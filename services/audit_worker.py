@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from engine.analysis import DiffAnalysis, analyze_diff
+from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
@@ -32,10 +33,12 @@ class WorkerSettings:
 
 
 def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, llm_client: object, model: str, timeout_seconds: float) -> str:
+    semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
         "You are an AI Security Auditor. Analyze this code diff. "
-        "You will receive both the raw diff and deterministic pre-analysis findings. "
-        "Use the deterministic findings as grounding evidence, then write a 2-sentence summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
+        "You will receive deterministic pre-analysis findings, structured semantic review packages, and the raw diff. "
+        "Use the semantic review packages as the primary review frame, use deterministic findings as grounding evidence, and use the raw diff as reference detail. "
+        "Write a concise summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
     )
     response = llm_client.chat.completions.create(
         model=model,
@@ -43,7 +46,11 @@ def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, l
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": f"{deterministic_analysis.format_for_prompt()}\n\nRaw diff:\n{diff_text}",
+                "content": (
+                    f"{deterministic_analysis.format_for_prompt()}\n\n"
+                    f"{format_semantic_review_packages(semantic_packages)}\n\n"
+                    f"Raw diff:\n{diff_text}"
+                ),
             },
         ],
         temperature=0.0,

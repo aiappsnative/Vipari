@@ -68,3 +68,16 @@ class RuleFinding:
     severity: FindingSeverity
     rationale: str
     evidence: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SemanticReviewPackage:
+    path: str
+    artifact_type: str
+    context_mode: SemanticContextMode
+    review_scope: str
+    review_objective: str
+    key_questions: List[str] = field(default_factory=list)
+    added_lines: List[str] = field(default_factory=list)
+    removed_lines: List[str] = field(default_factory=list)
+    deterministic_findings: List[str] = field(default_factory=list)
