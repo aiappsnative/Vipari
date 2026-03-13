@@ -31,8 +31,10 @@ flowchart TD
     F --> F4[Evidence spans and baseline score]
 
     G --> G0[Timeout and retry policy]
-    G0 -->|LLM success| G1[Intent and authority change detection]
-    G0 -->|LLM exhausted or rate limited| G5[Deterministic fallback summary]
+    G0 --> G0A[Honor provider retry hints]
+    G0 --> G0B[Apply bounded retry window]
+    G0A -->|LLM success| G1[Intent and authority change detection]
+    G0B -->|Retry budget exhausted or permanent failure| G5[Preliminary deterministic audit]
     G1 --> G2[Safety boundary weakening check]
     G2 --> G3[Sensitive capability expansion check]
     G3 --> G4[Structured semantic findings and confidence]
@@ -94,6 +96,8 @@ flowchart TD
         Y
         G
         G0
+        G0A
+        G0B
         G1
         G2
         G3
