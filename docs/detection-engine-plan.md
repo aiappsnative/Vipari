@@ -179,6 +179,7 @@ This stage governs how relevant audits move from webhook ingestion into durable 
 - track job state transitions
 - limit worker concurrency to protect the LLM quota
 - persist attempt counts and last error state
+- persist job creation time so retry age and maximum wait windows can be enforced
 
 ### Recommended initial states
 - `queued`
@@ -192,6 +193,28 @@ This stage governs how relevant audits move from webhook ingestion into durable 
 The issue seen in live testing was a `429 RateLimitReached` failure, which indicates quota pressure or request bursts rather than a fundamentally oversized diff.
 
 That means PromptDrift should solve the operational problem with queueing and retry discipline, not only by shrinking prompts.
+
+### Retry policy guidance
+Retryable failures should be treated differently from permanent failures.
+
+#### Retryable failures
+- `429` rate limit responses
+- request timeouts
+- temporary upstream connectivity failures
+- transient `5xx` class provider failures
+
+These should remain in the queue and be retried over a longer wall-clock window.
+
+The worker should prefer provider retry hints such as `retry-after` or `retry-after-ms` when available.
+
+If no provider hint is present, PromptDrift should apply a bounded escalating retry schedule.
+
+#### Non-retryable failures
+- invalid model identifiers
+- malformed requests
+- permanent authentication or configuration problems
+
+These should move to deterministic fallback quickly instead of waiting in the queue unnecessarily.
 
 ### Lean implementation guidance
 The first version can use a lightweight local store such as SQLite plus a simple worker loop.
@@ -351,6 +374,8 @@ It should also avoid reviewing oversized irrelevant context. The quality of this
 ### Reliability requirements
 - set an explicit request timeout
 - retry on transient failures and `429` with bounded exponential backoff
+- prefer provider retry hints over static local delays when the model provider supplies them
+- keep retryable jobs alive for a longer wall-clock retry window before falling back
 - record token or quota-related failures for later tuning
 - hand control to deterministic fallback output if LLM attempts are exhausted
 
@@ -424,12 +449,22 @@ PromptDrift should still post useful reviewer output when the LLM path fails aft
 - repeated `429` or quota exhaustion
 - timeout exhaustion
 - temporary upstream availability failures
+- retry window expiration for transient failures
+- non-retryable semantic review failures
 
 ### Output expectations
-- clearly state that semantic review was unavailable
+- present the result as a preliminary audit rather than an internal failure notice
 - summarize deterministic findings and evidence
 - preserve risk floor from deterministic analysis
-- optionally mark the comment as a fallback audit result
+- avoid exposing raw provider error details in the customer-facing comment
+
+### Internal versus external reporting
+The PR comment should stay reviewer-friendly.
+
+That means:
+- raw provider errors belong in persisted job metadata and logs
+- customer-facing comments should describe the result, not the infrastructure failure
+- the fallback comment can mention that further semantic review may refine the assessment later
 
 ---
 

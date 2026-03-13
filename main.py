@@ -1,19 +1,17 @@
 import os
-import time
 import hmac
 import hashlib
-import json
-import urllib.request
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-import jwt
-from github import Github
 from openai import OpenAI
 
-from engine.analysis import analyze_diff as analyze_diff_signals
 from engine.relevance import needs_audit as engine_needs_audit
+from services.audit_jobs import create_audit_job, init_db
+from services.audit_worker import AuditWorker, WorkerSettings
+from services.github_integration import fetch_pr_diff, generate_jwt, get_installation_token
 
 # load environment variables
 load_dotenv()
@@ -26,13 +24,48 @@ FOUNDRY_API_KEY = os.getenv("FOUNDRY_API_KEY")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o")
 AI_API_KEY = FOUNDRY_API_KEY or OPENAI_API_KEY
+AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", os.path.join(os.path.dirname(__file__), "promptdrift.db"))
+AUDIT_WORKER_ENABLED = os.getenv("AUDIT_WORKER_ENABLED", "1") == "1"
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+AUDIT_MAX_ATTEMPTS = int(os.getenv("AUDIT_MAX_ATTEMPTS", "5"))
+AUDIT_MAX_RETRY_WINDOW_SECONDS = float(os.getenv("AUDIT_MAX_RETRY_WINDOW_SECONDS", "5400"))
+AUDIT_WORKER_POLL_SECONDS = float(os.getenv("AUDIT_WORKER_POLL_SECONDS", "2"))
 
 if not all([GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, GITHUB_WEBHOOK_SECRET, AI_API_KEY]):
     raise RuntimeError("Required environment variables are missing. Check .env or .env.example")
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None)
+worker: AuditWorker | None = None
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global worker
+    init_db(AUDIT_DB_PATH)
+    if AUDIT_WORKER_ENABLED:
+        worker = AuditWorker(
+            WorkerSettings(
+                db_path=AUDIT_DB_PATH,
+                github_app_id=GITHUB_APP_ID,
+                github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+                llm_client=client,
+                model=AI_MODEL,
+                llm_timeout_seconds=LLM_TIMEOUT_SECONDS,
+                max_attempts=AUDIT_MAX_ATTEMPTS,
+                max_retry_window_seconds=AUDIT_MAX_RETRY_WINDOW_SECONDS,
+                poll_interval_seconds=AUDIT_WORKER_POLL_SECONDS,
+            )
+        )
+        worker.start()
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
+            worker = None
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 async def verify_signature(request: Request) -> bool:
@@ -45,66 +78,8 @@ async def verify_signature(request: Request) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def generate_jwt() -> str:
-    # load private key from file
-    with open(GITHUB_PRIVATE_KEY_PATH, "r") as f:
-        private_key = f.read()
-    now = int(time.time())
-    payload = {
-        "iat": now - 60,
-        "exp": now + (10 * 60),  # max 10 minutes
-        # GitHub requires `iss` to be a string
-        "iss": str(GITHUB_APP_ID),
-    }
-    token = jwt.encode(payload, private_key, algorithm="RS256")
-    # PyJWT returns str in newest versions; ensure str
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-    return token
-
-
-def get_installation_token(jwt_token: str, installation_id: int) -> str:
-    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
-    req = urllib.request.Request(url, method="POST")
-    req.add_header("Authorization", f"Bearer {jwt_token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            data = json.load(resp)
-    except Exception as e:
-        raise RuntimeError(f"Failed to obtain installation token: {e}")
-    return data.get("token")
-
-
-def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
-    diff_url = f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}"
-    req = urllib.request.Request(diff_url)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github.v3.diff")
-    with urllib.request.urlopen(req) as resp:
-        return resp.read().decode("utf-8")
-
-
 def needs_audit(diff: str) -> bool:
     return engine_needs_audit(diff)
-
-
-def analyze_diff(diff: str) -> str:
-    deterministic_analysis = analyze_diff_signals(diff)
-    system = (
-        "You are an AI Security Auditor. Analyze this code diff. "
-        "You will receive both the raw diff and deterministic pre-analysis findings. "
-        "Use the deterministic findings as grounding evidence, then write a 2-sentence summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
-    )
-    response = client.chat.completions.create(
-        model=AI_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"{deterministic_analysis.format_for_prompt()}\n\nRaw diff:\n{diff}"},
-        ],
-        temperature=0.0,
-    )
-    return response.choices[0].message.content or "Audit failed: empty response from AI model."
 
 
 @app.post("/webhook")
@@ -124,21 +99,25 @@ async def webhook(request: Request):
     installation_id = payload.get("installation", {}).get("id")
     repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
+    head_sha = payload.get("pull_request", {}).get("head", {}).get("sha")
 
-    if not all([installation_id, repo_full, pr_number]):
+    if not all([installation_id, repo_full, pr_number, head_sha]):
         raise HTTPException(status_code=400, detail="Missing payload data")
 
-    jwt_token = generate_jwt()
+    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, installation_id)
     diff_text = fetch_pr_diff(repo_full, pr_number, token)
 
     if not needs_audit(diff_text):
         return JSONResponse({"message": "no relevant changes"})
 
-    analysis = analyze_diff(diff_text)
-    gh = Github(token)
-    repo = gh.get_repo(repo_full)
-    pr = repo.get_pull(pr_number)
-    pr.create_issue_comment(analysis)
+    job = create_audit_job(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        installation_id=installation_id,
+        head_sha=head_sha,
+        diff_text=diff_text,
+    )
 
-    return JSONResponse({"message": "comment posted"})
+    return JSONResponse({"message": "audit queued", "job_id": job.id})
