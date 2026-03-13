@@ -12,6 +12,8 @@ import jwt
 from github import Github
 from openai import OpenAI
 
+from engine.relevance import needs_audit as engine_needs_audit
+
 # load environment variables
 load_dotenv()
 
@@ -83,17 +85,7 @@ def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
 
 
 def needs_audit(diff: str) -> bool:
-    # simple filename scan for keywords
-    lines = diff.splitlines()
-    for line in lines:
-        if line.startswith("diff --git"):
-            # format: diff --git a/path b/path
-            parts = line.split()
-            for path in parts[2:]:
-                path = path.strip()
-                if any(keyword in path.lower() for keyword in ("prompt", "ai", "llm")):
-                    return True
-    return False
+    return engine_needs_audit(diff)
 
 
 def analyze_diff(diff: str) -> str:

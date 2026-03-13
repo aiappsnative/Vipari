@@ -1,0 +1,89 @@
+flowchart TD
+    A[GitHub PR webhook event] --> B[Diff ingestion]
+    B --> C[File and hunk extraction]
+    C --> D[AI relevance filter]
+
+    D -->|Not AI relevant| Z1[Exit: no audit comment]
+    D -->|AI relevant| E[Structured change extraction]
+
+    E --> R[History and baseline retrieval]
+    E --> X[Semantic context selector]
+    E --> F[Deterministic signal engine]
+    R --> X
+    R --> F
+    X --> X1[diff_only]
+    X --> X2[section_context]
+    X --> X3[full_artifact_compare]
+    X1 --> Y[Semantic review package builder]
+    X2 --> Y
+    X3 --> Y
+    Y --> G[Early LLM semantic reviewer]
+
+    F --> F1[File type classification]
+    F --> F2[Guardrail and policy rules]
+    F --> F3[Model, tool, and data access rules]
+    F --> F4[Evidence spans and baseline score]
+
+    G --> G1[Intent and authority change detection]
+    G --> G2[Safety boundary weakening check]
+    G --> G3[Sensitive capability expansion check]
+    G --> G4[Structured semantic findings and confidence]
+
+    F1 --> H[Signal fusion layer]
+    F2 --> H
+    F3 --> H
+    F4 --> H
+    G1 --> H
+    G2 --> H
+    G3 --> H
+    G4 --> H
+    R --> H
+
+    H --> I[Risk scoring and confidence calibration]
+    I --> J[Reviewer-facing explanation synthesis]
+    J --> K[Markdown PR audit comment]
+    K --> L[Post comment to GitHub PR]
+
+    E --> P1[Artifact snapshot and lineage store]
+    I --> P2[Audit record persistence]
+    J --> P2
+    P1 --> R
+    P2 --> R
+    P2 --> M[Trend and reporting layer]
+    M --> N[Fixture set and policy tuning loop]
+
+    subgraph Deterministic Core
+        F
+        F1
+        F2
+        F3
+        F4
+    end
+
+    subgraph Semantic Review
+        R
+        X
+        X1
+        X2
+        X3
+        Y
+        G
+        G1
+        G2
+        G3
+        G4
+    end
+
+    subgraph Decision Output
+        H
+        I
+        J
+        K
+        L
+    end
+
+    subgraph Persistence and History
+        P1
+        P2
+        M
+    end
