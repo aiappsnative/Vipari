@@ -9,6 +9,18 @@ class SemanticContextMode(str, Enum):
     FULL_ARTIFACT_COMPARE = "full_artifact_compare"
 
 
+class FindingSeverity(str, Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+
+
+class RiskLevel(str, Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+
+
 @dataclass(frozen=True)
 class ChangedFile:
     old_path: str
@@ -33,3 +45,26 @@ class RelevanceResult:
     artifact_type: str
     reason: str
     context_mode: SemanticContextMode
+
+
+@dataclass(frozen=True)
+class StructuredChange:
+    path: str
+    artifact_type: str
+    context_mode: SemanticContextMode
+    added_lines: List[str] = field(default_factory=list)
+    removed_lines: List[str] = field(default_factory=list)
+    changed_hunks: int = 0
+    added_count: int = 0
+    removed_count: int = 0
+    added_terms: List[str] = field(default_factory=list)
+    removed_terms: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RuleFinding:
+    rule_id: str
+    title: str
+    severity: FindingSeverity
+    rationale: str
+    evidence: List[str] = field(default_factory=list)

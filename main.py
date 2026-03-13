@@ -12,6 +12,7 @@ import jwt
 from github import Github
 from openai import OpenAI
 
+from engine.analysis import analyze_diff as analyze_diff_signals
 from engine.relevance import needs_audit as engine_needs_audit
 
 # load environment variables
@@ -89,15 +90,17 @@ def needs_audit(diff: str) -> bool:
 
 
 def analyze_diff(diff: str) -> str:
+    deterministic_analysis = analyze_diff_signals(diff)
     system = (
         "You are an AI Security Auditor. Analyze this code diff. "
-        "If AI models or prompts changed, write a 2-sentence summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
+        "You will receive both the raw diff and deterministic pre-analysis findings. "
+        "Use the deterministic findings as grounding evidence, then write a 2-sentence summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
     )
     response = client.chat.completions.create(
         model=AI_MODEL,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": diff},
+            {"role": "user", "content": f"{deterministic_analysis.format_for_prompt()}\n\nRaw diff:\n{diff}"},
         ],
         temperature=0.0,
     )

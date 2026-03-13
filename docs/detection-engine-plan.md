@@ -9,6 +9,7 @@ The core design principle is a **hybrid engine**:
 - deterministic rules provide stability, auditability, and policy alignment
 - early LLM reasoning provides semantic interpretation and nuance
 - context selection determines the right review unit before semantic analysis runs
+- relevant audits are executed asynchronously so webhook ingestion stays fast and resilient
 - persistence enables history, baselines, and long-term value
 - final output is generated from fused evidence, not from a single raw model judgment
 
@@ -24,10 +25,45 @@ The core design principle is a **hybrid engine**:
 6. Keep the system testable with fixture-based evaluation.
 7. Select semantic review context based on artifact type rather than using raw diff-only or whole-commit review by default.
 8. Preserve enough structured history to support trend analysis, baseline comparison, and artifact lineage over time.
+9. Keep webhook acknowledgement fast by moving expensive LLM work into a background audit path.
 
 ---
 
 ## High-level architecture
+
+### Execution model
+
+PromptDrift should separate **event ingestion** from **audit execution**.
+
+The webhook endpoint should do only the minimum amount of work required to decide whether a PR deserves audit processing:
+- verify signature and event shape
+- fetch the PR diff
+- run a fast AI relevance gate
+- persist an audit job for relevant changes
+- return success quickly to GitHub
+
+The expensive path should run in a background worker:
+- deterministic analysis
+- semantic context selection
+- LLM review
+- retry and backoff handling
+- deterministic fallback generation if the LLM remains unavailable
+- PR comment posting
+
+This is the right fit for PromptDrift because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.
+
+### Why queue relevant audits by default
+
+The system should not keep two separate execution models where healthy requests are synchronous but failures become asynchronous.
+
+That split would make the system harder to reason about and operate.
+
+The cleaner rule is:
+- irrelevant changes exit inline
+- relevant changes become audit jobs
+- workers perform the full audit lifecycle
+
+This keeps the online path thin while allowing controlled concurrency, retries, back-pressure, and future durability.
 
 ### Lean-first persistence principle
 
@@ -45,6 +81,8 @@ Storage is therefore a **planned architectural capability**, even if its first i
 ### 1. Diff ingestion
 
 The engine starts by turning a GitHub pull request diff into structured internal objects.
+
+This stage executes inside the background audit worker after a relevant job has already been accepted.
 
 Expected responsibilities:
 - split diff by file
@@ -75,6 +113,9 @@ Expected outputs:
 - `candidate_change_type`
 
 This stage should remain conservative: false positives are acceptable early, false negatives are more dangerous.
+
+### Execution note
+This is the main analysis stage that should stay on the webhook path because it is cheap and useful for queue suppression.
 
 ---
 
@@ -125,6 +166,37 @@ If history exists, it should enrich context selection, semantic analysis, and ri
 - `artifact_lineage`
 - `recent_audit_context`
 - `baseline_reference`
+
+---
+
+## Audit job orchestration
+
+This stage governs how relevant audits move from webhook ingestion into durable background execution.
+
+### Responsibilities
+- create one audit job per relevant PR event
+- deduplicate or coalesce repeated events when possible
+- track job state transitions
+- limit worker concurrency to protect the LLM quota
+- persist attempt counts and last error state
+
+### Recommended initial states
+- `queued`
+- `processing`
+- `retry_wait`
+- `completed`
+- `fallback_posted`
+- `failed`
+
+### Why this matters
+The issue seen in live testing was a `429 RateLimitReached` failure, which indicates quota pressure or request bursts rather than a fundamentally oversized diff.
+
+That means PromptDrift should solve the operational problem with queueing and retry discipline, not only by shrinking prompts.
+
+### Lean implementation guidance
+The first version can use a lightweight local store such as SQLite plus a simple worker loop.
+
+That is sufficient to prove the architecture before introducing heavier infrastructure.
 
 ---
 
@@ -276,6 +348,12 @@ It should also avoid reviewing oversized irrelevant context. The quality of this
 - prefer categorical output schemas
 - treat low-confidence LLM findings as advisory, not decisive
 
+### Reliability requirements
+- set an explicit request timeout
+- retry on transient failures and `429` with bounded exponential backoff
+- record token or quota-related failures for later tuning
+- hand control to deterministic fallback output if LLM attempts are exhausted
+
 ### Important architectural note
 For prompt-like artifacts, semantic review should usually compare the **full old artifact** and the **full new artifact**, with the diff included as navigation aid.
 
@@ -333,6 +411,28 @@ This stage prepares the reviewer-facing output.
 
 ---
 
+## Deterministic fallback output
+
+PromptDrift should still post useful reviewer output when the LLM path fails after bounded retries.
+
+### Purpose
+- prevent silent audit drops
+- preserve reviewer trust
+- make deterministic findings operationally useful on their own
+
+### Trigger conditions
+- repeated `429` or quota exhaustion
+- timeout exhaustion
+- temporary upstream availability failures
+
+### Output expectations
+- clearly state that semantic review was unavailable
+- summarize deterministic findings and evidence
+- preserve risk floor from deterministic analysis
+- optionally mark the comment as a fallback audit result
+
+---
+
 ## Persistence layer
 
 Persistence should be treated as a separate architectural concern, not embedded directly in the webhook endpoint.
@@ -354,6 +454,9 @@ At minimum:
 - pull request number
 - commit SHA or head SHA
 - timestamp
+- job status
+- attempt count
+- last error category
 
 #### Changed artifact metadata
 - artifact path
@@ -426,6 +529,7 @@ Suggested core entities:
 
 - `Installation`
 - `Repository`
+- `AuditJob`
 - `PullRequestAudit`
 - `ChangedArtifact`
 - `ArtifactVersion`
@@ -476,21 +580,27 @@ A mature PromptDrift engine should provide:
 - implement initial rule families
 - return structured findings and score
 
-### Phase 3 — Early semantic review
+### Phase 3 — Audit job orchestration
+- add a minimal durable audit job model
+- enqueue relevant audits from the webhook path
+- run a worker loop with bounded concurrency
+- add retry, backoff, and deterministic fallback behavior
+
+### Phase 4 — Early semantic review
 - add narrowly scoped LLM semantic pass
 - define response schema
 - integrate semantic findings into fusion layer
 
-### Phase 4 — Minimal persistence and history
+### Phase 5 — Minimal persistence and history
 - define canonical audit record shape
 - persist audit runs and artifact versions
 - support basic history and baseline retrieval
 
-### Phase 5 — Reviewer output
+### Phase 6 — Reviewer output
 - generate improved Markdown comments from fused findings
 - add confidence and recommended action
 
-### Phase 6 — Evaluation harness
+### Phase 7 — Evaluation harness
 - add fixture-based tests
 - create baseline cases for benign, medium, and high-risk drift
 
@@ -508,6 +618,8 @@ Potential near-term module structure:
 - `engine/semantic_review.py`
 - `engine/fusion.py`
 - `engine/reporting.py`
+- `services/audit_jobs.py`
+- `services/audit_worker.py`
 - `storage/models.py`
 - `storage/repository.py`
 - `services/history.py`
@@ -523,4 +635,5 @@ PromptDrift should evolve into a **rule-guided semantic drift engine**.
 The deterministic layer should provide control and policy grounding.
 The early LLM layer should contribute semantic interpretation.
 The final comment should be based on fused evidence, not on raw model intuition alone.
+Relevant audit work should run asynchronously so model latency and rate limiting do not break webhook reliability.
 The persistence layer should make those decisions useful over time through history, baselines, and trend analysis.

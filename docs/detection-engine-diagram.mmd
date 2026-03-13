@@ -1,14 +1,20 @@
 flowchart TD
-    A[GitHub PR webhook event] --> B[Diff ingestion]
+    A[GitHub PR webhook event] --> A1[Signature and event validation]
+    A1 --> A2[Fetch installation token and PR diff]
+    A2 --> A3[Fast relevance gate]
+
+    A3 -->|Not AI relevant| Z1[Exit: no audit comment]
+    A3 -->|AI relevant| Q1[Create audit job]
+    Q1 --> Q2[Job queue / work scheduler]
+    Q2 --> Q3[Background audit worker]
+
+    Q3 --> B[Diff ingestion]
     B --> C[File and hunk extraction]
-    C --> D[AI relevance filter]
+    C --> D[Structured change extraction]
 
-    D -->|Not AI relevant| Z1[Exit: no audit comment]
-    D -->|AI relevant| E[Structured change extraction]
-
-    E --> R[History and baseline retrieval]
-    E --> X[Semantic context selector]
-    E --> F[Deterministic signal engine]
+    D --> R[History and baseline retrieval]
+    D --> X[Semantic context selector]
+    D --> F[Deterministic signal engine]
     R --> X
     R --> F
     X --> X1[diff_only]
@@ -17,26 +23,26 @@ flowchart TD
     X1 --> Y[Semantic review package builder]
     X2 --> Y
     X3 --> Y
-    Y --> G[Early LLM semantic reviewer]
+    Y --> G[LLM semantic reviewer]
 
     F --> F1[File type classification]
     F --> F2[Guardrail and policy rules]
     F --> F3[Model, tool, and data access rules]
     F --> F4[Evidence spans and baseline score]
 
-    G --> G1[Intent and authority change detection]
-    G --> G2[Safety boundary weakening check]
-    G --> G3[Sensitive capability expansion check]
-    G --> G4[Structured semantic findings and confidence]
+    G --> G0[Timeout and retry policy]
+    G0 -->|LLM success| G1[Intent and authority change detection]
+    G0 -->|LLM exhausted or rate limited| G5[Deterministic fallback summary]
+    G1 --> G2[Safety boundary weakening check]
+    G2 --> G3[Sensitive capability expansion check]
+    G3 --> G4[Structured semantic findings and confidence]
 
     F1 --> H[Signal fusion layer]
     F2 --> H
     F3 --> H
     F4 --> H
-    G1 --> H
-    G2 --> H
-    G3 --> H
     G4 --> H
+    G5 --> H
     R --> H
 
     H --> I[Risk scoring and confidence calibration]
@@ -44,13 +50,32 @@ flowchart TD
     J --> K[Markdown PR audit comment]
     K --> L[Post comment to GitHub PR]
 
-    E --> P1[Artifact snapshot and lineage store]
+    Q1 --> P0[Audit job persistence]
+    D --> P1[Artifact snapshot and lineage store]
     I --> P2[Audit record persistence]
     J --> P2
+    P0 --> Q2
+    P0 --> R
     P1 --> R
     P2 --> R
     P2 --> M[Trend and reporting layer]
     M --> N[Fixture set and policy tuning loop]
+
+    subgraph Online Ingestion Path
+        A
+        A1
+        A2
+        A3
+        Q1
+        Q2
+    end
+
+    subgraph Background Audit Path
+        Q3
+        B
+        C
+        D
+    end
 
     subgraph Deterministic Core
         F
@@ -68,10 +93,12 @@ flowchart TD
         X3
         Y
         G
+        G0
         G1
         G2
         G3
         G4
+        G5
     end
 
     subgraph Decision Output
@@ -83,6 +110,7 @@ flowchart TD
     end
 
     subgraph Persistence and History
+        P0
         P1
         P2
         M
