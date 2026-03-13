@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+PyGithub
+openai
+python-dotenv
+pyjwt
+cryptography
+
+# test dependencies
+pytest

@@ -1,0 +1,31 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+.pytest_cache/
+
+# Plan and other docs
+Plan.MD
+
+# Distribution
+*.egg-info/
+build/
+dist/
+
+# Logs
+*.log
+
+# Keys
+*.pem
