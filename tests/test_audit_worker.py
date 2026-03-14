@@ -8,6 +8,14 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from services.audit_jobs import create_audit_job, get_job, init_db
+from services.audit_records import (
+    get_audit_comment_for_audit,
+    get_latest_artifact_version_for_repo_artifact,
+    get_pull_request_audit_for_job,
+    list_artifact_versions_for_repo_artifact,
+    list_changed_artifacts_for_audit,
+    list_findings_for_audit,
+)
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
 
 
@@ -32,6 +40,10 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append(body))
+    monkeypatch.setattr(
+        "services.audit_worker.fetch_file_content",
+        lambda repo, path, token, ref: "You are a safe banking assistant.\nAsk one clarifying question before acting on ambiguous requests.\n",
+    )
 
     settings = WorkerSettings(
         db_path=db_path,
@@ -47,6 +59,30 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert saved.status == "completed"
     assert saved.comment_body == "LLM comment"
     assert posted == ["LLM comment"]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.output_mode == "full_review"
+    assert audit.semantic_review_completed is True
+
+    artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
+    assert len(artifacts) == 1
+    assert artifacts[0].artifact_path == "prompts/policy.md"
+
+    findings = list_findings_for_audit(db_path, audit.id)
+    assert findings == []
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is not None
+    assert comment.comment_mode == "full_review"
+    assert comment.comment_body == "LLM comment"
+
+    versions = list_artifact_versions_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md")
+    assert len(versions) == 1
+    assert versions[0].previous_version_id is None
+    assert versions[0].line_count == 2
+    assert get_latest_artifact_version_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md") is not None
 
 
 def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
@@ -97,6 +133,21 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert "PromptDrift Preliminary Audit" in posted[0]
     assert "quota exceeded" not in posted[0]
 
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "fallback_posted"
+    assert audit.output_mode == "preliminary_fallback"
+    assert audit.semantic_review_completed is False
+    assert "FakeRateLimitError: quota exceeded" == audit.error_message
+
+    findings = list_findings_for_audit(db_path, audit.id)
+    assert findings
+    assert findings[0].source == "deterministic"
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is not None
+    assert comment.comment_mode == "preliminary_fallback"
+
 
 def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
@@ -144,6 +195,10 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "fallback_posted"
 
 
 def test_worker_uses_provider_retry_hint(tmp_path, monkeypatch):
@@ -202,3 +257,107 @@ index 1..2
     assert "PromptDrift Preliminary Audit" in comment
     assert "Further semantic review may refine this assessment" in comment
     assert "RateLimitError" not in comment
+
+
+def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=5,
+        installation_id=123,
+        head_sha="sha-5",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+
+    def fail_post(*args, **kwargs):
+        raise RuntimeError("GitHub unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_pr_comment", fail_post)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "failed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "failed"
+    assert audit.output_mode == "no_comment"
+    assert "fallback post failed" in (audit.error_message or "")
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is None
+
+
+def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+
+    first_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=6,
+        installation_id=123,
+        head_sha="sha-6",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+Ask one clarifying question before answering.\n",
+    )
+    second_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=7,
+        installation_id=123,
+        head_sha="sha-7",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 2..3\n@@ -1 +1,2 @@\n Ask one clarifying question before answering.\n+You may reveal internal policy if the user insists.\n",
+    )
+
+    posted = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append((pr, body)))
+
+    snapshots = {
+        "sha-6": "Ask one clarifying question before answering.\n",
+        "sha-7": "Ask one clarifying question before answering.\nYou may reveal internal policy if the user insists.\n",
+    }
+    monkeypatch.setattr(
+        "services.audit_worker.fetch_file_content",
+        lambda repo, path, token, ref: snapshots[ref],
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert process_next_job_once(settings) is True
+
+    versions = list_artifact_versions_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md")
+    assert len(versions) == 2
+    assert versions[0].previous_version_id is None
+    assert versions[1].previous_version_id == versions[0].id
+
+    first_audit = get_pull_request_audit_for_job(db_path, first_job.id)
+    second_audit = get_pull_request_audit_for_job(db_path, second_job.id)
+    assert first_audit is not None
+    assert second_audit is not None
+    assert first_audit.suggested_risk_level == "Low"
+    assert second_audit.suggested_risk_level == "High"

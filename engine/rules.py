@@ -57,10 +57,21 @@ def _contains_any(texts: Iterable[str], terms: Iterable[str]) -> bool:
     return any(term in lowered for term in terms)
 
 
+def _matching_terms(texts: Iterable[str], terms: Iterable[str]) -> set[str]:
+    lowered = "\n".join(texts).lower()
+    return {term for term in terms if term in lowered}
+
+
 def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
     findings: List[RuleFinding] = []
 
-    if _contains_any(change.added_lines, SENSITIVE_DATA_TERMS):
+    newly_added_sensitive_terms = _matching_terms(change.added_lines, SENSITIVE_DATA_TERMS) - _matching_terms(change.removed_lines, SENSITIVE_DATA_TERMS)
+    newly_added_capability_terms = _matching_terms(change.added_lines, CAPABILITY_EXPANSION_TERMS) - _matching_terms(change.removed_lines, CAPABILITY_EXPANSION_TERMS)
+    newly_added_guardrail_weakening_terms = _matching_terms(change.added_lines, ("reveal", "share internal", "ignore", "bypass", "comply")) - _matching_terms(
+        change.removed_lines, ("reveal", "share internal", "ignore", "bypass", "comply")
+    )
+
+    if newly_added_sensitive_terms:
         findings.append(
             RuleFinding(
                 rule_id="sensitive_data_drift",
@@ -71,7 +82,7 @@ def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
             )
         )
 
-    if change.artifact_type in {"prompt", "system_prompt", "policy"} and _contains_any(change.added_lines, CAPABILITY_EXPANSION_TERMS):
+    if change.artifact_type in {"prompt", "system_prompt", "policy"} and newly_added_capability_terms:
         findings.append(
             RuleFinding(
                 rule_id="capability_drift",
@@ -93,7 +104,7 @@ def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
             )
         )
 
-    if change.artifact_type in {"guardrail", "policy", "system_prompt", "prompt"} and _contains_any(change.added_lines, ("reveal", "share internal", "ignore", "bypass", "comply")):
+    if change.artifact_type in {"guardrail", "policy", "system_prompt", "prompt"} and newly_added_guardrail_weakening_terms:
         findings.append(
             RuleFinding(
                 rule_id="guardrail_weakening",

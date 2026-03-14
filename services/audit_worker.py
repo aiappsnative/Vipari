@@ -16,7 +16,8 @@ from .audit_jobs import (
     mark_job_fallback_posted,
     mark_job_retry,
 )
-from .github_integration import generate_jwt, get_installation_token, post_pr_comment
+from .audit_records import record_audit_result
+from .github_integration import fetch_file_content, generate_jwt, get_installation_token, post_pr_comment
 
 
 @dataclass(frozen=True)
@@ -126,10 +127,114 @@ def _should_retry(job: AuditJob, settings: WorkerSettings) -> bool:
     return job_age_seconds < settings.max_retry_window_seconds
 
 
-def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings) -> None:
+def _get_installation_token_for_job(job: AuditJob, settings: WorkerSettings) -> str:
     jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
-    installation_token = get_installation_token(jwt_token, job.installation_id)
-    post_pr_comment(job.repo_full, job.pr_number, installation_token, body)
+    return get_installation_token(jwt_token, job.installation_id)
+
+
+def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> None:
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_pr_comment(job.repo_full, job.pr_number, token, body)
+
+
+def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
+    if not deterministic_analysis.artifacts:
+        return {}
+
+    try:
+        installation_token = _get_installation_token_for_job(job, settings)
+    except Exception:
+        return {}
+
+    snapshots: dict[str, str] = {}
+    for artifact in deterministic_analysis.artifacts:
+        try:
+            snapshots[artifact.relevance.path] = fetch_file_content(
+                job.repo_full,
+                artifact.relevance.path,
+                installation_token,
+                ref=job.head_sha,
+            )
+        except Exception:
+            continue
+    return snapshots
+
+
+def _persist_audit_result(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    status: str,
+    completion_mode: str,
+    output_mode: str,
+    comment_body: str | None,
+    comment_mode: str | None,
+    semantic_review_completed: bool,
+    error_message: str | None = None,
+) -> None:
+    try:
+        record_audit_result(
+            settings.db_path,
+            job_id=job.id,
+            repo_full=job.repo_full,
+            pr_number=job.pr_number,
+            installation_id=job.installation_id,
+            head_sha=job.head_sha,
+            deterministic_analysis=deterministic_analysis,
+            status=status,
+            completion_mode=completion_mode,
+            output_mode=output_mode,
+            comment_body=comment_body,
+            comment_mode=comment_mode,
+            semantic_review_completed=semantic_review_completed,
+            error_message=error_message,
+            artifact_snapshots=_fetch_artifact_snapshots(job, deterministic_analysis, settings),
+        )
+    except Exception:
+        return
+
+
+def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
+    fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
+    try:
+        _post_comment_for_job(job, fallback_comment, settings)
+    except Exception as fallback_exc:
+        combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
+        _persist_audit_result(
+            job,
+            deterministic_analysis,
+            settings,
+            status="failed",
+            completion_mode="failed",
+            output_mode="no_comment",
+            comment_body=None,
+            comment_mode=None,
+            semantic_review_completed=False,
+            error_message=combined_error,
+        )
+        mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+        return "failed"
+
+    _persist_audit_result(
+        job,
+        deterministic_analysis,
+        settings,
+        status="fallback_posted",
+        completion_mode="fallback_posted",
+        output_mode="preliminary_fallback",
+        comment_body=fallback_comment,
+        comment_mode="preliminary_fallback",
+        semantic_review_completed=False,
+        error_message=error_message,
+    )
+    mark_job_fallback_posted(
+        settings.db_path,
+        job.id,
+        comment_body=fallback_comment,
+        error_message=error_message,
+    )
+    return "fallback_posted"
 
 
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
@@ -142,9 +247,6 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             model=settings.model,
             timeout_seconds=settings.llm_timeout_seconds,
         )
-        _post_comment_for_job(job, comment_body, settings)
-        mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
-        return "completed"
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -153,20 +255,27 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             mark_job_retry(settings.db_path, job.id, error_message=error_message, retry_at=retry_at)
             return "retry_wait"
 
-        fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
-        try:
-            _post_comment_for_job(job, fallback_comment, settings)
-            mark_job_fallback_posted(
-                settings.db_path,
-                job.id,
-                comment_body=fallback_comment,
-                error_message=error_message,
-            )
-            return "fallback_posted"
-        except Exception as fallback_exc:
-            combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
-            mark_job_failed(settings.db_path, job.id, error_message=combined_error)
-            return "failed"
+        return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
+
+    try:
+        _post_comment_for_job(job, comment_body, settings)
+    except Exception as exc:
+        error_message = f"{type(exc).__name__}: {exc}"
+        return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
+
+    _persist_audit_result(
+        job,
+        deterministic_analysis,
+        settings,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body=comment_body,
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+    mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
+    return "completed"
 
 
 def process_next_job_once(settings: WorkerSettings) -> bool:

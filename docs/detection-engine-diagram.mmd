@@ -52,15 +52,17 @@ flowchart TD
     J --> K[Markdown PR audit comment]
     K --> L[Post comment to GitHub PR]
 
-    Q1 --> P0[Audit job persistence]
-    D --> P1[Artifact snapshot and lineage store]
-    I --> P2[Audit record persistence]
+    Q1 --> P0[Operational queue store]
+    D --> P1[Artifact lineage and version store]
+    I --> P2[Durable audit record store]
     J --> P2
     P0 --> Q2
     P0 --> R
     P1 --> R
     P2 --> R
+    P2 --> P3[Cold snapshot and archive policy]
     P2 --> M[Trend and reporting layer]
+    P3 --> M
     M --> N[Fixture set and policy tuning loop]
 
     subgraph Online Ingestion Path
@@ -117,5 +119,6 @@ flowchart TD
         P0
         P1
         P2
+        P3
         M
     end

@@ -5,7 +5,7 @@ import time
 import urllib.request
 
 import jwt
-from github import Github
+from github import Auth, Github
 
 
 def generate_jwt(app_id: str, private_key_path: str) -> str:
@@ -43,8 +43,17 @@ def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
         return response.read().decode("utf-8")
 
 
+def fetch_file_content(repo_full: str, file_path: str, token: str, *, ref: str) -> str:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    content = repo.get_contents(file_path, ref=ref)
+    if isinstance(content, list):
+        raise RuntimeError(f"Expected file content for {file_path}, but received a directory listing.")
+    return content.decoded_content.decode("utf-8")
+
+
 def post_pr_comment(repo_full: str, pr_number: int, token: str, body: str) -> None:
-    github_client = Github(token)
+    github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
     pr.create_issue_comment(body)

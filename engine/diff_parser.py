@@ -24,6 +24,15 @@ SIGNAL_TERMS = (
 )
 
 
+def extract_signal_terms_from_lines(lines: List[str]) -> List[str]:
+    return [term for term in SIGNAL_TERMS if any(term in line.lower() for line in lines)]
+
+
+def extract_signal_terms_from_text(text: str) -> List[str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return extract_signal_terms_from_lines(lines)
+
+
 def _normalize_git_path(path: str) -> str:
     if path.startswith("a/") or path.startswith("b/"):
         return path[2:]
@@ -89,8 +98,8 @@ def extract_structured_change(changed_file: ChangedFile, relevance: RelevanceRes
     added_clean = [line for line in added_lines if line]
     removed_clean = [line for line in removed_lines if line]
 
-    added_terms = [term for term in SIGNAL_TERMS if any(term in line.lower() for line in added_clean)]
-    removed_terms = [term for term in SIGNAL_TERMS if any(term in line.lower() for line in removed_clean)]
+    added_terms = extract_signal_terms_from_lines(added_clean)
+    removed_terms = extract_signal_terms_from_lines(removed_clean)
 
     return StructuredChange(
         path=changed_file.path,

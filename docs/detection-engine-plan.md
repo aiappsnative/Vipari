@@ -76,6 +76,19 @@ This means:
 
 Storage is therefore a **planned architectural capability**, even if its first implementation is intentionally minimal.
 
+### Persistence architecture principle
+
+PromptDrift should avoid premature database sprawl.
+
+The recommended architecture is:
+- one relational database for the near-to-mid term
+- SQLite for local and early development
+- PostgreSQL as the intended production-grade durable store
+- logical separation between operational queue data and durable audit/history data
+- future decomposition only when workload or tenant isolation actually justifies it
+
+This means PromptDrift should **design for separation without deploying multiple databases yet**.
+
 ---
 
 ### 1. Diff ingestion
@@ -220,6 +233,17 @@ These should move to deterministic fallback quickly instead of waiting in the qu
 The first version can use a lightweight local store such as SQLite plus a simple worker loop.
 
 That is sufficient to prove the architecture before introducing heavier infrastructure.
+
+### Operational storage boundary
+`AuditJob` is an operational table.
+
+Its purpose is to support:
+- queueing
+- retry scheduling
+- failure recovery
+- final execution state
+
+It should not become the long-term customer history model.
 
 ---
 
@@ -472,12 +496,107 @@ That means:
 
 Persistence should be treated as a separate architectural concern, not embedded directly in the webhook endpoint.
 
+### Current implementation status
+
+At the current branch stage, PromptDrift persists only the operational audit job queue.
+
+That means the database currently stores enough to support:
+- async execution
+- retries and retry windows
+- final posted comment capture
+- internal error tracking
+
+It does **not yet** store the full audit record model needed for long-term customer value.
+
+### Storage strategy going forward
+
+PromptDrift should distinguish between two kinds of persisted data:
+
+#### 1. Operational storage
+Used for:
+- queue execution
+- retries
+- transient failures
+- in-flight work state
+
+Current example:
+- `AuditJob`
+
+#### 2. Durable product storage
+Used for:
+- customer-visible audit history
+- explainable findings
+- artifact evolution
+- trend and governance reporting
+
+Planned examples:
+- `PullRequestAudit`
+- `ChangedArtifact`
+- `Finding`
+- `AuditComment`
+- `ArtifactVersion`
+
+This separation should exist even if both logical groups live in the same physical database at first.
+
 ### Why it matters
 PromptDrift becomes significantly more valuable when it can show:
 - artifact history
 - risk trend over time
 - recurring risk patterns
 - whether teams are improving after policy changes
+
+### Customer value model
+
+The next phase of persistence should be reverse-engineered from the customer value PromptDrift is expected to provide.
+
+#### 1. PR-level review value
+Customers should be able to answer:
+- what changed in this PR?
+- why was it risky?
+- what evidence drove the decision?
+- was the result deterministic-only or semantically reviewed?
+
+This means the database must store:
+- one durable audit record per evaluated PR head
+- final score, risk level, confidence, and comment text
+- deterministic findings and semantic findings in structured form
+- whether the result came from a full semantic pass or a preliminary fallback path
+
+#### 2. Artifact history value
+Customers should be able to answer:
+- how has this prompt or policy evolved over time?
+- when did risk first begin increasing?
+- which exact artifact versions triggered concern?
+
+This means the database must store:
+- normalized artifact identity
+- artifact version records
+- linkage from each audit to the artifact versions it evaluated
+- enough structure to compare current artifact versions against previous known baselines
+
+#### 3. Trend and governance value
+Customers should be able to answer:
+- which repos or teams generate repeated high-risk changes?
+- are policy changes reducing risk over time?
+- what rule families fire most often?
+
+This means the database must store:
+- auditable findings over time
+- stable rule identifiers and semantic categories
+- repository and installation scoping metadata
+- timestamps and indexes that support time-based reporting without scanning raw payload blobs
+
+#### 4. Operational trust value
+Customers and operators should be able to answer:
+- was the audit fully completed or did it fall back?
+- did the system retry due to provider pressure?
+- was a comment already posted for this PR head?
+
+This means the database must store:
+- job lifecycle state
+- retry history or at minimum retry counters and last error class
+- comment posting records or a durable audit output record
+- enough information to later implement comment dedupe or comment update behavior
 
 ### What should be persisted
 
@@ -492,12 +611,15 @@ At minimum:
 - job status
 - attempt count
 - last error category
+- completion mode (`completed`, `fallback_posted`, `failed`)
 
 #### Changed artifact metadata
 - artifact path
 - artifact type
 - context mode used
 - artifact hash or version identifier
+- changed hunk count
+- added and removed line counts
 
 #### Findings
 - deterministic findings
@@ -505,11 +627,213 @@ At minimum:
 - fused score
 - risk level
 - confidence
+- finding source (`deterministic`, `semantic`, `fused`)
+- stable category / rule identifiers
 
 #### Reviewer output
 - final comment body
 - summary
 - rationale
+- output mode (`full_review`, `preliminary_fallback`)
+
+#### Optional raw payload retention
+- raw diff snapshot only where operationally justified
+- large prompt or policy snapshots only when needed for lineage or baseline comparison
+- evidence excerpts preferred over full raw content in hot tables
+
+---
+
+## Reverse-engineered next schema
+
+The next persistence step should stay compact but should stop treating the database as only a queue.
+
+### Physical storage recommendation
+
+#### Near-term
+- one database
+- SQLite for local/dev
+- compact normalized tables
+
+#### Production target
+- PostgreSQL as the primary durable store
+- strong indexing on repository, PR, artifact, and time dimensions
+- future ability to add partitions, replicas, or archives without changing the core logical model
+
+#### What not to do yet
+- do not introduce multiple primary databases now
+- do not introduce a separate analytics warehouse now
+- do not choose a document database as the primary source of truth for audit history
+
+### Keep the existing operational table
+- `AuditJob`
+
+This remains the execution and retry mechanism.
+
+### Add a durable audit record layer
+
+#### `PullRequestAudit`
+Purpose:
+- one durable record for one evaluated PR head SHA
+
+Should store:
+- installation identifier
+- repository identifier
+- PR number
+- head SHA
+- audit status
+- completion mode (`completed`, `fallback_posted`, `failed`)
+- fused score
+- risk level
+- confidence
+- summary
+- rationale
+- posted comment body
+- timestamps
+
+#### `ChangedArtifact`
+Purpose:
+- identify which AI-relevant artifacts were part of the audit
+
+Should store:
+- foreign key to `PullRequestAudit`
+- artifact path
+- artifact type
+- context mode
+- changed hunk counts
+- added and removed counts
+
+#### `ArtifactVersion`
+Purpose:
+- track artifact lineage over time
+
+Should store:
+- normalized artifact identifier
+- repository identifier
+- artifact path
+- version hash
+- prior version reference
+- optional normalized content snapshot or retrievable pointer
+- timestamps
+
+### Hot versus cold data policy
+
+#### Hot queryable data
+Keep in primary durable tables:
+- audit metadata
+- findings
+- scores, risk levels, confidence
+- artifact identity and version metadata
+- comment metadata and body
+
+#### Cold or archival data
+Plan to move or minimize over time:
+- large raw diffs
+- large prompt or policy snapshots
+- verbose retry traces
+- oversized semantic payloads
+
+The goal is to keep customer-facing and reporting queries fast without losing forensic flexibility.
+
+#### `Finding`
+Purpose:
+- preserve explainable findings as first-class records
+
+Should store:
+- foreign key to `PullRequestAudit`
+- optional foreign key to `ChangedArtifact`
+- source (`deterministic`, `semantic`, `fused`)
+- rule id or semantic category
+- severity
+- title
+- rationale
+- confidence if available
+- evidence summary
+
+#### `AuditComment`
+Purpose:
+- track what was posted back to GitHub and later enable dedupe/update behavior
+
+Should store:
+- foreign key to `PullRequestAudit`
+- GitHub comment id
+- comment body
+- comment mode
+- created / updated timestamps
+
+---
+
+## Performance and scale planning
+
+PromptDrift should plan for growth before the database becomes sluggish.
+
+### Likely causes of future sluggishness
+- storing large raw text blobs in primary query tables
+- missing indexes on repository, PR, artifact, or time dimensions
+- mixing queue polling with heavy historical reporting workloads without separation
+- retaining all raw payloads in hot storage forever
+
+### Design responses
+- keep operational queue tables separate from durable audit tables
+- keep hot tables structured and compact
+- use evidence excerpts and hashes where full raw content is not required
+- introduce archival or cold-storage policies later for large payloads
+
+### Suggested future decomposition triggers
+Consider stronger separation only when one or more of these become true:
+- queue throughput materially impacts historical query latency
+- reporting queries become too expensive for the primary store
+- tenant isolation requirements become stricter
+- raw snapshot volume grows disproportionately relative to structured audit data
+
+Before those triggers, one well-structured relational database is the right tradeoff.
+
+---
+
+## Recommended next persistence phase
+
+This should be the next phase after the current semantic package work.
+
+### Phase 5A — Durable audit record
+Implement:
+- `PullRequestAudit`
+- `ChangedArtifact`
+- `Finding`
+- `AuditComment`
+
+Immediate customer value:
+- reviewable audit history per PR
+- foundation for dedupe/update behavior
+- explainable stored findings beyond the posted comment text
+- first real transition from an operational queue store to a customer-memory layer
+
+### Phase 5B — Artifact lineage
+Implement:
+- `ArtifactVersion`
+- normalized artifact identity
+- previous-version linkage
+
+Immediate customer value:
+- prompt and policy history
+- baseline comparison support
+- trend-ready lineage for future views
+
+### Phase 5C — Read-side history services
+Implement:
+- repository audit history queries
+- artifact history queries
+- repeated finding/rule trend queries
+
+Immediate customer value:
+- customer-facing history and governance views
+- internal debugging and quality analysis
+
+### Recommended implementation order from here
+1. Keep `AuditJob` as the operational queue table
+2. Add `PullRequestAudit` as the durable top-level audit record
+3. Persist deterministic findings first
+4. Persist semantic findings next
+5. Add `AuditComment` tracking for later dedupe/update behavior
+6. Add `ArtifactVersion` once the durable audit record contract stabilizes
 
 ### Lean implementation guidance
 The first implementation should store only what is necessary to support:
@@ -570,6 +894,14 @@ Suggested core entities:
 - `ArtifactVersion`
 - `Finding`
 - `AuditComment`
+
+### Recommended indexing direction
+- `PullRequestAudit(repository_id, pr_number, head_sha)`
+- `PullRequestAudit(created_at)`
+- `ChangedArtifact(repository_id, artifact_path)`
+- `ArtifactVersion(normalized_artifact_id, created_at)`
+- `Finding(rule_id)`
+- `Finding(source, severity)`
 
 This is sufficient to support history, baseline retrieval, and future trend views without prematurely locking the system into a large platform design.
 

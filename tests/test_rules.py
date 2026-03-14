@@ -89,3 +89,19 @@ index 123..456 100644
     assert artifact.change.removed_count == 1
     assert artifact.change.changed_hunks == 1
     assert "model" in artifact.change.added_terms
+
+
+def test_analyze_diff_ignores_sensitive_term_when_only_rewritten_from_existing_baseline():
+    diff = """diff --git a/system_prompt.md b/system_prompt.md
+index 123..456 100644
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1 @@
+-You are an AI assistant for a bank. You have access to user credit scores.
++You are an AI assistant for a bank. You have access to user credit scores. Ask one brief clarifying question before acting on ambiguous customer requests.
+"""
+    analysis = analyze_diff(diff)
+
+    assert analysis.has_relevant_changes
+    assert not any(f.rule_id == "sensitive_data_drift" for f in analysis.findings)
+    assert analysis.suggested_risk_level.value == "Low"
