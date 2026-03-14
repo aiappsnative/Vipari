@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -33,13 +34,24 @@ class WorkerSettings:
     poll_interval_seconds: float = 2.0
 
 
+RISK_BADGES = {
+    "Low": "✅ Risk: Low",
+    "Medium": "⚠️ Risk: Medium",
+    "High": "❌ Risk: High",
+}
+
+
 def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, llm_client: object, model: str, timeout_seconds: float) -> str:
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
         "You are an AI Security Auditor. Analyze this code diff. "
         "You will receive deterministic pre-analysis findings, structured semantic review packages, and the raw diff. "
         "Use the semantic review packages as the primary review frame, use deterministic findings as grounding evidence, and use the raw diff as reference detail. "
-        "Write a concise summary and assign a Risk Level (Low/Medium/High). Format as Markdown."
+        "Return concise reviewer notes in Markdown. "
+        "Include a one-sentence line in the form 'Summary: ...' describing what changed and why the risk level fits. "
+        "Include an explicit line in the form 'Risk Level: Low|Medium|High'. "
+        "Include a short 'Recommendation:' line. "
+        "Keep the detailed section compact and do not use code fences."
     )
     response = llm_client.chat.completions.create(
         model=model,
@@ -57,10 +69,17 @@ def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, l
         temperature=0.0,
         timeout=timeout_seconds,
     )
-    return response.choices[0].message.content or "Audit failed: empty response from AI model."
+    raw_comment = response.choices[0].message.content or "Audit failed: empty response from AI model."
+    risk_level = _extract_risk_level(raw_comment, default=deterministic_analysis.suggested_risk_level.value)
+    summary = _extract_summary(
+        raw_comment,
+        default=_build_fallback_summary(deterministic_analysis),
+    )
+    return _format_comment_body(raw_comment, risk_level=risk_level, review_mode="Full semantic review", summary=summary)
 
 
 def build_fallback_comment(deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
+    summary = _build_fallback_summary(deterministic_analysis)
     lines = [
         "## PromptDrift Preliminary Audit",
         "",
@@ -85,7 +104,145 @@ def build_fallback_comment(deterministic_analysis: DiffAnalysis, *, error_messag
             "Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
         ]
     )
-    return "\n".join(lines)
+    return _format_comment_body(
+        "\n".join(lines),
+        risk_level=deterministic_analysis.suggested_risk_level.value,
+        review_mode="Deterministic fallback review",
+        summary=summary,
+    )
+
+
+def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: str, summary: str) -> str:
+    normalized_risk = _normalize_risk_level(risk_level)
+    badge = RISK_BADGES[normalized_risk]
+    cleaned_details = _sanitize_detail_markdown(detail_markdown)
+    return "\n".join(
+        [
+            f"{badge} — {summary}",
+            "",
+            "<details>",
+            f"<summary>{review_mode} details</summary>",
+            "",
+            cleaned_details,
+            "",
+            "</details>",
+        ]
+    )
+
+
+def _sanitize_detail_markdown(detail_markdown: str) -> str:
+    cleaned = detail_markdown.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2:
+            cleaned = "\n".join(lines[1:-1]).strip()
+    return _remove_duplicate_risk_level_lines(cleaned)
+
+
+def _remove_duplicate_risk_level_lines(detail_markdown: str) -> str:
+    lines = detail_markdown.splitlines()
+    seen_risk_level = False
+    cleaned_lines: list[str] = []
+
+    for line in lines:
+        if _is_standalone_risk_level_line(line):
+            if seen_risk_level:
+                continue
+            seen_risk_level = True
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def _is_standalone_risk_level_line(line: str) -> bool:
+    normalized = line.strip()
+    return bool(
+        re.match(r"^(\*\*)?risk level(\*\*)?\s*[:\-]\s*(\*\*)?(low|medium|high)(\*\*)?\.?$", normalized, re.IGNORECASE)
+    )
+
+
+def _extract_summary(comment_body: str, *, default: str) -> str:
+    summary_patterns = [
+        r"^#{0,6}\s*summary\s*[:\-]\s*(.+)$",
+        r"^\*\*summary\*\*\s*[:\-]\s*(.+)$",
+        r"^\*\*summary\s*[:\-]\*\*\s*(.+)$",
+    ]
+    for raw_line in comment_body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        for pattern in summary_patterns:
+            match = re.match(pattern, line, re.IGNORECASE)
+            if match:
+                return _normalize_summary(match.group(1), default=default)
+
+    skip_patterns = (
+        r"^#{1,6}\s*summary\s*$",
+        r"^#{1,6}\s*reviewer notes\s*$",
+        r"^summary\s*$",
+        r"^reviewer notes\s*$",
+        r"^risk level\s*[:\-]",
+        r"^\*\*risk level\*\*\s*[:\-]",
+        r"^recommendation\s*[:\-]",
+        r"^\*\*recommendation\*\*\s*[:\-]",
+        r"^detailed analysis\s*[:\-]?$",
+        r"^\*\*detailed analysis\*\*\s*[:\-]?$",
+    )
+    for raw_line in comment_body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+        normalized = re.sub(r"^[#>*\-\s]+", "", line).strip()
+        if not normalized:
+            continue
+        if any(re.match(pattern, normalized, re.IGNORECASE) for pattern in skip_patterns):
+            continue
+        return _normalize_summary(normalized, default=default)
+
+    return _normalize_summary(default, default=default)
+
+
+def _normalize_summary(summary: str, *, default: str) -> str:
+    cleaned = re.sub(r"\s+", " ", summary).strip(" -*_`\t\r\n")
+    cleaned = re.sub(r"^\*{0,2}summary\*{0,2}\s*[:\-]?\*{0,2}\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\*\*(.+?)\*\*$", r"\1", cleaned)
+    cleaned = cleaned.rstrip(".")
+    if not cleaned:
+        cleaned = default.rstrip(".")
+    return cleaned + "."
+
+
+def _build_fallback_summary(deterministic_analysis: DiffAnalysis) -> str:
+    risk_level = _normalize_risk_level(deterministic_analysis.suggested_risk_level.value).lower()
+    if deterministic_analysis.findings:
+        primary_finding = deterministic_analysis.findings[0]
+        return (
+            f"{primary_finding.title} was detected, driving a {risk_level} risk assessment"
+        )
+
+    artifact_count = len(deterministic_analysis.artifacts)
+    if artifact_count == 0:
+        return f"No AI-relevant artifacts were identified, so the change remains {risk_level} risk"
+    if artifact_count == 1:
+        artifact = deterministic_analysis.artifacts[0].relevance.path
+        return f"AI-relevant changes were found in {artifact}, so the change remains {risk_level} risk"
+    return f"AI-relevant changes were found across {artifact_count} artifacts, so the change remains {risk_level} risk"
+
+
+def _extract_risk_level(comment_body: str, *, default: str) -> str:
+    match = re.search(r"risk level\s*[:\-]\s*\**(low|medium|high)\**", comment_body, re.IGNORECASE)
+    if not match:
+        return _normalize_risk_level(default)
+    return _normalize_risk_level(match.group(1))
+
+
+def _normalize_risk_level(risk_level: str) -> str:
+    lowered = risk_level.strip().lower()
+    if lowered == "low":
+        return "Low"
+    if lowered == "medium":
+        return "Medium"
+    return "High"
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:

@@ -5,6 +5,7 @@ import hashlib
 import asyncio
 import json
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 # make sure the package root is on sys.path so `import main` works
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -97,6 +98,42 @@ def test_webhook_queues_relevant_audit_job():
 
     assert response.status_code == 200
     assert response.json() == {"message": "audit queued", "job_id": 42}
+    create_job.assert_called_once()
+
+
+def test_webhook_retries_diff_fetch_after_transient_404():
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {"number": 8, "head": {"sha": "def456"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "pull_request",
+    }
+
+    transient_404 = HTTPError(
+        url="https://api.github.com/repos/doria90/dummyAI/pulls/8",
+        code=404,
+        msg="Not Found",
+        hdrs=None,
+        fp=None,
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch(
+        "main.fetch_pr_diff", side_effect=[transient_404, "diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n"]
+    ) as fetch_diff, patch("main.create_audit_job") as create_job, patch("main.PR_DIFF_FETCH_RETRY_SECONDS", 0):
+        create_job.return_value = type("Job", (), {"id": 43})()
+        response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "audit queued", "job_id": 43}
+    assert fetch_diff.call_count == 2
     create_job.assert_called_once()
 
 

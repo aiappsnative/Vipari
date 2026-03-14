@@ -1,7 +1,9 @@
 import os
 import hmac
 import hashlib
+import asyncio
 from contextlib import asynccontextmanager
+from urllib.error import HTTPError
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -30,6 +32,8 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 AUDIT_MAX_ATTEMPTS = int(os.getenv("AUDIT_MAX_ATTEMPTS", "5"))
 AUDIT_MAX_RETRY_WINDOW_SECONDS = float(os.getenv("AUDIT_MAX_RETRY_WINDOW_SECONDS", "5400"))
 AUDIT_WORKER_POLL_SECONDS = float(os.getenv("AUDIT_WORKER_POLL_SECONDS", "2"))
+PR_DIFF_FETCH_ATTEMPTS = int(os.getenv("PR_DIFF_FETCH_ATTEMPTS", "3"))
+PR_DIFF_FETCH_RETRY_SECONDS = float(os.getenv("PR_DIFF_FETCH_RETRY_SECONDS", "2"))
 
 if not all([GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, GITHUB_WEBHOOK_SECRET, AI_API_KEY]):
     raise RuntimeError("Required environment variables are missing. Check .env or .env.example")
@@ -82,6 +86,21 @@ def needs_audit(diff: str) -> bool:
     return engine_needs_audit(diff)
 
 
+async def fetch_pr_diff_with_retry(repo_full: str, pr_number: int, token: str) -> str:
+    last_error: HTTPError | None = None
+    for attempt in range(1, PR_DIFF_FETCH_ATTEMPTS + 1):
+        try:
+            return fetch_pr_diff(repo_full, pr_number, token)
+        except HTTPError as exc:
+            if exc.code != 404 or attempt == PR_DIFF_FETCH_ATTEMPTS:
+                raise
+            last_error = exc
+            await asyncio.sleep(PR_DIFF_FETCH_RETRY_SECONDS)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Failed to fetch PR diff after retry attempts.")
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     if not await verify_signature(request):
@@ -106,7 +125,7 @@ async def webhook(request: Request):
 
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, installation_id)
-    diff_text = fetch_pr_diff(repo_full, pr_number, token)
+    diff_text = await fetch_pr_diff_with_retry(repo_full, pr_number, token)
 
     if not needs_audit(diff_text):
         return JSONResponse({"message": "no relevant changes"})

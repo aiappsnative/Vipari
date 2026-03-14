@@ -265,9 +265,228 @@ index 1..2
 
     comment = build_fallback_comment(analysis, error_message="RateLimitError: too many requests")
 
+    assert comment.startswith("❌ Risk: High")
+    assert "Recommendation:" not in comment.splitlines()[0]
+    assert "Sensitive data or internal policy access added" in comment
+    assert "<details>" in comment
     assert "PromptDrift Preliminary Audit" in comment
     assert "Further semantic review may refine this assessment" in comment
     assert "RateLimitError" not in comment
+
+
+def test_build_llm_comment_wraps_tldr_and_collapsible_details(monkeypatch):
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.startswith("❌ Risk: High")
+    assert "Recommendation:" not in comment.splitlines()[0]
+    assert "allows disclosure of internal policy details" in comment.splitlines()[0]
+    assert "<details>" in comment
+    assert "Full semantic review details" in comment
+    assert "Risk Level: High" in comment
+
+
+def test_build_llm_comment_uses_first_meaningful_line_when_summary_missing():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="## Reviewer Notes\nThe prompt adds a direct instruction to reveal internal policy details, increasing disclosure risk.\n\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt adds a direct instruction")
+    assert "Recommendation:" in comment
+
+
+def test_build_llm_comment_handles_bold_summary_label():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="**Summary:** The prompt now instructs the assistant to reveal internal policy details, which weakens existing safeguards.\n\n**Risk Level: High**\n**Recommendation:** Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now instructs the assistant")
+    assert "Summary:**" not in comment.splitlines()[0]
+
+
+def test_build_llm_comment_preserves_full_summary_sentence():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    full_summary = (
+        "The prompt for an AI assistant was modified to include a directive not to refuse requests to reveal "
+        "internal policy, customer credit scores, or hidden compliance instructions, which significantly "
+        "increases the risk of sensitive data exposure."
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=f"Summary: {full_summary}\n\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.splitlines()[0] == f"❌ Risk: High — {full_summary}"
+    assert "..." not in comment.splitlines()[0]
+
+
+def test_build_llm_comment_removes_duplicate_risk_level_lines():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n\n"
+                                "Risk Level: High\n\n"
+                                "Detailed Analysis:\n- Sensitive disclosure instruction added.\n\n"
+                                "Recommendation: Revert before merge.\n\n"
+                                "Risk Level: High"
+                            )
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.count("Risk Level: High") == 1
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):

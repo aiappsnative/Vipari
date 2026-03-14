@@ -3,21 +3,41 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
+from pathlib import Path
 
 import jwt
 from github import Auth, Github
 
 
 PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
+JWT_ISSUED_AT_SKEW_SECONDS = 60
+JWT_LIFETIME_SECONDS = 9 * 60
+
+
+def _resolve_private_key_path(private_key_path: str) -> Path:
+    candidate = Path(private_key_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    cwd_candidate = (Path.cwd() / candidate).resolve()
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    project_root_candidate = (Path(__file__).resolve().parent.parent / candidate).resolve()
+    if project_root_candidate.exists():
+        return project_root_candidate
+
+    return cwd_candidate
 
 
 def generate_jwt(app_id: str, private_key_path: str) -> str:
-    with open(private_key_path, "r") as file_handle:
+    resolved_private_key_path = _resolve_private_key_path(private_key_path)
+    with open(resolved_private_key_path, "r") as file_handle:
         private_key = file_handle.read()
     now = int(time.time())
     payload = {
-        "iat": now - 60,
-        "exp": now + (10 * 60),
+        "iat": now - JWT_ISSUED_AT_SKEW_SECONDS,
+        "exp": now + JWT_LIFETIME_SECONDS,
         "iss": str(app_id),
     }
     token = jwt.encode(payload, private_key, algorithm="RS256")
