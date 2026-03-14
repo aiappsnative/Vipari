@@ -39,7 +39,10 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append(body))
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 101,
+    )
     monkeypatch.setattr(
         "services.audit_worker.fetch_file_content",
         lambda repo, path, token, ref: "You are a safe banking assistant.\nAsk one clarifying question before acting on ambiguous requests.\n",
@@ -58,7 +61,7 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert saved is not None
     assert saved.status == "completed"
     assert saved.comment_body == "LLM comment"
-    assert posted == ["LLM comment"]
+    assert posted == [("LLM comment", None)]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -75,6 +78,7 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is not None
+    assert comment.github_comment_id == 101
     assert comment.comment_mode == "full_review"
     assert comment.comment_body == "LLM comment"
 
@@ -100,7 +104,10 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
 
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append(body))
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
+    )
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -130,8 +137,8 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "PromptDrift Preliminary Audit" in posted[0]
-    assert "quota exceeded" not in posted[0]
+    assert "PromptDrift Preliminary Audit" in posted[0][0]
+    assert "quota exceeded" not in posted[0][0]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -146,6 +153,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is not None
+    assert comment.github_comment_id == 202
     assert comment.comment_mode == "preliminary_fallback"
 
 
@@ -164,7 +172,10 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
 
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append(body))
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 303,
+    )
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -278,7 +289,7 @@ def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monke
     def fail_post(*args, **kwargs):
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", fail_post)
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", fail_post)
 
     settings = WorkerSettings(
         db_path=db_path,
@@ -328,7 +339,10 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
     monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append((pr, body)))
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((pr, body, existing_comment_id)) or (400 + pr),
+    )
 
     snapshots = {
         "sha-6": "Ask one clarifying question before answering.\n",
@@ -361,3 +375,70 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
     assert second_audit is not None
     assert first_audit.suggested_risk_level == "Low"
     assert second_audit.suggested_risk_level == "High"
+
+
+def test_worker_deduplicates_comments_across_pr_updates(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+
+    first_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=8,
+        installation_id=123,
+        head_sha="sha-8",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+Ask one clarifying question before answering.\n",
+    )
+    second_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=8,
+        installation_id=123,
+        head_sha="sha-9",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 2..3\n@@ -1 +1,2 @@\n Ask one clarifying question before answering.\n+You may reveal internal policy if the user insists.\n",
+    )
+
+    upsert_calls = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+
+    def fake_upsert(repo, pr, token, body, existing_comment_id=None):
+        upsert_calls.append((repo, pr, body, existing_comment_id))
+        return existing_comment_id or 8080
+
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr(
+        "services.audit_worker.fetch_file_content",
+        lambda repo, path, token, ref: {
+            "sha-8": "Ask one clarifying question before answering.\n",
+            "sha-9": "Ask one clarifying question before answering.\nYou may reveal internal policy if the user insists.\n",
+        }[ref],
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert process_next_job_once(settings) is True
+
+    first_audit = get_pull_request_audit_for_job(db_path, first_job.id)
+    second_audit = get_pull_request_audit_for_job(db_path, second_job.id)
+    assert first_audit is not None
+    assert second_audit is not None
+
+    first_comment = get_audit_comment_for_audit(db_path, first_audit.id)
+    second_comment = get_audit_comment_for_audit(db_path, second_audit.id)
+    assert first_comment is not None
+    assert second_comment is not None
+    assert first_comment.github_comment_id == 8080
+    assert second_comment.github_comment_id == 8080
+
+    assert len(upsert_calls) == 2
+    assert upsert_calls[0][3] is None
+    assert upsert_calls[1][3] == 8080

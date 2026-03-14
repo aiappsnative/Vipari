@@ -8,6 +8,9 @@ import jwt
 from github import Auth, Github
 
 
+PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
+
+
 def generate_jwt(app_id: str, private_key_path: str) -> str:
     with open(private_key_path, "r") as file_handle:
         private_key = file_handle.read()
@@ -52,8 +55,30 @@ def fetch_file_content(repo_full: str, file_path: str, token: str, *, ref: str) 
     return content.decoded_content.decode("utf-8")
 
 
-def post_pr_comment(repo_full: str, pr_number: int, token: str, body: str) -> None:
+def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, existing_comment_id: int | None = None) -> int:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
-    pr.create_issue_comment(body)
+    managed_body = _build_managed_comment_body(body)
+
+    if existing_comment_id is not None:
+        for comment in pr.get_issue_comments():
+            if comment.id != existing_comment_id:
+                continue
+            comment.edit(managed_body)
+            return comment.id
+
+    for comment in reversed(list(pr.get_issue_comments())):
+        if PROMPTDRIFT_MANAGED_MARKER not in comment.body:
+            continue
+        comment.edit(managed_body)
+        return comment.id
+
+    created_comment = pr.create_issue_comment(managed_body)
+    return created_comment.id
+
+
+def _build_managed_comment_body(body: str) -> str:
+    if body.startswith(PROMPTDRIFT_MANAGED_MARKER):
+        return body
+    return f"{PROMPTDRIFT_MANAGED_MARKER}\n{body}"

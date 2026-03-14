@@ -63,6 +63,7 @@ class FindingRecord:
 class AuditCommentRecord:
     id: int
     audit_id: int
+    github_comment_id: int | None
     comment_mode: str
     comment_body: str
     posted_at: float
@@ -179,6 +180,7 @@ def init_audit_record_db(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS audit_comments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id INTEGER NOT NULL UNIQUE,
+                github_comment_id INTEGER,
                 comment_mode TEXT NOT NULL,
                 comment_body TEXT NOT NULL,
                 posted_at REAL NOT NULL,
@@ -219,6 +221,10 @@ def init_audit_record_db(db_path: str) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_normalized_id ON artifact_versions(normalized_artifact_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_hash ON artifact_versions(version_hash)")
 
+        audit_comments_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
+        if "github_comment_id" not in audit_comments_columns:
+            conn.execute("ALTER TABLE audit_comments ADD COLUMN github_comment_id INTEGER")
+
 
 def record_audit_result(
     db_path: str,
@@ -237,6 +243,7 @@ def record_audit_result(
     semantic_review_completed: bool,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
+    github_comment_id: int | None = None,
 ) -> PullRequestAuditRecord:
     now = time.time()
     artifact_snapshots = artifact_snapshots or {}
@@ -397,22 +404,23 @@ def record_audit_result(
                 conn.execute(
                     """
                     INSERT INTO audit_comments (
-                        audit_id, comment_mode, comment_body, posted_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        audit_id, github_comment_id, comment_mode, comment_body, posted_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (audit_id, comment_mode, comment_body, now, now, now),
+                    (audit_id, github_comment_id, comment_mode, comment_body, now, now, now),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE audit_comments
-                    SET comment_mode = ?,
+                    SET github_comment_id = ?,
+                        comment_mode = ?,
                         comment_body = ?,
                         posted_at = ?,
                         updated_at = ?
                     WHERE audit_id = ?
                     """,
-                    (comment_mode, comment_body, now, now, audit_id),
+                    (github_comment_id, comment_mode, comment_body, now, now, audit_id),
                 )
         else:
             conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
@@ -451,6 +459,22 @@ def list_findings_for_audit(db_path: str, audit_id: int) -> list[FindingRecord]:
 def get_audit_comment_for_audit(db_path: str, audit_id: int) -> Optional[AuditCommentRecord]:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM audit_comments WHERE audit_id = ?", (audit_id,)).fetchone()
+    return _row_to_audit_comment(row) if row is not None else None
+
+
+def get_latest_audit_comment_for_pr(db_path: str, repo_full: str, pr_number: int) -> Optional[AuditCommentRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number),
+        ).fetchone()
     return _row_to_audit_comment(row) if row is not None else None
 
 
@@ -597,6 +621,7 @@ def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
     return AuditCommentRecord(
         id=row["id"],
         audit_id=row["audit_id"],
+        github_comment_id=row["github_comment_id"],
         comment_mode=row["comment_mode"],
         comment_body=row["comment_body"],
         posted_at=row["posted_at"],

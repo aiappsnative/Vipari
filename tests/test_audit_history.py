@@ -36,7 +36,10 @@ def _process_accepted_pr(
     monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: f"Accepted review for PR {pr_number}")
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.post_pr_comment", lambda repo, pr, token, body: posted.append((repo, pr, body)))
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((repo, pr, body, existing_comment_id)) or (1000 + pr),
+    )
 
     settings = WorkerSettings(
         db_path=db_path,
@@ -47,7 +50,7 @@ def _process_accepted_pr(
     )
 
     assert process_next_job_once(settings) is True
-    assert posted == [(repo_full, pr_number, f"Accepted review for PR {pr_number}")]
+    assert posted == [(repo_full, pr_number, f"Accepted review for PR {pr_number}", None)]
 
 
 def test_dummyai_history_evolves_across_accepted_prs(tmp_path, monkeypatch):

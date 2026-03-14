@@ -16,8 +16,8 @@ from .audit_jobs import (
     mark_job_fallback_posted,
     mark_job_retry,
 )
-from .audit_records import record_audit_result
-from .github_integration import fetch_file_content, generate_jwt, get_installation_token, post_pr_comment
+from .audit_records import get_latest_audit_comment_for_pr, record_audit_result
+from .github_integration import fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 
 
 @dataclass(frozen=True)
@@ -132,9 +132,16 @@ def _get_installation_token_for_job(job: AuditJob, settings: WorkerSettings) -> 
     return get_installation_token(jwt_token, job.installation_id)
 
 
-def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> None:
+def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> int:
     token = installation_token or _get_installation_token_for_job(job, settings)
-    post_pr_comment(job.repo_full, job.pr_number, token, body)
+    existing_comment = get_latest_audit_comment_for_pr(settings.db_path, job.repo_full, job.pr_number)
+    return upsert_pr_comment(
+        job.repo_full,
+        job.pr_number,
+        token,
+        body,
+        existing_comment_id=existing_comment.github_comment_id if existing_comment is not None else None,
+    )
 
 
 def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
@@ -172,6 +179,7 @@ def _persist_audit_result(
     comment_mode: str | None,
     semantic_review_completed: bool,
     error_message: str | None = None,
+    github_comment_id: int | None = None,
 ) -> None:
     try:
         record_audit_result(
@@ -190,6 +198,7 @@ def _persist_audit_result(
             semantic_review_completed=semantic_review_completed,
             error_message=error_message,
             artifact_snapshots=_fetch_artifact_snapshots(job, deterministic_analysis, settings),
+            github_comment_id=github_comment_id,
         )
     except Exception:
         return
@@ -198,7 +207,7 @@ def _persist_audit_result(
 def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
     fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
     try:
-        _post_comment_for_job(job, fallback_comment, settings)
+        github_comment_id = _post_comment_for_job(job, fallback_comment, settings)
     except Exception as fallback_exc:
         combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
         _persist_audit_result(
@@ -227,6 +236,7 @@ def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_anal
         comment_mode="preliminary_fallback",
         semantic_review_completed=False,
         error_message=error_message,
+        github_comment_id=github_comment_id,
     )
     mark_job_fallback_posted(
         settings.db_path,
@@ -258,7 +268,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
 
     try:
-        _post_comment_for_job(job, comment_body, settings)
+        github_comment_id = _post_comment_for_job(job, comment_body, settings)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
@@ -273,6 +283,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         comment_body=comment_body,
         comment_mode="full_review",
         semantic_review_completed=True,
+        github_comment_id=github_comment_id,
     )
     mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
     return "completed"
