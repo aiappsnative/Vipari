@@ -17,7 +17,7 @@ env/
 .pytest_cache/
 
 # Plan and other docs
-Plan.MD
+#Plan.MD
 
 # Distribution
 *.egg-info/
@@ -26,6 +26,7 @@ dist/
 
 # Logs
 *.log
+*.db
 
 # Keys
 *.pem

@@ -1,0 +1,673 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from engine.analysis import DiffAnalysis
+from engine.diff_parser import extract_signal_terms_from_text
+
+
+@dataclass(frozen=True)
+class PullRequestAuditRecord:
+    id: int
+    job_id: int
+    repo_full: str
+    pr_number: int
+    installation_id: int
+    head_sha: str
+    status: str
+    completion_mode: str
+    output_mode: str
+    deterministic_score: int
+    suggested_risk_level: str
+    semantic_review_completed: bool
+    error_message: str | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class ChangedArtifactRecord:
+    id: int
+    audit_id: int
+    artifact_path: str
+    artifact_type: str
+    context_mode: str
+    relevance_reason: str
+    changed_hunks: int
+    added_count: int
+    removed_count: int
+    created_at: float
+
+
+@dataclass(frozen=True)
+class FindingRecord:
+    id: int
+    audit_id: int
+    changed_artifact_id: int | None
+    source: str
+    rule_id: str | None
+    title: str
+    severity: str
+    rationale: str
+    evidence: list[str]
+    created_at: float
+
+
+@dataclass(frozen=True)
+class AuditCommentRecord:
+    id: int
+    audit_id: int
+    github_comment_id: int | None
+    comment_mode: str
+    comment_body: str
+    posted_at: float
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class ArtifactHistoryRecord:
+    audit_id: int
+    job_id: int
+    repo_full: str
+    pr_number: int
+    head_sha: str
+    status: str
+    completion_mode: str
+    output_mode: str
+    deterministic_score: int
+    suggested_risk_level: str
+    semantic_review_completed: bool
+    artifact_path: str
+    artifact_type: str
+    context_mode: str
+    changed_hunks: int
+    added_count: int
+    removed_count: int
+    created_at: float
+
+
+@dataclass(frozen=True)
+class ArtifactVersionRecord:
+    id: int
+    audit_id: int
+    changed_artifact_id: int
+    normalized_artifact_id: str
+    artifact_path: str
+    artifact_type: str
+    version_hash: str
+    signal_terms: list[str]
+    line_count: int
+    previous_version_id: int | None
+    created_at: float
+
+
+def _connect(db_path: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def init_audit_record_db(db_path: str) -> None:
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pull_request_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completion_mode TEXT NOT NULL,
+                output_mode TEXT NOT NULL,
+                deterministic_score INTEGER NOT NULL,
+                suggested_risk_level TEXT NOT NULL,
+                semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, pr_number, head_sha)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS changed_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                context_mode TEXT NOT NULL,
+                relevance_reason TEXT NOT NULL,
+                changed_hunks INTEGER NOT NULL,
+                added_count INTEGER NOT NULL,
+                removed_count INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS findings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL,
+                changed_artifact_id INTEGER,
+                source TEXT NOT NULL,
+                rule_id TEXT,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE,
+                FOREIGN KEY(changed_artifact_id) REFERENCES changed_artifacts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL UNIQUE,
+                github_comment_id INTEGER,
+                comment_mode TEXT NOT NULL,
+                comment_body TEXT NOT NULL,
+                posted_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS artifact_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL,
+                changed_artifact_id INTEGER NOT NULL,
+                normalized_artifact_id TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                version_hash TEXT NOT NULL,
+                signal_terms_json TEXT NOT NULL,
+                line_count INTEGER NOT NULL,
+                previous_version_id INTEGER,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE,
+                FOREIGN KEY(changed_artifact_id) REFERENCES changed_artifacts(id) ON DELETE CASCADE,
+                FOREIGN KEY(previous_version_id) REFERENCES artifact_versions(id) ON DELETE SET NULL
+            )
+            """
+        )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pull_request_audits_repo_pr_sha ON pull_request_audits(repo_full, pr_number, head_sha)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pull_request_audits_created_at ON pull_request_audits(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_changed_artifacts_path ON changed_artifacts(artifact_path)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_source_severity ON findings(source, severity)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_rule_id ON findings(rule_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_normalized_id ON artifact_versions(normalized_artifact_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_hash ON artifact_versions(version_hash)")
+
+        audit_comments_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
+        if "github_comment_id" not in audit_comments_columns:
+            conn.execute("ALTER TABLE audit_comments ADD COLUMN github_comment_id INTEGER")
+
+
+def record_audit_result(
+    db_path: str,
+    *,
+    job_id: int,
+    repo_full: str,
+    pr_number: int,
+    installation_id: int,
+    head_sha: str,
+    deterministic_analysis: DiffAnalysis,
+    status: str,
+    completion_mode: str,
+    output_mode: str,
+    comment_body: str | None,
+    comment_mode: str | None,
+    semantic_review_completed: bool,
+    error_message: str | None = None,
+    artifact_snapshots: dict[str, str] | None = None,
+    github_comment_id: int | None = None,
+) -> PullRequestAuditRecord:
+    now = time.time()
+    artifact_snapshots = artifact_snapshots or {}
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id, created_at FROM pull_request_audits WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO pull_request_audits (
+                    job_id, repo_full, pr_number, installation_id, head_sha,
+                    status, completion_mode, output_mode,
+                    deterministic_score, suggested_risk_level, semantic_review_completed,
+                    error_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    repo_full,
+                    pr_number,
+                    installation_id,
+                    head_sha,
+                    status,
+                    completion_mode,
+                    output_mode,
+                    deterministic_analysis.deterministic_score,
+                    deterministic_analysis.suggested_risk_level.value,
+                    int(semantic_review_completed),
+                    error_message,
+                    now,
+                    now,
+                ),
+            )
+            audit_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        else:
+            audit_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE pull_request_audits
+                SET repo_full = ?,
+                    pr_number = ?,
+                    installation_id = ?,
+                    head_sha = ?,
+                    status = ?,
+                    completion_mode = ?,
+                    output_mode = ?,
+                    deterministic_score = ?,
+                    suggested_risk_level = ?,
+                    semantic_review_completed = ?,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    repo_full,
+                    pr_number,
+                    installation_id,
+                    head_sha,
+                    status,
+                    completion_mode,
+                    output_mode,
+                    deterministic_analysis.deterministic_score,
+                    deterministic_analysis.suggested_risk_level.value,
+                    int(semantic_review_completed),
+                    error_message,
+                    now,
+                    audit_id,
+                ),
+            )
+            conn.execute("DELETE FROM findings WHERE audit_id = ?", (audit_id,))
+            conn.execute("DELETE FROM artifact_versions WHERE audit_id = ?", (audit_id,))
+            conn.execute("DELETE FROM changed_artifacts WHERE audit_id = ?", (audit_id,))
+
+        for artifact in deterministic_analysis.artifacts:
+            cursor = conn.execute(
+                """
+                INSERT INTO changed_artifacts (
+                    audit_id, artifact_path, artifact_type, context_mode, relevance_reason,
+                    changed_hunks, added_count, removed_count, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    audit_id,
+                    artifact.relevance.path,
+                    artifact.relevance.artifact_type,
+                    artifact.relevance.context_mode.value,
+                    artifact.relevance.reason,
+                    artifact.change.changed_hunks,
+                    artifact.change.added_count,
+                    artifact.change.removed_count,
+                    now,
+                ),
+            )
+            changed_artifact_id = int(cursor.lastrowid)
+
+            for finding in artifact.findings:
+                conn.execute(
+                    """
+                    INSERT INTO findings (
+                        audit_id, changed_artifact_id, source, rule_id, title,
+                        severity, rationale, evidence_json, created_at
+                    ) VALUES (?, ?, 'deterministic', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        audit_id,
+                        changed_artifact_id,
+                        finding.rule_id,
+                        finding.title,
+                        finding.severity.value,
+                        finding.rationale,
+                        json.dumps(finding.evidence),
+                        now,
+                    ),
+                )
+
+            snapshot_text = artifact_snapshots.get(artifact.relevance.path)
+            if snapshot_text is not None:
+                normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact.relevance.path)
+                previous_version = conn.execute(
+                    """
+                    SELECT id FROM artifact_versions
+                    WHERE normalized_artifact_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (normalized_artifact_id,),
+                ).fetchone()
+                conn.execute(
+                    """
+                    INSERT INTO artifact_versions (
+                        audit_id, changed_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
+                        version_hash, signal_terms_json, line_count, previous_version_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        audit_id,
+                        changed_artifact_id,
+                        normalized_artifact_id,
+                        artifact.relevance.path,
+                        artifact.relevance.artifact_type,
+                        hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
+                        json.dumps(extract_signal_terms_from_text(snapshot_text)),
+                        len([line for line in snapshot_text.splitlines() if line.strip()]),
+                        previous_version["id"] if previous_version is not None else None,
+                        now,
+                    ),
+                )
+
+        if comment_body is not None and comment_mode is not None:
+            existing_comment = conn.execute(
+                "SELECT id, created_at FROM audit_comments WHERE audit_id = ?",
+                (audit_id,),
+            ).fetchone()
+            if existing_comment is None:
+                conn.execute(
+                    """
+                    INSERT INTO audit_comments (
+                        audit_id, github_comment_id, comment_mode, comment_body, posted_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (audit_id, github_comment_id, comment_mode, comment_body, now, now, now),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE audit_comments
+                    SET github_comment_id = ?,
+                        comment_mode = ?,
+                        comment_body = ?,
+                        posted_at = ?,
+                        updated_at = ?
+                    WHERE audit_id = ?
+                    """,
+                    (github_comment_id, comment_mode, comment_body, now, now, audit_id),
+                )
+        else:
+            conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
+
+        row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
+
+    if row is None:
+        raise RuntimeError("Failed to store or reload pull request audit record.")
+    return _row_to_pull_request_audit(row)
+
+
+def get_pull_request_audit_for_job(db_path: str, job_id: int) -> Optional[PullRequestAuditRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM pull_request_audits WHERE job_id = ?", (job_id,)).fetchone()
+    return _row_to_pull_request_audit(row) if row is not None else None
+
+
+def list_changed_artifacts_for_audit(db_path: str, audit_id: int) -> list[ChangedArtifactRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM changed_artifacts WHERE audit_id = ? ORDER BY id ASC",
+            (audit_id,),
+        ).fetchall()
+    return [_row_to_changed_artifact(row) for row in rows]
+
+
+def list_findings_for_audit(db_path: str, audit_id: int) -> list[FindingRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE audit_id = ? ORDER BY id ASC",
+            (audit_id,),
+        ).fetchall()
+    return [_row_to_finding(row) for row in rows]
+
+
+def get_audit_comment_for_audit(db_path: str, audit_id: int) -> Optional[AuditCommentRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM audit_comments WHERE audit_id = ?", (audit_id,)).fetchone()
+    return _row_to_audit_comment(row) if row is not None else None
+
+
+def get_latest_audit_comment_for_pr(db_path: str, repo_full: str, pr_number: int) -> Optional[AuditCommentRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number),
+        ).fetchone()
+    return _row_to_audit_comment(row) if row is not None else None
+
+
+def list_pull_request_audits_for_repo(db_path: str, repo_full: str) -> list[PullRequestAuditRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM pull_request_audits WHERE repo_full = ? ORDER BY created_at ASC, id ASC",
+            (repo_full,),
+        ).fetchall()
+    return [_row_to_pull_request_audit(row) for row in rows]
+
+
+def list_artifact_history_for_repo(db_path: str, repo_full: str, artifact_path: str) -> list[ArtifactHistoryRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                pra.id AS audit_id,
+                pra.job_id AS job_id,
+                pra.repo_full AS repo_full,
+                pra.pr_number AS pr_number,
+                pra.head_sha AS head_sha,
+                pra.status AS status,
+                pra.completion_mode AS completion_mode,
+                pra.output_mode AS output_mode,
+                pra.deterministic_score AS deterministic_score,
+                pra.suggested_risk_level AS suggested_risk_level,
+                pra.semantic_review_completed AS semantic_review_completed,
+                ca.artifact_path AS artifact_path,
+                ca.artifact_type AS artifact_type,
+                ca.context_mode AS context_mode,
+                ca.changed_hunks AS changed_hunks,
+                ca.added_count AS added_count,
+                ca.removed_count AS removed_count,
+                ca.created_at AS created_at
+            FROM changed_artifacts ca
+            INNER JOIN pull_request_audits pra ON pra.id = ca.audit_id
+            WHERE pra.repo_full = ? AND ca.artifact_path = ?
+            ORDER BY pra.created_at ASC, pra.id ASC, ca.id ASC
+            """,
+            (repo_full, artifact_path),
+        ).fetchall()
+    return [_row_to_artifact_history(row) for row in rows]
+
+
+def list_findings_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> list[FindingRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT f.*
+            FROM findings f
+            INNER JOIN changed_artifacts ca ON ca.id = f.changed_artifact_id
+            INNER JOIN pull_request_audits pra ON pra.id = f.audit_id
+            WHERE pra.repo_full = ? AND ca.artifact_path = ?
+            ORDER BY f.created_at ASC, f.id ASC
+            """,
+            (repo_full, artifact_path),
+        ).fetchall()
+    return [_row_to_finding(row) for row in rows]
+
+
+def list_artifact_versions_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> list[ArtifactVersionRecord]:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM artifact_versions
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (normalized_artifact_id,),
+        ).fetchall()
+    return [_row_to_artifact_version(row) for row in rows]
+
+
+def get_latest_artifact_version_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> Optional[ArtifactVersionRecord]:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM artifact_versions
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
+    return _row_to_artifact_version(row) if row is not None else None
+
+
+def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
+    return PullRequestAuditRecord(
+        id=row["id"],
+        job_id=row["job_id"],
+        repo_full=row["repo_full"],
+        pr_number=row["pr_number"],
+        installation_id=row["installation_id"],
+        head_sha=row["head_sha"],
+        status=row["status"],
+        completion_mode=row["completion_mode"],
+        output_mode=row["output_mode"],
+        deterministic_score=row["deterministic_score"],
+        suggested_risk_level=row["suggested_risk_level"],
+        semantic_review_completed=bool(row["semantic_review_completed"]),
+        error_message=row["error_message"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_changed_artifact(row: sqlite3.Row) -> ChangedArtifactRecord:
+    return ChangedArtifactRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        artifact_path=row["artifact_path"],
+        artifact_type=row["artifact_type"],
+        context_mode=row["context_mode"],
+        relevance_reason=row["relevance_reason"],
+        changed_hunks=row["changed_hunks"],
+        added_count=row["added_count"],
+        removed_count=row["removed_count"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_finding(row: sqlite3.Row) -> FindingRecord:
+    return FindingRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        changed_artifact_id=row["changed_artifact_id"],
+        source=row["source"],
+        rule_id=row["rule_id"],
+        title=row["title"],
+        severity=row["severity"],
+        rationale=row["rationale"],
+        evidence=json.loads(row["evidence_json"]),
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
+    return AuditCommentRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        github_comment_id=row["github_comment_id"],
+        comment_mode=row["comment_mode"],
+        comment_body=row["comment_body"],
+        posted_at=row["posted_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
+    return ArtifactHistoryRecord(
+        audit_id=row["audit_id"],
+        job_id=row["job_id"],
+        repo_full=row["repo_full"],
+        pr_number=row["pr_number"],
+        head_sha=row["head_sha"],
+        status=row["status"],
+        completion_mode=row["completion_mode"],
+        output_mode=row["output_mode"],
+        deterministic_score=row["deterministic_score"],
+        suggested_risk_level=row["suggested_risk_level"],
+        semantic_review_completed=bool(row["semantic_review_completed"]),
+        artifact_path=row["artifact_path"],
+        artifact_type=row["artifact_type"],
+        context_mode=row["context_mode"],
+        changed_hunks=row["changed_hunks"],
+        added_count=row["added_count"],
+        removed_count=row["removed_count"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_artifact_version(row: sqlite3.Row) -> ArtifactVersionRecord:
+    return ArtifactVersionRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        changed_artifact_id=row["changed_artifact_id"],
+        normalized_artifact_id=row["normalized_artifact_id"],
+        artifact_path=row["artifact_path"],
+        artifact_type=row["artifact_type"],
+        version_hash=row["version_hash"],
+        signal_terms=json.loads(row["signal_terms_json"]),
+        line_count=row["line_count"],
+        previous_version_id=row["previous_version_id"],
+        created_at=row["created_at"],
+    )
+
+
+def _build_normalized_artifact_id(repo_full: str, artifact_path: str) -> str:
+    return f"{repo_full.lower()}::{artifact_path.lower()}"

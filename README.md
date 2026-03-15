@@ -1,26 +1,62 @@
 # PromptDrift
 
-PromptDrift is a GitHub App backend that listens to `pull_request` webhooks, detects AI-relevant changes in pull requests, sends the diff to an LLM for review, and posts an audit comment back on the PR.
+PromptDrift is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
 
-## MVP status
+Its job is not just to say that “an AI file changed”, but to help reviewers answer the customer-critical question:
 
-The current MVP has been verified end to end against a private GitHub repository:
+**Did this PR materially change how the AI behaves, what it is allowed to do, or what it may reveal?**
 
-- GitHub App authentication works
-- webhook delivery works through ngrok
-- private pull request diff retrieval works
-- Azure OpenAI / Foundry-backed analysis works
-- PR comments are posted successfully by the GitHub App bot
+## Customer value
 
-## Current capabilities
+PromptDrift provides value by reducing the gap between ordinary code review and safe AI change review.
 
-- FastAPI webhook endpoint at `/webhook`
-- GitHub webhook signature verification
-- GitHub App JWT generation and installation token exchange
-- Pull request diff fetching for private repositories
-- Basic AI-related file detection using `prompt`, `ai`, and `llm` path keywords
-- Azure OpenAI / Foundry-backed PR analysis
-- PR comment publishing with a Markdown audit summary
+For customers, that means:
+
+- catching risky prompt and guardrail changes before they reach production
+- explaining *why* a change is risky, not just that a file changed
+- preserving audit history so teams can reason about drift over time
+- making AI review operationally practical inside the existing GitHub PR workflow
+- providing a defensible review trail for security, compliance, and platform teams
+
+In product terms, PromptDrift is moving toward becoming a **change intelligence layer for AI behavior**.
+
+## Current status
+
+The active branch has moved beyond the original MVP. The current system has been validated end to end against a private GitHub repository and now includes:
+
+- working GitHub App authentication and bot-authored PR comments
+- webhook ingestion with fast acknowledgement and queued audit execution
+- deterministic drift analysis and structured semantic review packages
+- retry and fallback behavior for transient model/provider failures
+- opened-event PR diff fetching with transient `404` retry and synchronize-only exact commit-pair reconstruction
+- atomic SQLite job claiming, failed-job requeue on webhook redelivery, and honest terminal failure states when persistence fails
+- durable audit/history persistence in SQLite for local development
+- artifact lineage and baseline-aware suppression for better risk judgment
+- negation-aware suppression for restrictive prompt additions such as `Do not reveal ...` so obvious safety wording is not scored as risky drift
+- managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
+- compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
+
+## What PromptDrift does today
+
+- receives GitHub `pull_request` webhooks at `/webhook`
+- verifies webhook signatures
+- fetches private PR diffs using GitHub App installation auth
+- retries transient opened-PR diff `404`s and reconstructs synchronize-event diffs from exact base/head commit trees to avoid stale PR snapshot races
+- runs a fast AI relevance gate on the webhook path
+- queues relevant audits for background execution
+- claims queued jobs atomically so concurrent workers cannot double-process the same audit
+- performs deterministic analysis of AI-relevant changes
+- prepares structured semantic review context for the LLM
+- falls back to a deterministic preliminary audit when the model call is permanently unavailable
+- posts a managed PR comment and replaces the previous managed comment on later PR updates
+- persists audit, finding, artifact, and comment history for later analysis
+- marks jobs failed instead of pretending success when comment posting or durable persistence breaks
+
+## High-level architecture
+
+- **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
+- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, replace-on-update comment publishing, durable persistence
+- **Persistence:** operational queue tables plus durable audit/history tables in one relational store for now
 
 ## Requirements
 
@@ -72,13 +108,21 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py) can be used to validate the local credential setup before testing.
 
+Recent live validation on the active branch covered:
+
+- risky opened PR flow with durable audit persistence and bot comment posting
+- synchronize re-audit flow with exact-SHA diff reconstruction and managed comment replacement
+- non-AI PR flow returning `no relevant changes` without queueing an audit
+- invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
+
 ## Known limitations
 
-- AI drift detection is still keyword-based and intentionally simple
-- Processing is synchronous
-- No persistence layer or dashboard yet
-- Limited automated tests
-- No queueing, retries, or rate-limit backoff yet
+- signal fusion between deterministic and semantic evidence is still early-stage
+- the queue and durable store are still local SQLite in the current dev shape
+- no customer dashboard or operator UI yet
+- no production deployment packaging or multi-tenant control plane yet
+- AI relevance and policy coverage should continue expanding beyond the current rule set
+- nuanced fusion between deterministic and semantic outputs still needs refinement beyond the current negation-aware guardrail suppression
 
 ## Safe repo practices
 
@@ -88,4 +132,11 @@ The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py)
 
 ## Next planned focus
 
-The next major workstream is strengthening the drift detection engine so PromptDrift can distinguish benign edits from meaningful model, prompt, and guardrail changes.
+The next major workstreams are:
+
+- improve signal fusion between deterministic findings and semantic review
+- expand read-side history and trend analysis capabilities
+- refresh product and architecture docs to match the real implemented system
+- continue the path from local/dev architecture toward production-grade persistence and dashboarding
+- plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement
+- plan for a future `customer-onboarding-baseline-v1` workflow to establish repository baselines and AI artifact inventories at install time
