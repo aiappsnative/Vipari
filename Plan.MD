@@ -40,9 +40,9 @@ This framing should shape roadmap decisions:
 	- structured semantic review packages implemented
 	- durable audit/history persistence implemented
 	- artifact lineage and baseline-aware suppression implemented
-	- PR comment dedupe/update implemented
+	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
-	- GitHub App auth hardening and opened-PR diff retry implemented
+	- GitHub App auth hardening, opened-PR diff retry, and exact-SHA synchronize diff reconstruction implemented
 	- live validation completed for benign, risky, fallback, dedupe, and bot-auth scenarios
 - Current known limitations:
 	- queue is local in-process SQLite for this stage
@@ -58,9 +58,9 @@ This framing should shape roadmap decisions:
 5. Retry handling, provider retry hints, and deterministic preliminary fallback
 6. Structured semantic review packages for LLM review framing
 7. Durable audit history and artifact lineage
-8. Managed comment dedupe/update behavior
+8. Managed comment replacement behavior on PR updates
 9. Reviewer-facing comment formatting polish
-10. GitHub App auth hardening and transient PR diff retry
+10. GitHub App auth hardening, transient PR diff retry, and synchronize diff freshness hardening
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings

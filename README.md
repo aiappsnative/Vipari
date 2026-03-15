@@ -30,25 +30,26 @@ The active branch has moved beyond the original MVP. The current system has been
 - retry and fallback behavior for transient model/provider failures
 - durable audit/history persistence in SQLite for local development
 - artifact lineage and baseline-aware suppression for better risk judgment
-- deduplicated managed PR comments that update instead of spamming threads
-- compact reviewer-facing comments with TLDR risk summaries and collapsible detail
+- managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
+- compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
 
 ## What PromptDrift does today
 
 - receives GitHub `pull_request` webhooks at `/webhook`
 - verifies webhook signatures
 - fetches private PR diffs using GitHub App installation auth
+- reconstructs synchronize-event diffs from exact base/head commit trees to avoid stale PR snapshot races
 - runs a fast AI relevance gate on the webhook path
 - queues relevant audits for background execution
 - performs deterministic analysis of AI-relevant changes
 - prepares structured semantic review context for the LLM
-- posts or updates a managed PR comment with risk and explanation
+- posts a managed PR comment and replaces the previous managed comment on later PR updates
 - persists audit, finding, artifact, and comment history for later analysis
 
 ## High-level architecture
 
 - **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
-- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, comment upsert, durable persistence
+- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, replace-on-update comment publishing, durable persistence
 - **Persistence:** operational queue tables plus durable audit/history tables in one relational store for now
 
 ## Requirements

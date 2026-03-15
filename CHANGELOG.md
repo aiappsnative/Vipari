@@ -5,22 +5,25 @@
 ### Added
 - durable audit, finding, artifact, and comment persistence
 - artifact lineage storage and baseline-aware reasoning support
-- managed PR comment dedupe/update behavior
+- managed PR comment replacement behavior on PR updates
 - compact TLDR plus collapsible detailed reviewer comment format
 - regression tests for reviewer comment formatting behavior
 - transient opened-PR diff retry handling on the webhook path
 - private-key path resolution coverage and GitHub App JWT safety-window coverage
+- exact-SHA synchronize diff reconstruction to avoid stale PR snapshot races
 
 ### Fixed
 - GitHub App private key path resolution across server and worker contexts
 - intermittent installation token failures caused by JWT expiration-window edge cases
 - duplicate risk-level lines in detailed reviewer comments
+- duplicate summary lines between the TLDR and expanded reviewer details
 - truncated TLDR summaries in reviewer comments
 - live opened-PR app flow failures caused by short-lived GitHub diff propagation delays
+- misleading PR timelines caused by in-place comment edits on synchronize events
 
 ### Verified
 - end-to-end GitHub App bot-authored comment posting against `dummyAI`
-- managed comment updates from `amit-ai-auditor-dev[bot]`
+- managed comment replacement from `amit-ai-auditor-dev[bot]` with a fresh visible timeline entry
 - live app-flow comment rendering with compact TLDR and collapsible details
 
 ### Product impact

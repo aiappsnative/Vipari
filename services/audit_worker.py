@@ -136,7 +136,20 @@ def _sanitize_detail_markdown(detail_markdown: str) -> str:
         lines = cleaned.splitlines()
         if len(lines) >= 2:
             cleaned = "\n".join(lines[1:-1]).strip()
+    cleaned = _remove_duplicate_summary_lines(cleaned)
     return _remove_duplicate_risk_level_lines(cleaned)
+
+
+def _remove_duplicate_summary_lines(detail_markdown: str) -> str:
+    lines = detail_markdown.splitlines()
+    cleaned_lines: list[str] = []
+
+    for line in lines:
+        if _is_standalone_summary_line(line):
+            continue
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines).strip()
 
 
 def _remove_duplicate_risk_level_lines(detail_markdown: str) -> str:
@@ -159,6 +172,11 @@ def _is_standalone_risk_level_line(line: str) -> bool:
     return bool(
         re.match(r"^(\*\*)?risk level(\*\*)?\s*[:\-]\s*(\*\*)?(low|medium|high)(\*\*)?\.?$", normalized, re.IGNORECASE)
     )
+
+
+def _is_standalone_summary_line(line: str) -> bool:
+    normalized = line.strip()
+    return bool(re.match(r"^(\*\*)?summary(\*\*)?\s*[:\-]\s*.+$", normalized, re.IGNORECASE))
 
 
 def _extract_summary(comment_body: str, *, default: str) -> str:

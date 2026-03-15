@@ -2,7 +2,8 @@ flowchart TD
     A[GitHub PR webhook event] --> A1[Signature and event validation]
     A1 --> A2[Fetch installation token and PR diff]
     A2 --> A2B[Retry transient opened-PR diff 404s]
-    A2B --> A3[Fast relevance gate]
+    A2B --> A2C[Rebuild synchronize diffs from exact base and head SHAs]
+    A2C --> A3[Fast relevance gate]
 
     A3 -->|Not AI relevant| Z1[Exit: no audit comment]
     A3 -->|AI relevant| Q1[Create audit job]
@@ -50,9 +51,9 @@ flowchart TD
 
     H --> I[Risk scoring and confidence calibration]
     I --> J[Reviewer-facing explanation synthesis]
-    J --> J1[TLDR risk summary plus collapsible detail]
+    J --> J1[TLDR risk summary plus collapsible detail without repeated summary row]
     J1 --> K[Managed Markdown PR audit comment]
-    K --> L[Upsert GitHub PR comment]
+    K --> L[Create new managed PR comment and delete previous managed comment]
 
     Q1 --> P0[Operational queue store]
     D --> P1[Artifact lineage and version store]

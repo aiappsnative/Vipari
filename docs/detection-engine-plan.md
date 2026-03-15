@@ -64,9 +64,9 @@ Implemented today:
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
-- managed PR comment upsert behavior to avoid repeated duplicate comments
-- reviewer-facing comment formatting with TLDR risk summary and collapsible details
-- GitHub App auth hardening and transient opened-PR diff retry handling
+- managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
+- reviewer-facing comment formatting with TLDR risk summary and collapsible details, without repeating the summary inside the expanded section
+- GitHub App auth hardening, transient opened-PR diff retry handling, and exact-SHA synchronize diff reconstruction
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
@@ -81,6 +81,7 @@ The webhook endpoint should do only the minimum amount of work required to decid
 - verify signature and event shape
 - fetch the PR diff
 - retry briefly when GitHub returns a transient opened-PR `404` immediately after PR creation
+- reconstruct synchronize-event diffs from the exact `base.sha` and `head.sha` commit pair so freshly changed PRs do not rely on stale PR snapshots
 - run a fast AI relevance gate
 - persist an audit job for relevant changes
 - return success quickly to GitHub
@@ -91,7 +92,7 @@ The expensive path should run in a background worker:
 - LLM review
 - retry and backoff handling
 - deterministic fallback generation if the LLM remains unavailable
-- managed PR comment upsert
+- create a fresh managed PR comment and delete the previous managed one after successful posting
 - durable audit persistence
 
 This is the right fit for PromptDrift because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.

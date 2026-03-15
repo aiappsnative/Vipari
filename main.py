@@ -13,7 +13,7 @@ from openai import OpenAI
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db
 from services.audit_worker import AuditWorker, WorkerSettings
-from services.github_integration import fetch_pr_diff, generate_jwt, get_installation_token
+from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 
 # load environment variables
 load_dotenv()
@@ -86,11 +86,17 @@ def needs_audit(diff: str) -> bool:
     return engine_needs_audit(diff)
 
 
-async def fetch_pr_diff_with_retry(repo_full: str, pr_number: int, token: str) -> str:
+async def fetch_diff_with_retry(repo_full: str, pr_number: int, token: str, *, base_sha: str | None = None, head_sha: str | None = None) -> str:
     last_error: HTTPError | None = None
+    fetcher = fetch_pr_diff
+    fetch_args = (repo_full, pr_number, token)
+    if base_sha and head_sha:
+        fetcher = fetch_commit_pair_diff
+        fetch_args = (repo_full, base_sha, head_sha, token)
+
     for attempt in range(1, PR_DIFF_FETCH_ATTEMPTS + 1):
         try:
-            return fetch_pr_diff(repo_full, pr_number, token)
+            return fetcher(*fetch_args)
         except HTTPError as exc:
             if exc.code != 404 or attempt == PR_DIFF_FETCH_ATTEMPTS:
                 raise
@@ -118,6 +124,7 @@ async def webhook(request: Request):
     installation_id = payload.get("installation", {}).get("id")
     repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
+    base_sha = payload.get("pull_request", {}).get("base", {}).get("sha")
     head_sha = payload.get("pull_request", {}).get("head", {}).get("sha")
 
     if not all([installation_id, repo_full, pr_number, head_sha]):
@@ -125,7 +132,7 @@ async def webhook(request: Request):
 
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, installation_id)
-    diff_text = await fetch_pr_diff_with_retry(repo_full, pr_number, token)
+    diff_text = await fetch_diff_with_retry(repo_full, pr_number, token, base_sha=base_sha, head_sha=head_sha)
 
     if not needs_audit(diff_text):
         return JSONResponse({"message": "no relevant changes"})

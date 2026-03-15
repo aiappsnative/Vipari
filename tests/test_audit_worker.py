@@ -315,6 +315,7 @@ index 1..2
     assert "allows disclosure of internal policy details" in comment.splitlines()[0]
     assert "<details>" in comment
     assert "Full semantic review details" in comment
+    assert "Summary:" not in comment
     assert "Risk Level: High" in comment
 
 
@@ -489,6 +490,50 @@ index 1..2
     assert comment.count("Risk Level: High") == 1
 
 
+def test_build_llm_comment_removes_summary_line_from_detailed_section():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n"
+                                "Risk Level: High\n"
+                                "Recommendation: Revert before merge."
+                            )
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now allows disclosure")
+    assert "Summary:" not in comment
+
+
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
@@ -596,7 +641,7 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
     assert second_audit.suggested_risk_level == "High"
 
 
-def test_worker_deduplicates_comments_across_pr_updates(tmp_path, monkeypatch):
+def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
 
@@ -624,7 +669,7 @@ def test_worker_deduplicates_comments_across_pr_updates(tmp_path, monkeypatch):
 
     def fake_upsert(repo, pr, token, body, existing_comment_id=None):
         upsert_calls.append((repo, pr, body, existing_comment_id))
-        return existing_comment_id or 8080
+        return 8080 if existing_comment_id is None else 9090
 
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr(
@@ -656,7 +701,7 @@ def test_worker_deduplicates_comments_across_pr_updates(tmp_path, monkeypatch):
     assert first_comment is not None
     assert second_comment is not None
     assert first_comment.github_comment_id == 8080
-    assert second_comment.github_comment_id == 8080
+    assert second_comment.github_comment_id == 9090
 
     assert len(upsert_calls) == 2
     assert upsert_calls[0][3] is None
