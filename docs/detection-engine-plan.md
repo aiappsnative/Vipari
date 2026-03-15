@@ -15,6 +15,29 @@ The core design principle is a **hybrid engine**:
 
 ---
 
+## Customer value frame
+
+PromptDrift should be understood as an AI change-review system, not merely a webhook bot.
+
+The value to customers is:
+
+- identifying changes that materially alter AI behavior, disclosure rules, or authority
+- helping human reviewers understand why a change is risky
+- creating durable memory about how prompts and guardrails evolve over time
+- reducing the odds that risky AI behavior changes slip through ordinary code review unnoticed
+
+This matters because AI risk often enters through small textual edits that look harmless in a normal diff but have outsized behavioral consequences.
+
+Every engine decision should therefore favor:
+
+- reviewer trust
+- evidence-backed explanations
+- operational consistency
+- durable history and trendability
+- precise detection of meaningful drift over noisy file changes
+
+---
+
 ## Design goals
 
 1. Detect AI-relevant changes more accurately than simple filename keyword matching.
@@ -26,10 +49,29 @@ The core design principle is a **hybrid engine**:
 7. Select semantic review context based on artifact type rather than using raw diff-only or whole-commit review by default.
 8. Preserve enough structured history to support trend analysis, baseline comparison, and artifact lineage over time.
 9. Keep webhook acknowledgement fast by moving expensive LLM work into a background audit path.
+10. Produce comments and records that are useful to both day-to-day reviewers and longer-horizon governance workflows.
 
 ---
 
 ## High-level architecture
+
+### Current implementation snapshot (March 2026)
+
+The active branch already implements a meaningful subset of this target architecture.
+
+Implemented today:
+- webhook-path signature verification, diff fetch, AI relevance gating, and audit job creation
+- background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
+- durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
+- artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
+- managed PR comment upsert behavior to avoid repeated duplicate comments
+- reviewer-facing comment formatting with TLDR risk summary and collapsible details
+- GitHub App auth hardening and transient opened-PR diff retry handling
+
+Still intentionally incomplete:
+- richer signal fusion between deterministic and semantic channels
+- trend/reporting read models and customer-facing dashboards
+- production-grade persistence/deployment posture beyond the current local-stage setup
 
 ### Execution model
 
@@ -38,6 +80,7 @@ PromptDrift should separate **event ingestion** from **audit execution**.
 The webhook endpoint should do only the minimum amount of work required to decide whether a PR deserves audit processing:
 - verify signature and event shape
 - fetch the PR diff
+- retry briefly when GitHub returns a transient opened-PR `404` immediately after PR creation
 - run a fast AI relevance gate
 - persist an audit job for relevant changes
 - return success quickly to GitHub
@@ -48,7 +91,8 @@ The expensive path should run in a background worker:
 - LLM review
 - retry and backoff handling
 - deterministic fallback generation if the LLM remains unavailable
-- PR comment posting
+- managed PR comment upsert
+- durable audit persistence
 
 This is the right fit for PromptDrift because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.
 
@@ -498,15 +542,19 @@ Persistence should be treated as a separate architectural concern, not embedded 
 
 ### Current implementation status
 
-At the current branch stage, PromptDrift persists only the operational audit job queue.
+At the current branch stage, PromptDrift now persists both operational queue state and a durable audit/history layer.
 
 That means the database currently stores enough to support:
 - async execution
 - retries and retry windows
-- final posted comment capture
-- internal error tracking
+- durable PR audit records
+- changed artifact records
+- explainable findings
+- audit comment tracking including GitHub comment id
+- artifact version lineage
+- internal error tracking and completion mode inspection
 
-It does **not yet** store the full audit record model needed for long-term customer value.
+This is no longer only a queue store. It is now the beginning of a customer-memory layer for AI change review.
 
 ### Storage strategy going forward
 
@@ -529,7 +577,7 @@ Used for:
 - artifact evolution
 - trend and governance reporting
 
-Planned examples:
+Current examples:
 - `PullRequestAudit`
 - `ChangedArtifact`
 - `Finding`
@@ -596,7 +644,7 @@ This means the database must store:
 - job lifecycle state
 - retry history or at minimum retry counters and last error class
 - comment posting records or a durable audit output record
-- enough information to later implement comment dedupe or comment update behavior
+- enough information to implement and preserve comment dedupe or comment update behavior
 
 ### What should be persisted
 
@@ -645,7 +693,7 @@ At minimum:
 
 ## Reverse-engineered next schema
 
-The next persistence step should stay compact but should stop treating the database as only a queue.
+The current durable schema should stay compact while evolving from stored history into usable reporting and governance views.
 
 ### Physical storage recommendation
 
@@ -669,13 +717,13 @@ The next persistence step should stay compact but should stop treating the datab
 
 This remains the execution and retry mechanism.
 
-### Add a durable audit record layer
+### Current durable audit record layer
 
 #### `PullRequestAudit`
 Purpose:
 - one durable record for one evaluated PR head SHA
 
-Should store:
+Currently stores or is designed to store:
 - installation identifier
 - repository identifier
 - PR number
@@ -791,49 +839,54 @@ Before those triggers, one well-structured relational database is the right trad
 
 ## Recommended next persistence phase
 
-This should be the next phase after the current semantic package work.
+The foundational persistence phases have now been completed in first form.
 
 ### Phase 5A — Durable audit record
-Implement:
+Status: implemented
+
+Delivered:
 - `PullRequestAudit`
 - `ChangedArtifact`
 - `Finding`
 - `AuditComment`
 
-Immediate customer value:
+Delivered customer value:
 - reviewable audit history per PR
-- foundation for dedupe/update behavior
-- explainable stored findings beyond the posted comment text
-- first real transition from an operational queue store to a customer-memory layer
+- explainable stored findings beyond posted comment text
+- durable tracking of posted GitHub comments
 
 ### Phase 5B — Artifact lineage
-Implement:
+Status: implemented
+
+Delivered:
 - `ArtifactVersion`
-- normalized artifact identity
+- normalized artifact identity by repo and path
 - previous-version linkage
 
-Immediate customer value:
+Delivered customer value:
 - prompt and policy history
 - baseline comparison support
-- trend-ready lineage for future views
+- trend-ready lineage foundation
 
 ### Phase 5C — Read-side history services
-Implement:
+Status: partially implemented
+
+Delivered so far:
 - repository audit history queries
 - artifact history queries
-- repeated finding/rule trend queries
+- finding history queries for repo/artifact drill-down
 
-Immediate customer value:
-- customer-facing history and governance views
-- internal debugging and quality analysis
+Still needed:
+- stronger trend aggregation views
+- customer-facing reporting surfaces
+- clearer governance-oriented summaries across repos and teams
 
 ### Recommended implementation order from here
 1. Keep `AuditJob` as the operational queue table
-2. Add `PullRequestAudit` as the durable top-level audit record
-3. Persist deterministic findings first
-4. Persist semantic findings next
-5. Add `AuditComment` tracking for later dedupe/update behavior
-6. Add `ArtifactVersion` once the durable audit record contract stabilizes
+2. Improve read-side reporting over `PullRequestAudit`, `Finding`, `AuditComment`, and `ArtifactVersion`
+3. Strengthen deterministic/semantic signal fusion and scoring calibration
+4. Add dashboard/operator views once the read model stabilizes
+5. Continue tightening the path from local SQLite architecture toward production-grade persistence
 
 ### Lean implementation guidance
 The first implementation should store only what is necessary to support:

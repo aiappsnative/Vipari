@@ -1,6 +1,27 @@
 # PromptDrift Development Plan
 
-This document outlines the phased roadmap for building the PromptDrift backend.  It is intended as a living guide and will evolve as the project grows.
+This document outlines the phased roadmap for building the PromptDrift backend. It is intended as a living guide and will evolve as the project grows.
+
+---
+
+## Product value north star
+
+PromptDrift exists to help customers safely ship AI changes.
+
+The core value is not generic PR summarization. The core value is:
+
+- detecting behavior-changing AI edits before they reach production
+- helping reviewers understand whether a PR changed safety, disclosure, authority, or policy behavior
+- preserving a durable history of AI drift over time
+- fitting into the customer's existing GitHub-based engineering workflow
+
+This framing should shape roadmap decisions:
+
+- prefer explainability over opaque scoring
+- prefer durable history over one-off comments
+- prefer reviewer usefulness over model cleverness for its own sake
+- prefer change-level evidence over vague AI risk statements
+- prefer operational reliability because customers only trust what shows up consistently in PR review
 
 ---
 
@@ -17,11 +38,17 @@ This document outlines the phased roadmap for building the PromptDrift backend. 
 	- deterministic drift analysis implemented
 	- queued audit worker with retry/fallback implemented
 	- structured semantic review packages implemented
-	- live validation completed for benign, risky, fallback, and larger PR scenarios
+	- durable audit/history persistence implemented
+	- artifact lineage and baseline-aware suppression implemented
+	- PR comment dedupe/update implemented
+	- compact TLDR + collapsible reviewer comment format implemented
+	- GitHub App auth hardening and opened-PR diff retry implemented
+	- live validation completed for benign, risky, fallback, dedupe, and bot-auth scenarios
 - Current known limitations:
-	- bot comment dedupe/update is not implemented yet
 	- queue is local in-process SQLite for this stage
-	- durable audit/history schema is not implemented yet
+	- signal fusion still needs improvement
+	- docs and product framing need periodic refresh to match implementation
+	- no dashboard or tenant-facing reporting surface yet
 
 ### Completed slices on `feature/drift-engine-v1`
 1. Diff parsing and AI relevance classification
@@ -30,13 +57,17 @@ This document outlines the phased roadmap for building the PromptDrift backend. 
 4. Queue-backed webhook execution path
 5. Retry handling, provider retry hints, and deterministic preliminary fallback
 6. Structured semantic review packages for LLM review framing
+7. Durable audit history and artifact lineage
+8. Managed comment dedupe/update behavior
+9. Reviewer-facing comment formatting polish
+10. GitHub App auth hardening and transient PR diff retry
 
 ### Next prioritized slices on `feature/drift-engine-v1`
-1. Durable audit record persistence (`PullRequestAudit`, `ChangedArtifact`, `Finding`, `AuditComment`)
-2. Signal fusion improvements between deterministic and semantic findings
-3. Bot comment dedupe/update behavior
-4. Artifact lineage and baseline support (`ArtifactVersion`)
-5. Better reviewer-facing explanation formatting
+1. Signal fusion improvements between deterministic and semantic findings
+2. Better read-side history, trend, and repo-level reporting queries
+3. Documentation refresh across product, architecture, and operations
+4. Production-oriented persistence and deployment hardening
+5. Dashboard/operator surface for customer visibility
 
 ### Persistence architecture direction
 - one relational database for the near term
@@ -47,7 +78,7 @@ This document outlines the phased roadmap for building the PromptDrift backend. 
 
 ---
 
-## Stage 1 – MVP (Core Logic & Webhook Processing)
+## Stage 1 – MVP (Core Logic & Webhook Processing)
 
 ### Goals
 1. Deliver a working FastAPI service that receives GitHub `pull_request` webhooks and analyzes diffs for AI‑related changes.
@@ -72,11 +103,11 @@ This document outlines the phased roadmap for building the PromptDrift backend. 
 - A handful of tests.
 
 ### Notes
-No database, no queueing, no multi‑tenant support.  Focus on correctness of the analysis logic.  This stage will serve as a prototype and be sufficient for initial customer trials or internal use.
+This stage is effectively complete and now surpassed by the active branch. The product has already moved beyond pure synchronous MVP behavior.
 
 ---
 
-## Stage 2 – Persistence, Multi‑Tenancy & Dashboard
+## Stage 2 – Persistence, Multi-Tenancy & Dashboard
 
 ### Goals
 1. Introduce data storage to record audit results, installations, and users.
@@ -105,11 +136,11 @@ No database, no queueing, no multi‑tenant support.  Focus on correctness of th
 - Migration scripts (Alembic or similar).
 
 ### Notes
-This stage lays the foundation for scalable, multi‑user deployments; the MVP logic is reused and verified.  Focus on security and tenancy boundaries.  Add tests for database interactions and dashboard endpoints.  Avoid premature multi-database splits; start with one well-structured relational store and introduce decomposition only when workloads justify it.
+This stage is now partially underway. Durable persistence, queue-backed execution, and history structures have already started. The remaining work is to turn those foundations into customer-visible reporting and operational control surfaces.
 
 ---
 
-## Stage 3 – Enterprise Scaling & Advanced Features
+## Stage 3 – Enterprise Scaling & Advanced Features
 
 ### Goals
 1. Harden the system for high traffic and multi‑region deployments.
@@ -137,9 +168,9 @@ This stage lays the foundation for scalable, multi‑user deployments; the MVP l
 - Comprehensive test suite including load tests and multi‑tenant isolation tests.
 
 ### Notes
-By this stage, the product should be ready for enterprise customers with SLAs.  The architectural decisions from earlier phases must prove functional; we will iterate based on customer feedback and usage patterns.
+By this stage, the product should be ready for enterprise customers with SLAs. The architectural decisions from earlier phases must prove functional; we will iterate based on customer feedback and usage patterns.
 
 ---
 
 ## Epilogue
-Each stage builds on the previous one.  The early emphasis on modularity and separation of concerns ensures that the core audit logic developed in Stage 1 is easily reused as we add persistence, multi‑tenancy, and scaling features.  This plan will be referenced and updated as the project progresses.
+Each stage builds on the previous one. The early emphasis on modularity and separation of concerns ensures that the core audit logic developed in Stage 1 is easily reused as we add persistence, multi-tenancy, and scaling features. This plan should continue to be updated whenever the implementation materially outpaces the roadmap text.
