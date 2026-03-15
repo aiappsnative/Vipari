@@ -87,15 +87,38 @@ def create_audit_job(
 ) -> AuditJob:
     now = time.time()
     with _connect(db_path) as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO audit_jobs (
-                repo_full, pr_number, installation_id, head_sha, diff_text,
-                status, attempt_count, next_attempt_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
-            """,
-            (repo_full, pr_number, installation_id, head_sha, diff_text, now, now, now),
-        )
+        existing = conn.execute(
+            "SELECT * FROM audit_jobs WHERE repo_full = ? AND pr_number = ? AND head_sha = ?",
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO audit_jobs (
+                    repo_full, pr_number, installation_id, head_sha, diff_text,
+                    status, attempt_count, next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
+                """,
+                (repo_full, pr_number, installation_id, head_sha, diff_text, now, now, now),
+            )
+        elif existing["status"] == "failed":
+            conn.execute(
+                """
+                UPDATE audit_jobs
+                SET installation_id = ?,
+                    diff_text = ?,
+                    status = 'queued',
+                    attempt_count = 0,
+                    next_attempt_at = ?,
+                    last_error = NULL,
+                    comment_body = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (installation_id, diff_text, now, now, existing["id"]),
+            )
+
         row = conn.execute(
             "SELECT * FROM audit_jobs WHERE repo_full = ? AND pr_number = ? AND head_sha = ?",
             (repo_full, pr_number, head_sha),
@@ -108,30 +131,24 @@ def create_audit_job(
 def claim_next_job(db_path: str, now: float | None = None) -> Optional[AuditJob]:
     current_time = now or time.time()
     with _connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM audit_jobs
-            WHERE status IN ('queued', 'retry_wait')
-              AND next_attempt_at <= ?
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            (current_time,),
-        ).fetchone()
-        if row is None:
-            return None
-
-        conn.execute(
+        claimed = conn.execute(
             """
             UPDATE audit_jobs
             SET status = 'processing',
                 attempt_count = attempt_count + 1,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = (
+                SELECT id
+                FROM audit_jobs
+                WHERE status IN ('queued', 'retry_wait')
+                  AND next_attempt_at <= ?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+            )
+            RETURNING *
             """,
-            (current_time, row["id"]),
-        )
-        claimed = conn.execute("SELECT * FROM audit_jobs WHERE id = ?", (row["id"],)).fetchone()
+            (current_time, current_time),
+        ).fetchone()
     return _row_to_job(claimed) if claimed is not None else None
 
 

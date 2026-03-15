@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from github.GithubException import GithubException
 from openai import OpenAI
 
 from engine.relevance import needs_audit as engine_needs_audit
@@ -86,19 +87,33 @@ def needs_audit(diff: str) -> bool:
     return engine_needs_audit(diff)
 
 
-async def fetch_diff_with_retry(repo_full: str, pr_number: int, token: str, *, base_sha: str | None = None, head_sha: str | None = None) -> str:
-    last_error: HTTPError | None = None
+def _get_diff_fetch_error_status_code(exc: Exception) -> int | None:
+    if isinstance(exc, HTTPError):
+        return exc.code
+    return getattr(exc, "status", None)
+
+
+async def fetch_diff_with_retry(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    use_commit_pair: bool = False,
+    base_sha: str | None = None,
+    head_sha: str | None = None,
+) -> str:
+    last_error: Exception | None = None
     fetcher = fetch_pr_diff
     fetch_args = (repo_full, pr_number, token)
-    if base_sha and head_sha:
+    if use_commit_pair and base_sha and head_sha:
         fetcher = fetch_commit_pair_diff
         fetch_args = (repo_full, base_sha, head_sha, token)
 
     for attempt in range(1, PR_DIFF_FETCH_ATTEMPTS + 1):
         try:
             return fetcher(*fetch_args)
-        except HTTPError as exc:
-            if exc.code != 404 or attempt == PR_DIFF_FETCH_ATTEMPTS:
+        except (HTTPError, GithubException) as exc:
+            if _get_diff_fetch_error_status_code(exc) != 404 or attempt == PR_DIFF_FETCH_ATTEMPTS:
                 raise
             last_error = exc
             await asyncio.sleep(PR_DIFF_FETCH_RETRY_SECONDS)
@@ -132,7 +147,14 @@ async def webhook(request: Request):
 
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, installation_id)
-    diff_text = await fetch_diff_with_retry(repo_full, pr_number, token, base_sha=base_sha, head_sha=head_sha)
+    diff_text = await fetch_diff_with_retry(
+        repo_full,
+        pr_number,
+        token,
+        use_commit_pair=action == "synchronize",
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
 
     if not needs_audit(diff_text):
         return JSONResponse({"message": "no relevant changes"})

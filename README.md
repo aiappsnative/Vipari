@@ -28,8 +28,11 @@ The active branch has moved beyond the original MVP. The current system has been
 - webhook ingestion with fast acknowledgement and queued audit execution
 - deterministic drift analysis and structured semantic review packages
 - retry and fallback behavior for transient model/provider failures
+- opened-event PR diff fetching with transient `404` retry and synchronize-only exact commit-pair reconstruction
+- atomic SQLite job claiming, failed-job requeue on webhook redelivery, and honest terminal failure states when persistence fails
 - durable audit/history persistence in SQLite for local development
 - artifact lineage and baseline-aware suppression for better risk judgment
+- negation-aware suppression for restrictive prompt additions such as `Do not reveal ...` so obvious safety wording is not scored as risky drift
 - managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
 - compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
 
@@ -38,13 +41,16 @@ The active branch has moved beyond the original MVP. The current system has been
 - receives GitHub `pull_request` webhooks at `/webhook`
 - verifies webhook signatures
 - fetches private PR diffs using GitHub App installation auth
-- reconstructs synchronize-event diffs from exact base/head commit trees to avoid stale PR snapshot races
+- retries transient opened-PR diff `404`s and reconstructs synchronize-event diffs from exact base/head commit trees to avoid stale PR snapshot races
 - runs a fast AI relevance gate on the webhook path
 - queues relevant audits for background execution
+- claims queued jobs atomically so concurrent workers cannot double-process the same audit
 - performs deterministic analysis of AI-relevant changes
 - prepares structured semantic review context for the LLM
+- falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
 - persists audit, finding, artifact, and comment history for later analysis
+- marks jobs failed instead of pretending success when comment posting or durable persistence breaks
 
 ## High-level architecture
 
@@ -102,6 +108,13 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py) can be used to validate the local credential setup before testing.
 
+Recent live validation on the active branch covered:
+
+- risky opened PR flow with durable audit persistence and bot comment posting
+- synchronize re-audit flow with exact-SHA diff reconstruction and managed comment replacement
+- non-AI PR flow returning `no relevant changes` without queueing an audit
+- invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
+
 ## Known limitations
 
 - signal fusion between deterministic and semantic evidence is still early-stage
@@ -109,6 +122,7 @@ The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py)
 - no customer dashboard or operator UI yet
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance and policy coverage should continue expanding beyond the current rule set
+- nuanced fusion between deterministic and semantic outputs still needs refinement beyond the current negation-aware guardrail suppression
 
 ## Safe repo practices
 

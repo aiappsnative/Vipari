@@ -7,8 +7,10 @@ flowchart TD
 
     A3 -->|Not AI relevant| Z1[Exit: no audit comment]
     A3 -->|AI relevant| Q1[Create audit job]
-    Q1 --> Q2[Job queue / work scheduler]
-    Q2 --> Q3[Background audit worker]
+    Q1 --> Q1A[Revive failed same-SHA job when applicable]
+    Q1A --> Q2[Job queue / work scheduler]
+    Q2 --> Q2A[Atomic job claim]
+    Q2A --> Q3[Background audit worker]
 
     Q3 --> B[Diff ingestion]
     B --> C[File and hunk extraction]
@@ -54,6 +56,7 @@ flowchart TD
     J --> J1[TLDR risk summary plus collapsible detail without repeated summary row]
     J1 --> K[Managed Markdown PR audit comment]
     K --> L[Create new managed PR comment and delete previous managed comment]
+    L --> L1[Persist audit outcome or fail job honestly]
 
     Q1 --> P0[Operational queue store]
     D --> P1[Artifact lineage and version store]
@@ -78,7 +81,9 @@ flowchart TD
         A2B
         A3
         Q1
+        Q1A
         Q2
+        Q2A
     end
 
     subgraph Background Audit Path
@@ -121,6 +126,7 @@ flowchart TD
         J1
         K
         L
+        L1
     end
 
     subgraph Persistence and History

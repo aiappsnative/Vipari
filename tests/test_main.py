@@ -80,7 +80,11 @@ def test_webhook_queues_relevant_audit_job():
         "action": "opened",
         "installation": {"id": 123},
         "repository": {"full_name": "doria90/dummyAI"},
-        "pull_request": {"number": 7, "head": {"sha": "abc123"}},
+        "pull_request": {
+            "number": 7,
+            "base": {"sha": "base-opened"},
+            "head": {"sha": "abc123"},
+        },
     }
     body = json.dumps(payload).encode("utf-8")
     headers = {
@@ -90,18 +94,21 @@ def test_webhook_queues_relevant_audit_job():
 
     with patch("main.generate_jwt", return_value="jwt-token"), patch(
         "main.get_installation_token", return_value="installation-token"
-    ), patch("main.fetch_pr_diff", return_value="diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n"), patch(
-        "main.create_audit_job"
-    ) as create_job:
+    ), patch("main.fetch_pr_diff", return_value="diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n") as fetch_pr_diff, patch(
+        "main.fetch_commit_pair_diff"
+    ) as fetch_commit_pair_diff, patch("main.create_audit_job") as create_job:
+        fetch_commit_pair_diff.return_value = "diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n"
         create_job.return_value = type("Job", (), {"id": 42})()
         response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
 
     assert response.status_code == 200
     assert response.json() == {"message": "audit queued", "job_id": 42}
+    fetch_pr_diff.assert_called_once_with("doria90/dummyAI", 7, "installation-token")
+    fetch_commit_pair_diff.assert_not_called()
     create_job.assert_called_once()
 
 
-def test_webhook_prefers_compare_diff_when_base_sha_is_present():
+def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
     main.GITHUB_WEBHOOK_SECRET = "secret"
     payload = {
         "action": "synchronize",
@@ -170,7 +177,7 @@ def test_webhook_retries_diff_fetch_after_transient_404():
     create_job.assert_called_once()
 
 
-def test_webhook_retries_compare_diff_after_transient_404():
+def test_webhook_retries_commit_pair_diff_after_transient_github_404():
     main.GITHUB_WEBHOOK_SECRET = "secret"
     payload = {
         "action": "synchronize",
@@ -188,20 +195,17 @@ def test_webhook_retries_compare_diff_after_transient_404():
         "X-GitHub-Event": "pull_request",
     }
 
-    transient_404 = HTTPError(
-        url="https://api.github.com/repos/doria90/dummyAI/compare/base789...head789",
-        code=404,
-        msg="Not Found",
-        hdrs=None,
-        fp=None,
-    )
+    class FakeGithubException(Exception):
+        def __init__(self, status: int, message: str):
+            super().__init__(message)
+            self.status = status
 
     with patch("main.generate_jwt", return_value="jwt-token"), patch(
         "main.get_installation_token", return_value="installation-token"
     ), patch(
         "main.fetch_commit_pair_diff",
-        side_effect=[transient_404, "diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n"],
-    ) as fetch_commit_pair_diff, patch("main.create_audit_job") as create_job, patch("main.PR_DIFF_FETCH_RETRY_SECONDS", 0):
+        side_effect=[FakeGithubException(404, "Not Found"), "diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n"],
+    ) as fetch_commit_pair_diff, patch("main.GithubException", FakeGithubException), patch("main.create_audit_job") as create_job, patch("main.PR_DIFF_FETCH_RETRY_SECONDS", 0):
         create_job.return_value = type("Job", (), {"id": 45})()
         response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
 

@@ -105,3 +105,21 @@ index 123..456 100644
     assert analysis.has_relevant_changes
     assert not any(f.rule_id == "sensitive_data_drift" for f in analysis.findings)
     assert analysis.suggested_risk_level.value == "Low"
+
+
+def test_analyze_diff_does_not_flag_negated_restrictive_prompt_addition():
+    diff = """diff --git a/system_prompt.md b/system_prompt.md
+index 123..456 100644
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,2 @@
+ You are an AI assistant for a bank.
++Do not reveal internal policy details or customer credit scores.
+"""
+    analysis = analyze_diff(diff)
+
+    assert analysis.has_relevant_changes
+    assert not any(f.rule_id == "sensitive_data_drift" for f in analysis.findings)
+    assert not any(f.rule_id == "capability_drift" for f in analysis.findings)
+    assert not any(f.rule_id == "guardrail_weakening" for f in analysis.findings)
+    assert analysis.suggested_risk_level.value == "Low"

@@ -52,6 +52,11 @@ RETRIEVAL_TERMS = (
 )
 
 
+def _is_restrictive_line(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in GUARDRAIL_TERMS)
+
+
 def _contains_any(texts: Iterable[str], terms: Iterable[str]) -> bool:
     lowered = "\n".join(texts).lower()
     return any(term in lowered for term in terms)
@@ -62,12 +67,22 @@ def _matching_terms(texts: Iterable[str], terms: Iterable[str]) -> set[str]:
     return {term for term in terms if term in lowered}
 
 
+def _matching_terms_in_nonrestrictive_lines(texts: Iterable[str], terms: Iterable[str]) -> set[str]:
+    matches: set[str] = set()
+    for text in texts:
+        if _is_restrictive_line(text):
+            continue
+        lowered = text.lower()
+        matches.update(term for term in terms if term in lowered)
+    return matches
+
+
 def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
     findings: List[RuleFinding] = []
 
-    newly_added_sensitive_terms = _matching_terms(change.added_lines, SENSITIVE_DATA_TERMS) - _matching_terms(change.removed_lines, SENSITIVE_DATA_TERMS)
-    newly_added_capability_terms = _matching_terms(change.added_lines, CAPABILITY_EXPANSION_TERMS) - _matching_terms(change.removed_lines, CAPABILITY_EXPANSION_TERMS)
-    newly_added_guardrail_weakening_terms = _matching_terms(change.added_lines, ("reveal", "share internal", "ignore", "bypass", "comply")) - _matching_terms(
+    newly_added_sensitive_terms = _matching_terms_in_nonrestrictive_lines(change.added_lines, SENSITIVE_DATA_TERMS) - _matching_terms(change.removed_lines, SENSITIVE_DATA_TERMS)
+    newly_added_capability_terms = _matching_terms_in_nonrestrictive_lines(change.added_lines, CAPABILITY_EXPANSION_TERMS) - _matching_terms(change.removed_lines, CAPABILITY_EXPANSION_TERMS)
+    newly_added_guardrail_weakening_terms = _matching_terms_in_nonrestrictive_lines(change.added_lines, ("reveal", "share internal", "ignore", "bypass", "comply")) - _matching_terms(
         change.removed_lines, ("reveal", "share internal", "ignore", "bypass", "comply")
     )
 

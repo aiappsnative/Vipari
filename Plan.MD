@@ -43,10 +43,13 @@ This framing should shape roadmap decisions:
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
 	- GitHub App auth hardening, opened-PR diff retry, and exact-SHA synchronize diff reconstruction implemented
-	- live validation completed for benign, risky, fallback, dedupe, and bot-auth scenarios
+	- atomic job claiming, failed-job requeue on same-SHA redelivery, and honest persistence-failure handling implemented
+	- deterministic rule suppression improved for restrictive negated safety wording such as `Do not reveal ...`
+	- live validation completed for benign, risky, synchronize, fallback, dedupe, and bot-auth scenarios
 - Current known limitations:
 	- queue is local in-process SQLite for this stage
 	- signal fusion still needs improvement
+	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
 	- no dashboard or tenant-facing reporting surface yet
 
@@ -61,6 +64,8 @@ This framing should shape roadmap decisions:
 8. Managed comment replacement behavior on PR updates
 9. Reviewer-facing comment formatting polish
 10. GitHub App auth hardening, transient PR diff retry, and synchronize diff freshness hardening
+11. Queue correctness hardening for atomic claim, failed-job revival, and truthful terminal states
+12. Deterministic negation-aware suppression for restrictive safety wording
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings

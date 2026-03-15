@@ -64,9 +64,11 @@ Implemented today:
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
+- negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
 - reviewer-facing comment formatting with TLDR risk summary and collapsible details, without repeating the summary inside the expanded section
 - GitHub App auth hardening, transient opened-PR diff retry handling, and exact-SHA synchronize diff reconstruction
+- atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
@@ -94,6 +96,7 @@ The expensive path should run in a background worker:
 - deterministic fallback generation if the LLM remains unavailable
 - create a fresh managed PR comment and delete the previous managed one after successful posting
 - durable audit persistence
+- mark the job failed if durable persistence cannot be completed after comment publication
 
 This is the right fit for PromptDrift because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.
 
@@ -234,10 +237,12 @@ This stage governs how relevant audits move from webhook ingestion into durable 
 ### Responsibilities
 - create one audit job per relevant PR event
 - deduplicate or coalesce repeated events when possible
+- atomically claim one queued job at a time so concurrent workers cannot double-process the same row
 - track job state transitions
 - limit worker concurrency to protect the LLM quota
 - persist attempt counts and last error state
 - persist job creation time so retry age and maximum wait windows can be enforced
+- revive a previously failed same-SHA job on webhook redelivery instead of permanently suppressing that audit opportunity
 
 ### Recommended initial states
 - `queued`
@@ -289,6 +294,16 @@ Its purpose is to support:
 - final execution state
 
 It should not become the long-term customer history model.
+
+### Current hardening notes
+
+The active branch has already validated several reliability behaviors that materially affect customer trust:
+
+- opened PR events stay on the ordinary PR diff endpoint, while synchronize events alone use exact commit-pair reconstruction
+- transient GitHub diff `404`s are retried for both raw HTTP failures and GitHub client exception shapes
+- SQLite job claims use one atomic `UPDATE ... RETURNING` path instead of a race-prone select-then-update sequence
+- persistence failures are treated as terminal execution failures, not silent success
+- deterministic fallback has been live-validated with an intentionally invalid model configuration and correctly records `fallback_posted`
 
 ---
 

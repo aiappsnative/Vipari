@@ -7,7 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
-from services.audit_jobs import create_audit_job, get_job, init_db
+from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db, mark_job_completed, mark_job_failed
 from services.audit_records import (
     get_audit_comment_for_audit,
     get_latest_artifact_version_for_repo_artifact,
@@ -21,6 +21,128 @@ from services.audit_worker import WorkerSettings, build_fallback_comment, proces
 
 class FakeRateLimitError(Exception):
     pass
+
+
+def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=101,
+        installation_id=123,
+        head_sha="sha-101",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+
+    claimed = claim_next_job(db_path, now=created.created_at + 1)
+
+    assert claimed is not None
+    assert claimed.id == created.id
+    assert claimed.status == "processing"
+    assert claimed.attempt_count == 1
+
+    saved = get_job(db_path, created.id)
+    assert saved is not None
+    assert saved.status == "processing"
+    assert saved.attempt_count == 1
+
+    assert claim_next_job(db_path, now=created.created_at + 2) is None
+
+
+def test_claim_next_job_returns_jobs_in_fifo_ready_order(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    first = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=201,
+        installation_id=123,
+        head_sha="sha-201",
+        diff_text="diff --git a/prompts/first.md b/prompts/first.md\nindex 1..2\n",
+    )
+    second = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=202,
+        installation_id=123,
+        head_sha="sha-202",
+        diff_text="diff --git a/prompts/second.md b/prompts/second.md\nindex 1..2\n",
+    )
+
+    first_claim = claim_next_job(db_path, now=second.created_at + 1)
+    second_claim = claim_next_job(db_path, now=second.created_at + 2)
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert first_claim.id == first.id
+    assert second_claim.id == second.id
+    assert first_claim.status == "processing"
+    assert second_claim.status == "processing"
+
+
+def test_create_audit_job_requeues_failed_same_sha_job(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=301,
+        installation_id=123,
+        head_sha="sha-301",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+    mark_job_failed(db_path, created.id, error_message="temporary failure")
+
+    recreated = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=301,
+        installation_id=456,
+        head_sha="sha-301",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 2..3\n",
+    )
+
+    assert recreated.id == created.id
+    assert recreated.status == "queued"
+    assert recreated.attempt_count == 0
+    assert recreated.last_error is None
+    assert recreated.comment_body is None
+    assert recreated.installation_id == 456
+    assert recreated.diff_text.endswith("index 2..3\n")
+
+    claimed = claim_next_job(db_path, now=recreated.updated_at + 1)
+    assert claimed is not None
+    assert claimed.id == created.id
+
+
+def test_create_audit_job_does_not_requeue_completed_same_sha_job(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=302,
+        installation_id=123,
+        head_sha="sha-302",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+    mark_job_completed(db_path, created.id, comment_body="posted")
+
+    recreated = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=302,
+        installation_id=456,
+        head_sha="sha-302",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 9..10\n",
+    )
+
+    assert recreated.id == created.id
+    assert recreated.status == "completed"
+    assert recreated.installation_id == 123
+    assert recreated.diff_text.endswith("index 1..2\n")
+    assert recreated.comment_body == "posted"
 
 
 def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
@@ -576,6 +698,84 @@ def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monke
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is None
+
+
+def test_worker_marks_job_failed_when_persistence_fails_after_comment_post(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=51,
+        installation_id=123,
+        head_sha="sha-51",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5151)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "failed"
+    assert saved.comment_body is None
+    assert "Persistence failure after comment post" in (saved.last_error or "")
+    assert get_pull_request_audit_for_job(db_path, job.id) is None
+
+
+def test_worker_marks_job_failed_when_persistence_fails_after_fallback_comment_post(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=52,
+        installation_id=123,
+        head_sha="sha-52",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5252)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
+
+    def failing_comment(*args, **kwargs):
+        raise FakeRateLimitError("quota exceeded")
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", failing_comment)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        max_attempts=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "failed"
+    assert saved.comment_body is None
+    assert "persistence failed after fallback comment post" in (saved.last_error or "").lower()
+    assert get_pull_request_audit_for_job(db_path, job.id) is None
 
 
 def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monkeypatch):

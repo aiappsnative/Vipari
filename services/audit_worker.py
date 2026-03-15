@@ -356,27 +356,24 @@ def _persist_audit_result(
     error_message: str | None = None,
     github_comment_id: int | None = None,
 ) -> None:
-    try:
-        record_audit_result(
-            settings.db_path,
-            job_id=job.id,
-            repo_full=job.repo_full,
-            pr_number=job.pr_number,
-            installation_id=job.installation_id,
-            head_sha=job.head_sha,
-            deterministic_analysis=deterministic_analysis,
-            status=status,
-            completion_mode=completion_mode,
-            output_mode=output_mode,
-            comment_body=comment_body,
-            comment_mode=comment_mode,
-            semantic_review_completed=semantic_review_completed,
-            error_message=error_message,
-            artifact_snapshots=_fetch_artifact_snapshots(job, deterministic_analysis, settings),
-            github_comment_id=github_comment_id,
-        )
-    except Exception:
-        return
+    record_audit_result(
+        settings.db_path,
+        job_id=job.id,
+        repo_full=job.repo_full,
+        pr_number=job.pr_number,
+        installation_id=job.installation_id,
+        head_sha=job.head_sha,
+        deterministic_analysis=deterministic_analysis,
+        status=status,
+        completion_mode=completion_mode,
+        output_mode=output_mode,
+        comment_body=comment_body,
+        comment_mode=comment_mode,
+        semantic_review_completed=semantic_review_completed,
+        error_message=error_message,
+        artifact_snapshots=_fetch_artifact_snapshots(job, deterministic_analysis, settings),
+        github_comment_id=github_comment_id,
+    )
 
 
 def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
@@ -385,34 +382,47 @@ def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_anal
         github_comment_id = _post_comment_for_job(job, fallback_comment, settings)
     except Exception as fallback_exc:
         combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="failed",
+                completion_mode="failed",
+                output_mode="no_comment",
+                comment_body=None,
+                comment_mode=None,
+                semantic_review_completed=False,
+                error_message=combined_error,
+            )
+        except Exception as persist_exc:
+            combined_error = (
+                f"{combined_error}; persistence failed: {type(persist_exc).__name__}: {persist_exc}"
+            )
+        mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+        return "failed"
+
+    try:
         _persist_audit_result(
             job,
             deterministic_analysis,
             settings,
-            status="failed",
-            completion_mode="failed",
-            output_mode="no_comment",
-            comment_body=None,
-            comment_mode=None,
+            status="fallback_posted",
+            completion_mode="fallback_posted",
+            output_mode="preliminary_fallback",
+            comment_body=fallback_comment,
+            comment_mode="preliminary_fallback",
             semantic_review_completed=False,
-            error_message=combined_error,
+            error_message=error_message,
+            github_comment_id=github_comment_id,
+        )
+    except Exception as persist_exc:
+        combined_error = (
+            f"{error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
         )
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
 
-    _persist_audit_result(
-        job,
-        deterministic_analysis,
-        settings,
-        status="fallback_posted",
-        completion_mode="fallback_posted",
-        output_mode="preliminary_fallback",
-        comment_body=fallback_comment,
-        comment_mode="preliminary_fallback",
-        semantic_review_completed=False,
-        error_message=error_message,
-        github_comment_id=github_comment_id,
-    )
     mark_job_fallback_posted(
         settings.db_path,
         job.id,
@@ -448,18 +458,24 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         error_message = f"{type(exc).__name__}: {exc}"
         return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
 
-    _persist_audit_result(
-        job,
-        deterministic_analysis,
-        settings,
-        status="completed",
-        completion_mode="completed",
-        output_mode="full_review",
-        comment_body=comment_body,
-        comment_mode="full_review",
-        semantic_review_completed=True,
-        github_comment_id=github_comment_id,
-    )
+    try:
+        _persist_audit_result(
+            job,
+            deterministic_analysis,
+            settings,
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_review",
+            comment_body=comment_body,
+            comment_mode="full_review",
+            semantic_review_completed=True,
+            github_comment_id=github_comment_id,
+        )
+    except Exception as persist_exc:
+        error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
+        mark_job_failed(settings.db_path, job.id, error_message=error_message)
+        return "failed"
+
     mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
     return "completed"
 
