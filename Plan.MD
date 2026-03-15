@@ -69,6 +69,123 @@ This framing should shape roadmap decisions:
 4. Production-oriented persistence and deployment hardening
 5. Dashboard/operator surface for customer visibility
 
+### Planned future workflow
+
+Name:
+- `audit-feedback-loop-v1`
+
+Suggested branch name:
+- `feature/audit-feedback-loop-v1`
+
+Purpose:
+- create a feedback and outcome loop so PromptDrift can learn from reviewer reactions, explicit customer feedback, and eventual PR outcomes
+- improve the risk engine using real-world disagreement and acceptance patterns rather than only internal intuition
+
+Why it matters:
+- a strong AI review product should not only publish audits, it should also learn where its guidance was useful, noisy, ignored, accepted, or overridden
+- customer feedback and PR outcomes are a future source of product-quality signals, evaluation fixtures, and rule-tuning priorities
+
+Important interpretation rule:
+- a `High` risk PR being merged is not automatic proof that the engine was wrong
+- it should be treated as a disagreement or review-outcome signal that requires context
+- learning inputs should remain advisory until validated through broader analysis
+
+Planned scope:
+- collect lightweight feedback on managed PromptDrift comments
+- support future explicit textual feedback from reviewers
+- capture PR outcomes such as merged, closed, changed-after-audit, and merged-after-follow-up
+- derive learning signals that can be used for reporting, evaluation, and future engine tuning
+
+Expected future data concepts:
+- `AuditFeedback`
+- `PullRequestOutcome`
+- `AuditLearningSignal`
+
+Recommended future rollout:
+1. Passive PR outcome capture
+2. GitHub emoji reaction capture on managed comments
+3. Structured textual feedback on managed comments or a dedicated future input surface
+4. Derived learning-signal reporting
+5. Engine-tuning and evaluation workflows built on top of those signals
+
+Guardrails for future implementation:
+- only feedback tied to managed PromptDrift comments should count as product feedback
+- raw user events and derived learning signals should be stored separately
+- outcome collection should be tied to the audited head SHA, not only the PR number
+- the first consumer of this data should be reporting and evaluation, not automatic model retraining
+
+### Planned future workflow
+
+Name:
+- `customer-onboarding-baseline-v1`
+
+Suggested branch name:
+- `feature/customer-onboarding-baseline-v1`
+
+Purpose:
+- help PromptDrift understand a newly installed repository before future PRs arrive
+- establish an initial baseline for AI-relevant artifacts, prompt locations, and likely behavioral control surfaces
+- make later drift detection more accurate by grounding audits in the repo's starting state
+
+Why it matters:
+- many meaningful AI changes only make sense relative to the pre-existing baseline
+- onboarding intelligence can reduce false positives caused by treating every future edit as isolated
+- it can help PromptDrift identify where prompts, policies, model-routing logic, and tool-authority definitions actually live inside a repo
+- it creates the foundation for future trend, governance, and repo-specific tuning workflows
+
+Core customer value:
+- faster time-to-value after installation
+- more accurate first audits because the engine already knows the likely AI control surface
+- better artifact lineage from day one
+- future ability to explain not only what changed, but what changed relative to the repo's original AI baseline
+
+Key product question:
+- should PromptDrift ingest the full historical commit graph on install, or establish a strong present-day baseline and optionally backfill later?
+
+Recommended starting answer:
+- start with a **baseline-first onboarding model**, not full historical ingestion by default
+- capture the repository's current AI-relevant artifact map and baseline versions at installation time
+- add selective or optional historical backfill later only where it produces clear customer value
+
+Why baseline-first is the right first move:
+- it is much cheaper and faster than replaying full repo history
+- it gives immediate product value without long installation delays
+- it avoids over-collecting data before there is a strong use case for it
+- it keeps onboarding operationally predictable for larger repositories
+
+When historical backfill may later be justified:
+- regulated customers want governance history from before install time
+- a repo already has a long and important prompt/policy evolution history
+- customers want trend views that start before PromptDrift was installed
+- baseline-only mode proves insufficient for high-value onboarding use cases
+
+Planned onboarding outputs:
+- discovered AI-relevant artifact inventory
+- artifact classification and likely purpose hints
+- baseline artifact versions and hashes
+- repo-level onboarding summary
+- confidence notes about what PromptDrift believes are the main AI control surfaces in that repo
+
+Expected future data concepts:
+- `RepositoryOnboarding`
+- `OnboardedArtifact`
+- `OnboardingBaselineVersion`
+- optional future `HistoricalBackfillJob`
+
+Recommended future rollout:
+1. Installation-time repository scan and AI artifact discovery
+2. Baseline version capture for relevant artifacts
+3. Repo-level onboarding summary and persisted inventory
+4. Optional targeted historical backfill for selected repos or artifacts
+5. Future onboarding-aware detection and reporting improvements
+
+Guardrails for future implementation:
+- do not require full historical replay for every customer install
+- keep onboarding bounded in time and cost
+- preserve a distinction between baseline captured at install time and history reconstructed later
+- treat inferred artifact purpose as probabilistic metadata, not hard truth
+- prefer selective backfill over all-history ingestion unless customers explicitly need it
+
 ### Persistence architecture direction
 - one relational database for the near term
 - SQLite for local/dev and PostgreSQL as the production target
@@ -137,6 +254,49 @@ This stage is effectively complete and now surpassed by the active branch. The p
 
 ### Notes
 This stage is now partially underway. Durable persistence, queue-backed execution, and history structures have already started. The remaining work is to turn those foundations into customer-visible reporting and operational control surfaces.
+
+### Planned future extension: audit feedback loop
+
+Once the durable audit/history layer is stable enough, PromptDrift should add a feedback-and-outcome workflow under `audit-feedback-loop-v1`.
+
+This future slice should aim to answer:
+- did reviewers find the audit useful?
+- did reviewers disagree with the assigned risk level?
+- was a high-risk PR merged anyway?
+- was the PR materially changed after the audit before it was accepted?
+- which findings or rule families most often correlate with overrides or disagreement?
+
+This work should initially be framed as:
+- customer feedback intake
+- PR outcome telemetry
+- evaluation signal generation
+
+It should not initially be framed as:
+- automatic retraining
+- direct auto-lowering or auto-raising of risk levels without review
+
+### Planned future extension: customer onboarding baseline
+
+Once PromptDrift has a stable durable history layer, it should add onboarding intelligence under `customer-onboarding-baseline-v1`.
+
+This future slice should aim to answer:
+- where do the repo's likely prompts, guardrails, and AI control artifacts live?
+- which files appear to define behavior, policy, model routing, tool access, or disclosure boundaries?
+- what baseline artifact versions should future audits compare against?
+- what can PromptDrift learn immediately at install time without replaying full history?
+
+Recommended product stance:
+- onboarding should default to present-day baseline capture
+- historical commit ingestion should be optional, selective, and justified by customer value
+
+This work should initially be framed as:
+- installation-time artifact discovery
+- baseline capture
+- future drift-context enrichment
+
+It should not initially be framed as:
+- mandatory full historical mining for every repository
+- expensive repo reconstruction before the product can provide any value
 
 ---
 

@@ -123,3 +123,5 @@ The next major workstreams are:
 - expand read-side history and trend analysis capabilities
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
+- plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement
+- plan for a future `customer-onboarding-baseline-v1` workflow to establish repository baselines and AI artifact inventories at install time
