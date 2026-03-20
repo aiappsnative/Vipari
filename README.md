@@ -43,7 +43,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - durable local persistence of static artifact profiles and baseline-linked drift deltas for changed AI artifacts
 - reviewer-facing PR comments enriched with a compact static drift summary block when artifact snapshots are available
 - repo-level static drift summaries and top-drifting artifact queries as first dashboard/read-side primitives
-- repository onboarding inventory persistence and selective historical backfill-job planning for discovered AI artifacts
+- repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
 
 ## What PromptDrift does today
 
@@ -60,7 +60,8 @@ The active branch has moved beyond the original MVP. The current system has been
 - injects a compact static drift summary into PR comments so reviewers can see guardrail/capability/autonomy movement against prior baselines
 - exposes read-side trend helpers for repo summaries and artifact drift leaderboards
 - supports baseline-first repository onboarding that persists discovered AI artifacts and baseline versions
-- supports selective historical backfill planning for onboarded artifacts
+- supports selective historical backfill planning and execution for onboarded artifacts
+- persists historical artifact versions and static profile lineage for backfilled snapshots
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
@@ -178,6 +179,7 @@ The next major workstreams are:
 - improve signal fusion between deterministic findings and semantic review
 - expand read-side history and trend analysis capabilities
 - build selective onboarding and historical backfill workflows for real repositories
+- deepen query and operator surfaces on top of the new onboarding and historical lineage records
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
 - plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement

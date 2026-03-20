@@ -198,7 +198,8 @@ Recommended future harness components:
 Current implementation status:
 - `onboard_repository()` now exists as a baseline-first onboarding workflow
 - selective historical backfill-job planning now exists for discovered artifacts
-- full historical backfill execution is still pending
+- `execute_repository_history_backfill()` now exists to persist historical artifact versions and static profile lineage for planned jobs
+- operator/query surfaces for the new backfill history are still pending
 
 ---
 
