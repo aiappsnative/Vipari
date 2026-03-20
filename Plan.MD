@@ -48,6 +48,7 @@ This framing should shape roadmap decisions:
 	- repository onboarding inventory persistence and selective historical backfill-job planning implemented
 	- historical backfill execution implemented for onboarded artifacts, with persisted historical versions and profile lineage
 	- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local operator CLI implemented
+	- large-repo dashboard aggregation optimized so OSS-scale repo views remain interactive
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -60,7 +61,9 @@ This framing should shape roadmap decisions:
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
-	- no dashboard or tenant-facing reporting surface yet
+	- current dashboard is still operator-oriented rather than customer decision-oriented
+	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
+	- dashboard currently exposes metrics and inventory, but not yet enough action-oriented insight for customers
 
 ### Completed slices on `feature/drift-engine-v1`
 1. Diff parsing and AI relevance classification
@@ -80,16 +83,42 @@ This framing should shape roadmap decisions:
 15. Reviewer-facing static drift summary block in PR comment output
 16. Read-side static drift aggregation queries for repo summaries and artifact leaderboards
 17. Baseline-first onboarding inventory persistence and selective historical backfill-job planning
+18. Historical backfill execution with persisted artifact/profile lineage
+19. Operator dashboard, JSON query APIs, and local CLI for onboarding/backfill inspection
+20. Large-repo dashboard aggregation optimization for real OSS repo responsiveness
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings
-2. Dashboard/operator surface backed by the new read-side drift queries
-3. Richer PR-facing presentation of drift profile deltas and reviewer explanations
-4. Documentation refresh across product, architecture, and operations
-5. Historical read-side queries that unify onboarding backfill and PR-time drift history
+2. Value-first dashboard insights layer (`review now`, guardrail regressions, capability expansions, recommended actions)
+3. Artifact grouping and control-surface map for prompts, agents, tool wiring, model config, and guardrails
+4. Richer PR-facing presentation of drift profile deltas and reviewer explanations
+5. Historical storyline and timeline views for top drifting artifacts
 6. OSS evaluation harness and candidate-repo runner
-4. Production-oriented persistence and deployment hardening
-5. Dashboard/operator surface for customer visibility
+7. Production-oriented persistence and deployment hardening
+
+### Dashboard product direction for next iteration
+
+The newly implemented dashboard is a strong operator and validation surface, but it is not yet the customer-facing product end state.
+
+Tomorrow's design priority should be to shift the dashboard from a metrics inventory into a decision surface.
+
+That means the next dashboard iteration should answer:
+- what needs review now,
+- what got riskier,
+- where guardrails weakened,
+- which control surfaces matter most,
+- and what the reviewer should inspect next.
+
+Recommended dashboard v2 sections:
+1. `Needs attention now` ranked artifact list with short narratives and recommended actions
+2. `Highest-risk drift` panel highlighting capability expansion, autonomy jumps, and safety regressions
+3. `Control surface map` grouping artifacts by prompts, agents, tool wiring, model config, retrieval, and guardrails
+4. `History and drift timeline` for top artifacts so customers can understand drift as a storyline rather than raw counts
+5. `Coverage and confidence` panel distinguishing high-confidence artifacts from lower-confidence discovery output
+
+Important product rule:
+- do not optimize the dashboard for exhaustiveness alone
+- optimize it for reviewer prioritization and customer decision-making
 
 ### Planned future workflow
 
@@ -218,6 +247,12 @@ That means PromptDrift should eventually be able to behave as if a public reposi
 - selectively digest relevant historical evolution,
 - populate artifact and static-profile history,
 - and surface useful PR and dashboard-level drift outputs.
+
+The `doria90/openfang` onboarding run has now validated that the current system can at least discover and render a large public-agent-style repository through the new dashboard surface.
+
+That run also exposed the next product truth clearly:
+- discovery alone is not sufficient,
+- customers need the dashboard to translate noisy artifact inventories into prioritized, explainable review guidance.
 
 Why this is the right end-goal test:
 - it validates onboarding robustness on repositories we did not design

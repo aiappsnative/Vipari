@@ -91,6 +91,12 @@ PromptDrift should eventually show:
 - strongest governance regressions,
 - timelines of major drift jumps.
 
+It should also answer the practical customer questions:
+- what needs review now,
+- what changed in a meaningful way,
+- which artifacts are noise versus real control surfaces,
+- and what a reviewer should inspect next.
+
 ---
 
 ## Recommended evaluation phases
@@ -169,11 +175,13 @@ Once dashboard and trend surfaces exist, validate that they answer:
 - what got riskier,
 - what governance weakened,
 - what patterns matter at repo level.
+- and what the customer should do next.
 
 Success criteria:
 - dashboard summaries are directionally correct,
 - results match repository history reasonably well,
-- a human can use them to prioritize inspection.
+- a human can use them to prioritize inspection,
+- and the dashboard can distinguish operator/debug metrics from customer-facing review guidance.
 
 ---
 
@@ -200,7 +208,13 @@ Current implementation status:
 - selective historical backfill-job planning now exists for discovered artifacts
 - `execute_repository_history_backfill()` now exists to persist historical artifact versions and static profile lineage for planned jobs
 - operator/query surfaces now exist via JSON API routes, dashboard pages, and a local CLI
+- real OSS validation has now been exercised against `doria90/openfang`, which confirmed both dashboard viability and current discovery noisiness on public repositories
 - OSS candidate-runner automation and benchmark exports are still pending
+
+Current product takeaway from OSS validation:
+- PromptDrift can now onboard and render a real public repository,
+- but the next milestone is not more raw metrics,
+- it is converting discovery and drift records into customer-facing insights and prioritized review actions.
 
 ---
 

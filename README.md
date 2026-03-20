@@ -46,6 +46,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
 - inspectable local dashboard pages and operator/query APIs for onboarding and drift inspection
 - a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
+- dashboard aggregation fast enough to inspect larger OSS repositories interactively
 
 ## What PromptDrift does today
 
@@ -189,7 +190,8 @@ Useful JSON endpoints:
 
 - signal fusion between deterministic and semantic evidence is still early-stage
 - the queue and durable store are still local SQLite in the current dev shape
-- no customer dashboard or operator UI yet
+- the current dashboard is still more useful as an operator/debug surface than as a customer decision surface
+- onboarding discovery on real OSS repositories can still be noisy and needs stronger artifact grouping, confidence handling, and prioritization
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance and policy coverage should continue expanding beyond the current rule set
 - nuanced fusion between deterministic and semantic outputs still needs refinement beyond the current negation-aware guardrail suppression
@@ -205,9 +207,10 @@ Useful JSON endpoints:
 The next major workstreams are:
 
 - improve signal fusion between deterministic findings and semantic review
-- expand read-side history and trend analysis capabilities
-- build selective onboarding and historical backfill workflows for real repositories
-- validate the new dashboard and operator surfaces against real OSS repositories
+- shift the dashboard from raw metrics to customer-facing insights and review prioritization
+- group artifacts into a clearer AI control-surface map
+- add timeline and storyline views for the most important drifting artifacts
+- continue validating the dashboard and operator surfaces against real OSS repositories
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
 - plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement

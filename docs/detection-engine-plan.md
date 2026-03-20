@@ -76,6 +76,8 @@ Implemented today:
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - first-pass PR comment integration for static drift summaries when artifact snapshots are available
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
+- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
+- dashboard aggregation optimized for larger OSS repositories so per-repo views stay interactive
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -86,8 +88,29 @@ Implemented today:
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
-- customer-facing dashboards and broader operator/reporting surfaces beyond the current query helpers
+- a value-first dashboard insights layer that translates artifact history into customer actions and reviewer priorities
 - production-grade persistence/deployment posture beyond the current local-stage setup
+
+### Dashboard evolution note
+
+The current dashboard layer should be understood as an operator/read-model surface, not yet the final customer product.
+
+It already proves that PromptDrift can:
+- onboard repositories,
+- expose discovered AI control surfaces,
+- persist baseline and history information,
+- and render a repo-level dashboard view for inspection.
+
+But that alone is not enough for customer value.
+
+The next dashboard iteration should emphasize:
+- prioritized review targets,
+- guardrail regressions,
+- capability expansion,
+- control-surface grouping,
+- and historical storylines for top artifacts.
+
+In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model
 
