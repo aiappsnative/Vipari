@@ -1,0 +1,204 @@
+import os
+import sys
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+from fastapi.testclient import TestClient
+
+import main
+from services.audit_records import RepoStaticDriftSummary
+from services.dashboard_views import RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView
+from services.onboarding import HistoricalBackfillExecutionResult, RepositoryOnboardingResult
+from services.onboarding_records import (
+    HistoricalBackfillJobRecord,
+    OnboardedArtifactRecord,
+    OnboardingBaselineVersionRecord,
+    RepositoryOnboardingRecord,
+)
+from engine.drift_profile import AgentAttributeProfile, StaticSignals
+
+
+def _profile() -> AgentAttributeProfile:
+    return AgentAttributeProfile(
+        guardrail_robustness=0.7,
+        capability_risk=0.2,
+        autonomy_level=0.3,
+        stability_vs_creativity=0.8,
+        governance_strength=0.6,
+        change_frequency=0.1,
+        semantic_density=0.4,
+        signals=StaticSignals(
+            token_count=10,
+            char_count=40,
+            section_count=1,
+            example_count=0,
+            instruction_density=0.2,
+            constraint_count=2,
+            explicit_limit_count=1,
+            ambiguity_count=0,
+        ),
+    )
+
+
+def _dashboard(repo_full: str) -> RepoDashboardView:
+    return RepoDashboardView(
+        repo_full=repo_full,
+        onboarding=RepositoryOnboardingRecord(
+            id=1,
+            repo_full=repo_full,
+            installation_id=123,
+            default_branch="main",
+            status="completed",
+            discovered_artifact_count=1,
+            created_at=1.0,
+            updated_at=1.0,
+        ),
+        backfill=RepoDashboardBackfillSummary(
+            job_count=1,
+            planned_job_count=0,
+            processing_job_count=0,
+            completed_job_count=1,
+            failed_job_count=0,
+            total_historical_versions=2,
+            total_historical_profiles=2,
+        ),
+        pull_request_audit_count=0,
+        baseline_version_count=1,
+        drift_summary=RepoStaticDriftSummary(
+            repo_full=repo_full,
+            artifact_count=0,
+            profile_count=0,
+            baseline_linked_profile_count=0,
+            avg_semantic_distance=0.0,
+            avg_guardrail_shift=0.0,
+            avg_capability_shift=0.0,
+            avg_autonomy_shift=0.0,
+            highest_capability_artifact_path=None,
+            highest_capability_delta=0.0,
+        ),
+        top_drifting_artifacts=[],
+        artifacts=[
+            RepoDashboardArtifactEntry(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Path indicates a prompt artifact.",
+                discovery_confidence=0.9,
+                baseline_line_count=4,
+                historical_version_count=2,
+                historical_profile_count=2,
+                latest_historical_semantic_distance=0.3,
+                latest_historical_drift_magnitude=0.7,
+                pr_profile_count=0,
+                latest_pr_semantic_distance=0.0,
+                latest_pr_capability_shift=0.0,
+                latest_pr_guardrail_shift=0.0,
+                leaderboard_drift_magnitude=0.0,
+            )
+        ],
+    )
+
+
+def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    onboarding_record = RepositoryOnboardingRecord(
+        id=1,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        default_branch="main",
+        status="completed",
+        discovered_artifact_count=1,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+    onboarding_result = RepositoryOnboardingResult(
+        onboarding=onboarding_record,
+        artifacts=[
+            OnboardedArtifactRecord(
+                id=1,
+                onboarding_id=1,
+                repo_full="doria90/dummyAI",
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Path indicates a prompt artifact.",
+                confidence=0.9,
+                created_at=1.0,
+            )
+        ],
+        baseline_versions=[
+            OnboardingBaselineVersionRecord(
+                id=1,
+                onboarding_id=1,
+                onboarded_artifact_id=1,
+                normalized_artifact_id="doria90/dummyai::prompts/system.txt",
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                version_hash="hash",
+                signal_terms=["safe"],
+                line_count=4,
+                profile=_profile(),
+                created_at=1.0,
+            )
+        ],
+    )
+    backfill_job = HistoricalBackfillJobRecord(
+        id=1,
+        onboarding_id=1,
+        onboarded_artifact_id=1,
+        repo_full="doria90/dummyAI",
+        artifact_path="prompts/system.txt",
+        artifact_type="prompt",
+        status="completed",
+        commit_count=2,
+        completed_commit_count=2,
+        commit_shas=["sha-2", "sha-1"],
+        last_error=None,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.onboard_repository", return_value=onboarding_result), patch(
+        "main.plan_repository_history_backfill", return_value=[backfill_job]
+    ), patch(
+        "main.execute_repository_history_backfill",
+        return_value=[HistoricalBackfillExecutionResult(job=backfill_job, versions=[], profiles=[])],
+    ), patch("main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")):
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/api/repos/doria90/dummyAI/onboard",
+                json={
+                    "installation_id": 123,
+                    "commit_limit_per_artifact": 5,
+                    "plan_backfill": True,
+                    "execute_backfill": True,
+                },
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["discovered_artifact_count"] == 1
+    assert payload["planned_backfill_job_count"] == 1
+    assert payload["executed_backfill_job_count"] == 1
+    assert payload["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+
+
+def test_dashboard_html_pages_render(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        index_response = client.get("/dashboard")
+        repo_response = client.get("/dashboard/doria90/dummyAI")
+
+    assert index_response.status_code == 200
+    assert "PromptDrift Dashboard" in index_response.text
+    assert "/api/repos" in index_response.text
+
+    assert repo_response.status_code == 200
+    assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
+    assert "/api/repos/${encodeURIComponent(repoFull)}/dashboard" in repo_response.text
