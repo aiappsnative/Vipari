@@ -2,6 +2,7 @@ import os
 import hmac
 import hashlib
 import asyncio
+from dataclasses import asdict
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError
 
@@ -13,6 +14,7 @@ from openai import OpenAI
 
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db
+from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 
@@ -71,6 +73,16 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/api/repos")
+async def list_repos():
+    return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH)]})
+
+
+@app.get("/api/repos/{repo_full:path}/dashboard")
+async def repo_dashboard(repo_full: str):
+    return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
 
 
 async def verify_signature(request: Request) -> bool:

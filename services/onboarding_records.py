@@ -359,6 +359,22 @@ def get_latest_repository_onboarding(db_path: str, repo_full: str) -> Repository
     return _row_to_repository_onboarding(row) if row is not None else None
 
 
+def list_latest_repository_onboardings(db_path: str) -> list[RepositoryOnboardingRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM repository_onboardings ORDER BY repo_full ASC, created_at DESC, id DESC"
+        ).fetchall()
+
+    latest_by_repo: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        repo_full = row["repo_full"]
+        if repo_full in latest_by_repo:
+            continue
+        latest_by_repo[repo_full] = row
+
+    return [_row_to_repository_onboarding(latest_by_repo[repo_full]) for repo_full in sorted(latest_by_repo)]
+
+
 def list_onboarded_artifacts_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardedArtifactRecord]:
     with _connect(db_path) as conn:
         rows = conn.execute(
