@@ -263,6 +263,8 @@ This layer should become the shared scoring substrate for:
 - trend aggregation
 - governance reporting
 
+The first onboarding integration is now in place through persisted onboarding baseline versions and planned selective historical backfill jobs.
+
 ---
 
 ## Current limitations

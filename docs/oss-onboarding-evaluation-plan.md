@@ -195,6 +195,11 @@ Recommended future harness components:
 - benchmark script for candidate repos,
 - comparison report between expected vs discovered AI control surfaces.
 
+Current implementation status:
+- `onboard_repository()` now exists as a baseline-first onboarding workflow
+- selective historical backfill-job planning now exists for discovered artifacts
+- full historical backfill execution is still pending
+
 ---
 
 ## What to measure

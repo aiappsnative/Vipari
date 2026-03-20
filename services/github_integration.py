@@ -142,6 +142,32 @@ def fetch_file_content(repo_full: str, file_path: str, token: str, *, ref: str) 
     return content.decoded_content.decode("utf-8")
 
 
+def get_repo_default_branch(repo_full: str, token: str) -> str:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    return repo.default_branch
+
+
+def list_repository_files(repo_full: str, token: str, *, ref: str | None = None) -> list[str]:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    tree_ref = ref or repo.default_branch
+    tree = repo.get_git_tree(tree_ref, recursive=True)
+    return sorted(entry.path for entry in tree.tree if entry.type == "blob")
+
+
+def list_file_commits(repo_full: str, file_path: str, token: str, *, branch: str | None = None, limit: int = 25) -> list[str]:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    commits = repo.get_commits(path=file_path, sha=branch)
+    commit_shas: list[str] = []
+    for index, commit in enumerate(commits):
+        if index >= limit:
+            break
+        commit_shas.append(commit.sha)
+    return commit_shas
+
+
 def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, existing_comment_id: int | None = None) -> int:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)

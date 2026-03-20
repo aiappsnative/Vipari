@@ -54,8 +54,10 @@ def init_db(db_path: str) -> None:
             """
         )
     from .audit_records import init_audit_record_db
+    from .onboarding_records import init_onboarding_record_db
 
     init_audit_record_db(db_path)
+    init_onboarding_record_db(db_path)
 
 
 def _row_to_job(row: sqlite3.Row) -> AuditJob:
