@@ -200,6 +200,32 @@ Guardrails for future implementation:
 - treat inferred artifact purpose as probabilistic metadata, not hard truth
 - prefer selective backfill over all-history ingestion unless customers explicitly need it
 
+### End-goal validation plan
+
+The ultimate validation for the `drift-engine` and onboarding work should be real open-source repository onboarding.
+
+That means PromptDrift should eventually be able to behave as if a public repository installed it as a GitHub App and then:
+- discover likely AI control surfaces,
+- establish a strong present-day baseline,
+- selectively digest relevant historical evolution,
+- populate artifact and static-profile history,
+- and surface useful PR and dashboard-level drift outputs.
+
+Why this is the right end-goal test:
+- it validates onboarding robustness on repositories we did not design
+- it tests whether baseline-first onboarding and selective history digestion produce useful drift intelligence
+- it tests whether the eventual dashboard and read-side surfaces are helpful on real repository history
+- it keeps product development honest by requiring value on messy, real-world GitHub repositories
+
+Recommended validation sequence:
+1. Build onboarding inventory persistence and baseline capture
+2. Add selective historical backfill for discovered artifacts
+3. Add read-side trend and repo-level aggregation queries
+4. Add operator/API surfaces for onboarding and backfill
+5. Validate against a curated set of public OSS repositories with visible prompts/configs/tooling
+
+See `docs/oss-onboarding-evaluation-plan.md` for the detailed evaluation plan and success criteria.
+
 ### Persistence architecture direction
 - one relational database for the near term
 - SQLite for local/dev and PostgreSQL as the production target
