@@ -73,6 +73,7 @@ Implemented today:
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
+- durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -82,7 +83,6 @@ Implemented today:
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
-- durable storage and retrieval of static drift profiles as first-class history records
 - PR comment integration for attribute-delta summaries
 - trend/reporting read models and customer-facing dashboards
 - production-grade persistence/deployment posture beyond the current local-stage setup
@@ -253,6 +253,13 @@ That module currently:
 - compares baseline and current versions
 - returns attribute deltas, lexical similarity, semantic distance, and short narrative summaries
 
+The first persistence integration for this stage now exists in `services/audit_records.py`.
+
+That integration currently:
+- stores one static profile record per changed artifact snapshot when artifact text is available
+- links the current profile to the prior profile for the same normalized artifact id
+- stores attribute deltas and narrative output for later history and trend queries
+
 ### Design note
 This stage is intentionally heuristic-first.
 
@@ -278,6 +285,11 @@ It answers questions such as:
 - compute attribute deltas
 - attach an explainable narrative to the deltas
 - persist enough data for future trend and history views
+
+### Current implementation note
+The first durable baseline linkage now compares the current artifact snapshot against the latest persisted profile for the same repo/path pair.
+
+That is not yet the final baseline-selection strategy, but it is the first working durable form of baseline-aware profile history.
 
 ### Expected outputs
 - `AgentDriftDelta`

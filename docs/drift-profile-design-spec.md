@@ -37,7 +37,7 @@ That is a major conceptual step toward:
 
 The first implementation is intentionally narrow and heuristic-first.
 
-It does **not** yet persist profiles, attach them to audit records, or render them in GitHub comments.
+It does **not** yet render profile deltas in GitHub comments.
 
 It **does** introduce:
 - static signal extraction from prompt/config text
@@ -45,6 +45,7 @@ It **does** introduce:
 - baseline-to-current comparison
 - semantic similarity and distance
 - explainable drift narrative output
+- durable storage of artifact-level static profiles and baseline-linked deltas inside audit history
 - regression tests validating the expected score direction of representative prompt changes
 
 The implementation lives in `engine/drift_profile.py`.
@@ -252,6 +253,7 @@ PromptDrift also has:
 - a static attribute vocabulary for design drift
 - a concrete baseline-comparison payload
 - a scoring layer suitable for trend graphs and PR summaries
+- persisted artifact-level profile history for later read-side queries
 
 ### Architectural role
 This layer should become the shared scoring substrate for:
@@ -267,7 +269,6 @@ This layer should become the shared scoring substrate for:
 
 The current implementation deliberately does **not** yet do the following:
 
-- persist `AgentAttributeProfile` records in the database
 - attach profile deltas to `pull_request_audits`
 - select a real stored baseline automatically
 - read GitHub review metadata directly from persisted records or live API lookups
@@ -282,13 +283,11 @@ That is acceptable for the first slice because the main goal is architectural pr
 
 ## Expected next evolutions
 
-### 1. Persist profile snapshots
-Add durable storage for:
-- artifact or agent identifier
-- baseline profile
-- current profile
-- profile delta
-- provenance (repo, PR, head SHA, artifact path, audit id)
+### 1. Enrich persisted profile snapshots
+Extend durable storage with:
+- stronger agent-level identifiers in addition to artifact path lineage
+- explicit baseline provenance types (previous version vs approved baseline vs onboarding baseline)
+- easier read models for timeline and repo-level aggregations
 
 ### 2. Feed PR review output
 Add a compact PR summary block such as:

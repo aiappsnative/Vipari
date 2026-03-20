@@ -40,6 +40,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
 - compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
 - first-pass static drift profiling for prompts/configs, including guardrail, capability, autonomy, creativity/stability, governance, and change-frequency attributes
+- durable local persistence of static artifact profiles and baseline-linked drift deltas for changed AI artifacts
 
 ## What PromptDrift does today
 
@@ -52,6 +53,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - claims queued jobs atomically so concurrent workers cannot double-process the same audit
 - performs deterministic analysis of AI-relevant changes
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
+- stores static artifact profiles in audit history so later versions can compare against the previous known baseline
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
@@ -63,7 +65,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
 - **Worker path:** deterministic analysis, semantic review, retry/fallback handling, replace-on-update comment publishing, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
-- **Persistence:** operational queue tables plus durable audit/history tables in one relational store for now
+- **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
 
 ## Static drift profile model
 

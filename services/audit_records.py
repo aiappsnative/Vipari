@@ -4,12 +4,13 @@ import hashlib
 import json
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
 from engine.analysis import DiffAnalysis
 from engine.diff_parser import extract_signal_terms_from_text
+from engine.drift_profile import AgentAttributeProfile, StaticSignals, build_attribute_profile, compare_attribute_profiles
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,25 @@ class ArtifactVersionRecord:
     signal_terms: list[str]
     line_count: int
     previous_version_id: int | None
+    created_at: float
+
+
+@dataclass(frozen=True)
+class StaticArtifactProfileRecord:
+    id: int
+    audit_id: int
+    changed_artifact_id: int
+    artifact_version_id: int
+    normalized_artifact_id: str
+    artifact_path: str
+    artifact_type: str
+    profile: AgentAttributeProfile
+    baseline_profile_id: int | None
+    semantic_similarity: float
+    semantic_distance: float
+    attribute_deltas: dict[str, float]
+    narrative: list[str]
+    signal_terms: list[str]
     created_at: float
 
 
@@ -210,6 +230,31 @@ def init_audit_record_db(db_path: str) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS static_artifact_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL,
+                changed_artifact_id INTEGER NOT NULL,
+                artifact_version_id INTEGER NOT NULL,
+                normalized_artifact_id TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                profile_json TEXT NOT NULL,
+                baseline_profile_id INTEGER,
+                semantic_similarity REAL NOT NULL,
+                semantic_distance REAL NOT NULL,
+                attribute_deltas_json TEXT NOT NULL,
+                narrative_json TEXT NOT NULL,
+                signal_terms_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE,
+                FOREIGN KEY(changed_artifact_id) REFERENCES changed_artifacts(id) ON DELETE CASCADE,
+                FOREIGN KEY(artifact_version_id) REFERENCES artifact_versions(id) ON DELETE CASCADE,
+                FOREIGN KEY(baseline_profile_id) REFERENCES static_artifact_profiles(id) ON DELETE SET NULL
+            )
+            """
+        )
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pull_request_audits_repo_pr_sha ON pull_request_audits(repo_full, pr_number, head_sha)"
@@ -220,6 +265,9 @@ def init_audit_record_db(db_path: str) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_rule_id ON findings(rule_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_normalized_id ON artifact_versions(normalized_artifact_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_hash ON artifact_versions(version_hash)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_static_artifact_profiles_normalized_id ON static_artifact_profiles(normalized_artifact_id, created_at)"
+        )
 
         audit_comments_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
         if "github_comment_id" not in audit_comments_columns:
@@ -317,6 +365,7 @@ def record_audit_result(
                 ),
             )
             conn.execute("DELETE FROM findings WHERE audit_id = ?", (audit_id,))
+            conn.execute("DELETE FROM static_artifact_profiles WHERE audit_id = ?", (audit_id,))
             conn.execute("DELETE FROM artifact_versions WHERE audit_id = ?", (audit_id,))
             conn.execute("DELETE FROM changed_artifacts WHERE audit_id = ?", (audit_id,))
 
@@ -365,6 +414,17 @@ def record_audit_result(
             snapshot_text = artifact_snapshots.get(artifact.relevance.path)
             if snapshot_text is not None:
                 normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact.relevance.path)
+                signal_terms = extract_signal_terms_from_text(snapshot_text)
+                profile = build_attribute_profile(snapshot_text)
+                previous_profile_row = conn.execute(
+                    """
+                    SELECT * FROM static_artifact_profiles
+                    WHERE normalized_artifact_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (normalized_artifact_id,),
+                ).fetchone()
                 previous_version = conn.execute(
                     """
                     SELECT id FROM artifact_versions
@@ -388,9 +448,66 @@ def record_audit_result(
                         artifact.relevance.path,
                         artifact.relevance.artifact_type,
                         hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
-                        json.dumps(extract_signal_terms_from_text(snapshot_text)),
+                        json.dumps(signal_terms),
                         len([line for line in snapshot_text.splitlines() if line.strip()]),
                         previous_version["id"] if previous_version is not None else None,
+                        now,
+                    ),
+                )
+                artifact_version_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+                baseline_profile_id: int | None = None
+                semantic_similarity = 1.0
+                semantic_distance = 0.0
+                attribute_deltas: dict[str, float] = {
+                    "guardrail_robustness": 0.0,
+                    "capability_risk": 0.0,
+                    "autonomy_level": 0.0,
+                    "stability_vs_creativity": 0.0,
+                    "governance_strength": 0.0,
+                    "change_frequency": 0.0,
+                    "semantic_density": 0.0,
+                }
+                narrative = ["No baseline profile available; stored current profile as a new baseline candidate."]
+
+                if previous_profile_row is not None:
+                    baseline_profile_id = previous_profile_row["id"]
+                    baseline_profile = _profile_from_json(previous_profile_row["profile_json"])
+                    previous_signal_terms = json.loads(previous_profile_row["signal_terms_json"])
+                    semantic_similarity = _term_similarity(signal_terms, previous_signal_terms)
+                    drift_delta = compare_attribute_profiles(
+                        baseline_profile,
+                        profile,
+                        semantic_similarity=semantic_similarity,
+                    )
+                    semantic_distance = drift_delta.semantic_distance
+                    attribute_deltas = drift_delta.attribute_deltas
+                    narrative = drift_delta.narrative
+
+                conn.execute(
+                    """
+                    INSERT INTO static_artifact_profiles (
+                        audit_id, changed_artifact_id, artifact_version_id,
+                        normalized_artifact_id, artifact_path, artifact_type,
+                        profile_json, baseline_profile_id, semantic_similarity,
+                        semantic_distance, attribute_deltas_json, narrative_json,
+                        signal_terms_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        audit_id,
+                        changed_artifact_id,
+                        artifact_version_id,
+                        normalized_artifact_id,
+                        artifact.relevance.path,
+                        artifact.relevance.artifact_type,
+                        json.dumps(asdict(profile)),
+                        baseline_profile_id,
+                        semantic_similarity,
+                        semantic_distance,
+                        json.dumps(attribute_deltas),
+                        json.dumps(narrative),
+                        json.dumps(signal_terms),
                         now,
                     ),
                 )
@@ -567,6 +684,37 @@ def get_latest_artifact_version_for_repo_artifact(db_path: str, repo_full: str, 
     return _row_to_artifact_version(row) if row is not None else None
 
 
+def list_static_profiles_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> list[StaticArtifactProfileRecord]:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM static_artifact_profiles
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (normalized_artifact_id,),
+        ).fetchall()
+    return [_row_to_static_artifact_profile(row) for row in rows]
+
+
+def get_latest_static_profile_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> Optional[StaticArtifactProfileRecord]:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM static_artifact_profiles
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
+    return _row_to_static_artifact_profile(row) if row is not None else None
+
+
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     return PullRequestAuditRecord(
         id=row["id"],
@@ -667,6 +815,72 @@ def _row_to_artifact_version(row: sqlite3.Row) -> ArtifactVersionRecord:
         previous_version_id=row["previous_version_id"],
         created_at=row["created_at"],
     )
+
+
+def _row_to_static_artifact_profile(row: sqlite3.Row) -> StaticArtifactProfileRecord:
+    return StaticArtifactProfileRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        changed_artifact_id=row["changed_artifact_id"],
+        artifact_version_id=row["artifact_version_id"],
+        normalized_artifact_id=row["normalized_artifact_id"],
+        artifact_path=row["artifact_path"],
+        artifact_type=row["artifact_type"],
+        profile=_profile_from_json(row["profile_json"]),
+        baseline_profile_id=row["baseline_profile_id"],
+        semantic_similarity=row["semantic_similarity"],
+        semantic_distance=row["semantic_distance"],
+        attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
+        narrative=json.loads(row["narrative_json"]),
+        signal_terms=json.loads(row["signal_terms_json"]),
+        created_at=row["created_at"],
+    )
+
+
+def _profile_from_json(profile_json: str) -> AgentAttributeProfile:
+    payload = json.loads(profile_json)
+    signal_payload = payload["signals"]
+    return AgentAttributeProfile(
+        guardrail_robustness=float(payload["guardrail_robustness"]),
+        capability_risk=float(payload["capability_risk"]),
+        autonomy_level=float(payload["autonomy_level"]),
+        stability_vs_creativity=float(payload["stability_vs_creativity"]),
+        governance_strength=float(payload["governance_strength"]),
+        change_frequency=float(payload["change_frequency"]),
+        semantic_density=float(payload["semantic_density"]),
+        signals=StaticSignals(
+            token_count=int(signal_payload["token_count"]),
+            char_count=int(signal_payload["char_count"]),
+            section_count=int(signal_payload["section_count"]),
+            example_count=int(signal_payload["example_count"]),
+            instruction_density=float(signal_payload["instruction_density"]),
+            constraint_count=int(signal_payload["constraint_count"]),
+            explicit_limit_count=int(signal_payload["explicit_limit_count"]),
+            ambiguity_count=int(signal_payload["ambiguity_count"]),
+            guardrail_counts={key: int(value) for key, value in signal_payload.get("guardrail_counts", {}).items()},
+            write_signal_count=int(signal_payload.get("write_signal_count", 0)),
+            read_signal_count=int(signal_payload.get("read_signal_count", 0)),
+            sensitive_tool_count=int(signal_payload.get("sensitive_tool_count", 0)),
+            prod_signal_count=int(signal_payload.get("prod_signal_count", 0)),
+            sandbox_signal_count=int(signal_payload.get("sandbox_signal_count", 0)),
+            systems_touched_count=int(signal_payload.get("systems_touched_count", 0)),
+            human_review_count=int(signal_payload.get("human_review_count", 0)),
+            parallelism_signal_count=int(signal_payload.get("parallelism_signal_count", 0)),
+            max_steps=int(signal_payload.get("max_steps", 0)),
+            temperature=(float(signal_payload["temperature"]) if signal_payload.get("temperature") is not None else None),
+            top_p=(float(signal_payload["top_p"]) if signal_payload.get("top_p") is not None else None),
+        ),
+    )
+
+
+def _term_similarity(left: list[str], right: list[str]) -> float:
+    left_set = {item.lower() for item in left}
+    right_set = {item.lower() for item in right}
+    if not left_set and not right_set:
+        return 1.0
+    if not left_set or not right_set:
+        return 0.0
+    return round(len(left_set & right_set) / len(left_set | right_set), 4)
 
 
 def _build_normalized_artifact_id(repo_full: str, artifact_path: str) -> str:
