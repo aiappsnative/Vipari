@@ -47,6 +47,7 @@ This framing should shape roadmap decisions:
 	- repo-level static drift summary and top-drifting artifact queries implemented as first read-side trend primitives
 	- repository onboarding inventory persistence and selective historical backfill-job planning implemented
 	- historical backfill execution implemented for onboarded artifacts, with persisted historical versions and profile lineage
+	- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local operator CLI implemented
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -84,9 +85,9 @@ This framing should shape roadmap decisions:
 1. Signal fusion improvements between deterministic and semantic findings
 2. Dashboard/operator surface backed by the new read-side drift queries
 3. Richer PR-facing presentation of drift profile deltas and reviewer explanations
-4. Query/API/CLI surfaces for onboarding, backfill, and drift read models
-5. Documentation refresh across product, architecture, and operations
-6. Historical read-side queries that unify onboarding backfill and PR-time drift history
+4. Documentation refresh across product, architecture, and operations
+5. Historical read-side queries that unify onboarding backfill and PR-time drift history
+6. OSS evaluation harness and candidate-repo runner
 4. Production-oriented persistence and deployment hardening
 5. Dashboard/operator surface for customer visibility
 

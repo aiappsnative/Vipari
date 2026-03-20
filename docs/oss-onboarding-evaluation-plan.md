@@ -199,7 +199,8 @@ Current implementation status:
 - `onboard_repository()` now exists as a baseline-first onboarding workflow
 - selective historical backfill-job planning now exists for discovered artifacts
 - `execute_repository_history_backfill()` now exists to persist historical artifact versions and static profile lineage for planned jobs
-- operator/query surfaces for the new backfill history are still pending
+- operator/query surfaces now exist via JSON API routes, dashboard pages, and a local CLI
+- OSS candidate-runner automation and benchmark exports are still pending
 
 ---
 

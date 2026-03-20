@@ -44,6 +44,8 @@ The active branch has moved beyond the original MVP. The current system has been
 - reviewer-facing PR comments enriched with a compact static drift summary block when artifact snapshots are available
 - repo-level static drift summaries and top-drifting artifact queries as first dashboard/read-side primitives
 - repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
+- inspectable local dashboard pages and operator/query APIs for onboarding and drift inspection
+- a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
 
 ## What PromptDrift does today
 
@@ -62,6 +64,9 @@ The active branch has moved beyond the original MVP. The current system has been
 - supports baseline-first repository onboarding that persists discovered AI artifacts and baseline versions
 - supports selective historical backfill planning and execution for onboarded artifacts
 - persists historical artifact versions and static profile lineage for backfilled snapshots
+- exposes JSON query APIs for repository listings and unified dashboard payloads
+- exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`
+- includes `scripts/repo_ops.py` for local operator workflows and read-side inspection
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
@@ -157,6 +162,29 @@ Recent live validation on the active branch covered:
 - non-AI PR flow returning `no relevant changes` without queueing an audit
 - invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
 
+## Local operator and dashboard testing
+
+Once the app is running locally, you can inspect the current drift dashboard in the browser:
+
+- `/dashboard`
+- `/dashboard/<owner>/<repo>`
+
+You can also inspect or drive the workflow locally with the CLI:
+
+```bash
+python scripts/repo_ops.py list-repos
+python scripts/repo_ops.py dashboard owner/repo
+python scripts/repo_ops.py onboard owner/repo <installation_id> --plan-backfill --execute-backfill
+python scripts/repo_ops.py backfill owner/repo <installation_id>
+```
+
+Useful JSON endpoints:
+
+- `GET /api/repos`
+- `GET /api/repos/{owner/repo}/dashboard`
+- `POST /api/repos/{owner/repo}/onboard`
+- `POST /api/repos/{owner/repo}/backfill`
+
 ## Known limitations
 
 - signal fusion between deterministic and semantic evidence is still early-stage
@@ -179,7 +207,7 @@ The next major workstreams are:
 - improve signal fusion between deterministic findings and semantic review
 - expand read-side history and trend analysis capabilities
 - build selective onboarding and historical backfill workflows for real repositories
-- deepen query and operator surfaces on top of the new onboarding and historical lineage records
+- validate the new dashboard and operator surfaces against real OSS repositories
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
 - plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement
