@@ -141,6 +141,35 @@ class StaticArtifactDriftPreview:
     signal_terms: list[str]
 
 
+@dataclass(frozen=True)
+class RepoStaticDriftSummary:
+    repo_full: str
+    artifact_count: int
+    profile_count: int
+    baseline_linked_profile_count: int
+    avg_semantic_distance: float
+    avg_guardrail_shift: float
+    avg_capability_shift: float
+    avg_autonomy_shift: float
+    highest_capability_artifact_path: str | None
+    highest_capability_delta: float
+
+
+@dataclass(frozen=True)
+class ArtifactDriftLeaderboardEntry:
+    artifact_path: str
+    artifact_type: str
+    latest_profile_id: int
+    sample_count: int
+    latest_created_at: float
+    semantic_distance: float
+    guardrail_shift: float
+    capability_shift: float
+    autonomy_shift: float
+    drift_magnitude: float
+    narrative: list[str]
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
@@ -784,6 +813,88 @@ def preview_static_drift_for_artifacts(
     return previews
 
 
+def get_repo_static_drift_summary(db_path: str, repo_full: str) -> RepoStaticDriftSummary:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT sap.*
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+
+    profiles = [_row_to_static_artifact_profile(row) for row in rows]
+    artifact_paths = {profile.artifact_path for profile in profiles}
+    baseline_linked = [profile for profile in profiles if profile.baseline_profile_id is not None]
+    avg_semantic_distance = _average([profile.semantic_distance for profile in baseline_linked])
+    avg_guardrail_shift = _average([abs(profile.attribute_deltas["guardrail_robustness"]) for profile in baseline_linked])
+    avg_capability_shift = _average([abs(profile.attribute_deltas["capability_risk"]) for profile in baseline_linked])
+    avg_autonomy_shift = _average([abs(profile.attribute_deltas["autonomy_level"]) for profile in baseline_linked])
+
+    highest_capability_artifact_path: str | None = None
+    highest_capability_delta = 0.0
+    if baseline_linked:
+        highest_capability = max(baseline_linked, key=lambda profile: profile.attribute_deltas["capability_risk"])
+        highest_capability_artifact_path = highest_capability.artifact_path
+        highest_capability_delta = round(highest_capability.attribute_deltas["capability_risk"], 4)
+
+    return RepoStaticDriftSummary(
+        repo_full=repo_full,
+        artifact_count=len(artifact_paths),
+        profile_count=len(profiles),
+        baseline_linked_profile_count=len(baseline_linked),
+        avg_semantic_distance=avg_semantic_distance,
+        avg_guardrail_shift=avg_guardrail_shift,
+        avg_capability_shift=avg_capability_shift,
+        avg_autonomy_shift=avg_autonomy_shift,
+        highest_capability_artifact_path=highest_capability_artifact_path,
+        highest_capability_delta=highest_capability_delta,
+    )
+
+
+def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit: int = 10) -> list[ArtifactDriftLeaderboardEntry]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT sap.*
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+
+    grouped: dict[str, list[StaticArtifactProfileRecord]] = {}
+    for profile in (_row_to_static_artifact_profile(row) for row in rows):
+        grouped.setdefault(profile.artifact_path, []).append(profile)
+
+    leaderboard: list[ArtifactDriftLeaderboardEntry] = []
+    for artifact_path, profiles in grouped.items():
+        latest = profiles[-1]
+        leaderboard.append(
+            ArtifactDriftLeaderboardEntry(
+                artifact_path=artifact_path,
+                artifact_type=latest.artifact_type,
+                latest_profile_id=latest.id,
+                sample_count=len(profiles),
+                latest_created_at=latest.created_at,
+                semantic_distance=latest.semantic_distance,
+                guardrail_shift=round(latest.attribute_deltas["guardrail_robustness"], 4),
+                capability_shift=round(latest.attribute_deltas["capability_risk"], 4),
+                autonomy_shift=round(latest.attribute_deltas["autonomy_level"], 4),
+                drift_magnitude=_drift_magnitude(latest),
+                narrative=latest.narrative,
+            )
+        )
+
+    leaderboard.sort(key=lambda entry: (-entry.drift_magnitude, entry.artifact_path))
+    return leaderboard[:limit]
+
+
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     return PullRequestAuditRecord(
         id=row["id"],
@@ -950,6 +1061,22 @@ def _term_similarity(left: list[str], right: list[str]) -> float:
     if not left_set or not right_set:
         return 0.0
     return round(len(left_set & right_set) / len(left_set | right_set), 4)
+
+
+def _average(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
+
+
+def _drift_magnitude(profile: StaticArtifactProfileRecord) -> float:
+    return round(
+        abs(profile.attribute_deltas["guardrail_robustness"])
+        + abs(profile.attribute_deltas["capability_risk"])
+        + abs(profile.attribute_deltas["autonomy_level"])
+        + profile.semantic_distance,
+        4,
+    )
 
 
 def _build_normalized_artifact_id(repo_full: str, artifact_path: str) -> str:

@@ -44,6 +44,7 @@ This framing should shape roadmap decisions:
 	- first-pass static drift profiling implemented for GitHub-visible prompts and configs
 	- static artifact profile persistence implemented with baseline-linked history records
 	- reviewer-facing static drift summary block implemented in PR comments when artifact snapshots are available
+	- repo-level static drift summary and top-drifting artifact queries implemented as first read-side trend primitives
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -74,12 +75,14 @@ This framing should shape roadmap decisions:
 13. Static design drift-profile layer with attribute extraction and baseline comparison primitives
 14. Static artifact profile persistence and baseline-linked profile history
 15. Reviewer-facing static drift summary block in PR comment output
+16. Read-side static drift aggregation queries for repo summaries and artifact leaderboards
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings
-2. Better read-side history, trend, and repo-level reporting queries
+2. Dashboard/operator surface backed by the new read-side drift queries
 3. Richer PR-facing presentation of drift profile deltas and reviewer explanations
-4. Documentation refresh across product, architecture, and operations
+4. Selective onboarding and historical backfill workflows for real repositories
+5. Documentation refresh across product, architecture, and operations
 4. Production-oriented persistence and deployment hardening
 5. Dashboard/operator surface for customer visibility
 

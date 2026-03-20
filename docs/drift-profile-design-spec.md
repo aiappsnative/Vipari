@@ -302,7 +302,11 @@ Support baseline selection from:
 - latest approved profile
 
 ### 4. Add trend read models
-Support:
+The first read-side slice now supports:
+- repo-level static drift summaries
+- top-drifting artifact leaderboards
+
+It should continue expanding to support:
 - per-agent timelines
 - repo-level aggregate drift
 - top-drifting artifacts

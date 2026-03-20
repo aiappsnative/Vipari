@@ -75,6 +75,7 @@ Implemented today:
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - first-pass PR comment integration for static drift summaries when artifact snapshots are available
+- first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -85,7 +86,7 @@ Implemented today:
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
-- trend/reporting read models and customer-facing dashboards
+- customer-facing dashboards and broader operator/reporting surfaces beyond the current query helpers
 - production-grade persistence/deployment posture beyond the current local-stage setup
 
 ### Execution model
@@ -293,6 +294,8 @@ The first durable baseline linkage now compares the current artifact snapshot ag
 That is not yet the final baseline-selection strategy, but it is the first working durable form of baseline-aware profile history.
 
 The first reviewer-facing presentation of this data now appears as a compact static drift block inserted into PR comments ahead of the detailed semantic review section.
+
+The first read-side trend layer now exists as repo summary and artifact leaderboard queries over persisted static profile history.
 
 ### Expected outputs
 - `AgentDriftDelta`

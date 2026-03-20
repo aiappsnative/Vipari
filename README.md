@@ -42,6 +42,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - first-pass static drift profiling for prompts/configs, including guardrail, capability, autonomy, creativity/stability, governance, and change-frequency attributes
 - durable local persistence of static artifact profiles and baseline-linked drift deltas for changed AI artifacts
 - reviewer-facing PR comments enriched with a compact static drift summary block when artifact snapshots are available
+- repo-level static drift summaries and top-drifting artifact queries as first dashboard/read-side primitives
 
 ## What PromptDrift does today
 
@@ -56,6 +57,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
 - stores static artifact profiles in audit history so later versions can compare against the previous known baseline
 - injects a compact static drift summary into PR comments so reviewers can see guardrail/capability/autonomy movement against prior baselines
+- exposes read-side trend helpers for repo summaries and artifact drift leaderboards
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
