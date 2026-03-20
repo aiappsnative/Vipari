@@ -2,6 +2,8 @@
 
 PromptDrift is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
 
+The product direction is now explicitly GitHub-native and static-first: PromptDrift treats risk and drift as properties of prompts, policies, model settings, tool definitions, and agent wiring visible in code review, rather than as a runtime observability problem.
+
 Its job is not just to say that “an AI file changed”, but to help reviewers answer the customer-critical question:
 
 **Did this PR materially change how the AI behaves, what it is allowed to do, or what it may reveal?**
@@ -20,6 +22,8 @@ For customers, that means:
 
 In product terms, PromptDrift is moving toward becoming a **change intelligence layer for AI behavior**.
 
+For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
+
 ## Current status
 
 The active branch has moved beyond the original MVP. The current system has been validated end to end against a private GitHub repository and now includes:
@@ -35,6 +39,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - negation-aware suppression for restrictive prompt additions such as `Do not reveal ...` so obvious safety wording is not scored as risky drift
 - managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
 - compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
+- first-pass static drift profiling for prompts/configs, including guardrail, capability, autonomy, creativity/stability, governance, and change-frequency attributes
 
 ## What PromptDrift does today
 
@@ -46,6 +51,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - queues relevant audits for background execution
 - claims queued jobs atomically so concurrent workers cannot double-process the same audit
 - performs deterministic analysis of AI-relevant changes
+- extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
@@ -56,7 +62,33 @@ The active branch has moved beyond the original MVP. The current system has been
 
 - **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
 - **Worker path:** deterministic analysis, semantic review, retry/fallback handling, replace-on-update comment publishing, durable persistence
+- **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables in one relational store for now
+
+## Static drift profile model
+
+The first implemented drift-engine slice introduces a static attribute model for GitHub-visible AI artifacts.
+
+The current profile dimensions are:
+
+- `guardrail_robustness`
+- `capability_risk`
+- `autonomy_level`
+- `stability_vs_creativity`
+- `governance_strength`
+- `change_frequency`
+- `semantic_density`
+
+These are computed from static signals such as:
+
+- instruction and constraint density (`must`, `never`, `do not`, `always`)
+- explicit limits (`up to`, `above`, `max`, bounded authority wording)
+- tool and privilege wording (read vs write, production vs sandbox, sensitive systems)
+- autonomy markers (steps, loops, parallelism, human approval hints)
+- model settings such as `temperature` and `top_p`
+- governance inputs such as CODEOWNERS requirements, review strength, and recent churn
+
+This gives PromptDrift a concrete foundation for future baseline comparison, trend analysis, and PR-facing drift summaries without relying on runtime telemetry.
 
 ## Requirements
 
@@ -135,6 +167,7 @@ Recent live validation on the active branch covered:
 The next major workstreams are:
 
 - improve signal fusion between deterministic findings and semantic review
+- wire static drift-profile deltas into PR-facing review output
 - expand read-side history and trend analysis capabilities
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding

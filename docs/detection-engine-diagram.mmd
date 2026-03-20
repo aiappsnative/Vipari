@@ -17,10 +17,12 @@ flowchart TD
     C --> D[Structured change extraction]
 
     D --> R[History and baseline retrieval]
+    D --> S[Static design profile extraction]
     D --> X[Semantic context selector]
     D --> F[Deterministic signal engine]
     R --> X
     R --> F
+    R --> S
     X --> X1[diff_only]
     X --> X2[section_context]
     X --> X3[full_artifact_compare]
@@ -50,6 +52,10 @@ flowchart TD
     G4 --> H
     G5 --> H
     R --> H
+    S --> S1[Attribute profile builder]
+    S1 --> S2[Baseline profile comparison]
+    S2 --> S3[Attribute deltas plus drift narrative]
+    S3 --> H
 
     H --> I[Risk scoring and confidence calibration]
     I --> J[Reviewer-facing explanation synthesis]
@@ -60,6 +66,7 @@ flowchart TD
 
     Q1 --> P0[Operational queue store]
     D --> P1[Artifact lineage and version store]
+    S2 --> P5[Static profile and delta store]
     I --> P2[Durable audit and finding store]
     J --> P2
     K --> P4[Audit comment record store]
@@ -70,6 +77,7 @@ flowchart TD
     P4 --> R
     P2 --> P3[Cold snapshot and archive policy]
     P2 --> M[Trend and reporting layer]
+    P5 --> M
     P4 --> M
     P3 --> M
     M --> N[Fixture set and policy tuning loop]
@@ -99,6 +107,13 @@ flowchart TD
         F2
         F3
         F4
+    end
+
+    subgraph Static Drift Layer
+        S
+        S1
+        S2
+        S3
     end
 
     subgraph Semantic Review
@@ -134,6 +149,7 @@ flowchart TD
         P1
         P2
         P4
+        P5
         P3
         M
     end

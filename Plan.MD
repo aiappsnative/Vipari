@@ -2,6 +2,8 @@
 
 This document outlines the phased roadmap for building the PromptDrift backend. It is intended as a living guide and will evolve as the project grows.
 
+For the enduring product thesis, guardrails, and design principles that should outlast roadmap changes, see `SOUL.md`.
+
 ---
 
 ## Product value north star
@@ -39,6 +41,7 @@ This framing should shape roadmap decisions:
 	- queued audit worker with retry/fallback implemented
 	- structured semantic review packages implemented
 	- durable audit/history persistence implemented
+	- first-pass static drift profiling implemented for GitHub-visible prompts and configs
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -66,11 +69,14 @@ This framing should shape roadmap decisions:
 10. GitHub App auth hardening, transient PR diff retry, and synchronize diff freshness hardening
 11. Queue correctness hardening for atomic claim, failed-job revival, and truthful terminal states
 12. Deterministic negation-aware suppression for restrictive safety wording
+13. Static design drift-profile layer with attribute extraction and baseline comparison primitives
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings
-2. Better read-side history, trend, and repo-level reporting queries
-3. Documentation refresh across product, architecture, and operations
+2. Persist static profiles and baseline selection into durable history
+3. Better read-side history, trend, and repo-level reporting queries
+4. PR-facing presentation of drift profile deltas and reviewer explanations
+5. Documentation refresh across product, architecture, and operations
 4. Production-oriented persistence and deployment hardening
 5. Dashboard/operator surface for customer visibility
 
