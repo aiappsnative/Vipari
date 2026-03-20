@@ -128,6 +128,19 @@ class StaticArtifactProfileRecord:
     created_at: float
 
 
+@dataclass(frozen=True)
+class StaticArtifactDriftPreview:
+    artifact_path: str
+    artifact_type: str
+    profile: AgentAttributeProfile
+    baseline_profile_id: int | None
+    semantic_similarity: float
+    semantic_distance: float
+    attribute_deltas: dict[str, float]
+    narrative: list[str]
+    signal_terms: list[str]
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
@@ -713,6 +726,62 @@ def get_latest_static_profile_for_repo_artifact(db_path: str, repo_full: str, ar
             (normalized_artifact_id,),
         ).fetchone()
     return _row_to_static_artifact_profile(row) if row is not None else None
+
+
+def preview_static_drift_for_artifacts(
+    db_path: str,
+    repo_full: str,
+    artifact_snapshots: dict[str, str],
+    artifact_types_by_path: dict[str, str],
+) -> list[StaticArtifactDriftPreview]:
+    previews: list[StaticArtifactDriftPreview] = []
+    for artifact_path, snapshot_text in artifact_snapshots.items():
+        artifact_type = artifact_types_by_path.get(artifact_path, "generic")
+        signal_terms = extract_signal_terms_from_text(snapshot_text)
+        profile = build_attribute_profile(snapshot_text)
+        baseline_profile = get_latest_static_profile_for_repo_artifact(db_path, repo_full, artifact_path)
+
+        baseline_profile_id: int | None = None
+        semantic_similarity = 1.0
+        semantic_distance = 0.0
+        attribute_deltas: dict[str, float] = {
+            "guardrail_robustness": 0.0,
+            "capability_risk": 0.0,
+            "autonomy_level": 0.0,
+            "stability_vs_creativity": 0.0,
+            "governance_strength": 0.0,
+            "change_frequency": 0.0,
+            "semantic_density": 0.0,
+        }
+        narrative = ["No baseline profile available; current profile will establish the first baseline."]
+
+        if baseline_profile is not None:
+            baseline_profile_id = baseline_profile.id
+            semantic_similarity = _term_similarity(signal_terms, baseline_profile.signal_terms)
+            drift_delta = compare_attribute_profiles(
+                baseline_profile.profile,
+                profile,
+                semantic_similarity=semantic_similarity,
+            )
+            semantic_distance = drift_delta.semantic_distance
+            attribute_deltas = drift_delta.attribute_deltas
+            narrative = drift_delta.narrative
+
+        previews.append(
+            StaticArtifactDriftPreview(
+                artifact_path=artifact_path,
+                artifact_type=artifact_type,
+                profile=profile,
+                baseline_profile_id=baseline_profile_id,
+                semantic_similarity=semantic_similarity,
+                semantic_distance=semantic_distance,
+                attribute_deltas=attribute_deltas,
+                narrative=narrative,
+                signal_terms=signal_terms,
+            )
+        )
+
+    return previews
 
 
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:

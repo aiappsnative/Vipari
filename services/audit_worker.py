@@ -17,7 +17,7 @@ from .audit_jobs import (
     mark_job_fallback_posted,
     mark_job_retry,
 )
-from .audit_records import get_latest_audit_comment_for_pr, record_audit_result
+from .audit_records import get_latest_audit_comment_for_pr, preview_static_drift_for_artifacts, record_audit_result
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 
 
@@ -128,6 +128,59 @@ def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: 
             "</details>",
         ]
     )
+
+
+def _artifact_type_map(deterministic_analysis: DiffAnalysis) -> dict[str, str]:
+    return {artifact.relevance.path: artifact.relevance.artifact_type for artifact in deterministic_analysis.artifacts}
+
+
+def _summarize_delta(value: float) -> str:
+    if value > 0:
+        return f"+{value:.2f}"
+    return f"{value:.2f}"
+
+
+def _build_static_drift_summary_block(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings, artifact_snapshots: dict[str, str]) -> str:
+    if not artifact_snapshots:
+        return ""
+
+    previews = preview_static_drift_for_artifacts(
+        settings.db_path,
+        job.repo_full,
+        artifact_snapshots,
+        _artifact_type_map(deterministic_analysis),
+    )
+    if not previews:
+        return ""
+
+    lines = ["### Static drift signals", ""]
+    for preview in previews:
+        if preview.baseline_profile_id is None:
+            lines.append(f"- `{preview.artifact_path}` [{preview.artifact_type}] — no stored baseline yet; this version becomes the first profile baseline.")
+            continue
+
+        lines.append(
+            "- "
+            f"`{preview.artifact_path}` [{preview.artifact_type}] — "
+            f"Guardrails {_summarize_delta(preview.attribute_deltas['guardrail_robustness'])}, "
+            f"Capability {_summarize_delta(preview.attribute_deltas['capability_risk'])}, "
+            f"Autonomy {_summarize_delta(preview.attribute_deltas['autonomy_level'])}, "
+            f"Distance {preview.semantic_distance:.2f}"
+        )
+        if preview.narrative:
+            lines.append(f"  - {preview.narrative[0]}")
+
+    return "\n".join(lines)
+
+
+def _inject_static_drift_summary(comment_body: str, summary_block: str) -> str:
+    if not summary_block.strip():
+        return comment_body
+    details_marker = "<details>"
+    if details_marker not in comment_body:
+        return f"{comment_body.rstrip()}\n\n{summary_block.strip()}"
+    summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
+    return f"{summary_prefix.rstrip()}\n\n{summary_block.strip()}\n\n{details_marker}{detail_suffix}"
 
 
 def _sanitize_detail_markdown(detail_markdown: str) -> str:
@@ -355,6 +408,7 @@ def _persist_audit_result(
     semantic_review_completed: bool,
     error_message: str | None = None,
     github_comment_id: int | None = None,
+    artifact_snapshots: dict[str, str] | None = None,
 ) -> None:
     record_audit_result(
         settings.db_path,
@@ -371,13 +425,24 @@ def _persist_audit_result(
         comment_mode=comment_mode,
         semantic_review_completed=semantic_review_completed,
         error_message=error_message,
-        artifact_snapshots=_fetch_artifact_snapshots(job, deterministic_analysis, settings),
+        artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
     )
 
 
-def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
+def _handle_fallback(
+    job: AuditJob,
+    settings: WorkerSettings,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    error_message: str,
+    artifact_snapshots: dict[str, str] | None = None,
+) -> str:
     fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
+    fallback_comment = _inject_static_drift_summary(
+        fallback_comment,
+        _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots or {}),
+    )
     try:
         github_comment_id = _post_comment_for_job(job, fallback_comment, settings)
     except Exception as fallback_exc:
@@ -394,6 +459,7 @@ def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_anal
                 comment_mode=None,
                 semantic_review_completed=False,
                 error_message=combined_error,
+                artifact_snapshots=artifact_snapshots,
             )
         except Exception as persist_exc:
             combined_error = (
@@ -415,6 +481,7 @@ def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_anal
             semantic_review_completed=False,
             error_message=error_message,
             github_comment_id=github_comment_id,
+            artifact_snapshots=artifact_snapshots,
         )
     except Exception as persist_exc:
         combined_error = (
@@ -434,6 +501,7 @@ def _handle_fallback(job: AuditJob, settings: WorkerSettings, deterministic_anal
 
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
+    artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
     try:
         comment_body = build_llm_comment(
             job.diff_text,
@@ -441,6 +509,10 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             llm_client=settings.llm_client,
             model=settings.model,
             timeout_seconds=settings.llm_timeout_seconds,
+        )
+        comment_body = _inject_static_drift_summary(
+            comment_body,
+            _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots),
         )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
@@ -450,13 +522,25 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             mark_job_retry(settings.db_path, job.id, error_message=error_message, retry_at=retry_at)
             return "retry_wait"
 
-        return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
+        return _handle_fallback(
+            job,
+            settings,
+            deterministic_analysis,
+            error_message=error_message,
+            artifact_snapshots=artifact_snapshots,
+        )
 
     try:
         github_comment_id = _post_comment_for_job(job, comment_body, settings)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
-        return _handle_fallback(job, settings, deterministic_analysis, error_message=error_message)
+        return _handle_fallback(
+            job,
+            settings,
+            deterministic_analysis,
+            error_message=error_message,
+            artifact_snapshots=artifact_snapshots,
+        )
 
     try:
         _persist_audit_result(
@@ -470,6 +554,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             comment_mode="full_review",
             semantic_review_completed=True,
             github_comment_id=github_comment_id,
+            artifact_snapshots=artifact_snapshots,
         )
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"

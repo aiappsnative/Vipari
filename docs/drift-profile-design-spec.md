@@ -37,7 +37,7 @@ That is a major conceptual step toward:
 
 The first implementation is intentionally narrow and heuristic-first.
 
-It does **not** yet render profile deltas in GitHub comments.
+It now renders a compact first-pass static drift summary in GitHub comments when artifact snapshots are available.
 
 It **does** introduce:
 - static signal extraction from prompt/config text
@@ -290,7 +290,7 @@ Extend durable storage with:
 - easier read models for timeline and repo-level aggregations
 
 ### 2. Feed PR review output
-Add a compact PR summary block such as:
+Expand the current compact PR summary block such as:
 - `Guardrail robustness: 0.82 -> 0.74 (-0.08)`
 - `Capability risk: 0.40 -> 0.58 (+0.18)`
 - `Autonomy: 0.30 -> 0.45 (+0.15)`

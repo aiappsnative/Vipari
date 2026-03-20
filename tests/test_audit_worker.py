@@ -182,8 +182,12 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     saved = get_job(db_path, job.id)
     assert saved is not None
     assert saved.status == "completed"
-    assert saved.comment_body == "LLM comment"
-    assert posted == [("LLM comment", None)]
+    assert "LLM comment" in saved.comment_body
+    assert "Static drift signals" in saved.comment_body
+    assert "no stored baseline yet" in saved.comment_body
+    assert len(posted) == 1
+    assert "LLM comment" in posted[0][0]
+    assert posted[0][1] is None
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -202,7 +206,8 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert comment is not None
     assert comment.github_comment_id == 101
     assert comment.comment_mode == "full_review"
-    assert comment.comment_body == "LLM comment"
+    assert "Static drift signals" in comment.comment_body
+    assert "LLM comment" in comment.comment_body
 
     versions = list_artifact_versions_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md")
     assert len(versions) == 1
@@ -839,6 +844,11 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
     assert second_audit is not None
     assert first_audit.suggested_risk_level == "Low"
     assert second_audit.suggested_risk_level == "High"
+    assert "Static drift signals" in posted[0][1]
+    assert "no stored baseline yet" in posted[0][1]
+    assert "Static drift signals" in posted[1][1]
+    assert "Distance" in posted[1][1]
+
 
 
 def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):

@@ -41,6 +41,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
 - first-pass static drift profiling for prompts/configs, including guardrail, capability, autonomy, creativity/stability, governance, and change-frequency attributes
 - durable local persistence of static artifact profiles and baseline-linked drift deltas for changed AI artifacts
+- reviewer-facing PR comments enriched with a compact static drift summary block when artifact snapshots are available
 
 ## What PromptDrift does today
 
@@ -54,6 +55,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - performs deterministic analysis of AI-relevant changes
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
 - stores static artifact profiles in audit history so later versions can compare against the previous known baseline
+- injects a compact static drift summary into PR comments so reviewers can see guardrail/capability/autonomy movement against prior baselines
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
@@ -169,7 +171,6 @@ Recent live validation on the active branch covered:
 The next major workstreams are:
 
 - improve signal fusion between deterministic findings and semantic review
-- wire static drift-profile deltas into PR-facing review output
 - expand read-side history and trend analysis capabilities
 - refresh product and architecture docs to match the real implemented system
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
