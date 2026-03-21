@@ -122,6 +122,8 @@ The first concrete move in that direction is now implemented: repo detail pages 
 
 The overview page should now also be treated as the landing risk surface, with an explicit portfolio risk-state summary ahead of the deeper repo queue and coverage views.
 
+It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
+
 In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model

@@ -243,6 +243,12 @@ p {
     transform: translateY(-1px);
 }
 
+.risk-surface-card {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+}
+
 .coverage-row {
     display: flex;
     justify-content: space-between;

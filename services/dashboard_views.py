@@ -76,9 +76,33 @@ class DashboardOverviewControlSurface:
 
 
 @dataclass(frozen=True)
+class DashboardOverviewRiskDistribution:
+    group_key: str
+    label: str
+    repo_count: int
+    artifact_count: int
+    weighted_risk: float
+    review_now_artifact_count: int
+
+
+@dataclass(frozen=True)
+class DashboardOverviewRegressionEntry:
+    repo_full: str
+    artifact_path: str
+    artifact_type: str
+    title: str
+    priority: str
+    drift_magnitude: float
+    capability_shift: float
+    guardrail_shift: float
+
+
+@dataclass(frozen=True)
 class DashboardOverviewView:
     risk_state: DashboardOverviewRiskState
     metrics: list[DashboardOverviewMetric]
+    highest_risk_items: list[DashboardOverviewRegressionEntry]
+    control_surface_risk: list[DashboardOverviewRiskDistribution]
     attention_repos: list[DashboardOverviewAttentionRepo]
     control_surface_coverage: list[DashboardOverviewControlSurface]
     repos: list[RepoDashboardIndexEntry]
@@ -194,6 +218,8 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
 
     attention_repos = _build_overview_attention_repos(repo_views)
     control_surface_coverage = _build_overview_control_surface_coverage(repo_views)
+    control_surface_risk = _build_overview_control_surface_risk(repo_views)
+    highest_risk_items = _build_overview_regressions(repo_views)
     risk_state = _build_overview_risk_state(attention_repos)
 
     metrics = [
@@ -232,6 +258,8 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
     return DashboardOverviewView(
         risk_state=risk_state,
         metrics=metrics,
+        highest_risk_items=highest_risk_items,
+        control_surface_risk=control_surface_risk,
         attention_repos=attention_repos,
         control_surface_coverage=control_surface_coverage,
         repos=repos,
@@ -750,3 +778,92 @@ def _build_overview_risk_state(attention_repos: list[DashboardOverviewAttentionR
         highest_risk_title=top_repo.highest_insight_title if top_repo is not None else None,
         highest_drift_magnitude=top_repo.top_drift_magnitude if top_repo is not None else 0.0,
     )
+
+
+def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewRegressionEntry]:
+    items: list[DashboardOverviewRegressionEntry] = []
+    for view in repo_views:
+        artifact_by_path = {artifact.artifact_path: artifact for artifact in view.artifacts}
+        for insight in view.insights:
+            artifact = artifact_by_path.get(insight.artifact_path)
+            if artifact is None:
+                continue
+            drift_magnitude = max(
+                artifact.leaderboard_drift_magnitude,
+                artifact.latest_historical_drift_magnitude,
+                abs(min(artifact.latest_pr_guardrail_shift, 0.0)),
+                max(artifact.latest_pr_capability_shift, 0.0),
+            )
+            items.append(
+                DashboardOverviewRegressionEntry(
+                    repo_full=view.repo_full,
+                    artifact_path=artifact.artifact_path,
+                    artifact_type=artifact.artifact_type,
+                    title=insight.title,
+                    priority=insight.priority,
+                    drift_magnitude=drift_magnitude,
+                    capability_shift=artifact.latest_pr_capability_shift,
+                    guardrail_shift=artifact.latest_pr_guardrail_shift,
+                )
+            )
+
+    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
+    items.sort(
+        key=lambda item: (
+            priority_rank.get(item.priority, 9),
+            -max(item.drift_magnitude, item.capability_shift, abs(min(item.guardrail_shift, 0.0))),
+            item.repo_full,
+            item.artifact_path,
+        )
+    )
+    return items[:8]
+
+
+def _build_overview_control_surface_risk(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewRiskDistribution]:
+    grouped: dict[str, dict[str, float | int | str | set[str]]] = {}
+    for view in repo_views:
+        insight_by_path = {insight.artifact_path: insight for insight in view.insights}
+        for artifact in view.artifacts:
+            group_key = _artifact_group_key(artifact)
+            group = grouped.setdefault(
+                group_key,
+                {
+                    "label": _control_surface_label(group_key),
+                    "repo_set": set(),
+                    "artifact_count": 0,
+                    "weighted_risk": 0.0,
+                    "review_now_artifact_count": 0,
+                },
+            )
+            group["repo_set"].add(view.repo_full)
+            group["artifact_count"] = int(group["artifact_count"]) + 1
+            group["weighted_risk"] = float(group["weighted_risk"]) + _insight_score(artifact)
+            insight = insight_by_path.get(artifact.artifact_path)
+            if insight is not None and insight.priority == "review_now":
+                group["review_now_artifact_count"] = int(group["review_now_artifact_count"]) + 1
+
+    results = [
+        DashboardOverviewRiskDistribution(
+            group_key=group_key,
+            label=str(group["label"]),
+            repo_count=len(group["repo_set"]),
+            artifact_count=int(group["artifact_count"]),
+            weighted_risk=round(float(group["weighted_risk"]), 3),
+            review_now_artifact_count=int(group["review_now_artifact_count"]),
+        )
+        for group_key, group in grouped.items()
+    ]
+    results.sort(key=lambda item: (-item.weighted_risk, -item.review_now_artifact_count, item.label))
+    return results
+
+
+def _control_surface_label(group_key: str) -> str:
+    return {
+        "prompts": "Prompts and instructions",
+        "guardrails": "Guardrails and policy",
+        "models": "Model and generation config",
+        "tools": "Tooling and orchestration",
+        "agents": "Agent code and assets",
+        "retrieval": "Retrieval and knowledge",
+        "other": "Other AI-related artifacts",
+    }[group_key]

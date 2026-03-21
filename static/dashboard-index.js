@@ -46,6 +46,46 @@ function renderAttentionRepos(items) {
         .join("")}</div>`;
 }
 
+function renderHighestRiskItems(items) {
+    if (!items.length) {
+        return '<div class="muted">No cross-repo regressions yet.</div>';
+    }
+    return `<div class="stack">${items
+        .map(
+            (item) => `
+                <a class="attention-link" href="/dashboard/${encodeURIComponent(item.repo_full)}">
+                    <div class="priority priority-${item.priority}">${item.priority.replace("_", " ")}</div>
+                    <div class="insight-title">${item.title}</div>
+                    <div>${item.repo_full}</div>
+                    <div class="muted meta-tight">${item.artifact_path} · ${item.artifact_type}</div>
+                    <div class="meta-tight muted">Drift ${item.drift_magnitude.toFixed(3)} · Capability ${item.capability_shift.toFixed(3)} · Guardrail ${item.guardrail_shift.toFixed(3)}</div>
+                </a>
+            `
+        )
+        .join("")}</div>`;
+}
+
+function renderControlSurfaceRisk(items) {
+    if (!items.length) {
+        return '<div class="muted">No control-surface risk distribution yet.</div>';
+    }
+    const maxRisk = Math.max(...items.map((item) => item.weighted_risk), 1);
+    return `<div class="stack">${items
+        .map(
+            (item) => `
+                <div class="risk-surface-card">
+                    <div class="coverage-row">
+                        <strong>${item.label}</strong>
+                        <span class="muted">risk ${item.weighted_risk.toFixed(3)}</span>
+                    </div>
+                    <div class="bar-track"><div class="bar-fill" style="width: ${(item.weighted_risk / maxRisk) * 100}%"></div></div>
+                    <div class="meta-tight muted">${item.repo_count} repos · ${item.artifact_count} artifacts · ${item.review_now_artifact_count} review-now artifacts</div>
+                </div>
+            `
+        )
+        .join("")}</div>`;
+}
+
 function renderControlSurfaceCoverage(items) {
     if (!items.length) {
         return '<div class="muted">No control surface coverage yet.</div>';
@@ -92,6 +132,8 @@ async function loadOverview() {
     document.getElementById("overview-metrics").innerHTML = payload.metrics
         .map((metric) => metricCard(metric.label, metric.value, metric.detail))
         .join("");
+    document.getElementById("highest-risk-items").innerHTML = renderHighestRiskItems(payload.highest_risk_items);
+    document.getElementById("control-surface-risk").innerHTML = renderControlSurfaceRisk(payload.control_surface_risk);
     document.getElementById("attention-repos").innerHTML = renderAttentionRepos(payload.attention_repos);
     document.getElementById("control-surface-coverage").innerHTML = renderControlSurfaceCoverage(payload.control_surface_coverage);
     document.getElementById("repos").innerHTML = renderRepoTable(payload.repos);

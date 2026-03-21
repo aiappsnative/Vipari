@@ -131,6 +131,7 @@ Now implemented as the first structural step:
 - `/dashboard/{owner/repo}` remains the repo detail surface for artifact-level inspection
 - overview cards and coverage bars should keep evolving toward richer graphs rather than reverting to a repo card wall
 - the overview now opens with an explicit portfolio risk-state summary so users see overall exposure before repo-level detail
+- the overview now also highlights highest-risk drift and risk by control surface so the landing page reflects portfolio-wide hotspots before repo drill-down
 
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone

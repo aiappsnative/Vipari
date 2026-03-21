@@ -68,6 +68,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_response.status_code == 200
     overview_payload = overview_response.json()
     assert overview_payload["risk_state"]["headline"]
+    assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
+    assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
 
