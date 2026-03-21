@@ -2,7 +2,21 @@ function metricCard(label, value, detail) {
     return `<div class="card"><div class="muted">${label}</div><div class="metric">${value}</div><div class="muted">${detail}</div></div>`;
 }
 
+function asArray(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function setSectionHtml(elementId, html) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = html;
+    }
+}
+
 function renderRiskState(riskState) {
+    if (!riskState) {
+        return '<div class="hero-panel-inner hero-status-baseline"><div><div class="priority priority-baseline_review">baseline</div><h2 class="hero-title">Portfolio risk state unavailable</h2><p class="hero-copy">The overview payload is missing a risk-state summary. Refresh after the API finishes loading.</p></div></div>';
+    }
     const statusLabel = riskState.status.replace("_", " ");
     return `
         <div class="hero-panel-inner hero-status-${riskState.status}">
@@ -27,7 +41,7 @@ function renderRiskState(riskState) {
     `;
 }
 
-function renderAttentionRepos(items) {
+function renderAttentionRepos(items = []) {
     if (!items.length) {
         return '<div class="muted">No repo priorities yet. Onboard a repository to populate the decision queue.</div>';
     }
@@ -46,7 +60,7 @@ function renderAttentionRepos(items) {
         .join("")}</div>`;
 }
 
-function renderHighestRiskItems(items) {
+function renderHighestRiskItems(items = []) {
     if (!items.length) {
         return '<div class="muted">No cross-repo regressions yet.</div>';
     }
@@ -65,7 +79,7 @@ function renderHighestRiskItems(items) {
         .join("")}</div>`;
 }
 
-function renderRegressionPatterns(items) {
+function renderRegressionPatterns(items = []) {
     if (!items.length) {
         return '<div class="muted">No portfolio-level regression patterns yet.</div>';
     }
@@ -88,7 +102,7 @@ function renderRegressionPatterns(items) {
         .join("")}</div>`;
 }
 
-function renderControlSurfaceRisk(items) {
+function renderControlSurfaceRisk(items = []) {
     if (!items.length) {
         return '<div class="muted">No control-surface risk distribution yet.</div>';
     }
@@ -109,7 +123,7 @@ function renderControlSurfaceRisk(items) {
         .join("")}</div>`;
 }
 
-function renderControlSurfaceCoverage(items) {
+function renderControlSurfaceCoverage(items = []) {
     if (!items.length) {
         return '<div class="muted">No control surface coverage yet.</div>';
     }
@@ -129,7 +143,7 @@ function renderControlSurfaceCoverage(items) {
         .join("")}</div>`;
 }
 
-function renderRepoTable(items) {
+function renderRepoTable(items = []) {
     if (!items.length) {
         return '<div class="muted">No onboarded repositories yet. Use the onboarding API first.</div>';
     }
@@ -148,19 +162,43 @@ function renderRepoTable(items) {
 }
 
 async function loadOverview() {
-    const response = await fetch("/api/dashboard/overview");
-    const payload = await response.json();
+    try {
+        const response = await fetch("/api/dashboard/overview");
+        if (!response.ok) {
+            throw new Error(`Overview request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        const metrics = asArray(payload.metrics);
+        const regressionPatterns = asArray(payload.regression_patterns);
+        const highestRiskItems = asArray(payload.highest_risk_items);
+        const controlSurfaceRisk = asArray(payload.control_surface_risk);
+        const attentionRepos = asArray(payload.attention_repos);
+        const controlSurfaceCoverage = asArray(payload.control_surface_coverage);
+        const repos = asArray(payload.repos);
 
-    document.getElementById("portfolio-risk-state").innerHTML = renderRiskState(payload.risk_state);
-    document.getElementById("overview-metrics").innerHTML = payload.metrics
-        .map((metric) => metricCard(metric.label, metric.value, metric.detail))
-        .join("");
-    document.getElementById("regression-patterns").innerHTML = renderRegressionPatterns(payload.regression_patterns);
-    document.getElementById("highest-risk-items").innerHTML = renderHighestRiskItems(payload.highest_risk_items);
-    document.getElementById("control-surface-risk").innerHTML = renderControlSurfaceRisk(payload.control_surface_risk);
-    document.getElementById("attention-repos").innerHTML = renderAttentionRepos(payload.attention_repos);
-    document.getElementById("control-surface-coverage").innerHTML = renderControlSurfaceCoverage(payload.control_surface_coverage);
-    document.getElementById("repos").innerHTML = renderRepoTable(payload.repos);
+        setSectionHtml("portfolio-risk-state", renderRiskState(payload.risk_state));
+        setSectionHtml(
+            "overview-metrics",
+            metrics.map((metric) => metricCard(metric.label, metric.value, metric.detail)).join("")
+        );
+        setSectionHtml("regression-patterns", renderRegressionPatterns(regressionPatterns));
+        setSectionHtml("highest-risk-items", renderHighestRiskItems(highestRiskItems));
+        setSectionHtml("control-surface-risk", renderControlSurfaceRisk(controlSurfaceRisk));
+        setSectionHtml("attention-repos", renderAttentionRepos(attentionRepos));
+        setSectionHtml("control-surface-coverage", renderControlSurfaceCoverage(controlSurfaceCoverage));
+        setSectionHtml("repos", renderRepoTable(repos));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown overview error";
+        const fallback = `<div class="muted">Unable to load dashboard overview. ${message}</div>`;
+        setSectionHtml("portfolio-risk-state", fallback);
+        setSectionHtml("overview-metrics", fallback);
+        setSectionHtml("regression-patterns", fallback);
+        setSectionHtml("highest-risk-items", fallback);
+        setSectionHtml("control-surface-risk", fallback);
+        setSectionHtml("attention-repos", fallback);
+        setSectionHtml("control-surface-coverage", fallback);
+        setSectionHtml("repos", fallback);
+    }
 }
 
 loadOverview();

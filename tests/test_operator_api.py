@@ -314,8 +314,10 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "renderRiskState" in index_js_response.text
     assert "renderHighestRiskItems" in index_js_response.text
     assert "renderControlSurfaceRisk" in index_js_response.text
+    assert "Unable to load dashboard overview" in index_js_response.text
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "renderDesignProfiles" in repo_js_response.text
     assert "renderHistoryTimelines" in repo_js_response.text
+    assert "Unable to load repository dashboard" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text

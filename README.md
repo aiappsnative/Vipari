@@ -53,6 +53,11 @@ The active branch has moved beyond the original MVP. The current system has been
 - a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
 - dashboard aggregation fast enough to inspect larger OSS repositories interactively
 
+The dashboard should now be read as two linked product surfaces:
+
+- `/dashboard` is the portfolio decision surface for triage, hotspots, and control-surface coverage
+- `/dashboard/{owner/repo}` is the repo explanation surface for baseline-relative posture, history, and artifact-level evidence
+
 ## What PromptDrift does today
 
 - receives GitHub `pull_request` webhooks at `/webhook`
@@ -173,8 +178,14 @@ Recent live validation on the active branch covered:
 
 Once the app is running locally, you can inspect the current drift dashboard in the browser:
 
-- `/dashboard`
-- `/dashboard/<owner>/<repo>`
+- `/dashboard` — portfolio risk posture, regression patterns, review queue, and control-surface hotspots
+- `/dashboard/<owner>/<repo>` — baseline-vs-current design posture, timelines, prioritized insights, and artifact inventory
+
+Recommended 5-minute local inspection flow:
+
+1. Open `/dashboard` first and confirm the portfolio risk-state hero, regression patterns, and highest-risk drift panels render.
+2. Open `/dashboard/<owner>/<repo>` for a seeded repository and confirm the design-posture cards, timeline, and artifact inventory render.
+3. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
 
 You can also inspect or drive the workflow locally with the CLI:
 
@@ -188,6 +199,7 @@ python scripts/repo_ops.py backfill owner/repo <installation_id>
 Useful JSON endpoints:
 
 - `GET /api/repos`
+- `GET /api/dashboard/overview`
 - `GET /api/repos/{owner/repo}/dashboard`
 - `POST /api/repos/{owner/repo}/onboard`
 - `POST /api/repos/{owner/repo}/backfill`
@@ -196,8 +208,8 @@ Useful JSON endpoints:
 
 - signal fusion between deterministic and semantic evidence is still early-stage
 - the queue and durable store are still local SQLite in the current dev shape
-- the current dashboard is still more useful as an operator/debug surface than as a customer decision surface
-- the dashboard frontend is in the middle of being extracted from inline route strings into dedicated template/static assets
+- the current dashboard is now a usable customer-style decision surface, but it still needs richer provenance and stronger real-world data density
+- the dashboard frontend has been extracted into dedicated template/static assets, but compatibility hardening should continue whenever new payload fields are added
 - onboarding discovery on real OSS repositories can still be noisy and needs stronger artifact grouping, confidence handling, and prioritization
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance and policy coverage should continue expanding beyond the current rule set
@@ -214,8 +226,8 @@ Useful JSON endpoints:
 The next major workstreams are:
 
 - improve signal fusion between deterministic findings and semantic review
-- finish the dashboard frontend extraction so future UI work lives in dedicated template/static files instead of `main.py`
-- shift the dashboard from raw metrics to customer-facing insights and review prioritization
+- continue compatibility hardening for dashboard payload evolution and stale local-server cases
+- improve the customer-facing insight quality using richer real-world seeded or OSS data
 - group artifacts into a clearer AI control-surface map
 - add timeline and storyline views for the most important drifting artifacts
 - continue validating the dashboard and operator surfaces against real OSS repositories

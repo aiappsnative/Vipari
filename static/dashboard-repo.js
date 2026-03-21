@@ -1,6 +1,21 @@
 const repoFull = document.querySelector('meta[name="promptdrift-repo-full"]')?.getAttribute("content") || "";
 
-function renderRiskTags(tags) {
+function asArray(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function asNumber(value, fallback = 0) {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function setSectionHtml(elementId, html) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = html;
+    }
+}
+
+function renderRiskTags(tags = []) {
     return tags.map((tag) => `<span class="tag">${tag}</span>`).join("");
 }
 
@@ -17,7 +32,7 @@ function metricCard(label, value, detail) {
     return `<div class="card"><div class="muted">${label}</div><div class="metric">${value}</div><div class="muted">${detail}</div></div>`;
 }
 
-function renderLeaderboard(items) {
+function renderLeaderboard(items = []) {
     if (!items.length) {
         return '<div class="muted">No pull-request drift samples have been recorded yet.</div>';
     }
@@ -35,7 +50,7 @@ function renderLeaderboard(items) {
         .join("")}</tbody></table>`;
 }
 
-function renderArtifacts(items) {
+function renderArtifacts(items = []) {
     if (!items.length) {
         return '<div class="muted">No onboarded artifacts were found for this repository yet.</div>';
     }
@@ -54,11 +69,11 @@ function renderArtifacts(items) {
         .join("")}</tbody></table>`;
 }
 
-function renderInsights(items) {
+function renderInsights(items = []) {
     if (!items.length) {
         return '<div class="muted">No prioritized insights yet. Once drift history grows, this panel will highlight what needs review first.</div>';
     }
-    const designProfiles = Object.fromEntries((window.__designProfiles || []).map((item) => [item.artifact_path, item]));
+    const designProfiles = Object.fromEntries(asArray(window.__designProfiles).map((item) => [item.artifact_path, item]));
     return `<div class="stack">${items
         .map(
             (item) => `
@@ -76,7 +91,7 @@ function renderInsights(items) {
         .join("")}</div>`;
 }
 
-function renderControlSurfaces(items) {
+function renderControlSurfaces(items = []) {
     if (!items.length) {
         return '<div class="muted">No grouped control surfaces yet.</div>';
     }
@@ -93,12 +108,12 @@ function renderControlSurfaces(items) {
         .join("")}</tbody></table>`;
 }
 
-function renderHistoryTimelines(items) {
+function renderHistoryTimelines(items = []) {
     if (!items.length) {
         return '<div class="muted">No historical timeline yet. Backfill or PR profile data will populate this view.</div>';
     }
     const maxDrift = Math.max(
-        ...items.flatMap((item) => item.points.map((point) => point.drift_magnitude)),
+        ...items.flatMap((item) => asArray(item.points).map((point) => asNumber(point.drift_magnitude))),
         1
     );
     return `<div class="stack">${items
@@ -112,7 +127,7 @@ function renderHistoryTimelines(items) {
                         </div>
                         <div class="muted">Max drift ${item.max_drift_magnitude.toFixed(3)}</div>
                     </div>
-                    <div class="timeline-points">${item.points
+                    <div class="timeline-points">${asArray(item.points)
                         .map(
                             (point) => `
                                 <div class="timeline-point">
@@ -132,7 +147,7 @@ function renderHistoryTimelines(items) {
         .join("")}</div>`;
 }
 
-function renderDesignProfiles(items) {
+function renderDesignProfiles(items = []) {
     if (!items.length) {
         return '<div class="muted">No design-profile comparisons yet. Onboarded baseline data is available, but no prioritized surfaces are ready for comparison.</div>';
     }
@@ -155,7 +170,7 @@ function renderDesignProfiles(items) {
                         ${renderProfileMetric("Stability", item.baseline_profile.stability_vs_creativity, item.current_profile.stability_vs_creativity)}
                         ${renderProfileMetric("Governance", item.baseline_profile.governance_strength, item.current_profile.governance_strength)}
                     </div>
-                    <div class="meta-tight muted">${item.narrative.join(" ")}</div>
+                    <div class="meta-tight muted">${asArray(item.narrative).join(" ")}</div>
                 </div>
             `
         )
@@ -163,41 +178,68 @@ function renderDesignProfiles(items) {
 }
 
 async function loadDashboard() {
-    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
-    const payload = await response.json();
-    window.__designProfiles = payload.design_profiles || [];
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
+        if (!response.ok) {
+            throw new Error(`Repo dashboard request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        const onboarding = payload.onboarding || null;
+        const backfill = payload.backfill || {};
+        const driftSummary = payload.drift_summary || {};
+        const designProfiles = asArray(payload.design_profiles);
+        const insights = asArray(payload.insights);
+        const controlSurfaces = asArray(payload.control_surface_groups);
+        const leaderboard = asArray(payload.top_drifting_artifacts);
+        const historyTimelines = asArray(payload.history_timelines);
+        const artifacts = asArray(payload.artifacts);
+        window.__designProfiles = designProfiles;
 
-    document.getElementById("summary").innerHTML = [
-        metricCard(
-            "Onboarded artifacts",
-            payload.onboarding ? payload.onboarding.discovered_artifact_count : 0,
-            payload.onboarding ? `Default branch: ${payload.onboarding.default_branch}` : "No onboarding yet"
-        ),
-        metricCard("Baseline versions", payload.baseline_version_count, `Repo: ${payload.repo_full}`),
-        metricCard(
-            "Backfill jobs",
-            payload.backfill.job_count,
-            `Completed: ${payload.backfill.completed_job_count} · Failed: ${payload.backfill.failed_job_count}`
-        ),
-        metricCard(
-            "Historical versions",
-            payload.backfill.total_historical_versions,
-            `Historical profiles: ${payload.backfill.total_historical_profiles}`
-        ),
-        metricCard("PR audits", payload.pull_request_audit_count, `PR profiles: ${payload.drift_summary.profile_count}`),
-        metricCard(
-            "Avg semantic distance",
-            payload.drift_summary.avg_semantic_distance.toFixed(3),
-            `Highest capability artifact: ${payload.drift_summary.highest_capability_artifact_path || "n/a"}`
-        ),
-    ].join("");
+        setSectionHtml(
+            "summary",
+            [
+                metricCard(
+                    "Onboarded artifacts",
+                    onboarding ? onboarding.discovered_artifact_count : 0,
+                    onboarding ? `Default branch: ${onboarding.default_branch}` : "No onboarding yet"
+                ),
+                metricCard("Baseline versions", asNumber(payload.baseline_version_count), `Repo: ${payload.repo_full || repoFull}`),
+                metricCard(
+                    "Backfill jobs",
+                    asNumber(backfill.job_count),
+                    `Completed: ${asNumber(backfill.completed_job_count)} · Failed: ${asNumber(backfill.failed_job_count)}`
+                ),
+                metricCard(
+                    "Historical versions",
+                    asNumber(backfill.total_historical_versions),
+                    `Historical profiles: ${asNumber(backfill.total_historical_profiles)}`
+                ),
+                metricCard("PR audits", asNumber(payload.pull_request_audit_count), `PR profiles: ${asNumber(driftSummary.profile_count)}`),
+                metricCard(
+                    "Avg semantic distance",
+                    asNumber(driftSummary.avg_semantic_distance).toFixed(3),
+                    `Highest capability artifact: ${driftSummary.highest_capability_artifact_path || "n/a"}`
+                ),
+            ].join("")
+        );
 
-    document.getElementById("design-profiles").innerHTML = renderDesignProfiles(payload.design_profiles);
-    document.getElementById("insights").innerHTML = renderInsights(payload.insights);
-    document.getElementById("control-surfaces").innerHTML = renderControlSurfaces(payload.control_surface_groups);
-    document.getElementById("leaderboard").innerHTML = renderLeaderboard(payload.top_drifting_artifacts);
-    document.getElementById("history-timelines").innerHTML = renderHistoryTimelines(payload.history_timelines);
-    document.getElementById("artifacts").innerHTML = renderArtifacts(payload.artifacts);
+        setSectionHtml("design-profiles", renderDesignProfiles(designProfiles));
+        setSectionHtml("insights", renderInsights(insights));
+        setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
+        setSectionHtml("leaderboard", renderLeaderboard(leaderboard));
+        setSectionHtml("history-timelines", renderHistoryTimelines(historyTimelines));
+        setSectionHtml("artifacts", renderArtifacts(artifacts));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
+        const fallback = `<div class="muted">Unable to load repository dashboard. ${message}</div>`;
+        setSectionHtml("summary", fallback);
+        setSectionHtml("design-profiles", fallback);
+        setSectionHtml("insights", fallback);
+        setSectionHtml("control-surfaces", fallback);
+        setSectionHtml("leaderboard", fallback);
+        setSectionHtml("history-timelines", fallback);
+        setSectionHtml("artifacts", fallback);
+    }
 }
 
 loadDashboard();

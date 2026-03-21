@@ -52,6 +52,7 @@ This framing should shape roadmap decisions:
 	- extracted dashboard frontend into dedicated templates/static assets and introduced an overview-vs-detail dashboard split
 	- first repo-detail history and drift timeline visualization implemented for onboarded artifacts
 	- repo-detail baseline-vs-current design posture cards, static-only messaging, and risk-tag/provenance-lite surfacing implemented
+	- overview regression-pattern summaries and compatibility hardening implemented so stale or sparse payloads degrade safely in the browser
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -64,9 +65,9 @@ This framing should shape roadmap decisions:
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
-	- current dashboard is still operator-oriented rather than customer decision-oriented
+	- current dashboard is now directionally customer-oriented, but still needs richer provenance and more varied real-world data
 	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
-	- dashboard currently exposes metrics and inventory, but not yet enough action-oriented insight for customers
+	- dashboard still needs stronger provenance and reviewer workflow context to move from insightful to indispensable
 
 ### Completed slices on `feature/drift-engine-v1`
 1. Diff parsing and AI relevance classification
@@ -92,22 +93,20 @@ This framing should shape roadmap decisions:
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings
-2. Frontend extraction for dashboard pages into dedicated templates/static assets so product work no longer lands in `main.py`
-3. Value-first dashboard insights layer (`review now`, guardrail regressions, capability expansions, recommended actions)
-4. Artifact grouping and control-surface map for prompts, agents, tool wiring, model config, and guardrails
-5. Historical storyline and timeline views for top drifting artifacts
-6. OSS evaluation harness and candidate-repo runner
-7. Production-oriented persistence and deployment hardening
+2. Richer provenance and reviewer workflow context on repo detail pages
+3. More representative OSS/demo data so portfolio views show clearer pattern diversity
+4. OSS evaluation harness and candidate-repo runner
+5. Production-oriented persistence and deployment hardening
 
 ### Dashboard product direction for next iteration
 
-The newly implemented dashboard is a strong operator and validation surface, but it is not yet the customer-facing product end state.
+The newly implemented dashboard is now the right structural product surface, but it is not yet the final customer-facing product end state.
 
-Tomorrow's design priority should be to shift the dashboard from a metrics inventory into a decision surface.
+Tomorrow's design priority should be to deepen the decision surface with better provenance and stronger real-world examples, not to add more generic metrics.
 
-Today's architecture priority should be to extract the current dashboard frontend into dedicated files before adding more product complexity.
+Today's architecture priority should be to preserve the extracted frontend split and keep hardening it against payload evolution before adding more product complexity.
 
-That extraction should establish a cleaner split:
+The current split should remain the rule:
 - FastAPI routes stay thin and primarily serve JSON plus page shells
 - dashboard HTML lives in `templates/`
 - dashboard styling and interactivity live in `static/`
@@ -127,12 +126,13 @@ Recommended dashboard v2 sections:
 4. `History and drift timeline` for top artifacts so customers can understand drift as a storyline rather than raw counts
 5. `Coverage and confidence` panel distinguishing high-confidence artifacts from lower-confidence discovery output
 
-Now implemented as the first structural step:
+Now implemented as the current dashboard baseline:
 - `/dashboard` is the portfolio overview and decision queue
 - `/dashboard/{owner/repo}` remains the repo detail surface for artifact-level inspection
 - overview cards and coverage bars should keep evolving toward richer graphs rather than reverting to a repo card wall
 - the overview now opens with an explicit portfolio risk-state summary so users see overall exposure before repo-level detail
 - the overview now also highlights highest-risk drift and risk by control surface so the landing page reflects portfolio-wide hotspots before repo drill-down
+- the overview now includes regression-pattern summaries and should fail gracefully when older local payloads omit newer fields
 
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone
