@@ -2,19 +2,25 @@ import os
 import hmac
 import hashlib
 import asyncio
+from dataclasses import asdict
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from github.GithubException import GithubException
 from openai import OpenAI
+from pydantic import BaseModel
 
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db
+from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
+from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 # load environment variables
 load_dotenv()
@@ -71,6 +77,105 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
+
+
+class RepositoryOnboardingRequest(BaseModel):
+    installation_id: int
+    commit_limit_per_artifact: int = 10
+    plan_backfill: bool = True
+    execute_backfill: bool = False
+
+
+class RepositoryBackfillRequest(BaseModel):
+    installation_id: int
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_index_page():
+    return HTMLResponse(render_dashboard_index_page())
+
+
+@app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
+async def dashboard_repo_page(repo_full: str):
+    return HTMLResponse(render_repo_dashboard_page(repo_full))
+
+
+@app.get("/api/repos")
+async def list_repos():
+    return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH)]})
+
+
+@app.get("/api/dashboard/overview")
+async def dashboard_overview():
+    return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH)))
+
+
+@app.get("/api/repos/{repo_full:path}/dashboard")
+async def repo_dashboard(repo_full: str):
+    return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
+
+
+@app.post("/api/repos/{repo_full:path}/onboard")
+async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest):
+    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
+    token = get_installation_token(jwt_token, payload.installation_id)
+
+    onboarding_result = onboard_repository(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        installation_id=payload.installation_id,
+        token=token,
+    )
+    planned_jobs = []
+    if payload.plan_backfill:
+        planned_jobs = plan_repository_history_backfill(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            token=token,
+            commit_limit_per_artifact=payload.commit_limit_per_artifact,
+        )
+    executed_jobs = []
+    if payload.execute_backfill:
+        executed_jobs = execute_repository_history_backfill(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            token=token,
+        )
+
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "onboarding_id": onboarding_result.onboarding.id,
+            "discovered_artifact_count": len(onboarding_result.artifacts),
+            "baseline_version_count": len(onboarding_result.baseline_versions),
+            "planned_backfill_job_count": len(planned_jobs),
+            "executed_backfill_job_count": len(executed_jobs),
+            "dashboard": asdict(dashboard),
+        }
+    )
+
+
+@app.post("/api/repos/{repo_full:path}/backfill")
+async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest):
+    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
+    token = get_installation_token(jwt_token, payload.installation_id)
+    executed_jobs = execute_repository_history_backfill(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        token=token,
+    )
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "executed_backfill_job_count": len(executed_jobs),
+            "completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
+            "failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
+            "dashboard": asdict(dashboard),
+        }
+    )
 
 
 async def verify_signature(request: Request) -> bool:

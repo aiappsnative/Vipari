@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PromptDrift Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/dashboard-index.js"></script>
+</head>
+<body>
+    <div class="wrap wrap-wide">
+        <h1>PromptDrift Dashboard</h1>
+        <p class="hero-copy">Use the overview to decide what deserves review first, then drill into repo detail pages for artifact-level drift evidence.</p>
+
+        <div id="portfolio-risk-state" class="hero-panel section">
+            <div class="muted">Loading portfolio risk state...</div>
+        </div>
+
+        <div class="info-strip section">
+            All metrics are derived from repository code, prompts, and config only. No production traffic or user data is analyzed.
+        </div>
+
+        <div id="overview-metrics" class="grid grid-summary section"></div>
+
+        <div class="section card">
+            <h2>Regression patterns</h2>
+            <p class="meta-tight muted">Portfolio-level pattern counts show which kinds of baseline-relative change or missing baseline evidence are appearing most often.</p>
+            <div id="regression-patterns" class="muted">Loading regression patterns...</div>
+        </div>
+
+        <div class="grid grid-two-up section">
+            <div class="card">
+                <h2>Highest-risk drift</h2>
+                <div id="highest-risk-items" class="muted">Loading highest-risk drift...</div>
+            </div>
+            <div class="card">
+                <h2>Risk by control surface</h2>
+                <div id="control-surface-risk" class="muted">Loading control-surface risk...</div>
+            </div>
+        </div>
+
+        <div class="grid grid-two-up section">
+            <div class="card">
+                <h2>Review queue</h2>
+                <div id="attention-repos" class="muted">Loading repo priorities...</div>
+            </div>
+            <div class="card">
+                <h2>Control surface coverage</h2>
+                <p class="meta-tight muted">Bars show tracked artifact count relative to the largest control surface group in the current portfolio.</p>
+                <div id="control-surface-coverage" class="muted">Loading control surface map...</div>
+            </div>
+        </div>
+
+        <div class="section card">
+            <h2>All onboarded repositories</h2>
+            <div id="repos" class="muted">Loading repositories...</div>
+        </div>
+    </div>
+</body>
+</html>

@@ -4,9 +4,12 @@
 
 This document defines the target architecture for the next-generation PromptDrift detection engine. It is intended to guide implementation on the `feature/drift-engine-v1` branch and to be used alongside the Mermaid diagram in [docs/detection-engine-diagram.mmd](docs/detection-engine-diagram.mmd).
 
+It should be read together with [SOUL.md](SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
+
 The core design principle is a **hybrid engine**:
 
 - deterministic rules provide stability, auditability, and policy alignment
+- static design profiling provides durable attribute baselines for GitHub-visible prompts, configs, and agent wiring
 - early LLM reasoning provides semantic interpretation and nuance
 - context selection determines the right review unit before semantic analysis runs
 - relevant audits are executed asynchronously so webhook ingestion stays fast and resilient
@@ -36,6 +39,12 @@ Every engine decision should therefore favor:
 - durable history and trendability
 - precise detection of meaningful drift over noisy file changes
 
+The design should also now favor:
+
+- GitHub-native inputs over runtime dependencies
+- baseline-relative drift over absolute claims of universal model safety
+- explainable attribute movement over opaque scoring
+
 ---
 
 ## Design goals
@@ -63,6 +72,12 @@ Implemented today:
 - webhook-path signature verification, diff fetch, AI relevance gating, and audit job creation
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
+- a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
+- durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
+- first-pass PR comment integration for static drift summaries when artifact snapshots are available
+- first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
+- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
+- dashboard aggregation optimized for larger OSS repositories so per-repo views stay interactive
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -72,8 +87,46 @@ Implemented today:
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
-- trend/reporting read models and customer-facing dashboards
+- richer PR comment integration for attribute-delta summaries beyond the current compact summary block
+- a value-first dashboard insights layer that translates artifact history into customer actions and reviewer priorities
 - production-grade persistence/deployment posture beyond the current local-stage setup
+
+### Dashboard evolution note
+
+The current dashboard layer should be understood as an operator/read-model surface, not yet the final customer product.
+
+It already proves that PromptDrift can:
+- onboard repositories,
+- expose discovered AI control surfaces,
+- persist baseline and history information,
+- render a portfolio overview page plus repo-level detail views for inspection.
+
+But that alone is not enough for customer value.
+
+Before the next graph-heavy dashboard iteration, the frontend architecture should be cleaned up.
+
+The current inline-page prototype served its purpose for speed, but future dashboard work should follow this split:
+- FastAPI route handlers remain thin and focused on routing plus JSON APIs
+- page markup moves into `templates/`
+- dashboard CSS and JavaScript move into `static/`
+- repo-level dashboard rendering consumes the read-model API rather than embedding product logic in `main.py`
+
+The next dashboard iteration should emphasize:
+- prioritized review targets,
+- guardrail regressions,
+- capability expansion,
+- control-surface grouping,
+- and historical storylines for top artifacts.
+
+The first concrete move in that direction is now implemented: repo detail pages include a lightweight artifact history timeline built from historical profile records plus PR drift samples.
+
+The overview page should now also be treated as the landing risk surface, with an explicit portfolio risk-state summary ahead of the deeper repo queue and coverage views.
+
+It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
+
+Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, and provenance-lite context derived from Git history and PR records.
+
+In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model
 
@@ -200,6 +253,98 @@ This stage is shared by both deterministic and LLM-driven analysis.
 
 ---
 
+### 4. Static design profile extraction
+
+This stage turns GitHub-visible prompt/config content into a stable attribute profile that can be compared over time.
+
+It exists because PromptDrift's product direction is explicitly static-first and GitHub-native: customers want to understand how agent design changes, even when PromptDrift never sees runtime traffic.
+
+### Responsibilities
+- extract durable static signals from prompt/config text and related metadata
+- summarize those signals into a small attribute vector
+- make the vector explainable enough for PR review and longitudinal reporting
+- support future baseline comparison and trend analysis
+
+### Example profile dimensions
+- `guardrail_robustness`
+- `capability_risk`
+- `autonomy_level`
+- `stability_vs_creativity`
+- `governance_strength`
+- `change_frequency`
+- `semantic_density`
+
+### Example signals
+- count of explicit constraints such as `must`, `never`, `do not`, `always`
+- bounded authority phrases such as `up to`, `above`, `max`, `limit`
+- examples/few-shot density
+- write vs read capability language
+- production vs sandbox indicators
+- sensitive system and privileged tool mentions
+- human approval markers and execution-step depth
+- model parameters such as `temperature` and `top_p`
+- governance metadata such as CODEOWNERS requirements, security review presence, and recent churn
+
+### First implemented slice
+The first implementation of this stage now exists in `engine/drift_profile.py`.
+
+That module currently:
+- extracts static signals from text
+- builds an `AgentAttributeProfile`
+- compares baseline and current versions
+- returns attribute deltas, lexical similarity, semantic distance, and short narrative summaries
+
+The first persistence integration for this stage now exists in `services/audit_records.py`.
+
+That integration currently:
+- stores one static profile record per changed artifact snapshot when artifact text is available
+- links the current profile to the prior profile for the same normalized artifact id
+- stores attribute deltas and narrative output for later history and trend queries
+
+### Design note
+This stage is intentionally heuristic-first.
+
+That is acceptable because:
+- its scores are baseline-relative rather than universal truth claims
+- its logic is explainable and testable
+- it provides a concrete bridge between raw artifact changes and future trend/history features
+
+---
+
+### 5. Static baseline and drift comparison
+
+This stage compares a current static profile against a chosen baseline profile.
+
+It answers questions such as:
+- did guardrails weaken relative to the approved baseline?
+- did capability risk increase because a new production write path was introduced?
+- did autonomy increase because approval checks were removed?
+- did governance weaken because review controls dropped while churn increased?
+
+### Responsibilities
+- choose the relevant baseline (previous version, approved baseline, or onboarding baseline)
+- compute attribute deltas
+- attach an explainable narrative to the deltas
+- persist enough data for future trend and history views
+
+### Current implementation note
+The first durable baseline linkage now compares the current artifact snapshot against the latest persisted profile for the same repo/path pair.
+
+That is not yet the final baseline-selection strategy, but it is the first working durable form of baseline-aware profile history.
+
+The first reviewer-facing presentation of this data now appears as a compact static drift block inserted into PR comments ahead of the detailed semantic review section.
+
+The first read-side trend layer now exists as repo summary and artifact leaderboard queries over persisted static profile history.
+
+### Expected outputs
+- `AgentDriftDelta`
+- `semantic_similarity`
+- `semantic_distance`
+- attribute-specific deltas
+- reviewer-facing explanations
+
+---
+
 ## History and baseline retrieval
 
 This stage retrieves prior audit and artifact context when available.
@@ -222,11 +367,14 @@ This stage should be optional in early implementation.
 If no history exists, the engine should still function normally.
 If history exists, it should enrich context selection, semantic analysis, and risk interpretation.
 
+It should also enrich static drift comparison by providing the right baseline profile for the current artifact or agent.
+
 ### Expected outputs
 - `previous_artifact_version`
 - `artifact_lineage`
 - `recent_audit_context`
 - `baseline_reference`
+- `baseline_attribute_profile`
 
 ---
 
