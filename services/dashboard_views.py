@@ -119,6 +119,27 @@ class RepoDashboardControlSurfaceGroup:
 
 
 @dataclass(frozen=True)
+class RepoArtifactTimelinePoint:
+    source: str
+    label: str
+    created_at: float
+    semantic_distance: float
+    capability_shift: float
+    guardrail_shift: float
+    autonomy_shift: float
+    drift_magnitude: float
+
+
+@dataclass(frozen=True)
+class RepoArtifactHistoryTimeline:
+    artifact_path: str
+    artifact_type: str
+    point_count: int
+    max_drift_magnitude: float
+    points: list[RepoArtifactTimelinePoint]
+
+
+@dataclass(frozen=True)
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
@@ -129,6 +150,7 @@ class RepoDashboardView:
     top_drifting_artifacts: list[ArtifactDriftLeaderboardEntry]
     insights: list[RepoDashboardInsightEntry]
     control_surface_groups: list[RepoDashboardControlSurfaceGroup]
+    history_timelines: list[RepoArtifactHistoryTimeline]
     artifacts: list[RepoDashboardArtifactEntry]
 
 
@@ -224,6 +246,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
             top_drifting_artifacts=top_drifting_artifacts,
             insights=[],
             control_surface_groups=[],
+            history_timelines=[],
             artifacts=[],
         )
 
@@ -271,6 +294,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
 
     insights = _build_repo_insights(artifact_entries)
     control_surface_groups = _build_control_surface_groups(artifact_entries)
+    history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -290,6 +314,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
         top_drifting_artifacts=top_drifting_artifacts,
         insights=insights,
         control_surface_groups=control_surface_groups,
+        history_timelines=history_timelines,
         artifacts=artifact_entries,
     )
 
@@ -510,6 +535,95 @@ def _artifact_group_key(artifact: RepoDashboardArtifactEntry) -> str:
     if artifact.artifact_type == "ai_code":
         return "agents"
     return "other"
+
+
+def _build_repo_history_timelines(
+    db_path: str,
+    repo_full: str,
+    artifacts: list[RepoDashboardArtifactEntry],
+) -> list[RepoArtifactHistoryTimeline]:
+    artifacts_by_path = {artifact.artifact_path: artifact for artifact in artifacts}
+    if not artifacts_by_path:
+        return []
+
+    points_by_path: dict[str, list[RepoArtifactTimelinePoint]] = {path: [] for path in artifacts_by_path}
+    with _connect(db_path) as conn:
+        historical_rows = conn.execute(
+            """
+            SELECT artifact_path, artifact_type, commit_sha, created_at, semantic_distance, attribute_deltas_json
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (_normalized_id_prefix(repo_full),),
+        ).fetchall()
+        for row in historical_rows:
+            artifact_path = row["artifact_path"]
+            if artifact_path not in points_by_path:
+                continue
+            attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
+            semantic_distance = float(row["semantic_distance"])
+            points_by_path[artifact_path].append(
+                RepoArtifactTimelinePoint(
+                    source="historical",
+                    label=f"commit {str(row['commit_sha'])[:7]}",
+                    created_at=float(row["created_at"]),
+                    semantic_distance=semantic_distance,
+                    capability_shift=attribute_deltas.get("capability_risk", 0.0),
+                    guardrail_shift=attribute_deltas.get("guardrail_robustness", 0.0),
+                    autonomy_shift=attribute_deltas.get("autonomy_level", 0.0),
+                    drift_magnitude=_drift_magnitude(semantic_distance, attribute_deltas),
+                )
+            )
+
+        pr_rows = conn.execute(
+            """
+            SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, sap.created_at, sap.semantic_distance, sap.attribute_deltas_json
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+        for row in pr_rows:
+            artifact_path = row["artifact_path"]
+            if artifact_path not in points_by_path:
+                continue
+            attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
+            semantic_distance = float(row["semantic_distance"])
+            points_by_path[artifact_path].append(
+                RepoArtifactTimelinePoint(
+                    source="pull_request",
+                    label=f"PR #{row['pr_number']}",
+                    created_at=float(row["created_at"]),
+                    semantic_distance=semantic_distance,
+                    capability_shift=attribute_deltas.get("capability_risk", 0.0),
+                    guardrail_shift=attribute_deltas.get("guardrail_robustness", 0.0),
+                    autonomy_shift=attribute_deltas.get("autonomy_level", 0.0),
+                    drift_magnitude=_drift_magnitude(semantic_distance, attribute_deltas),
+                )
+            )
+
+    timelines: list[RepoArtifactHistoryTimeline] = []
+    for artifact_path, points in points_by_path.items():
+        if not points:
+            continue
+        points.sort(key=lambda point: (point.created_at, point.label))
+        artifact = artifacts_by_path[artifact_path]
+        trimmed_points = points[-8:]
+        timelines.append(
+            RepoArtifactHistoryTimeline(
+                artifact_path=artifact_path,
+                artifact_type=artifact.artifact_type,
+                point_count=len(points),
+                max_drift_magnitude=max(point.drift_magnitude for point in points),
+                points=trimmed_points,
+            )
+        )
+
+    timelines.sort(key=lambda item: (-item.max_drift_magnitude, item.artifact_path))
+    return timelines[:6]
 
 
 def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewAttentionRepo]:

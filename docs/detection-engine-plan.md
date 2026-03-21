@@ -118,6 +118,8 @@ The next dashboard iteration should emphasize:
 - control-surface grouping,
 - and historical storylines for top artifacts.
 
+The first concrete move in that direction is now implemented: repo detail pages include a lightweight artifact history timeline built from historical profile records plus PR drift samples.
+
 In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model

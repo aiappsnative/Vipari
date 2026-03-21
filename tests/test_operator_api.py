@@ -10,6 +10,8 @@ import main
 from services.audit_records import RepoStaticDriftSummary
 from services.dashboard_views import (
     RepoDashboardArtifactEntry,
+    RepoArtifactHistoryTimeline,
+    RepoArtifactTimelinePoint,
     RepoDashboardBackfillSummary,
     RepoDashboardControlSurfaceGroup,
     RepoDashboardInsightEntry,
@@ -102,6 +104,36 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 artifact_count=1,
                 high_confidence_count=1,
                 top_artifact_paths=["prompts/system.txt"],
+            )
+        ],
+        history_timelines=[
+            RepoArtifactHistoryTimeline(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                point_count=2,
+                max_drift_magnitude=0.7,
+                points=[
+                    RepoArtifactTimelinePoint(
+                        source="historical",
+                        label="commit sha-1",
+                        created_at=1.0,
+                        semantic_distance=0.2,
+                        capability_shift=0.1,
+                        guardrail_shift=0.0,
+                        autonomy_shift=0.1,
+                        drift_magnitude=0.4,
+                    ),
+                    RepoArtifactTimelinePoint(
+                        source="pull_request",
+                        label="PR #42",
+                        created_at=2.0,
+                        semantic_distance=0.3,
+                        capability_shift=0.2,
+                        guardrail_shift=-0.1,
+                        autonomy_shift=0.1,
+                        drift_magnitude=0.7,
+                    ),
+                ],
             )
         ],
         artifacts=[
@@ -235,6 +267,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
     assert "Needs attention now" in repo_response.text
     assert "Control surface map" in repo_response.text
+    assert "History and drift timeline" in repo_response.text
     assert "promptdrift-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
 
@@ -243,4 +276,5 @@ def test_dashboard_html_pages_render(tmp_path):
     assert index_js_response.status_code == 200
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
+    assert "renderHistoryTimelines" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text

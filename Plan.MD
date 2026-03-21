@@ -50,6 +50,7 @@ This framing should shape roadmap decisions:
 	- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local operator CLI implemented
 	- large-repo dashboard aggregation optimized so OSS-scale repo views remain interactive
 	- extracted dashboard frontend into dedicated templates/static assets and introduced an overview-vs-detail dashboard split
+	- first repo-detail history and drift timeline visualization implemented for onboarded artifacts
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented

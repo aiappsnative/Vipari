@@ -77,6 +77,45 @@ function renderControlSurfaces(items) {
         .join("")}</tbody></table>`;
 }
 
+function renderHistoryTimelines(items) {
+    if (!items.length) {
+        return '<div class="muted">No historical timeline yet. Backfill or PR profile data will populate this view.</div>';
+    }
+    const maxDrift = Math.max(
+        ...items.flatMap((item) => item.points.map((point) => point.drift_magnitude)),
+        1
+    );
+    return `<div class="stack">${items
+        .map(
+            (item) => `
+                <div class="timeline-card">
+                    <div class="timeline-header">
+                        <div>
+                            <div class="insight-title">${item.artifact_path}</div>
+                            <div class="muted meta-tight">${item.artifact_type} · ${item.point_count} recorded points</div>
+                        </div>
+                        <div class="muted">Max drift ${item.max_drift_magnitude.toFixed(3)}</div>
+                    </div>
+                    <div class="timeline-points">${item.points
+                        .map(
+                            (point) => `
+                                <div class="timeline-point">
+                                    <div class="timeline-label-row">
+                                        <span class="timeline-label">${point.label}</span>
+                                        <span class="timeline-meta">${point.source === "pull_request" ? "PR" : "History"} · drift ${point.drift_magnitude.toFixed(3)}</span>
+                                    </div>
+                                    <div class="bar-track"><div class="bar-fill" style="width: ${(point.drift_magnitude / maxDrift) * 100}%"></div></div>
+                                    <div class="timeline-meta muted">Semantic ${point.semantic_distance.toFixed(3)} · Capability ${point.capability_shift.toFixed(3)} · Guardrail ${point.guardrail_shift.toFixed(3)}</div>
+                                </div>
+                            `
+                        )
+                        .join("")}</div>
+                </div>
+            `
+        )
+        .join("")}</div>`;
+}
+
 async function loadDashboard() {
     const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
     const payload = await response.json();
@@ -109,6 +148,7 @@ async function loadDashboard() {
     document.getElementById("insights").innerHTML = renderInsights(payload.insights);
     document.getElementById("control-surfaces").innerHTML = renderControlSurfaces(payload.control_surface_groups);
     document.getElementById("leaderboard").innerHTML = renderLeaderboard(payload.top_drifting_artifacts);
+    document.getElementById("history-timelines").innerHTML = renderHistoryTimelines(payload.history_timelines);
     document.getElementById("artifacts").innerHTML = renderArtifacts(payload.artifacts);
 }
 

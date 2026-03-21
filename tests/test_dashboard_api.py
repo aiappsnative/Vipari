@@ -80,4 +80,6 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["control_surface_groups"][0]["group_key"] == "prompts"
+    assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["history_timelines"][0]["point_count"] == 1
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"

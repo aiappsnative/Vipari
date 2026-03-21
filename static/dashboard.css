@@ -212,6 +212,46 @@ p {
     background: linear-gradient(90deg, var(--accent), #9b8cff);
 }
 
+.timeline-card {
+    border: 1px solid rgba(157, 176, 208, 0.12);
+    border-radius: 14px;
+    padding: 14px;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.timeline-points {
+    display: grid;
+    gap: 10px;
+}
+
+.timeline-point {
+    display: grid;
+    gap: 6px;
+}
+
+.timeline-label-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    font-size: 0.92rem;
+}
+
+.timeline-label {
+    font-weight: 600;
+}
+
+.timeline-meta {
+    font-size: 0.88rem;
+}
+
 .insight-title {
     font-weight: 700;
     margin-bottom: 6px;
