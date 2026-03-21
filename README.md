@@ -191,6 +191,7 @@ Useful JSON endpoints:
 - signal fusion between deterministic and semantic evidence is still early-stage
 - the queue and durable store are still local SQLite in the current dev shape
 - the current dashboard is still more useful as an operator/debug surface than as a customer decision surface
+- the dashboard frontend is in the middle of being extracted from inline route strings into dedicated template/static assets
 - onboarding discovery on real OSS repositories can still be noisy and needs stronger artifact grouping, confidence handling, and prioritization
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance and policy coverage should continue expanding beyond the current rule set
@@ -207,6 +208,7 @@ Useful JSON endpoints:
 The next major workstreams are:
 
 - improve signal fusion between deterministic findings and semantic review
+- finish the dashboard frontend extraction so future UI work lives in dedicated template/static files instead of `main.py`
 - shift the dashboard from raw metrics to customer-facing insights and review prioritization
 - group artifacts into a clearer AI control-surface map
 - add timeline and storyline views for the most important drifting artifacts

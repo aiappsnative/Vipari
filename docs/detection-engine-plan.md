@@ -103,6 +103,14 @@ It already proves that PromptDrift can:
 
 But that alone is not enough for customer value.
 
+Before the next graph-heavy dashboard iteration, the frontend architecture should be cleaned up.
+
+The current inline-page prototype served its purpose for speed, but future dashboard work should follow this split:
+- FastAPI route handlers remain thin and focused on routing plus JSON APIs
+- page markup moves into `templates/`
+- dashboard CSS and JavaScript move into `static/`
+- repo-level dashboard rendering consumes the read-model API rather than embedding product logic in `main.py`
+
 The next dashboard iteration should emphasize:
 - prioritized review targets,
 - guardrail regressions,

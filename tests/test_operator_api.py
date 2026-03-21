@@ -221,13 +221,24 @@ def test_dashboard_html_pages_render(tmp_path):
     with TestClient(main.app) as client:
         index_response = client.get("/dashboard")
         repo_response = client.get("/dashboard/doria90/dummyAI")
+        css_response = client.get("/static/dashboard.css")
+        index_js_response = client.get("/static/dashboard-index.js")
+        repo_js_response = client.get("/static/dashboard-repo.js")
 
     assert index_response.status_code == 200
     assert "PromptDrift Dashboard" in index_response.text
-    assert "/api/repos" in index_response.text
+    assert "/static/dashboard-index.js" in index_response.text
 
     assert repo_response.status_code == 200
     assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
     assert "Needs attention now" in repo_response.text
     assert "Control surface map" in repo_response.text
-    assert "/api/repos/${encodeURIComponent(repoFull)}/dashboard" in repo_response.text
+    assert "promptdrift-repo-full" in repo_response.text
+    assert "/static/dashboard-repo.js" in repo_response.text
+
+    assert css_response.status_code == 200
+    assert "--panel-border" in css_response.text
+    assert index_js_response.status_code == 200
+    assert "loadRepos" in index_js_response.text
+    assert repo_js_response.status_code == 200
+    assert "loadDashboard" in repo_js_response.text

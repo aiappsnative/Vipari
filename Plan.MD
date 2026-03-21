@@ -89,9 +89,9 @@ This framing should shape roadmap decisions:
 
 ### Next prioritized slices on `feature/drift-engine-v1`
 1. Signal fusion improvements between deterministic and semantic findings
-2. Value-first dashboard insights layer (`review now`, guardrail regressions, capability expansions, recommended actions)
-3. Artifact grouping and control-surface map for prompts, agents, tool wiring, model config, and guardrails
-4. Richer PR-facing presentation of drift profile deltas and reviewer explanations
+2. Frontend extraction for dashboard pages into dedicated templates/static assets so product work no longer lands in `main.py`
+3. Value-first dashboard insights layer (`review now`, guardrail regressions, capability expansions, recommended actions)
+4. Artifact grouping and control-surface map for prompts, agents, tool wiring, model config, and guardrails
 5. Historical storyline and timeline views for top drifting artifacts
 6. OSS evaluation harness and candidate-repo runner
 7. Production-oriented persistence and deployment hardening
@@ -101,6 +101,14 @@ This framing should shape roadmap decisions:
 The newly implemented dashboard is a strong operator and validation surface, but it is not yet the customer-facing product end state.
 
 Tomorrow's design priority should be to shift the dashboard from a metrics inventory into a decision surface.
+
+Today's architecture priority should be to extract the current dashboard frontend into dedicated files before adding more product complexity.
+
+That extraction should establish a cleaner split:
+- FastAPI routes stay thin and primarily serve JSON plus page shells
+- dashboard HTML lives in `templates/`
+- dashboard styling and interactivity live in `static/`
+- future overview graphs and storyline views land in versioned frontend assets rather than inline strings in `main.py`
 
 That means the next dashboard iteration should answer:
 - what needs review now,
@@ -119,6 +127,10 @@ Recommended dashboard v2 sections:
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone
 - optimize it for reviewer prioritization and customer decision-making
+
+Important architecture rule:
+- do not continue growing dashboard HTML, CSS, and JavaScript inline in `main.py`
+- use the extracted frontend surface as the only place for future dashboard UI work
 
 ### Planned future workflow
 

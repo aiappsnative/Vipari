@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{REPO_FULL}} · PromptDrift</title>
+    <meta name="promptdrift-repo-full" content="{{REPO_FULL}}" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/dashboard-repo.js"></script>
+</head>
+<body>
+    <div class="wrap wrap-dashboard">
+        <div class="topbar">
+            <div>
+                <a class="link" href="/dashboard">← All repositories</a>
+                <h1>{{REPO_FULL}}</h1>
+                <p class="muted">Unified view of onboarding, backfill lineage, and pull-request drift history.</p>
+            </div>
+            <div class="callout">Live from the local PromptDrift SQLite store</div>
+        </div>
+
+        <div id="summary" class="grid grid-summary"></div>
+
+        <div class="grid grid-two-up section">
+            <div class="card">
+                <h2>Needs attention now</h2>
+                <div id="insights" class="muted">Loading prioritized insights...</div>
+            </div>
+            <div class="card">
+                <h2>Control surface map</h2>
+                <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
+            </div>
+        </div>
+
+        <div class="section card">
+            <h2>Top drifting pull-request artifacts</h2>
+            <div id="leaderboard" class="muted">Loading drift leaderboard...</div>
+        </div>
+
+        <div class="section card">
+            <h2>Artifact inventory</h2>
+            <div id="artifacts" class="muted">Loading artifact table...</div>
+        </div>
+    </div>
+</body>
+</html>

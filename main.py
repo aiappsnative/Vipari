@@ -4,11 +4,11 @@ import hashlib
 import asyncio
 from dataclasses import asdict
 from contextlib import asynccontextmanager
-from html import escape as html_escape
 from urllib.error import HTTPError
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from github.GithubException import GithubException
 from openai import OpenAI
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db
 from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -76,6 +77,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -91,12 +93,12 @@ class RepositoryBackfillRequest(BaseModel):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_index_page():
-    return HTMLResponse(_render_dashboard_index_page())
+    return HTMLResponse(render_dashboard_index_page())
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
 async def dashboard_repo_page(repo_full: str):
-    return HTMLResponse(_render_repo_dashboard_page(repo_full))
+    return HTMLResponse(render_repo_dashboard_page(repo_full))
 
 
 @app.get("/api/repos")
@@ -267,232 +269,3 @@ async def webhook(request: Request):
     )
 
     return JSONResponse({"message": "audit queued", "job_id": job.id})
-
-
-def _render_dashboard_index_page() -> str:
-        return """
-<!DOCTYPE html>
-<html lang=\"en\">
-<head>
-    <meta charset=\"UTF-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-    <title>PromptDrift Dashboard</title>
-    <style>
-        :root {
-            color-scheme: dark;
-            --bg: #0b1020;
-            --panel: #121a31;
-            --panel-border: #263252;
-            --text: #edf2ff;
-            --muted: #9db0d0;
-            --accent: #78a6ff;
-            --success: #4fd1a5;
-        }
-        body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: linear-gradient(180deg, #0b1020, #111a33); color: var(--text); }
-        .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 64px; }
-        h1 { margin: 0 0 12px; font-size: 2rem; }
-        p { color: var(--muted); }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }
-        .card { background: rgba(18, 26, 49, 0.9); border: 1px solid var(--panel-border); border-radius: 18px; padding: 18px; box-shadow: 0 18px 40px rgba(0,0,0,0.25); }
-        .repo-link { color: var(--text); font-weight: 600; text-decoration: none; }
-        .repo-link:hover { color: var(--accent); }
-        .meta { margin-top: 8px; font-size: 0.95rem; color: var(--muted); }
-        .pill { display: inline-block; margin-top: 10px; padding: 6px 10px; border-radius: 999px; background: rgba(79, 209, 165, 0.12); color: var(--success); font-size: 0.85rem; }
-    </style>
-</head>
-<body>
-    <div class=\"wrap\">
-        <h1>PromptDrift Dashboard</h1>
-        <p>Inspect onboarded repositories, historical backfill coverage, and drift posture from the local PromptDrift store.</p>
-        <div id=\"repos\" class=\"grid\"></div>
-    </div>
-    <script>
-        async function loadRepos() {
-            const container = document.getElementById('repos');
-            container.innerHTML = '<div class="card">Loading repositories...</div>';
-            const response = await fetch('/api/repos');
-            const payload = await response.json();
-            if (!payload.repos.length) {
-                container.innerHTML = '<div class="card">No onboarded repositories yet. Use the onboarding API first.</div>';
-                return;
-            }
-            container.innerHTML = payload.repos.map((repo) => `
-                <div class="card">
-                    <a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${repo.repo_full}</a>
-                    <div class="meta">Default branch: ${repo.default_branch}</div>
-                    <div class="meta">Discovered artifacts: ${repo.discovered_artifact_count}</div>
-                    <div class="pill">${repo.onboarding_status}</div>
-                </div>
-            `).join('');
-        }
-        loadRepos();
-    </script>
-</body>
-</html>
-"""
-
-
-def _render_repo_dashboard_page(repo_full: str) -> str:
-        escaped_repo_full = html_escape(repo_full)
-        return f"""
-<!DOCTYPE html>
-<html lang=\"en\">
-<head>
-    <meta charset=\"UTF-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-    <title>{escaped_repo_full} · PromptDrift</title>
-    <style>
-        :root {{
-            color-scheme: dark;
-            --bg: #0b1020;
-            --panel: #121a31;
-            --panel-border: #263252;
-            --text: #edf2ff;
-            --muted: #9db0d0;
-            --accent: #78a6ff;
-            --warning: #f6ad55;
-        }}
-        body {{ margin: 0; font-family: Segoe UI, Arial, sans-serif; background: linear-gradient(180deg, #0b1020, #111a33); color: var(--text); }}
-        .wrap {{ max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }}
-        .topbar {{ display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }}
-        .link {{ color: var(--accent); text-decoration: none; }}
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 24px; }}
-        .card {{ background: rgba(18, 26, 49, 0.9); border: 1px solid var(--panel-border); border-radius: 18px; padding: 18px; box-shadow: 0 18px 40px rgba(0,0,0,0.25); }}
-        .metric {{ font-size: 1.8rem; font-weight: 700; margin-top: 10px; }}
-        .muted {{ color: var(--muted); }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
-        th, td {{ text-align: left; padding: 12px 10px; border-bottom: 1px solid rgba(157, 176, 208, 0.15); font-size: 0.95rem; vertical-align: top; }}
-        th {{ color: var(--muted); font-weight: 600; }}
-        .section {{ margin-top: 28px; }}
-        .callout {{ color: var(--warning); font-size: 0.92rem; }}
-        .stack {{ display: grid; gap: 12px; }}
-        .insight-title {{ font-weight: 700; margin-bottom: 6px; }}
-        .priority {{ display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 0.8rem; margin-bottom: 10px; text-transform: capitalize; }}
-        .priority-review_now {{ background: rgba(246, 173, 85, 0.14); color: #f6ad55; }}
-        .priority-watch {{ background: rgba(120, 166, 255, 0.14); color: #78a6ff; }}
-        .priority-baseline_review {{ background: rgba(79, 209, 165, 0.14); color: #4fd1a5; }}
-    </style>
-</head>
-<body>
-    <div class=\"wrap\">
-        <div class=\"topbar\">
-            <div>
-                <a class=\"link\" href=\"/dashboard\">← All repositories</a>
-                <h1>{escaped_repo_full}</h1>
-                <p class=\"muted\">Unified view of onboarding, backfill lineage, and pull-request drift history.</p>
-            </div>
-            <div class=\"callout\">Live from the local PromptDrift SQLite store</div>
-        </div>
-
-        <div id=\"summary\" class=\"grid\"></div>
-
-        <div class=\"section card\">
-            <h2>Top drifting pull-request artifacts</h2>
-            <div id=\"leaderboard\" class=\"muted\">Loading drift leaderboard...</div>
-        </div>
-
-        <div class=\"section card\">
-            <h2>Artifact inventory</h2>
-            <div id=\"artifacts\" class=\"muted\">Loading artifact table...</div>
-        </div>
-    </div>
-
-    <script>
-        const repoFull = {repo_full!r};
-
-        function metricCard(label, value, detail) {{
-            return `<div class="card"><div class="muted">${{label}}</div><div class="metric">${{value}}</div><div class="muted">${{detail}}</div></div>`;
-        }}
-
-
-                <div class="grid section">
-                    <div class="card">
-                        <h2>Needs attention now</h2>
-                        <div id="insights" class="muted">Loading prioritized insights...</div>
-                    </div>
-                    <div class="card">
-                        <h2>Control surface map</h2>
-                        <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
-                    </div>
-                </div>
-        function renderLeaderboard(items) {{
-            if (!items.length) {{
-                return '<div class="muted">No pull-request drift samples have been recorded yet.</div>';
-            }}
-            return `<table><thead><tr><th>Artifact</th><th>Type</th><th>Drift magnitude</th><th>Capability shift</th><th>Autonomy shift</th></tr></thead><tbody>${{items.map((item) => `
-                <tr>
-                    <td>${{item.artifact_path}}</td>
-                    <td>${{item.artifact_type}}</td>
-                    <td>${{item.drift_magnitude.toFixed(3)}}</td>
-                    <td>${{item.capability_shift.toFixed(3)}}</td>
-                    <td>${{item.autonomy_shift.toFixed(3)}}</td>
-                </tr>`).join('')}}</tbody></table>`;
-        }}
-
-        function renderArtifacts(items) {{
-            if (!items.length) {{
-                return '<div class="muted">No onboarded artifacts were found for this repository yet.</div>';
-            }}
-            return `<table><thead><tr><th>Artifact</th><th>Baseline lines</th><th>Historical versions</th><th>Historical drift</th><th>PR profiles</th><th>Latest PR semantic distance</th></tr></thead><tbody>${{items.map((item) => `
-                <tr>
-                    <td><strong>${{item.artifact_path}}</strong><br><span class="muted">${{item.artifact_type}}</span></td>
-                    <td>${{item.baseline_line_count}}</td>
-                    <td>${{item.historical_version_count}}</td>
-                    <td>${{item.latest_historical_drift_magnitude.toFixed(3)}}</td>
-                    <td>${{item.pr_profile_count}}</td>
-                    <td>${{item.latest_pr_semantic_distance.toFixed(3)}}</td>
-                </tr>`).join('')}}</tbody></table>`;
-        }}
-
-        function renderInsights(items) {{
-            if (!items.length) {{
-                return '<div class="muted">No prioritized insights yet. Once drift history grows, this panel will highlight what needs review first.</div>';
-            }}
-            return `<div class="stack">${{items.map((item) => `
-                <div>
-                    <div class="priority priority-${{item.priority}}">${{item.priority.replace('_', ' ')}}</div>
-                    <div class="insight-title">${{item.title}}</div>
-                    <div><strong>${{item.artifact_path}}</strong> <span class="muted">(${{item.artifact_type}})</span></div>
-                    <div class="muted" style="margin-top:6px;">${{item.rationale}}</div>
-                    <div style="margin-top:6px;">${{item.recommended_action}}</div>
-                </div>
-            `).join('')}}</div>`;
-        }}
-
-        function renderControlSurfaces(items) {{
-            if (!items.length) {{
-                return '<div class="muted">No grouped control surfaces yet.</div>';
-            }}
-            return `<table><thead><tr><th>Group</th><th>Artifacts</th><th>High confidence</th><th>Top examples</th></tr></thead><tbody>${{items.map((item) => `
-                <tr>
-                    <td>${{item.label}}</td>
-                    <td>${{item.artifact_count}}</td>
-                    <td>${{item.high_confidence_count}}</td>
-                    <td>${{item.top_artifact_paths.join('<br>')}}</td>
-                </tr>`).join('')}}</tbody></table>`;
-        }}
-
-        async function loadDashboard() {{
-            const response = await fetch(`/api/repos/${{encodeURIComponent(repoFull)}}/dashboard`);
-            const payload = await response.json();
-
-            document.getElementById('summary').innerHTML = [
-                metricCard('Onboarded artifacts', payload.onboarding ? payload.onboarding.discovered_artifact_count : 0, payload.onboarding ? `Default branch: ${{payload.onboarding.default_branch}}` : 'No onboarding yet'),
-                metricCard('Baseline versions', payload.baseline_version_count, `Repo: ${{payload.repo_full}}`),
-                metricCard('Backfill jobs', payload.backfill.job_count, `Completed: ${{payload.backfill.completed_job_count}} · Failed: ${{payload.backfill.failed_job_count}}`),
-                metricCard('Historical versions', payload.backfill.total_historical_versions, `Historical profiles: ${{payload.backfill.total_historical_profiles}}`),
-                metricCard('PR audits', payload.pull_request_audit_count, `PR profiles: ${{payload.drift_summary.profile_count}}`),
-                metricCard('Avg semantic distance', payload.drift_summary.avg_semantic_distance.toFixed(3), `Highest capability artifact: ${{payload.drift_summary.highest_capability_artifact_path || 'n/a'}}`),
-            ].join('');
-
-            document.getElementById('insights').innerHTML = renderInsights(payload.insights);
-            document.getElementById('control-surfaces').innerHTML = renderControlSurfaces(payload.control_surface_groups);
-            document.getElementById('leaderboard').innerHTML = renderLeaderboard(payload.top_drifting_artifacts);
-            document.getElementById('artifacts').innerHTML = renderArtifacts(payload.artifacts);
-        }}
-
-        loadDashboard();
-    </script>
-</body>
-</html>
-"""
