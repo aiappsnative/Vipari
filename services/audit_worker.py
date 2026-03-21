@@ -351,6 +351,8 @@ def _extract_retry_after_seconds(exc: Exception) -> int | None:
 def _should_retry(job: AuditJob, settings: WorkerSettings) -> bool:
     if job.attempt_count >= settings.max_attempts:
         return False
+    if job.attempt_count <= 1:
+        return True
     job_age_seconds = max(0.0, time.time() - job.created_at)
     return job_age_seconds < settings.max_retry_window_seconds
 
