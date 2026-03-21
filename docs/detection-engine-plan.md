@@ -120,6 +120,8 @@ The next dashboard iteration should emphasize:
 
 The first concrete move in that direction is now implemented: repo detail pages include a lightweight artifact history timeline built from historical profile records plus PR drift samples.
 
+The overview page should now also be treated as the landing risk surface, with an explicit portfolio risk-state summary ahead of the deeper repo queue and coverage views.
+
 In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model

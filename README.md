@@ -46,6 +46,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
 - inspectable local dashboard pages and operator/query APIs for onboarding and drift inspection
 - a split dashboard experience with a portfolio overview at `/dashboard` and repo detail views at `/dashboard/{owner/repo}`
+- a portfolio risk-state summary at the top of the overview page so users land on the overall AI risk posture first
 - a first repo-detail history timeline so reviewers can see how artifact drift accumulated across backfill and PR samples
 - a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
 - dashboard aggregation fast enough to inspect larger OSS repositories interactively

@@ -38,6 +38,20 @@ class DashboardOverviewMetric:
 
 
 @dataclass(frozen=True)
+class DashboardOverviewRiskState:
+    status: str
+    headline: str
+    summary: str
+    review_now_repo_count: int
+    watch_repo_count: int
+    baseline_review_repo_count: int
+    highest_risk_repo_full: str | None
+    highest_risk_artifact_path: str | None
+    highest_risk_title: str | None
+    highest_drift_magnitude: float
+
+
+@dataclass(frozen=True)
 class DashboardOverviewAttentionRepo:
     repo_full: str
     highest_priority: str
@@ -63,6 +77,7 @@ class DashboardOverviewControlSurface:
 
 @dataclass(frozen=True)
 class DashboardOverviewView:
+    risk_state: DashboardOverviewRiskState
     metrics: list[DashboardOverviewMetric]
     attention_repos: list[DashboardOverviewAttentionRepo]
     control_surface_coverage: list[DashboardOverviewControlSurface]
@@ -179,6 +194,7 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
 
     attention_repos = _build_overview_attention_repos(repo_views)
     control_surface_coverage = _build_overview_control_surface_coverage(repo_views)
+    risk_state = _build_overview_risk_state(attention_repos)
 
     metrics = [
         DashboardOverviewMetric(
@@ -214,6 +230,7 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
     ]
 
     return DashboardOverviewView(
+        risk_state=risk_state,
         metrics=metrics,
         attention_repos=attention_repos,
         control_surface_coverage=control_surface_coverage,
@@ -700,3 +717,36 @@ def _build_overview_control_surface_coverage(repo_views: list[RepoDashboardView]
     ]
     results.sort(key=lambda item: (-item.repo_count, -item.artifact_count, item.label))
     return results
+
+
+def _build_overview_risk_state(attention_repos: list[DashboardOverviewAttentionRepo]) -> DashboardOverviewRiskState:
+    review_now_repo_count = sum(1 for repo in attention_repos if repo.highest_priority == "review_now")
+    watch_repo_count = sum(1 for repo in attention_repos if repo.highest_priority == "watch")
+    baseline_review_repo_count = sum(1 for repo in attention_repos if repo.highest_priority == "baseline_review")
+
+    top_repo = attention_repos[0] if attention_repos else None
+    if review_now_repo_count > 0:
+        status = "high_attention"
+        headline = "High-attention risk requires review"
+        summary = "At least one repository has capability expansion, guardrail regression, or strong drift signals that should be reviewed now."
+    elif watch_repo_count > 0:
+        status = "watch"
+        headline = "Risk posture is stable but worth watching"
+        summary = "No repository is in immediate review-now status, but there are active drift signals that deserve follow-up."
+    else:
+        status = "baseline"
+        headline = "Risk posture is baseline-oriented"
+        summary = "Current repositories mostly need baseline confirmation and broader coverage rather than urgent investigation."
+
+    return DashboardOverviewRiskState(
+        status=status,
+        headline=headline,
+        summary=summary,
+        review_now_repo_count=review_now_repo_count,
+        watch_repo_count=watch_repo_count,
+        baseline_review_repo_count=baseline_review_repo_count,
+        highest_risk_repo_full=top_repo.repo_full if top_repo is not None else None,
+        highest_risk_artifact_path=top_repo.highest_insight_artifact_path if top_repo is not None else None,
+        highest_risk_title=top_repo.highest_insight_title if top_repo is not None else None,
+        highest_drift_magnitude=top_repo.top_drift_magnitude if top_repo is not None else 0.0,
+    )

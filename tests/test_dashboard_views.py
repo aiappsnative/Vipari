@@ -192,6 +192,7 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
 
     overview = build_dashboard_overview_view(db_path)
 
+    assert overview.risk_state.status in {"high_attention", "watch", "baseline"}
     assert overview.metrics[0].label == "Onboarded repositories"
     assert overview.metrics[0].value == 2
     assert len(overview.attention_repos) == 2

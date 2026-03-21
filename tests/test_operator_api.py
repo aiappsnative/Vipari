@@ -260,6 +260,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert index_response.status_code == 200
     assert "PromptDrift Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
+    assert "portfolio-risk-state" in index_response.text
     assert "Review queue" in index_response.text
     assert "Control surface coverage" in index_response.text
 
@@ -272,8 +273,10 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "/static/dashboard-repo.js" in repo_response.text
 
     assert css_response.status_code == 200
+    assert ".hero-panel" in css_response.text
     assert "--panel-border" in css_response.text
     assert index_js_response.status_code == 200
+    assert "renderRiskState" in index_js_response.text
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "renderHistoryTimelines" in repo_js_response.text

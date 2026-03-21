@@ -2,6 +2,31 @@ function metricCard(label, value, detail) {
     return `<div class="card"><div class="muted">${label}</div><div class="metric">${value}</div><div class="muted">${detail}</div></div>`;
 }
 
+function renderRiskState(riskState) {
+    const statusLabel = riskState.status.replace("_", " ");
+    return `
+        <div class="hero-panel-inner hero-status-${riskState.status}">
+            <div>
+                <div class="priority priority-${riskState.review_now_repo_count > 0 ? "review_now" : riskState.watch_repo_count > 0 ? "watch" : "baseline_review"}">${statusLabel}</div>
+                <h2 class="hero-title">${riskState.headline}</h2>
+                <p class="hero-copy">${riskState.summary}</p>
+            </div>
+            <div class="hero-stats">
+                <div class="hero-stat"><span class="hero-stat-value">${riskState.review_now_repo_count}</span><span class="muted">review now repos</span></div>
+                <div class="hero-stat"><span class="hero-stat-value">${riskState.watch_repo_count}</span><span class="muted">watch repos</span></div>
+                <div class="hero-stat"><span class="hero-stat-value">${riskState.baseline_review_repo_count}</span><span class="muted">baseline repos</span></div>
+            </div>
+            <div class="hero-focus muted">
+                <strong>Current highest-risk focus:</strong>
+                ${riskState.highest_risk_repo_full || "n/a"}
+                ${riskState.highest_risk_title ? `· ${riskState.highest_risk_title}` : ""}
+                ${riskState.highest_risk_artifact_path ? `<br>${riskState.highest_risk_artifact_path}` : ""}
+                ${riskState.highest_drift_magnitude ? `<br>Top recorded drift magnitude ${riskState.highest_drift_magnitude.toFixed(3)}` : ""}
+            </div>
+        </div>
+    `;
+}
+
 function renderAttentionRepos(items) {
     if (!items.length) {
         return '<div class="muted">No repo priorities yet. Onboard a repository to populate the decision queue.</div>';
@@ -63,6 +88,7 @@ async function loadOverview() {
     const response = await fetch("/api/dashboard/overview");
     const payload = await response.json();
 
+    document.getElementById("portfolio-risk-state").innerHTML = renderRiskState(payload.risk_state);
     document.getElementById("overview-metrics").innerHTML = payload.metrics
         .map((metric) => metricCard(metric.label, metric.value, metric.detail))
         .join("");

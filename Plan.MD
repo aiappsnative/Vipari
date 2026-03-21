@@ -130,6 +130,7 @@ Now implemented as the first structural step:
 - `/dashboard` is the portfolio overview and decision queue
 - `/dashboard/{owner/repo}` remains the repo detail surface for artifact-level inspection
 - overview cards and coverage bars should keep evolving toward richer graphs rather than reverting to a repo card wall
+- the overview now opens with an explicit portfolio risk-state summary so users see overall exposure before repo-level detail
 
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone
