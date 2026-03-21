@@ -26,7 +26,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The active branch has moved beyond the original MVP. The current system has been validated end to end against a private GitHub repository and now includes:
+The current `main` branch has moved beyond the original MVP. The merged system has been validated end to end against a private GitHub repository and now includes:
 
 - working GitHub App authentication and bot-authored PR comments
 - webhook ingestion with fast acknowledgement and queued audit execution
@@ -235,3 +235,10 @@ The next major workstreams are:
 - continue the path from local/dev architecture toward production-grade persistence and dashboarding
 - plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement
 - plan for a future `customer-onboarding-baseline-v1` workflow to establish repository baselines and AI artifact inventories at install time
+
+Recommended near-term execution order:
+
+1. add richer provenance and reviewer workflow context on repo detail pages
+2. improve signal fusion between deterministic and semantic outputs
+3. seed stronger OSS/demo datasets so the overview shows more realistic pattern diversity
+4. build a lightweight OSS evaluation harness before taking on broader production hardening

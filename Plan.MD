@@ -27,16 +27,19 @@ This framing should shape roadmap decisions:
 
 ---
 
-## Current branch map (March 2026)
+## Current repository map (March 2026)
 
 ### `main`
-- Purpose: stable verified MVP baseline
-- Current status: intentionally behind ongoing engine work
-- Merge policy: receive only approved, validated engine milestones
+- Purpose: active post-merge baseline for the static-first drift engine
+- Current status:
+	- includes the merged `feature/drift-engine-v1` milestone
+	- is green at the full-suite level
+	- now contains the canonical implementation of the dashboard, onboarding, and static drift-profile work
+- Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-engine-v1`
-- Purpose: active integration branch for next-generation detection engine work
-- Current status:
+- Purpose: completed milestone branch retained as the merge lineage for the first static-first drift engine release
+- Current status at merge time:
 	- deterministic drift analysis implemented
 	- queued audit worker with retry/fallback implemented
 	- structured semantic review packages implemented
@@ -60,7 +63,8 @@ This framing should shape roadmap decisions:
 	- atomic job claiming, failed-job requeue on same-SHA redelivery, and honest persistence-failure handling implemented
 	- deterministic rule suppression improved for restrictive negated safety wording such as `Do not reveal ...`
 	- live validation completed for benign, risky, synchronize, fallback, dedupe, and bot-auth scenarios
-- Current known limitations:
+	- merged to `main` after the retry-window regression was fixed and the full suite passed
+- Remaining limitations now inherited by `main`:
 	- queue is local in-process SQLite for this stage
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
@@ -90,13 +94,20 @@ This framing should shape roadmap decisions:
 18. Historical backfill execution with persisted artifact/profile lineage
 19. Operator dashboard, JSON query APIs, and local CLI for onboarding/backfill inspection
 20. Large-repo dashboard aggregation optimization for real OSS repo responsiveness
+21. Overview regression-pattern summaries plus payload-compatibility hardening for stale or sparse dashboard responses
+22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
 
-### Next prioritized slices on `feature/drift-engine-v1`
-1. Signal fusion improvements between deterministic and semantic findings
-2. Richer provenance and reviewer workflow context on repo detail pages
+### Next prioritized slices after the merge
+1. Richer provenance and reviewer workflow context on repo detail pages
+2. Signal fusion improvements between deterministic and semantic findings
 3. More representative OSS/demo data so portfolio views show clearer pattern diversity
 4. OSS evaluation harness and candidate-repo runner
 5. Production-oriented persistence and deployment hardening
+
+Suggested next branch sequence:
+- `feature/repo-provenance-v1`
+- `feature/signal-fusion-v1`
+- `feature/oss-eval-harness-v1`
 
 ### Dashboard product direction for next iteration
 
@@ -141,6 +152,38 @@ Important product rule:
 Important architecture rule:
 - do not continue growing dashboard HTML, CSS, and JavaScript inline in `main.py`
 - use the extracted frontend surface as the only place for future dashboard UI work
+
+### Near-term execution plan
+
+#### 1. `feature/repo-provenance-v1`
+
+Purpose:
+- enrich repo detail pages with stronger reviewer context around where drift came from
+
+Planned scope:
+- add author, PR number, commit/date, and clearer baseline-vs-PR provenance labels where available
+- improve repo-detail narratives so reviewers can answer "who changed this, when, and in what review context?"
+- keep the change read-model focused rather than adding more top-level panels
+
+#### 2. `feature/signal-fusion-v1`
+
+Purpose:
+- tighten the relationship between deterministic findings and semantic review output
+
+Planned scope:
+- make deterministic and semantic evidence reinforce or dampen each other more explicitly
+- improve final reviewer explanations when the two channels disagree
+- add regression fixtures for common conflict cases
+
+#### 3. `feature/oss-eval-harness-v1`
+
+Purpose:
+- make future changes safer by evaluating the engine against representative OSS repos and curated scenarios
+
+Planned scope:
+- add repeatable seeded-repo runs
+- record expected overview and repo-detail outputs for key scenarios
+- turn recent manual OSS validation into lightweight automated coverage
 
 ### Planned future workflow
 

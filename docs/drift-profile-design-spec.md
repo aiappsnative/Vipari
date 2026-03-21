@@ -48,7 +48,7 @@ It **does** introduce:
 - durable storage of artifact-level static profiles and baseline-linked deltas inside audit history
 - regression tests validating the expected score direction of representative prompt changes
 
-The implementation lives in `engine/drift_profile.py`.
+The profile computation core lives in `engine/drift_profile.py`, while the persisted history, read-side aggregation, and dashboard consumption now extend into the audit, onboarding, and dashboard service layers.
 
 ---
 
@@ -118,7 +118,7 @@ Current outputs:
 - `attribute_deltas`
 - `narrative`
 
-This object is designed to become the payload for future PR summaries, stored audit records, and trend queries.
+This object now informs PR summaries, stored audit records, and trend queries, and it should continue expanding into richer repo-detail provenance and reviewer workflows.
 
 ---
 
@@ -254,9 +254,10 @@ PromptDrift also has:
 - a concrete baseline-comparison payload
 - a scoring layer suitable for trend graphs and PR summaries
 - persisted artifact-level profile history for later read-side queries
+- dashboard surfaces that render baseline-vs-current design posture and drift history for prioritized artifacts
 
 ### Architectural role
-This layer should become the shared scoring substrate for:
+This layer is now the shared scoring substrate for:
 - PR-facing drift summaries
 - artifact baseline comparison
 - onboarding baseline capture

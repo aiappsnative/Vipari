@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the target architecture for the next-generation PromptDrift detection engine. It is intended to guide implementation on the `feature/drift-engine-v1` branch and to be used alongside the Mermaid diagram in [docs/detection-engine-diagram.mmd](docs/detection-engine-diagram.mmd).
+This document defines the target architecture for the next-generation PromptDrift detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [docs/detection-engine-diagram.mmd](docs/detection-engine-diagram.mmd).
 
 It should be read together with [SOUL.md](SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
 
@@ -66,7 +66,7 @@ The design should also now favor:
 
 ### Current implementation snapshot (March 2026)
 
-The active branch already implements a meaningful subset of this target architecture.
+The current `main` branch already implements a meaningful subset of this target architecture.
 
 Implemented today:
 - webhook-path signature verification, diff fetch, AI relevance gating, and audit job creation
@@ -93,7 +93,7 @@ Still intentionally incomplete:
 
 ### Dashboard evolution note
 
-The current dashboard layer should be understood as an operator/read-model surface, not yet the final customer product.
+The current dashboard layer should be understood as an early customer-facing decision surface built on read-model APIs, not yet the final customer product.
 
 It already proves that PromptDrift can:
 - onboard repositories,
@@ -103,9 +103,9 @@ It already proves that PromptDrift can:
 
 But that alone is not enough for customer value.
 
-Before the next graph-heavy dashboard iteration, the frontend architecture should be cleaned up.
+The main frontend cleanup has already been completed.
 
-The current inline-page prototype served its purpose for speed, but future dashboard work should follow this split:
+Future dashboard work should keep following this split:
 - FastAPI route handlers remain thin and focused on routing plus JSON APIs
 - page markup moves into `templates/`
 - dashboard CSS and JavaScript move into `static/`
@@ -126,7 +126,12 @@ It should also surface cross-repo hotspots directly, which now includes a first 
 
 Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, and provenance-lite context derived from Git history and PR records.
 
-In other words, the dashboard should become a decision surface, not just a metrics surface.
+In other words, the dashboard is now a real first decision surface and should keep evolving in that direction rather than reverting to a raw metrics surface.
+
+The next architectural improvements for this layer are:
+- stronger provenance on repo detail pages
+- denser cross-repo examples and evaluation coverage
+- better signal fusion so the dashboard reflects more trustworthy reviewer priorities
 
 ### Execution model
 
