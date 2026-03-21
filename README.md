@@ -45,6 +45,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - repo-level static drift summaries and top-drifting artifact queries as first dashboard/read-side primitives
 - repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
 - inspectable local dashboard pages and operator/query APIs for onboarding and drift inspection
+- a split dashboard experience with a portfolio overview at `/dashboard` and repo detail views at `/dashboard/{owner/repo}`
 - a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
 - dashboard aggregation fast enough to inspect larger OSS repositories interactively
 
@@ -66,6 +67,7 @@ The active branch has moved beyond the original MVP. The current system has been
 - supports selective historical backfill planning and execution for onboarded artifacts
 - persists historical artifact versions and static profile lineage for backfilled snapshots
 - exposes JSON query APIs for repository listings and unified dashboard payloads
+- exposes an overview dashboard API at `GET /api/dashboard/overview`
 - exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`
 - includes `scripts/repo_ops.py` for local operator workflows and read-side inspection
 - prepares structured semantic review context for the LLM

@@ -99,7 +99,7 @@ It already proves that PromptDrift can:
 - onboard repositories,
 - expose discovered AI control surfaces,
 - persist baseline and history information,
-- and render a repo-level dashboard view for inspection.
+- render a portfolio overview page plus repo-level detail views for inspection.
 
 But that alone is not enough for customer value.
 

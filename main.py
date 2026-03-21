@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db
-from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
@@ -104,6 +104,11 @@ async def dashboard_repo_page(repo_full: str):
 @app.get("/api/repos")
 async def list_repos():
     return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH)]})
+
+
+@app.get("/api/dashboard/overview")
+async def dashboard_overview():
+    return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH)))
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")

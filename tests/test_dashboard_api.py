@@ -61,8 +61,14 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     )
 
     with TestClient(main.app) as client:
+        overview_response = client.get("/api/dashboard/overview")
         index_response = client.get("/api/repos")
         repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.json()
+    assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
+    assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"

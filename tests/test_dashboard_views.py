@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
-from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -147,3 +147,52 @@ def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_pat
 
     assert [entry.repo_full for entry in index] == ["doria90/repo-one", "doria90/repo-two"]
     assert all(entry.discovered_artifact_count == 1 for entry in index)
+
+
+def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(tmp_path):
+    db_path = str(tmp_path / "overview.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-one",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/a.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/repo-one",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/repo-one",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_BASELINE, "sha-2": PROMPT_CURRENT}[ref],
+    )
+    _record_pr_profile(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-two",
+        installation_id=2,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    overview = build_dashboard_overview_view(db_path)
+
+    assert overview.metrics[0].label == "Onboarded repositories"
+    assert overview.metrics[0].value == 2
+    assert len(overview.attention_repos) == 2
+    assert overview.attention_repos[0].repo_full == "doria90/repo-one"
+    assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
+    assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
+    assert [repo.repo_full for repo in overview.repos] == ["doria90/repo-one", "doria90/repo-two"]

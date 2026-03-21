@@ -121,6 +121,11 @@ p {
     color: var(--muted);
 }
 
+.meta-tight {
+    margin-top: 6px;
+    font-size: 0.92rem;
+}
+
 .pill,
 .priority {
     display: inline-block;
@@ -168,6 +173,43 @@ p {
 .stack {
     display: grid;
     gap: 12px;
+}
+
+.attention-link {
+    display: block;
+    color: var(--text);
+    text-decoration: none;
+    border: 1px solid rgba(157, 176, 208, 0.12);
+    border-radius: 14px;
+    padding: 14px;
+    transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.attention-link:hover {
+    border-color: rgba(120, 166, 255, 0.45);
+    transform: translateY(-1px);
+}
+
+.coverage-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.bar-track {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(157, 176, 208, 0.15);
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), #9b8cff);
 }
 
 .insight-title {

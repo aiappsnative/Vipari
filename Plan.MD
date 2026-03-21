@@ -49,6 +49,7 @@ This framing should shape roadmap decisions:
 	- historical backfill execution implemented for onboarded artifacts, with persisted historical versions and profile lineage
 	- unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local operator CLI implemented
 	- large-repo dashboard aggregation optimized so OSS-scale repo views remain interactive
+	- extracted dashboard frontend into dedicated templates/static assets and introduced an overview-vs-detail dashboard split
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
@@ -123,6 +124,11 @@ Recommended dashboard v2 sections:
 3. `Control surface map` grouping artifacts by prompts, agents, tool wiring, model config, retrieval, and guardrails
 4. `History and drift timeline` for top artifacts so customers can understand drift as a storyline rather than raw counts
 5. `Coverage and confidence` panel distinguishing high-confidence artifacts from lower-confidence discovery output
+
+Now implemented as the first structural step:
+- `/dashboard` is the portfolio overview and decision queue
+- `/dashboard/{owner/repo}` remains the repo detail surface for artifact-level inspection
+- overview cards and coverage bars should keep evolving toward richer graphs rather than reverting to a repo card wall
 
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone

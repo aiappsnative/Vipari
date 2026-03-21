@@ -31,6 +31,45 @@ class RepoDashboardIndexEntry:
 
 
 @dataclass(frozen=True)
+class DashboardOverviewMetric:
+    label: str
+    value: int | float
+    detail: str
+
+
+@dataclass(frozen=True)
+class DashboardOverviewAttentionRepo:
+    repo_full: str
+    highest_priority: str
+    highest_insight_title: str | None
+    highest_insight_artifact_path: str | None
+    insight_count: int
+    review_now_count: int
+    watch_count: int
+    baseline_review_count: int
+    top_drift_magnitude: float
+    avg_semantic_distance: float
+    discovered_artifact_count: int
+
+
+@dataclass(frozen=True)
+class DashboardOverviewControlSurface:
+    group_key: str
+    label: str
+    repo_count: int
+    artifact_count: int
+    high_confidence_count: int
+
+
+@dataclass(frozen=True)
+class DashboardOverviewView:
+    metrics: list[DashboardOverviewMetric]
+    attention_repos: list[DashboardOverviewAttentionRepo]
+    control_surface_coverage: list[DashboardOverviewControlSurface]
+    repos: list[RepoDashboardIndexEntry]
+
+
+@dataclass(frozen=True)
 class RepoDashboardBackfillSummary:
     job_count: int
     planned_job_count: int
@@ -105,6 +144,59 @@ def list_repo_dashboard_index(db_path: str) -> list[RepoDashboardIndexEntry]:
         )
         for onboarding in onboardings
     ]
+
+
+def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
+    repos = list_repo_dashboard_index(db_path)
+    repo_views = [build_repo_dashboard_view(db_path, repo.repo_full) for repo in repos]
+
+    total_artifacts = sum(repo.discovered_artifact_count for repo in repos)
+    total_backfill_jobs = sum(view.backfill.job_count for view in repo_views)
+    review_now_repo_count = sum(1 for view in repo_views if any(insight.priority == "review_now" for insight in view.insights))
+    total_pr_audits = sum(view.pull_request_audit_count for view in repo_views)
+
+    attention_repos = _build_overview_attention_repos(repo_views)
+    control_surface_coverage = _build_overview_control_surface_coverage(repo_views)
+
+    metrics = [
+        DashboardOverviewMetric(
+            label="Onboarded repositories",
+            value=len(repos),
+            detail="Repos with a stored onboarding record in the local PromptDrift store.",
+        ),
+        DashboardOverviewMetric(
+            label="Tracked artifacts",
+            value=total_artifacts,
+            detail="Discovered AI control surfaces currently included in the local baseline inventory.",
+        ),
+        DashboardOverviewMetric(
+            label="Needs review now",
+            value=review_now_repo_count,
+            detail="Repositories that currently contain at least one high-priority `review now` insight.",
+        ),
+        DashboardOverviewMetric(
+            label="Pull-request audits",
+            value=total_pr_audits,
+            detail="Persisted PR audit runs represented across the current repository set.",
+        ),
+        DashboardOverviewMetric(
+            label="Backfill jobs",
+            value=total_backfill_jobs,
+            detail="Historical backfill jobs planned or executed across onboarded repositories.",
+        ),
+        DashboardOverviewMetric(
+            label="Control surface groups",
+            value=len(control_surface_coverage),
+            detail="Distinct control surface categories currently represented across onboarded repositories.",
+        ),
+    ]
+
+    return DashboardOverviewView(
+        metrics=metrics,
+        attention_repos=attention_repos,
+        control_surface_coverage=control_surface_coverage,
+        repos=repos,
+    )
 
 
 def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView:
@@ -418,3 +510,79 @@ def _artifact_group_key(artifact: RepoDashboardArtifactEntry) -> str:
     if artifact.artifact_type == "ai_code":
         return "agents"
     return "other"
+
+
+def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewAttentionRepo]:
+    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
+    attention_repos: list[DashboardOverviewAttentionRepo] = []
+    for view in repo_views:
+        sorted_insights = sorted(
+            view.insights,
+            key=lambda insight: (priority_rank.get(insight.priority, 9), -insight.score, insight.artifact_path),
+        )
+        top_insight = sorted_insights[0] if sorted_insights else None
+        attention_repos.append(
+            DashboardOverviewAttentionRepo(
+                repo_full=view.repo_full,
+                highest_priority=top_insight.priority if top_insight is not None else "baseline_review",
+                highest_insight_title=top_insight.title if top_insight is not None else None,
+                highest_insight_artifact_path=top_insight.artifact_path if top_insight is not None else None,
+                insight_count=len(view.insights),
+                review_now_count=sum(1 for insight in view.insights if insight.priority == "review_now"),
+                watch_count=sum(1 for insight in view.insights if insight.priority == "watch"),
+                baseline_review_count=sum(1 for insight in view.insights if insight.priority == "baseline_review"),
+                top_drift_magnitude=max(
+                    [entry.drift_magnitude for entry in view.top_drifting_artifacts] or [0.0]
+                ),
+                avg_semantic_distance=view.drift_summary.avg_semantic_distance,
+                discovered_artifact_count=(view.onboarding.discovered_artifact_count if view.onboarding is not None else 0),
+            )
+        )
+
+    attention_repos.sort(
+        key=lambda repo: (
+            priority_rank.get(repo.highest_priority, 9),
+            -repo.review_now_count,
+            -repo.top_drift_magnitude,
+            repo.repo_full,
+        )
+    )
+    return attention_repos
+
+
+def _build_overview_control_surface_coverage(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewControlSurface]:
+    grouped: dict[str, DashboardOverviewControlSurface] = {}
+    repo_sets: dict[str, set[str]] = {}
+    for view in repo_views:
+        for group in view.control_surface_groups:
+            repo_sets.setdefault(group.group_key, set()).add(view.repo_full)
+            current = grouped.get(group.group_key)
+            if current is None:
+                grouped[group.group_key] = DashboardOverviewControlSurface(
+                    group_key=group.group_key,
+                    label=group.label,
+                    repo_count=0,
+                    artifact_count=group.artifact_count,
+                    high_confidence_count=group.high_confidence_count,
+                )
+            else:
+                grouped[group.group_key] = DashboardOverviewControlSurface(
+                    group_key=current.group_key,
+                    label=current.label,
+                    repo_count=0,
+                    artifact_count=current.artifact_count + group.artifact_count,
+                    high_confidence_count=current.high_confidence_count + group.high_confidence_count,
+                )
+
+    results = [
+        DashboardOverviewControlSurface(
+            group_key=item.group_key,
+            label=item.label,
+            repo_count=len(repo_sets.get(item.group_key, set())),
+            artifact_count=item.artifact_count,
+            high_confidence_count=item.high_confidence_count,
+        )
+        for item in grouped.values()
+    ]
+    results.sort(key=lambda item: (-item.repo_count, -item.artifact_count, item.label))
+    return results

@@ -228,6 +228,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert index_response.status_code == 200
     assert "PromptDrift Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
+    assert "Review queue" in index_response.text
+    assert "Control surface coverage" in index_response.text
 
     assert repo_response.status_code == 200
     assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
@@ -239,6 +241,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert css_response.status_code == 200
     assert "--panel-border" in css_response.text
     assert index_js_response.status_code == 200
-    assert "loadRepos" in index_js_response.text
+    assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "loadDashboard" in repo_js_response.text
