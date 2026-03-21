@@ -42,6 +42,10 @@ before those changes ship.
 
 We do this without requiring runtime traffic, production logs, or access to customer data.
 
+Our first practical job is narrower than “full AI governance.”
+
+PromptDrift should help teams decide when an AI-related pull request must be escalated before merge because it changed what the AI is allowed to do, how tightly it is constrained, or how broadly it can act.
+
 ---
 
 ## What we are building
@@ -198,6 +202,15 @@ On every PR that touches AI-relevant files, PromptDrift should explain:
 - whether risk increased or decreased,
 - and what reviewers should pay attention to.
 
+This is the product wedge.
+
+PromptDrift should first win as a high-signal PR reviewer for AI control-surface changes, not as a generic governance dashboard.
+
+The primary workflow outcome is not automatic allow/deny.
+It is an escalation decision:
+- can this stay in the normal review lane,
+- or does it require AI platform, security, or product review before merge?
+
 ### Agent history view
 For each agent, PromptDrift should show:
 - baseline vs current profile,
@@ -206,6 +219,8 @@ For each agent, PromptDrift should show:
 - and governance context.
 
 The product should feel native to GitHub and useful during review, not only after deployment.
+
+The dashboard and history views should reinforce the PR workflow by showing what those PR-level decisions add up to over time.
 
 ---
 
@@ -229,9 +244,16 @@ PromptDrift exists to meet that need.
 
 ## Who this is for
 
-PromptDrift is for teams building and governing AI systems in software organizations, especially:
-- engineering leaders,
-- platform teams,
+PromptDrift is for teams building and governing AI systems in software organizations.
+
+The primary first buyer is:
+- a Head of AI Platform or Head of Engineering at a mid-size SaaS company shipping AI features
+
+The primary day-to-day users are:
+- senior backend and AI platform engineers responsible for prompts, model configs, tools, and agent wiring
+- a smaller set of platform or security reviewers subscribed to high-risk AI changes
+
+Secondary stakeholders may include:
 - security teams,
 - compliance and GRC stakeholders,
 - and product owners responsible for AI behavior and change control.
@@ -280,7 +302,13 @@ A good PromptDrift result should help a reviewer answer:
 - Did capability expand?
 - Did autonomy increase?
 - Is the governance around this change strong enough?
-- Should this change ship as-is?
+- Should this PR be escalated before merge?
+
+And a good product trial should be able to prove:
+
+- PromptDrift found real, non-obvious, high-impact AI changes in live repos
+- those findings were difficult to catch in ordinary code review alone
+- the visible PR noise remained low enough that engineers kept trusting the product
 
 If we answer those well, we are building the right thing.
 

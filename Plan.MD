@@ -27,6 +27,15 @@ This framing should shape roadmap decisions:
 - prefer change-level evidence over vague AI risk statements
 - prefer operational reliability because customers only trust what shows up consistently in PR review
 
+### Current strategic decisions
+
+- **Primary buyer:** Head of AI Platform or Head of Engineering at a mid-size SaaS company shipping AI features
+- **Primary user:** senior backend / AI platform engineers, with a smaller set of security or platform reviewers for escalations
+- **Product wedge:** GitHub PR review workflow
+- **Primary decision improved:** whether an AI-related PR must be escalated before merge
+- **Default baseline concept:** latest explicitly approved version of a control surface
+- **Near-term commercial proof:** find concrete, non-obvious high-risk AI changes in real repos with tolerable noise
+
 ---
 
 ## Current repository map (March 2026)
@@ -100,16 +109,25 @@ This framing should shape roadmap decisions:
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
 
 ### Next prioritized slices after the merge
-1. Richer provenance and reviewer workflow context on repo detail pages
-2. Signal fusion improvements between deterministic and semantic findings
-3. More representative OSS/demo data so portfolio views show clearer pattern diversity
-4. OSS evaluation harness and candidate-repo runner
-5. Production-oriented persistence and deployment hardening
+1. High-precision PR escalation experience with an opinionated risk taxonomy
+2. Approved-baseline model and review workflow for critical control surfaces
+3. Richer provenance and reviewer workflow context on repo detail pages
+4. Signal fusion improvements between deterministic and semantic findings
+5. More representative OSS/demo data plus an OSS evaluation harness
+6. Production-oriented persistence and deployment hardening
 
 Suggested next branch sequence:
+- `feature/pr-escalation-v1`
+- `feature/approved-baseline-v1`
 - `feature/repo-provenance-v1`
 - `feature/signal-fusion-v1`
 - `feature/oss-eval-harness-v1`
+
+### What not to build yet
+
+- full runtime observability, logging, or eval-loop infrastructure as a primary product surface
+- generic AI code review across all code instead of AI control surfaces
+- a heavy policy-authoring UI or full GRC suite
 
 ### Dashboard product direction for next iteration
 
@@ -157,7 +175,32 @@ Important architecture rule:
 
 ### Near-term execution plan
 
-#### 1. `feature/repo-provenance-v1`
+#### 1. `feature/pr-escalation-v1`
+
+Purpose:
+- make the PR review workflow the unmistakable product wedge
+
+Planned scope:
+- publish a clearer escalation recommendation in PR output
+- add an opinionated static risk taxonomy focused on:
+	- guardrail and policy weakening
+	- capability and blast-radius expansion
+	- autonomy increases
+	- governance bypasses
+	- critical-surface modifications
+- pair PR comments with a GitHub label-based escalation signal rather than jumping straight to hard merge blocking
+
+#### 2. `feature/approved-baseline-v1`
+
+Purpose:
+- make baseline-relative drift trustworthy by defining one authoritative baseline model across PRs, dashboards, and history views
+
+Planned scope:
+- treat the latest explicitly approved version as the default baseline for a control surface
+- distinguish onboarding baseline, current main, and approved baseline clearly in stored provenance
+- let teams start with sane defaults while nudging them toward explicit approval workflows for critical surfaces
+
+#### 3. `feature/repo-provenance-v1`
 
 Purpose:
 - enrich repo detail pages with stronger reviewer context around where drift came from
@@ -167,7 +210,7 @@ Planned scope:
 - improve repo-detail narratives so reviewers can answer "who changed this, when, and in what review context?"
 - keep the change read-model focused rather than adding more top-level panels
 
-#### 2. `feature/signal-fusion-v1`
+#### 4. `feature/signal-fusion-v1`
 
 Purpose:
 - tighten the relationship between deterministic findings and semantic review output
@@ -177,7 +220,7 @@ Planned scope:
 - improve final reviewer explanations when the two channels disagree
 - add regression fixtures for common conflict cases
 
-#### 3. `feature/oss-eval-harness-v1`
+#### 5. `feature/oss-eval-harness-v1`
 
 Purpose:
 - make future changes safer by evaluating the engine against representative OSS repos and curated scenarios
@@ -186,6 +229,15 @@ Planned scope:
 - add repeatable seeded-repo runs
 - record expected overview and repo-detail outputs for key scenarios
 - turn recent manual OSS validation into lightweight automated coverage
+
+### Trial success criteria for the next version
+
+The next version should be judged by whether it can:
+
+- surface meaningful AI-control-surface changes in real PRs that reviewers would otherwise miss
+- keep visible PR noise low enough that teams do not mute or uninstall it
+- trigger real review interventions, edits, or explicit acknowledgements on a meaningful share of surfaced findings
+- avoid becoming a generic dashboard-first or governance-suite-first product before the PR wedge is trusted
 
 ### Planned future workflow
 

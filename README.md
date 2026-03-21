@@ -8,6 +8,10 @@ Its job is not just to say that “an AI file changed”, but to help reviewers 
 
 **Did this PR materially change how the AI behaves, what it is allowed to do, or what it may reveal?**
 
+Near-term, the product is being shaped around one especially important follow-up question:
+
+**Does this AI-related PR need escalation before merge?**
+
 ## Customer value
 
 PromptDrift provides value by reducing the gap between ordinary code review and safe AI change review.
@@ -21,6 +25,8 @@ For customers, that means:
 - providing a defensible review trail for security, compliance, and platform teams
 
 In product terms, PromptDrift is moving toward becoming a **change intelligence layer for AI behavior**.
+
+The product wedge is the PR review workflow. Dashboard and history views remain important, but they should reinforce PR-level decisions rather than replace them.
 
 For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 

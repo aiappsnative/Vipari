@@ -46,6 +46,7 @@ The design should also now favor:
 - GitHub-native inputs over runtime dependencies
 - baseline-relative drift over absolute claims of universal model safety
 - explainable attribute movement over opaque scoring
+- escalation-quality reviewer output over generic broad-spectrum AI commentary
 
 ---
 
@@ -88,6 +89,8 @@ Implemented today:
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 
 Still intentionally incomplete:
+- a crisp PR escalation workflow with opinionated taxonomy and explicit escalation signals
+- one authoritative approved-baseline model shared by PR review, dashboards, and history views
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
 - a value-first dashboard insights layer that translates artifact history into customer actions and reviewer priorities
@@ -136,6 +139,19 @@ The next architectural improvements for this layer are:
 - better signal fusion so the dashboard reflects more trustworthy reviewer priorities
 
 ### Execution model
+
+### Product decision model
+
+The primary product decision PromptDrift should improve is not raw allow/deny.
+
+It is:
+- whether an AI-related PR can remain in the normal review lane,
+- or whether it must be escalated before merge to AI platform, security, or product owners.
+
+The architecture should therefore optimize for:
+- high-precision identification of meaningful AI control-surface changes
+- low visible noise in PRs
+- clearer provenance and baseline context for why a change deserves escalation
 
 PromptDrift should separate **event ingestion** from **audit execution**.
 

@@ -31,6 +31,9 @@ That is a major conceptual step toward:
 - governance-oriented reporting
 - reviewer-visible design-drift summaries in pull requests
 
+For the future product, the default baseline should not be “previous version” or a raw onboarding snapshot.
+It should be the **latest explicitly approved version** of a control surface, with temporary fallbacks only until an approved baseline exists.
+
 ---
 
 ## Scope of the first implementation
@@ -119,6 +122,11 @@ Current outputs:
 - `narrative`
 
 This object now informs PR summaries, stored audit records, and trend queries, and it should continue expanding into richer repo-detail provenance and reviewer workflows.
+
+In the next product version, this object should also support explicit baseline provenance so reviewers can tell whether a drift comparison was computed against:
+- an approved baseline,
+- an onboarding fallback baseline,
+- or a less authoritative historical reference.
 
 ---
 
