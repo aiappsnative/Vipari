@@ -88,6 +88,22 @@ class DashboardOverviewRiskDistribution:
 
 
 @dataclass(frozen=True)
+class DashboardOverviewRegressionPattern:
+    pattern_key: str
+    label: str
+    repo_count: int
+    artifact_count: int
+    review_now_artifact_count: int
+    max_drift_magnitude: float
+    example_repo_full: str | None
+    example_artifact_path: str | None
+    example_title: str | None
+    summary: str
+
+
+
+
+@dataclass(frozen=True)
 class DashboardOverviewRegressionEntry:
     repo_full: str
     artifact_path: str
@@ -103,6 +119,7 @@ class DashboardOverviewRegressionEntry:
 class DashboardOverviewView:
     risk_state: DashboardOverviewRiskState
     metrics: list[DashboardOverviewMetric]
+    regression_patterns: list[DashboardOverviewRegressionPattern]
     highest_risk_items: list[DashboardOverviewRegressionEntry]
     control_surface_risk: list[DashboardOverviewRiskDistribution]
     attention_repos: list[DashboardOverviewAttentionRepo]
@@ -136,6 +153,7 @@ class RepoDashboardArtifactEntry:
     latest_pr_semantic_distance: float
     latest_pr_capability_shift: float
     latest_pr_guardrail_shift: float
+    latest_pr_autonomy_shift: float
     leaderboard_drift_magnitude: float
 
 
@@ -250,6 +268,7 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
     attention_repos = _build_overview_attention_repos(repo_views)
     control_surface_coverage = _build_overview_control_surface_coverage(repo_views)
     control_surface_risk = _build_overview_control_surface_risk(repo_views)
+    regression_patterns = _build_overview_regression_patterns(repo_views)
     highest_risk_items = _build_overview_regressions(repo_views)
     risk_state = _build_overview_risk_state(attention_repos)
 
@@ -289,6 +308,7 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
     return DashboardOverviewView(
         risk_state=risk_state,
         metrics=metrics,
+        regression_patterns=regression_patterns,
         highest_risk_items=highest_risk_items,
         control_surface_risk=control_surface_risk,
         attention_repos=attention_repos,
@@ -359,6 +379,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
                 latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
                 latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
                 latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
+                latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
                 leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
             )
         )
@@ -415,6 +436,7 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "latest_pr_semantic_distance": 0.0,
         "latest_pr_capability_shift": 0.0,
         "latest_pr_guardrail_shift": 0.0,
+        "latest_pr_autonomy_shift": 0.0,
     }
 
 
@@ -479,6 +501,7 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
             metrics["latest_pr_semantic_distance"] = float(row["semantic_distance"])
             metrics["latest_pr_capability_shift"] = attribute_deltas.get("capability_risk", 0.0)
             metrics["latest_pr_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
+            metrics["latest_pr_autonomy_shift"] = attribute_deltas.get("autonomy_level", 0.0)
 
     return metrics_by_path
 
@@ -868,13 +891,132 @@ def _artifact_risk_tags(artifact: RepoDashboardArtifactEntry, attribute_deltas: 
         tags.append("capability expanded")
     if attribute_deltas.get("guardrail_robustness", artifact.latest_pr_guardrail_shift) < -0.05:
         tags.append("guardrails weakened")
-    if attribute_deltas.get("autonomy_level", 0.0) > 0.05:
+    if attribute_deltas.get("autonomy_level", artifact.latest_pr_autonomy_shift) > 0.05:
         tags.append("autonomy increased")
     if artifact.latest_historical_drift_magnitude > 0.35:
         tags.append("historical hotspot")
     if not tags:
         tags.append("baseline only")
     return tags
+
+
+def _build_overview_regression_patterns(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewRegressionPattern]:
+    pattern_defs = [
+        (
+            "capability_expansion",
+            "Capability expansion",
+            "Baseline-relative changes increased capability or widened operational reach.",
+        ),
+        (
+            "guardrail_weakening",
+            "Guardrail weakening",
+            "Constraints, approvals, or escalation language weakened relative to the baseline.",
+        ),
+        (
+            "autonomy_increase",
+            "Autonomy increase",
+            "Artifacts now signal more independent execution, broader action, or less supervision.",
+        ),
+        (
+            "historical_hotspot",
+            "Historical hotspots",
+            "Stored history shows repeated design movement even when recent PR signals are limited.",
+        ),
+        (
+            "baseline_candidate",
+            "Baseline candidates",
+            "Tracked control surfaces still need stronger comparative evidence before they can be classified as active regressions.",
+        ),
+    ]
+    grouped: dict[str, dict[str, object]] = {
+        pattern_key: {
+            "label": label,
+            "summary": summary,
+            "repo_set": set(),
+            "artifact_count": 0,
+            "review_now_artifact_count": 0,
+            "max_drift_magnitude": 0.0,
+            "example_repo_full": None,
+            "example_artifact_path": None,
+            "example_title": None,
+        }
+        for pattern_key, label, summary in pattern_defs
+    }
+
+    for view in repo_views:
+        insight_by_path = {insight.artifact_path: insight for insight in view.insights}
+        for artifact in view.artifacts:
+            matches = _artifact_regression_pattern_keys(artifact)
+            if not matches:
+                continue
+
+            insight = insight_by_path.get(artifact.artifact_path)
+            drift_magnitude = max(
+                artifact.leaderboard_drift_magnitude,
+                artifact.latest_historical_drift_magnitude,
+                abs(min(artifact.latest_pr_guardrail_shift, 0.0)),
+                max(artifact.latest_pr_capability_shift, 0.0),
+                max(artifact.latest_pr_autonomy_shift, 0.0),
+            )
+            for pattern_key in matches:
+                group = grouped[pattern_key]
+                repo_set = group["repo_set"]
+                assert isinstance(repo_set, set)
+                repo_set.add(view.repo_full)
+                group["artifact_count"] = int(group["artifact_count"]) + 1
+                if insight is not None and insight.priority == "review_now":
+                    group["review_now_artifact_count"] = int(group["review_now_artifact_count"]) + 1
+                if drift_magnitude >= float(group["max_drift_magnitude"]):
+                    group["max_drift_magnitude"] = round(drift_magnitude, 3)
+                    group["example_repo_full"] = view.repo_full
+                    group["example_artifact_path"] = artifact.artifact_path
+                    group["example_title"] = insight.title if insight is not None else _pattern_default_title(pattern_key)
+
+    results = [
+        DashboardOverviewRegressionPattern(
+            pattern_key=pattern_key,
+            label=str(group["label"]),
+            repo_count=len(group["repo_set"]),
+            artifact_count=int(group["artifact_count"]),
+            review_now_artifact_count=int(group["review_now_artifact_count"]),
+            max_drift_magnitude=round(float(group["max_drift_magnitude"]), 3),
+            example_repo_full=(str(group["example_repo_full"]) if group["example_repo_full"] is not None else None),
+            example_artifact_path=(
+                str(group["example_artifact_path"]) if group["example_artifact_path"] is not None else None
+            ),
+            example_title=(str(group["example_title"]) if group["example_title"] is not None else None),
+            summary=str(group["summary"]),
+        )
+        for pattern_key, group in grouped.items()
+        if int(group["artifact_count"]) > 0
+    ]
+    results.sort(key=lambda item: (-item.artifact_count, -item.review_now_artifact_count, item.label))
+    return results
+
+
+def _artifact_regression_pattern_keys(artifact: RepoDashboardArtifactEntry) -> list[str]:
+    pattern_keys: list[str] = []
+    if artifact.latest_pr_capability_shift > 0.05:
+        pattern_keys.append("capability_expansion")
+    if artifact.latest_pr_guardrail_shift < -0.05:
+        pattern_keys.append("guardrail_weakening")
+    if artifact.latest_pr_autonomy_shift > 0.05:
+        pattern_keys.append("autonomy_increase")
+    if artifact.latest_historical_drift_magnitude > 0.35:
+        pattern_keys.append("historical_hotspot")
+    if not pattern_keys and artifact.discovery_confidence >= 0.75:
+        pattern_keys.append("baseline_candidate")
+    return pattern_keys
+
+
+def _pattern_default_title(pattern_key: str) -> str:
+    return {
+        "capability_expansion": "Capability expansion needs review",
+        "guardrail_weakening": "Guardrail regression needs review",
+        "autonomy_increase": "Autonomy increase needs review",
+        "historical_hotspot": "Historical drift hotspot",
+        "baseline_candidate": "High-value control surface to baseline",
+    }[pattern_key]
 
 
 def _build_overview_control_surface_coverage(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewControlSurface]:

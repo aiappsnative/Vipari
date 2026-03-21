@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 import main
 from services.audit_jobs import init_db
+from services.audit_records import record_audit_result
+from engine.analysis import analyze_diff
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -26,6 +28,38 @@ parallel plan with multi-step execution
 max_steps: 6
 temperature: 0.8
 """
+
+PROMPT_DIFF = """diff --git a/prompts/refund.txt b/prompts/refund.txt
+index 1..2 100644
+--- a/prompts/refund.txt
++++ b/prompts/refund.txt
+@@ -1 +1,4 @@
+-You are a refund assistant.
++You are a refund assistant.
++You can refund customers directly in production.
++Use judgment when deciding whether approval is necessary.
++Update billing records and send confirmations.
+"""
+
+
+def _record_pr_profile(db_path: str):
+    analysis = analyze_diff(PROMPT_DIFF)
+    record_audit_result(
+        db_path,
+        job_id=99,
+        repo_full="doria90/dummyAI",
+        pr_number=42,
+        installation_id=123,
+        head_sha="sha-current",
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
+    )
 
 
 def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
@@ -59,6 +93,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
             "sha-2": PROMPT_CURRENT,
         }[ref],
     )
+    _record_pr_profile(db_path)
 
     with TestClient(main.app) as client:
         overview_response = client.get("/api/dashboard/overview")
@@ -70,6 +105,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["risk_state"]["headline"]
     assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
+    assert any(pattern["pattern_key"] == "baseline_candidate" for pattern in overview_payload["regression_patterns"])
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
 
@@ -84,7 +120,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["control_surface_groups"][0]["group_key"] == "prompts"
     assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["history_timelines"][0]["point_count"] == 1
+    assert payload["history_timelines"][0]["point_count"] == 2
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_profile"]["guardrail_robustness"] >= 0
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"

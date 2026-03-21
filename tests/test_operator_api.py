@@ -178,6 +178,7 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 latest_pr_semantic_distance=0.0,
                 latest_pr_capability_shift=0.0,
                 latest_pr_guardrail_shift=0.0,
+                latest_pr_autonomy_shift=0.0,
                 leaderboard_drift_magnitude=0.0,
             )
         ],
@@ -288,6 +289,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "PromptDrift Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     assert "portfolio-risk-state" in index_response.text
+    assert "Regression patterns" in index_response.text
     assert "No production traffic or user data is analyzed" in index_response.text
     assert "Highest-risk drift" in index_response.text
     assert "Risk by control surface" in index_response.text

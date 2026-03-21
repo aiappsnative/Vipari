@@ -65,6 +65,29 @@ function renderHighestRiskItems(items) {
         .join("")}</div>`;
 }
 
+function renderRegressionPatterns(items) {
+    if (!items.length) {
+        return '<div class="muted">No portfolio-level regression patterns yet.</div>';
+    }
+    const maxArtifacts = Math.max(...items.map((item) => item.artifact_count), 1);
+    return `<div class="stack">${items
+        .map(
+            (item) => `
+                <div class="risk-surface-card">
+                    <div class="coverage-row">
+                        <strong>${item.label}</strong>
+                        <span class="muted">${item.artifact_count} artifacts · ${item.repo_count} repos</span>
+                    </div>
+                    <div class="bar-track"><div class="bar-fill" style="width: ${(item.artifact_count / maxArtifacts) * 100}%"></div></div>
+                    <div class="meta-tight muted">${item.summary}</div>
+                    <div class="meta-tight muted">Review now: ${item.review_now_artifact_count} · Max drift ${item.max_drift_magnitude.toFixed(3)}</div>
+                    ${item.example_repo_full ? `<div class="meta-tight muted">Lead example: ${item.example_repo_full} · ${item.example_title || item.example_artifact_path}${item.example_artifact_path ? ` · ${item.example_artifact_path}` : ""}</div>` : ""}
+                </div>
+            `
+        )
+        .join("")}</div>`;
+}
+
 function renderControlSurfaceRisk(items) {
     if (!items.length) {
         return '<div class="muted">No control-surface risk distribution yet.</div>';
@@ -132,6 +155,7 @@ async function loadOverview() {
     document.getElementById("overview-metrics").innerHTML = payload.metrics
         .map((metric) => metricCard(metric.label, metric.value, metric.detail))
         .join("");
+    document.getElementById("regression-patterns").innerHTML = renderRegressionPatterns(payload.regression_patterns);
     document.getElementById("highest-risk-items").innerHTML = renderHighestRiskItems(payload.highest_risk_items);
     document.getElementById("control-surface-risk").innerHTML = renderControlSurfaceRisk(payload.control_surface_risk);
     document.getElementById("attention-repos").innerHTML = renderAttentionRepos(payload.attention_repos);

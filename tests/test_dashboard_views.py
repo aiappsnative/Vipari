@@ -161,23 +161,23 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
 
     onboard_repository(
         db_path,
-        repo_full="doria90/repo-one",
+        repo_full="doria90/dummyAI",
         installation_id=1,
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: ["prompts/a.txt"],
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
         fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
     )
     plan_repository_history_backfill(
         db_path,
-        repo_full="doria90/repo-one",
+        repo_full="doria90/dummyAI",
         token="token",
         commit_limit_per_artifact=5,
         list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
     )
     execute_repository_history_backfill(
         db_path,
-        repo_full="doria90/repo-one",
+        repo_full="doria90/dummyAI",
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_BASELINE, "sha-2": PROMPT_CURRENT}[ref],
     )
@@ -198,10 +198,12 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.risk_state.status in {"high_attention", "watch", "baseline"}
     assert len(overview.highest_risk_items) >= 1
     assert len(overview.control_surface_risk) >= 1
+    assert len(overview.regression_patterns) >= 1
     assert overview.metrics[0].label == "Onboarded repositories"
     assert overview.metrics[0].value == 2
     assert len(overview.attention_repos) == 2
-    assert overview.attention_repos[0].repo_full == "doria90/repo-one"
+    assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
+    assert any(pattern.pattern_key == "baseline_candidate" for pattern in overview.regression_patterns)
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
-    assert [repo.repo_full for repo in overview.repos] == ["doria90/repo-one", "doria90/repo-two"]
+    assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
