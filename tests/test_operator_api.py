@@ -8,7 +8,13 @@ from fastapi.testclient import TestClient
 
 import main
 from services.audit_records import RepoStaticDriftSummary
-from services.dashboard_views import RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView
+from services.dashboard_views import (
+    RepoDashboardArtifactEntry,
+    RepoDashboardBackfillSummary,
+    RepoDashboardControlSurfaceGroup,
+    RepoDashboardInsightEntry,
+    RepoDashboardView,
+)
 from services.onboarding import HistoricalBackfillExecutionResult, RepositoryOnboardingResult
 from services.onboarding_records import (
     HistoricalBackfillJobRecord,
@@ -78,6 +84,26 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
             highest_capability_delta=0.0,
         ),
         top_drifting_artifacts=[],
+        insights=[
+            RepoDashboardInsightEntry(
+                title="High-value control surface to baseline",
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                priority="baseline_review",
+                score=0.8,
+                rationale="This artifact looks like a real AI control surface but does not yet have meaningful drift context.",
+                recommended_action="Confirm whether this is a true AI control surface and keep it in the monitored baseline set.",
+            )
+        ],
+        control_surface_groups=[
+            RepoDashboardControlSurfaceGroup(
+                group_key="prompts",
+                label="Prompts and instructions",
+                artifact_count=1,
+                high_confidence_count=1,
+                top_artifact_paths=["prompts/system.txt"],
+            )
+        ],
         artifacts=[
             RepoDashboardArtifactEntry(
                 artifact_path="prompts/system.txt",
@@ -184,6 +210,7 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     assert payload["discovered_artifact_count"] == 1
     assert payload["planned_backfill_job_count"] == 1
     assert payload["executed_backfill_job_count"] == 1
+    assert payload["dashboard"]["insights"][0]["artifact_path"] == "prompts/system.txt"
     assert payload["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
 
 
@@ -201,4 +228,6 @@ def test_dashboard_html_pages_render(tmp_path):
 
     assert repo_response.status_code == 200
     assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
+    assert "Needs attention now" in repo_response.text
+    assert "Control surface map" in repo_response.text
     assert "/api/repos/${encodeURIComponent(repoFull)}/dashboard" in repo_response.text

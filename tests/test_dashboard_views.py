@@ -110,6 +110,11 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.pull_request_audit_count == 1
     assert dashboard.drift_summary.profile_count == 1
     assert len(dashboard.artifacts) == 1
+    assert len(dashboard.insights) == 1
+    assert dashboard.insights[0].artifact_path == "prompts/refund.txt"
+    assert dashboard.insights[0].priority in {"review_now", "watch", "baseline_review"}
+    assert len(dashboard.control_surface_groups) == 1
+    assert dashboard.control_surface_groups[0].group_key == "prompts"
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 2
     assert dashboard.artifacts[0].pr_profile_count == 1

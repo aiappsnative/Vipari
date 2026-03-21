@@ -365,6 +365,12 @@ def _render_repo_dashboard_page(repo_full: str) -> str:
         th {{ color: var(--muted); font-weight: 600; }}
         .section {{ margin-top: 28px; }}
         .callout {{ color: var(--warning); font-size: 0.92rem; }}
+        .stack {{ display: grid; gap: 12px; }}
+        .insight-title {{ font-weight: 700; margin-bottom: 6px; }}
+        .priority {{ display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 0.8rem; margin-bottom: 10px; text-transform: capitalize; }}
+        .priority-review_now {{ background: rgba(246, 173, 85, 0.14); color: #f6ad55; }}
+        .priority-watch {{ background: rgba(120, 166, 255, 0.14); color: #78a6ff; }}
+        .priority-baseline_review {{ background: rgba(79, 209, 165, 0.14); color: #4fd1a5; }}
     </style>
 </head>
 <body>
@@ -398,6 +404,17 @@ def _render_repo_dashboard_page(repo_full: str) -> str:
             return `<div class="card"><div class="muted">${{label}}</div><div class="metric">${{value}}</div><div class="muted">${{detail}}</div></div>`;
         }}
 
+
+                <div class="grid section">
+                    <div class="card">
+                        <h2>Needs attention now</h2>
+                        <div id="insights" class="muted">Loading prioritized insights...</div>
+                    </div>
+                    <div class="card">
+                        <h2>Control surface map</h2>
+                        <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
+                    </div>
+                </div>
         function renderLeaderboard(items) {{
             if (!items.length) {{
                 return '<div class="muted">No pull-request drift samples have been recorded yet.</div>';
@@ -427,6 +444,34 @@ def _render_repo_dashboard_page(repo_full: str) -> str:
                 </tr>`).join('')}}</tbody></table>`;
         }}
 
+        function renderInsights(items) {{
+            if (!items.length) {{
+                return '<div class="muted">No prioritized insights yet. Once drift history grows, this panel will highlight what needs review first.</div>';
+            }}
+            return `<div class="stack">${{items.map((item) => `
+                <div>
+                    <div class="priority priority-${{item.priority}}">${{item.priority.replace('_', ' ')}}</div>
+                    <div class="insight-title">${{item.title}}</div>
+                    <div><strong>${{item.artifact_path}}</strong> <span class="muted">(${{item.artifact_type}})</span></div>
+                    <div class="muted" style="margin-top:6px;">${{item.rationale}}</div>
+                    <div style="margin-top:6px;">${{item.recommended_action}}</div>
+                </div>
+            `).join('')}}</div>`;
+        }}
+
+        function renderControlSurfaces(items) {{
+            if (!items.length) {{
+                return '<div class="muted">No grouped control surfaces yet.</div>';
+            }}
+            return `<table><thead><tr><th>Group</th><th>Artifacts</th><th>High confidence</th><th>Top examples</th></tr></thead><tbody>${{items.map((item) => `
+                <tr>
+                    <td>${{item.label}}</td>
+                    <td>${{item.artifact_count}}</td>
+                    <td>${{item.high_confidence_count}}</td>
+                    <td>${{item.top_artifact_paths.join('<br>')}}</td>
+                </tr>`).join('')}}</tbody></table>`;
+        }}
+
         async function loadDashboard() {{
             const response = await fetch(`/api/repos/${{encodeURIComponent(repoFull)}}/dashboard`);
             const payload = await response.json();
@@ -440,6 +485,8 @@ def _render_repo_dashboard_page(repo_full: str) -> str:
                 metricCard('Avg semantic distance', payload.drift_summary.avg_semantic_distance.toFixed(3), `Highest capability artifact: ${{payload.drift_summary.highest_capability_artifact_path || 'n/a'}}`),
             ].join('');
 
+            document.getElementById('insights').innerHTML = renderInsights(payload.insights);
+            document.getElementById('control-surfaces').innerHTML = renderControlSurfaces(payload.control_surface_groups);
             document.getElementById('leaderboard').innerHTML = renderLeaderboard(payload.top_drifting_artifacts);
             document.getElementById('artifacts').innerHTML = renderArtifacts(payload.artifacts);
         }}
