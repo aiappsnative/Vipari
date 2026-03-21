@@ -118,6 +118,9 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert len(dashboard.history_timelines) == 1
     assert dashboard.history_timelines[0].artifact_path == "prompts/refund.txt"
     assert dashboard.history_timelines[0].point_count == 3
+    assert len(dashboard.design_profiles) == 1
+    assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
+    assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 2
     assert dashboard.artifacts[0].pr_profile_count == 1

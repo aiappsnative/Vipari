@@ -1,5 +1,18 @@
 const repoFull = document.querySelector('meta[name="promptdrift-repo-full"]')?.getAttribute("content") || "";
 
+function renderRiskTags(tags) {
+    return tags.map((tag) => `<span class="tag">${tag}</span>`).join("");
+}
+
+function renderProfileMetric(label, baselineValue, currentValue) {
+    return `
+        <div class="profile-metric">
+            <div class="profile-label">${label}</div>
+            <div class="profile-values"><span>${baselineValue.toFixed(2)}</span><span class="muted">→</span><span>${currentValue.toFixed(2)}</span></div>
+        </div>
+    `;
+}
+
 function metricCard(label, value, detail) {
     return `<div class="card"><div class="muted">${label}</div><div class="metric">${value}</div><div class="muted">${detail}</div></div>`;
 }
@@ -45,6 +58,7 @@ function renderInsights(items) {
     if (!items.length) {
         return '<div class="muted">No prioritized insights yet. Once drift history grows, this panel will highlight what needs review first.</div>';
     }
+    const designProfiles = Object.fromEntries((window.__designProfiles || []).map((item) => [item.artifact_path, item]));
     return `<div class="stack">${items
         .map(
             (item) => `
@@ -52,6 +66,8 @@ function renderInsights(items) {
                     <div class="priority priority-${item.priority}">${item.priority.replace("_", " ")}</div>
                     <div class="insight-title">${item.title}</div>
                     <div><strong>${item.artifact_path}</strong> <span class="muted">(${item.artifact_type})</span></div>
+                    <div class="tag-row">${renderRiskTags(designProfiles[item.artifact_path]?.risk_tags || ["baseline only"])}</div>
+                    <div class="meta-tight muted">${designProfiles[item.artifact_path]?.provenance?.label || "No PR or history provenance yet"}</div>
                     <div class="muted" style="margin-top:6px;">${item.rationale}</div>
                     <div style="margin-top:6px;">${item.recommended_action}</div>
                 </div>
@@ -116,9 +132,40 @@ function renderHistoryTimelines(items) {
         .join("")}</div>`;
 }
 
+function renderDesignProfiles(items) {
+    if (!items.length) {
+        return '<div class="muted">No design-profile comparisons yet. Onboarded baseline data is available, but no prioritized surfaces are ready for comparison.</div>';
+    }
+    return `<div class="stack">${items
+        .map(
+            (item) => `
+                <div class="design-card">
+                    <div class="timeline-header">
+                        <div>
+                            <div class="insight-title">${item.artifact_path}</div>
+                            <div class="muted meta-tight">${item.artifact_type} · drift from baseline ${item.drift_from_baseline.toFixed(3)}</div>
+                        </div>
+                        <div class="muted">${item.provenance?.label || "Baseline only"}</div>
+                    </div>
+                    <div class="tag-row">${renderRiskTags(item.risk_tags)}</div>
+                    <div class="profile-grid">
+                        ${renderProfileMetric("Guardrails", item.baseline_profile.guardrail_robustness, item.current_profile.guardrail_robustness)}
+                        ${renderProfileMetric("Capability", item.baseline_profile.capability_risk, item.current_profile.capability_risk)}
+                        ${renderProfileMetric("Autonomy", item.baseline_profile.autonomy_level, item.current_profile.autonomy_level)}
+                        ${renderProfileMetric("Stability", item.baseline_profile.stability_vs_creativity, item.current_profile.stability_vs_creativity)}
+                        ${renderProfileMetric("Governance", item.baseline_profile.governance_strength, item.current_profile.governance_strength)}
+                    </div>
+                    <div class="meta-tight muted">${item.narrative.join(" ")}</div>
+                </div>
+            `
+        )
+        .join("")}</div>`;
+}
+
 async function loadDashboard() {
     const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
     const payload = await response.json();
+    window.__designProfiles = payload.design_profiles || [];
 
     document.getElementById("summary").innerHTML = [
         metricCard(
@@ -145,6 +192,7 @@ async function loadDashboard() {
         ),
     ].join("");
 
+    document.getElementById("design-profiles").innerHTML = renderDesignProfiles(payload.design_profiles);
     document.getElementById("insights").innerHTML = renderInsights(payload.insights);
     document.getElementById("control-surfaces").innerHTML = renderControlSurfaces(payload.control_surface_groups);
     document.getElementById("leaderboard").innerHTML = renderLeaderboard(payload.top_drifting_artifacts);

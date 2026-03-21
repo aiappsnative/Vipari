@@ -219,6 +219,14 @@ p {
     font-size: 0.92rem;
 }
 
+.info-strip {
+    border: 1px solid rgba(157, 176, 208, 0.14);
+    border-radius: 16px;
+    padding: 14px 16px;
+    background: rgba(11, 16, 32, 0.28);
+    color: var(--muted);
+}
+
 .section {
     margin-top: 28px;
 }
@@ -241,6 +249,56 @@ p {
 .attention-link:hover {
     border-color: rgba(120, 166, 255, 0.45);
     transform: translateY(-1px);
+}
+
+.design-card {
+    border: 1px solid rgba(157, 176, 208, 0.12);
+    border-radius: 14px;
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+}
+
+.profile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.profile-metric {
+    border: 1px solid rgba(157, 176, 208, 0.12);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: rgba(11, 16, 32, 0.24);
+}
+
+.profile-label {
+    font-size: 0.88rem;
+    color: var(--muted);
+}
+
+.profile-values {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 6px;
+    font-weight: 700;
+}
+
+.tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(120, 166, 255, 0.12);
+    color: var(--accent);
+    font-size: 0.8rem;
 }
 
 .risk-surface-card {

@@ -9,8 +9,11 @@ from fastapi.testclient import TestClient
 import main
 from services.audit_records import RepoStaticDriftSummary
 from services.dashboard_views import (
+    DashboardProfileVector,
     RepoDashboardArtifactEntry,
     RepoArtifactHistoryTimeline,
+    RepoArtifactDesignProfile,
+    RepoArtifactProvenance,
     RepoArtifactTimelinePoint,
     RepoDashboardBackfillSummary,
     RepoDashboardControlSurfaceGroup,
@@ -134,6 +137,30 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                         drift_magnitude=0.7,
                     ),
                 ],
+            )
+        ],
+        design_profiles=[
+            RepoArtifactDesignProfile(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                drift_from_baseline=0.7,
+                baseline_profile=DashboardProfileVector(
+                    guardrail_robustness=0.7,
+                    capability_risk=0.2,
+                    autonomy_level=0.3,
+                    stability_vs_creativity=0.8,
+                    governance_strength=0.6,
+                ),
+                current_profile=DashboardProfileVector(
+                    guardrail_robustness=0.5,
+                    capability_risk=0.5,
+                    autonomy_level=0.6,
+                    stability_vs_creativity=0.4,
+                    governance_strength=0.6,
+                ),
+                risk_tags=["capability expanded", "autonomy increased"],
+                narrative=["Capability risk increased due to broader or more sensitive actions."],
+                provenance=RepoArtifactProvenance(source_type="pull_request", label="PR #42 · sha-cur", created_at=2.0),
             )
         ],
         artifacts=[
@@ -261,6 +288,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "PromptDrift Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     assert "portfolio-risk-state" in index_response.text
+    assert "No production traffic or user data is analyzed" in index_response.text
     assert "Highest-risk drift" in index_response.text
     assert "Risk by control surface" in index_response.text
     assert "Review queue" in index_response.text
@@ -268,6 +296,8 @@ def test_dashboard_html_pages_render(tmp_path):
 
     assert repo_response.status_code == 200
     assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
+    assert "Static-only analysis" in repo_response.text
+    assert "Baseline vs current design posture" in repo_response.text
     assert "Needs attention now" in repo_response.text
     assert "Control surface map" in repo_response.text
     assert "History and drift timeline" in repo_response.text
@@ -284,5 +314,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "renderControlSurfaceRisk" in index_js_response.text
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
+    assert "renderDesignProfiles" in repo_js_response.text
     assert "renderHistoryTimelines" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text

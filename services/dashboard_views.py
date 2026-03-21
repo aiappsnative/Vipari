@@ -4,6 +4,8 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
+from engine.drift_profile import AgentAttributeProfile, StaticSignals
+
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
     RepoStaticDriftSummary,
@@ -179,6 +181,34 @@ class RepoArtifactHistoryTimeline:
 
 
 @dataclass(frozen=True)
+class DashboardProfileVector:
+    guardrail_robustness: float
+    capability_risk: float
+    autonomy_level: float
+    stability_vs_creativity: float
+    governance_strength: float
+
+
+@dataclass(frozen=True)
+class RepoArtifactProvenance:
+    source_type: str
+    label: str
+    created_at: float | None
+
+
+@dataclass(frozen=True)
+class RepoArtifactDesignProfile:
+    artifact_path: str
+    artifact_type: str
+    drift_from_baseline: float
+    baseline_profile: DashboardProfileVector
+    current_profile: DashboardProfileVector
+    risk_tags: list[str]
+    narrative: list[str]
+    provenance: RepoArtifactProvenance | None
+
+
+@dataclass(frozen=True)
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
@@ -190,6 +220,7 @@ class RepoDashboardView:
     insights: list[RepoDashboardInsightEntry]
     control_surface_groups: list[RepoDashboardControlSurfaceGroup]
     history_timelines: list[RepoArtifactHistoryTimeline]
+    design_profiles: list[RepoArtifactDesignProfile]
     artifacts: list[RepoDashboardArtifactEntry]
 
 
@@ -292,6 +323,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
             insights=[],
             control_surface_groups=[],
             history_timelines=[],
+            design_profiles=[],
             artifacts=[],
         )
 
@@ -301,6 +333,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
     jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
     metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
+    profile_context_by_path = _load_repo_artifact_profile_context(db_path, repo_full)
 
     artifact_entries: list[RepoDashboardArtifactEntry] = []
     total_historical_versions = sum(metrics["historical_version_count"] for metrics in metrics_by_path.values())
@@ -340,6 +373,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
     insights = _build_repo_insights(artifact_entries)
     control_surface_groups = _build_control_surface_groups(artifact_entries)
     history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
+    design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -360,6 +394,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
         insights=insights,
         control_surface_groups=control_surface_groups,
         history_timelines=history_timelines,
+        design_profiles=design_profiles,
         artifacts=artifact_entries,
     )
 
@@ -381,6 +416,17 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "latest_pr_capability_shift": 0.0,
         "latest_pr_guardrail_shift": 0.0,
     }
+
+
+@dataclass(frozen=True)
+class _RepoArtifactProfileContext:
+    profile: AgentAttributeProfile
+    source_type: str
+    label: str
+    created_at: float
+    semantic_distance: float
+    attribute_deltas: dict[str, float]
+    narrative: list[str]
 
 
 def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[str, float | int]]:
@@ -435,6 +481,55 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
             metrics["latest_pr_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
 
     return metrics_by_path
+
+
+def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[str, _RepoArtifactProfileContext]:
+    contexts: dict[str, _RepoArtifactProfileContext] = {}
+    with _connect(db_path) as conn:
+        historical_rows = conn.execute(
+            """
+            SELECT artifact_path, commit_sha, created_at, semantic_distance, profile_json, attribute_deltas_json, narrative_json
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (_normalized_id_prefix(repo_full),),
+        ).fetchall()
+        for row in historical_rows:
+            artifact_path = row["artifact_path"]
+            contexts[artifact_path] = _RepoArtifactProfileContext(
+                profile=_profile_from_json(row["profile_json"]),
+                source_type="historical",
+                label=f"commit {str(row['commit_sha'])[:7]}",
+                created_at=float(row["created_at"]),
+                semantic_distance=float(row["semantic_distance"]),
+                attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
+                narrative=json.loads(row["narrative_json"]),
+            )
+
+        pr_rows = conn.execute(
+            """
+            SELECT sap.artifact_path, pra.pr_number, pra.head_sha, sap.created_at, sap.semantic_distance, sap.profile_json, sap.attribute_deltas_json, sap.narrative_json
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+        for row in pr_rows:
+            artifact_path = row["artifact_path"]
+            contexts[artifact_path] = _RepoArtifactProfileContext(
+                profile=_profile_from_json(row["profile_json"]),
+                source_type="pull_request",
+                label=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                created_at=float(row["created_at"]),
+                semantic_distance=float(row["semantic_distance"]),
+                attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
+                narrative=json.loads(row["narrative_json"]),
+            )
+
+    return contexts
 
 
 def _normalized_id_prefix(repo_full: str) -> str:
@@ -671,6 +766,63 @@ def _build_repo_history_timelines(
     return timelines[:6]
 
 
+def _build_repo_design_profiles(
+    artifacts: list[RepoDashboardArtifactEntry],
+    insights: list[RepoDashboardInsightEntry],
+    baseline_by_path,
+    profile_context_by_path: dict[str, _RepoArtifactProfileContext],
+) -> list[RepoArtifactDesignProfile]:
+    artifact_by_path = {artifact.artifact_path: artifact for artifact in artifacts}
+    ordered_paths: list[str] = []
+    for insight in insights:
+        if insight.artifact_path not in ordered_paths:
+            ordered_paths.append(insight.artifact_path)
+    for artifact in artifacts:
+        if artifact.artifact_path not in ordered_paths:
+            ordered_paths.append(artifact.artifact_path)
+
+    design_profiles: list[RepoArtifactDesignProfile] = []
+    for artifact_path in ordered_paths[:4]:
+        artifact = artifact_by_path.get(artifact_path)
+        baseline = baseline_by_path.get(artifact_path)
+        if artifact is None or baseline is None:
+            continue
+
+        context = profile_context_by_path.get(artifact_path)
+        baseline_profile = _profile_vector(baseline.profile)
+        if context is None:
+            current_profile = baseline_profile
+            drift_from_baseline = 0.0
+            risk_tags = ["baseline only"]
+            narrative = ["No drift samples yet. This surface is currently represented only by the approved baseline."]
+            provenance = None
+        else:
+            current_profile = _profile_vector(context.profile)
+            drift_from_baseline = _drift_magnitude(context.semantic_distance, context.attribute_deltas)
+            risk_tags = _artifact_risk_tags(artifact, context.attribute_deltas)
+            narrative = context.narrative
+            provenance = RepoArtifactProvenance(
+                source_type=context.source_type,
+                label=context.label,
+                created_at=context.created_at,
+            )
+
+        design_profiles.append(
+            RepoArtifactDesignProfile(
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                drift_from_baseline=drift_from_baseline,
+                baseline_profile=baseline_profile,
+                current_profile=current_profile,
+                risk_tags=risk_tags,
+                narrative=narrative,
+                provenance=provenance,
+            )
+        )
+
+    return design_profiles
+
+
 def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewAttentionRepo]:
     priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     attention_repos: list[DashboardOverviewAttentionRepo] = []
@@ -707,6 +859,22 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
         )
     )
     return attention_repos
+
+
+def _artifact_risk_tags(artifact: RepoDashboardArtifactEntry, attribute_deltas: dict[str, float] | None = None) -> list[str]:
+    attribute_deltas = attribute_deltas or {}
+    tags: list[str] = []
+    if attribute_deltas.get("capability_risk", artifact.latest_pr_capability_shift) > 0.05:
+        tags.append("capability expanded")
+    if attribute_deltas.get("guardrail_robustness", artifact.latest_pr_guardrail_shift) < -0.05:
+        tags.append("guardrails weakened")
+    if attribute_deltas.get("autonomy_level", 0.0) > 0.05:
+        tags.append("autonomy increased")
+    if artifact.latest_historical_drift_magnitude > 0.35:
+        tags.append("historical hotspot")
+    if not tags:
+        tags.append("baseline only")
+    return tags
 
 
 def _build_overview_control_surface_coverage(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewControlSurface]:
@@ -867,3 +1035,49 @@ def _control_surface_label(group_key: str) -> str:
         "retrieval": "Retrieval and knowledge",
         "other": "Other AI-related artifacts",
     }[group_key]
+
+
+def _profile_vector(profile: AgentAttributeProfile) -> DashboardProfileVector:
+    return DashboardProfileVector(
+        guardrail_robustness=profile.guardrail_robustness,
+        capability_risk=profile.capability_risk,
+        autonomy_level=profile.autonomy_level,
+        stability_vs_creativity=profile.stability_vs_creativity,
+        governance_strength=profile.governance_strength,
+    )
+
+
+def _profile_from_json(profile_json: str) -> AgentAttributeProfile:
+    payload = json.loads(profile_json)
+    signal_payload = payload["signals"]
+    return AgentAttributeProfile(
+        guardrail_robustness=float(payload["guardrail_robustness"]),
+        capability_risk=float(payload["capability_risk"]),
+        autonomy_level=float(payload["autonomy_level"]),
+        stability_vs_creativity=float(payload["stability_vs_creativity"]),
+        governance_strength=float(payload["governance_strength"]),
+        change_frequency=float(payload["change_frequency"]),
+        semantic_density=float(payload["semantic_density"]),
+        signals=StaticSignals(
+            token_count=int(signal_payload["token_count"]),
+            char_count=int(signal_payload["char_count"]),
+            section_count=int(signal_payload["section_count"]),
+            example_count=int(signal_payload["example_count"]),
+            instruction_density=float(signal_payload["instruction_density"]),
+            constraint_count=int(signal_payload["constraint_count"]),
+            explicit_limit_count=int(signal_payload["explicit_limit_count"]),
+            ambiguity_count=int(signal_payload["ambiguity_count"]),
+            guardrail_counts={key: int(value) for key, value in signal_payload.get("guardrail_counts", {}).items()},
+            write_signal_count=int(signal_payload.get("write_signal_count", 0)),
+            read_signal_count=int(signal_payload.get("read_signal_count", 0)),
+            sensitive_tool_count=int(signal_payload.get("sensitive_tool_count", 0)),
+            prod_signal_count=int(signal_payload.get("prod_signal_count", 0)),
+            sandbox_signal_count=int(signal_payload.get("sandbox_signal_count", 0)),
+            systems_touched_count=int(signal_payload.get("systems_touched_count", 0)),
+            human_review_count=int(signal_payload.get("human_review_count", 0)),
+            parallelism_signal_count=int(signal_payload.get("parallelism_signal_count", 0)),
+            max_steps=int(signal_payload.get("max_steps", 0)),
+            temperature=(float(signal_payload["temperature"]) if signal_payload.get("temperature") is not None else None),
+            top_p=(float(signal_payload["top_p"]) if signal_payload.get("top_p") is not None else None),
+        ),
+    )

@@ -124,6 +124,8 @@ The overview page should now also be treated as the landing risk surface, with a
 
 It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
 
+Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, and provenance-lite context derived from Git history and PR records.
+
 In other words, the dashboard should become a decision surface, not just a metrics surface.
 
 ### Execution model

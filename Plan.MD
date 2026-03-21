@@ -51,6 +51,7 @@ This framing should shape roadmap decisions:
 	- large-repo dashboard aggregation optimized so OSS-scale repo views remain interactive
 	- extracted dashboard frontend into dedicated templates/static assets and introduced an overview-vs-detail dashboard split
 	- first repo-detail history and drift timeline visualization implemented for onboarded artifacts
+	- repo-detail baseline-vs-current design posture cards, static-only messaging, and risk-tag/provenance-lite surfacing implemented
 	- artifact lineage and baseline-aware suppression implemented
 	- PR comment replace-on-update behavior implemented
 	- compact TLDR + collapsible reviewer comment format implemented
