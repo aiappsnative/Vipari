@@ -2,6 +2,8 @@
 
 This document outlines the phased roadmap for building the PromptDrift backend. It is intended as a living guide and will evolve as the project grows.
 
+This is the canonical roadmap document. Product/usage guidance belongs in [README.md](README.md), while deeper architecture belongs in [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
+
 For the enduring product thesis, guardrails, and design principles that should outlast roadmap changes, see `SOUL.md`.
 
 ---

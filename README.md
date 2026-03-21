@@ -26,32 +26,17 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch has moved beyond the original MVP. The merged system has been validated end to end against a private GitHub repository and now includes:
+The current `main` branch now includes the first merged static-first drift engine milestone.
 
-- working GitHub App authentication and bot-authored PR comments
-- webhook ingestion with fast acknowledgement and queued audit execution
-- deterministic drift analysis and structured semantic review packages
-- retry and fallback behavior for transient model/provider failures
-- opened-event PR diff fetching with transient `404` retry and synchronize-only exact commit-pair reconstruction
-- atomic SQLite job claiming, failed-job requeue on webhook redelivery, and honest terminal failure states when persistence fails
-- durable audit/history persistence in SQLite for local development
-- artifact lineage and baseline-aware suppression for better risk judgment
-- negation-aware suppression for restrictive prompt additions such as `Do not reveal ...` so obvious safety wording is not scored as risky drift
-- managed PR comments that are replaced on PR updates so the timeline reflects the latest audit moment
-- compact reviewer-facing comments with TLDR risk summaries and collapsible detail without duplicating the summary inside the expanded section
-- first-pass static drift profiling for prompts/configs, including guardrail, capability, autonomy, creativity/stability, governance, and change-frequency attributes
-- durable local persistence of static artifact profiles and baseline-linked drift deltas for changed AI artifacts
-- reviewer-facing PR comments enriched with a compact static drift summary block when artifact snapshots are available
-- repo-level static drift summaries and top-drifting artifact queries as first dashboard/read-side primitives
-- repository onboarding inventory persistence, selective historical backfill-job planning, and historical artifact/profile ingestion for discovered AI artifacts
-- inspectable local dashboard pages and operator/query APIs for onboarding and drift inspection
-- a split dashboard experience with a portfolio overview at `/dashboard` and repo detail views at `/dashboard/{owner/repo}`
-- a portfolio risk-state summary at the top of the overview page so users land on the overall AI risk posture first
-- overview panels for highest-risk drift and risk by control surface across the onboarded portfolio
-- repo-detail baseline-vs-current design posture cards with static attribute vectors, risk tags, and light provenance context
-- a first repo-detail history timeline so reviewers can see how artifact drift accumulated across backfill and PR samples
-- a local CLI for listing onboarded repos, printing dashboard payloads, and running onboarding/backfill workflows
-- dashboard aggregation fast enough to inspect larger OSS repositories interactively
+In practical terms, PromptDrift currently provides:
+
+- queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and managed PR comments
+- baseline-linked static drift profiling for prompts, configs, and related AI control surfaces
+- onboarding and selective historical backfill for repository-level artifact inventories and profile history
+- a split dashboard surface with portfolio overview and repo-detail drill-down pages
+- a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
+
+For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
 The dashboard should now be read as two linked product surfaces:
 
@@ -206,14 +191,10 @@ Useful JSON endpoints:
 
 ## Known limitations
 
-- signal fusion between deterministic and semantic evidence is still early-stage
 - the queue and durable store are still local SQLite in the current dev shape
-- the current dashboard is now a usable customer-style decision surface, but it still needs richer provenance and stronger real-world data density
-- the dashboard frontend has been extracted into dedicated template/static assets, but compatibility hardening should continue whenever new payload fields are added
-- onboarding discovery on real OSS repositories can still be noisy and needs stronger artifact grouping, confidence handling, and prioritization
+- the dashboard is useful for reviewer decision support, but still needs richer provenance and denser real-world example data
 - no production deployment packaging or multi-tenant control plane yet
-- AI relevance and policy coverage should continue expanding beyond the current rule set
-- nuanced fusion between deterministic and semantic outputs still needs refinement beyond the current negation-aware guardrail suppression
+- AI relevance coverage and deterministic/semantic signal fusion still need refinement
 
 ## Safe repo practices
 
@@ -221,24 +202,8 @@ Useful JSON endpoints:
 - Do not commit private key files
 - Use [.env.example](.env.example) as the only committed environment template
 
-## Next planned focus
+## Roadmap and deeper design docs
 
-The next major workstreams are:
-
-- improve signal fusion between deterministic findings and semantic review
-- continue compatibility hardening for dashboard payload evolution and stale local-server cases
-- improve the customer-facing insight quality using richer real-world seeded or OSS data
-- group artifacts into a clearer AI control-surface map
-- add timeline and storyline views for the most important drifting artifacts
-- continue validating the dashboard and operator surfaces against real OSS repositories
-- refresh product and architecture docs to match the real implemented system
-- continue the path from local/dev architecture toward production-grade persistence and dashboarding
-- plan for a future `audit-feedback-loop-v1` workflow to capture customer feedback and PR outcomes for evaluation and engine improvement
-- plan for a future `customer-onboarding-baseline-v1` workflow to establish repository baselines and AI artifact inventories at install time
-
-Recommended near-term execution order:
-
-1. add richer provenance and reviewer workflow context on repo detail pages
-2. improve signal fusion between deterministic and semantic outputs
-3. seed stronger OSS/demo datasets so the overview shows more realistic pattern diversity
-4. build a lightweight OSS evaluation harness before taking on broader production hardening
+- [Plan.MD](Plan.MD) tracks milestone status, near-term feature order, and future workflows
+- [docs/detection-engine-plan.md](docs/detection-engine-plan.md) captures the detection-engine architecture and implementation snapshot
+- [docs/drift-profile-design-spec.md](docs/drift-profile-design-spec.md) describes the static drift-profile layer in more depth

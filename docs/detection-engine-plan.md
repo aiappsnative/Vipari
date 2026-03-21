@@ -4,6 +4,8 @@
 
 This document defines the target architecture for the next-generation PromptDrift detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [docs/detection-engine-diagram.mmd](docs/detection-engine-diagram.mmd).
 
+This document is intentionally architecture-focused. Roadmap sequencing lives in [Plan.MD](../Plan.MD), while product and local-usage guidance lives in [README.md](../README.md).
+
 It should be read together with [SOUL.md](SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
 
 The core design principle is a **hybrid engine**:
