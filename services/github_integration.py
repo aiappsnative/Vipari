@@ -12,6 +12,9 @@ from github import Auth, Github
 
 
 PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
+PROMPTDRIFT_ESCALATION_LABEL = "promptdrift: escalate-before-merge"
+PROMPTDRIFT_ESCALATION_LABEL_COLOR = "B60205"
+PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION = "PromptDrift recommends escalation before merge"
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
 
@@ -193,6 +196,31 @@ def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, 
     if previous_comment is not None and previous_comment.id != created_comment.id:
         previous_comment.delete()
     return created_comment.id
+
+
+def ensure_pr_label(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
+    label_color: str = PROMPTDRIFT_ESCALATION_LABEL_COLOR,
+    label_description: str = PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+) -> bool:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    issue = repo.get_issue(number=pr_number)
+
+    repo_labels = {label.name for label in repo.get_labels()}
+    if label_name not in repo_labels:
+        repo.create_label(label_name, label_color, label_description)
+
+    issue_labels = {label.name for label in issue.get_labels()}
+    if label_name in issue_labels:
+        return False
+
+    issue.add_to_labels(label_name)
+    return True
 
 
 def _build_managed_comment_body(body: str) -> str:

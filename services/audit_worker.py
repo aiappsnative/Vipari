@@ -18,7 +18,7 @@ from .audit_jobs import (
     mark_job_retry,
 )
 from .audit_records import get_latest_audit_comment_for_pr, preview_static_drift_for_artifacts, record_audit_result
-from .github_integration import fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
+from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,38 @@ RISK_BADGES = {
     "High": "❌ Risk: High",
 }
 
+ESCALATION_REASON_BY_RULE_ID = {
+    "guardrail_drift": "guardrail or policy weakening",
+    "guardrail_weakening": "guardrail or policy weakening",
+    "sensitive_data_drift": "capability or blast-radius expansion",
+    "capability_drift": "capability or blast-radius expansion",
+    "tooling_drift": "critical-surface modification",
+    "retrieval_drift": "critical-surface modification",
+    "model_drift": "critical-surface modification",
+}
 
-def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, llm_client: object, model: str, timeout_seconds: float) -> str:
+
+@dataclass(frozen=True)
+class EscalationRecommendation:
+    decision: str
+    reasons: tuple[str, ...] = ()
+    label_name: str | None = None
+
+    @property
+    def requires_label(self) -> bool:
+        return self.decision == "escalate_before_merge" and self.label_name is not None
+
+
+def build_llm_comment(
+    diff_text: str,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    llm_client: object,
+    model: str,
+    timeout_seconds: float,
+    escalation_recommendation: EscalationRecommendation | None = None,
+) -> str:
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
         "You are an AI Security Auditor. Analyze this code diff. "
@@ -75,10 +105,22 @@ def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, l
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
-    return _format_comment_body(raw_comment, risk_level=risk_level, review_mode="Full semantic review", summary=summary)
+    return _format_comment_body(
+        raw_comment,
+        risk_level=risk_level,
+        review_mode="Full semantic review",
+        summary=summary,
+        escalation_recommendation=recommendation,
+    )
 
 
-def build_fallback_comment(deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
+def build_fallback_comment(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    error_message: str,
+    escalation_recommendation: EscalationRecommendation | None = None,
+) -> str:
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     summary = _build_fallback_summary(deterministic_analysis)
     lines = [
         "## PromptDrift Preliminary Audit",
@@ -109,16 +151,25 @@ def build_fallback_comment(deterministic_analysis: DiffAnalysis, *, error_messag
         risk_level=deterministic_analysis.suggested_risk_level.value,
         review_mode="Deterministic fallback review",
         summary=summary,
+        escalation_recommendation=recommendation,
     )
 
 
-def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: str, summary: str) -> str:
+def _format_comment_body(
+    detail_markdown: str,
+    *,
+    risk_level: str,
+    review_mode: str,
+    summary: str,
+    escalation_recommendation: EscalationRecommendation,
+) -> str:
     normalized_risk = _normalize_risk_level(risk_level)
     badge = RISK_BADGES[normalized_risk]
     cleaned_details = _sanitize_detail_markdown(detail_markdown)
     return "\n".join(
         [
             f"{badge} — {summary}",
+            _format_escalation_line(escalation_recommendation),
             "",
             "<details>",
             f"<summary>{review_mode} details</summary>",
@@ -128,6 +179,34 @@ def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: 
             "</details>",
         ]
     )
+
+
+def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
+    if recommendation.decision == "escalate_before_merge":
+        if recommendation.reasons:
+            return f"Escalation: **Recommended before merge** — {'; '.join(recommendation.reasons)}"
+        return "Escalation: **Recommended before merge**"
+    return "Escalation: **Not recommended** — stays in the normal review lane"
+
+
+def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> EscalationRecommendation:
+    reasons: list[str] = []
+    for finding in deterministic_analysis.findings:
+        if finding.severity.value != "High":
+            continue
+        reason = ESCALATION_REASON_BY_RULE_ID.get(finding.rule_id)
+        if reason is None or reason in reasons:
+            continue
+        reasons.append(reason)
+
+    if reasons:
+        return EscalationRecommendation(
+            decision="escalate_before_merge",
+            reasons=tuple(reasons),
+            label_name="promptdrift: escalate-before-merge",
+        )
+
+    return EscalationRecommendation(decision="normal_review")
 
 
 def _artifact_type_map(deterministic_analysis: DiffAnalysis) -> dict[str, str]:
@@ -181,6 +260,19 @@ def _inject_static_drift_summary(comment_body: str, summary_block: str) -> str:
         return f"{comment_body.rstrip()}\n\n{summary_block.strip()}"
     summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
     return f"{summary_prefix.rstrip()}\n\n{summary_block.strip()}\n\n{details_marker}{detail_suffix}"
+
+
+def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
+    if "Escalation:" in comment_body:
+        return comment_body
+
+    escalation_line = _format_escalation_line(recommendation)
+    details_marker = "<details>"
+    if details_marker not in comment_body:
+        return f"{comment_body.rstrip()}\n{escalation_line}"
+
+    summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
+    return f"{summary_prefix.rstrip()}\n{escalation_line}\n\n{details_marker}{detail_suffix}"
 
 
 def _sanitize_detail_markdown(detail_markdown: str) -> str:
@@ -374,6 +466,25 @@ def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *,
     )
 
 
+def _apply_escalation_label_for_job(
+    job: AuditJob,
+    recommendation: EscalationRecommendation,
+    settings: WorkerSettings,
+    *,
+    installation_token: str | None = None,
+) -> None:
+    if not recommendation.requires_label:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    ensure_pr_label(
+        job.repo_full,
+        job.pr_number,
+        token,
+        label_name=recommendation.label_name,
+    )
+
+
 def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
     if not deterministic_analysis.artifacts:
         return {}
@@ -439,14 +550,22 @@ def _handle_fallback(
     *,
     error_message: str,
     artifact_snapshots: dict[str, str] | None = None,
+    escalation_recommendation: EscalationRecommendation | None = None,
 ) -> str:
-    fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    fallback_comment = build_fallback_comment(
+        deterministic_analysis,
+        error_message=error_message,
+        escalation_recommendation=recommendation,
+    )
+    fallback_comment = _ensure_escalation_guidance(fallback_comment, recommendation)
     fallback_comment = _inject_static_drift_summary(
         fallback_comment,
         _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots or {}),
     )
     try:
-        github_comment_id = _post_comment_for_job(job, fallback_comment, settings)
+        installation_token = _get_installation_token_for_job(job, settings)
+        github_comment_id = _post_comment_for_job(job, fallback_comment, settings, installation_token=installation_token)
     except Exception as fallback_exc:
         combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
         try:
@@ -470,6 +589,17 @@ def _handle_fallback(
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
 
+    combined_error_message = error_message
+    try:
+        _apply_escalation_label_for_job(
+            job,
+            recommendation,
+            settings,
+            installation_token=installation_token,
+        )
+    except Exception as label_exc:
+        combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+
     try:
         _persist_audit_result(
             job,
@@ -481,13 +611,13 @@ def _handle_fallback(
             comment_body=fallback_comment,
             comment_mode="preliminary_fallback",
             semantic_review_completed=False,
-            error_message=error_message,
+            error_message=combined_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
         )
     except Exception as persist_exc:
         combined_error = (
-            f"{error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
+            f"{combined_error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
         )
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
@@ -496,7 +626,7 @@ def _handle_fallback(
         settings.db_path,
         job.id,
         comment_body=fallback_comment,
-        error_message=error_message,
+        error_message=combined_error_message,
     )
     return "fallback_posted"
 
@@ -504,6 +634,7 @@ def _handle_fallback(
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
     artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+    escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     try:
         comment_body = build_llm_comment(
             job.diff_text,
@@ -511,7 +642,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             llm_client=settings.llm_client,
             model=settings.model,
             timeout_seconds=settings.llm_timeout_seconds,
+            escalation_recommendation=escalation_recommendation,
         )
+        comment_body = _ensure_escalation_guidance(comment_body, escalation_recommendation)
         comment_body = _inject_static_drift_summary(
             comment_body,
             _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots),
@@ -530,10 +663,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             deterministic_analysis,
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
+            escalation_recommendation=escalation_recommendation,
         )
 
     try:
-        github_comment_id = _post_comment_for_job(job, comment_body, settings)
+        installation_token = _get_installation_token_for_job(job, settings)
+        github_comment_id = _post_comment_for_job(job, comment_body, settings, installation_token=installation_token)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         return _handle_fallback(
@@ -542,7 +677,19 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             deterministic_analysis,
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
+            escalation_recommendation=escalation_recommendation,
         )
+
+    audit_error_message = None
+    try:
+        _apply_escalation_label_for_job(
+            job,
+            escalation_recommendation,
+            settings,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
 
     try:
         _persist_audit_result(
@@ -555,6 +702,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             comment_body=comment_body,
             comment_mode="full_review",
             semantic_review_completed=True,
+            error_message=audit_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
         )
