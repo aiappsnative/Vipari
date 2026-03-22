@@ -18,7 +18,7 @@ from .audit_jobs import (
     mark_job_retry,
 )
 from .audit_records import get_latest_audit_comment_for_pr, preview_static_drift_for_artifacts, record_audit_result
-from .github_integration import fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
+from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 
 
 @dataclass(frozen=True)
@@ -40,18 +40,56 @@ RISK_BADGES = {
     "High": "❌ Risk: High",
 }
 
+ESCALATION_REASON_BY_RULE_ID = {
+    "guardrail_drift": "guardrail or policy weakening",
+    "guardrail_weakening": "guardrail or policy weakening",
+    "sensitive_data_drift": "capability or blast-radius expansion",
+    "capability_drift": "capability or blast-radius expansion",
+    "tooling_drift": "critical-surface modification",
+    "retrieval_drift": "critical-surface modification",
+    "model_drift": "critical-surface modification",
+}
 
-def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, llm_client: object, model: str, timeout_seconds: float) -> str:
+
+@dataclass(frozen=True)
+class EscalationRecommendation:
+    decision: str
+    reasons: tuple[str, ...] = ()
+    label_name: str | None = None
+
+    @property
+    def requires_label(self) -> bool:
+        return self.decision == "escalate_before_merge" and self.label_name is not None
+
+
+@dataclass(frozen=True)
+class CanonicalCommentDetails:
+    risk_level: str
+    analysis_bullets: tuple[str, ...]
+    recommendation: str
+
+
+def build_llm_comment(
+    diff_text: str,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    llm_client: object,
+    model: str,
+    timeout_seconds: float,
+    escalation_recommendation: EscalationRecommendation | None = None,
+) -> str:
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
         "You are an AI Security Auditor. Analyze this code diff. "
         "You will receive deterministic pre-analysis findings, structured semantic review packages, and the raw diff. "
         "Use the semantic review packages as the primary review frame, use deterministic findings as grounding evidence, and use the raw diff as reference detail. "
-        "Return concise reviewer notes in Markdown. "
+        "Return reviewer notes in Markdown using this structure exactly: 'Summary: ...', 'Risk Level: Low|Medium|High', 'Detailed Analysis:', 2-4 bullet points, and 'Recommendation: ...'. "
         "Include a one-sentence line in the form 'Summary: ...' describing what changed and why the risk level fits. "
         "Include an explicit line in the form 'Risk Level: Low|Medium|High'. "
+        "Under 'Detailed Analysis:' provide grounded reviewer reasoning, not generic advice. "
         "Include a short 'Recommendation:' line. "
-        "Keep the detailed section compact and do not use code fences."
+        "Keep the detailed section compact but substantive, and do not use code fences."
     )
     response = llm_client.chat.completions.create(
         model=model,
@@ -75,50 +113,53 @@ def build_llm_comment(diff_text: str, deterministic_analysis: DiffAnalysis, *, l
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
-    return _format_comment_body(raw_comment, risk_level=risk_level, review_mode="Full semantic review", summary=summary)
-
-
-def build_fallback_comment(deterministic_analysis: DiffAnalysis, *, error_message: str) -> str:
-    summary = _build_fallback_summary(deterministic_analysis)
-    lines = [
-        "## PromptDrift Preliminary Audit",
-        "",
-        f"Risk Level: **{deterministic_analysis.suggested_risk_level.value}**",
-        "",
-        "This review is based on deterministic risk signals while semantic review is still pending or unavailable.",
-        "",
-        "### Deterministic findings",
-    ]
-
-    if not deterministic_analysis.findings:
-        lines.append("- AI-relevant files were detected, but no deterministic rule findings were triggered.")
-    else:
-        for finding in deterministic_analysis.findings:
-            evidence = "; ".join(finding.evidence[:2]) if finding.evidence else "no evidence excerpt"
-            lines.append(f"- **{finding.severity.value}** `{finding.rule_id}`: {finding.title} — {evidence}")
-
-    lines.extend(
-        [
-            "",
-            "### Suggested reviewer action",
-            "Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
-        ]
+    canonical_details = _build_semantic_comment_details(
+        raw_comment,
+        deterministic_analysis,
+        risk_level=risk_level,
     )
     return _format_comment_body(
-        "\n".join(lines),
+        _render_canonical_detail_markdown(canonical_details),
+        risk_level=risk_level,
+        review_mode="Full semantic review",
+        summary=summary,
+        escalation_recommendation=recommendation,
+    )
+
+
+def build_fallback_comment(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    error_message: str,
+    escalation_recommendation: EscalationRecommendation | None = None,
+) -> str:
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    summary = _build_fallback_summary(deterministic_analysis)
+    canonical_details = _build_fallback_comment_details(deterministic_analysis)
+    return _format_comment_body(
+        _render_canonical_detail_markdown(canonical_details),
         risk_level=deterministic_analysis.suggested_risk_level.value,
         review_mode="Deterministic fallback review",
         summary=summary,
+        escalation_recommendation=recommendation,
     )
 
 
-def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: str, summary: str) -> str:
+def _format_comment_body(
+    detail_markdown: str,
+    *,
+    risk_level: str,
+    review_mode: str,
+    summary: str,
+    escalation_recommendation: EscalationRecommendation,
+) -> str:
     normalized_risk = _normalize_risk_level(risk_level)
     badge = RISK_BADGES[normalized_risk]
-    cleaned_details = _sanitize_detail_markdown(detail_markdown)
+    cleaned_details = detail_markdown.strip()
     return "\n".join(
         [
             f"{badge} — {summary}",
+            _format_escalation_line(escalation_recommendation),
             "",
             "<details>",
             f"<summary>{review_mode} details</summary>",
@@ -128,6 +169,180 @@ def _format_comment_body(detail_markdown: str, *, risk_level: str, review_mode: 
             "</details>",
         ]
     )
+
+
+def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
+    if recommendation.decision == "escalate_before_merge":
+        if recommendation.reasons:
+            return f"Escalation: **Recommended before merge** — {'; '.join(recommendation.reasons)}"
+        return "Escalation: **Recommended before merge**"
+    return "Escalation: **Not recommended** — stays in the normal review lane"
+
+
+def _build_semantic_comment_details(
+    raw_comment: str,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    risk_level: str,
+) -> CanonicalCommentDetails:
+    analysis_bullets = _extract_analysis_bullets(raw_comment)
+    if len(analysis_bullets) < 2:
+        analysis_bullets = _build_default_analysis_bullets(deterministic_analysis)
+
+    recommendation = _extract_recommendation(
+        raw_comment,
+        default=_default_recommendation_for_risk(risk_level),
+    )
+
+    return CanonicalCommentDetails(
+        risk_level=_normalize_risk_level(risk_level),
+        analysis_bullets=tuple(analysis_bullets[:4]),
+        recommendation=recommendation,
+    )
+
+
+def _build_fallback_comment_details(deterministic_analysis: DiffAnalysis) -> CanonicalCommentDetails:
+    bullets = [
+        "This review is based on deterministic risk signals while semantic review is still pending or unavailable.",
+    ]
+
+    if not deterministic_analysis.findings:
+        bullets.append("AI-relevant files were detected, but no deterministic rule findings were triggered.")
+    else:
+        for finding in deterministic_analysis.findings[:3]:
+            evidence = "; ".join(finding.evidence[:2]) if finding.evidence else "no evidence excerpt"
+            bullets.append(f"{finding.title}: {evidence}")
+
+    return CanonicalCommentDetails(
+        risk_level=_normalize_risk_level(deterministic_analysis.suggested_risk_level.value),
+        analysis_bullets=tuple(bullets),
+        recommendation="Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
+    )
+
+
+def _render_canonical_detail_markdown(details: CanonicalCommentDetails) -> str:
+    lines = [f"Risk Level: {details.risk_level}", "Detailed Analysis:"]
+    lines.extend(f"- {bullet}" for bullet in details.analysis_bullets)
+    lines.append(f"Recommendation: {details.recommendation}")
+    return "\n".join(lines)
+
+
+def _extract_analysis_bullets(comment_body: str) -> list[str]:
+    lines = comment_body.splitlines()
+    bullets: list[str] = []
+    in_detailed_section = False
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        normalized = re.sub(r"^[#>*\s]+", "", stripped).strip()
+        if re.match(r"^(\*\*)?detailed analysis(\*\*)?\s*[:\-]?$", normalized, re.IGNORECASE):
+            in_detailed_section = True
+            continue
+        if re.match(r"^(\*\*)?recommendation(\*\*)?\s*[:\-]", normalized, re.IGNORECASE):
+            break
+
+        if in_detailed_section:
+            bullet = re.sub(r"^[-*]\s*", "", stripped).strip()
+            if bullet:
+                bullets.append(_normalize_sentence(bullet))
+
+    if bullets:
+        return bullets
+
+    fallback_lines: list[str] = []
+    skip_patterns = (
+        r"^(\*\*)?summary(\*\*)?\s*[:\-]",
+        r"^(\*\*)?risk level(\*\*)?\s*[:\-]",
+        r"^(\*\*)?recommendation(\*\*)?\s*[:\-]",
+        r"^(\*\*)?reviewer notes(\*\*)?\s*$",
+        r"^(\*\*)?detailed analysis(\*\*)?\s*[:\-]?$",
+    )
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        normalized = re.sub(r"^[#>*\s]+", "", stripped).strip()
+        if any(re.match(pattern, normalized, re.IGNORECASE) for pattern in skip_patterns):
+            continue
+        fallback_lines.append(_normalize_sentence(re.sub(r"^[-*]\s*", "", normalized).strip()))
+
+    return fallback_lines[:4]
+
+
+def _build_default_analysis_bullets(deterministic_analysis: DiffAnalysis) -> list[str]:
+    bullets: list[str] = []
+
+    for artifact in deterministic_analysis.artifacts[:2]:
+        bullets.append(
+            f"`{artifact.relevance.path}` [{artifact.relevance.artifact_type}] changed with {artifact.change.added_count} additions, {artifact.change.removed_count} removals, and {artifact.change.changed_hunks} touched hunks in an AI control surface."
+        )
+
+    for finding in deterministic_analysis.findings[:3]:
+        evidence = f" Evidence: {finding.evidence[0]}" if finding.evidence else ""
+        bullets.append(f"{finding.title}: {finding.rationale}{evidence}")
+
+    if not bullets:
+        bullets.append("AI-relevant artifacts changed, so reviewers should confirm the intended behavior and disclosure boundaries still match the approved design.")
+
+    return bullets
+
+
+def _extract_recommendation(comment_body: str, *, default: str) -> str:
+    patterns = (
+        r"^(\*\*)?recommendation(\*\*)?\s*[:\-]\s*(.+)$",
+        r"^\*\*recommendation\s*[:\-]\*\*\s*(.+)$",
+    )
+    for raw_line in comment_body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        for pattern in patterns:
+            match = re.match(pattern, stripped, re.IGNORECASE)
+            if match:
+                value = match.group(match.lastindex)
+                return _normalize_sentence(value, default=default)
+    return _normalize_sentence(default, default=default)
+
+
+def _default_recommendation_for_risk(risk_level: str) -> str:
+    normalized = _normalize_risk_level(risk_level)
+    if normalized == "High":
+        return "Escalate before merge and revert or narrow the permissive change until safeguards are restored."
+    if normalized == "Medium":
+        return "Review the changed AI control surface closely and confirm the new behavior is intended before merge."
+    return "Confirm the change is intended and keep the normal review lane."
+
+
+def _normalize_sentence(value: str, *, default: str | None = None) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip(" -*_`\t\r\n")
+    cleaned = re.sub(r"^\*\*(.+?)\*\*$", r"\1", cleaned)
+    if not cleaned and default is not None:
+        cleaned = default.strip()
+    cleaned = cleaned.rstrip(".")
+    return f"{cleaned}." if cleaned else ""
+
+
+def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> EscalationRecommendation:
+    reasons: list[str] = []
+    for finding in deterministic_analysis.findings:
+        if finding.severity.value != "High":
+            continue
+        reason = ESCALATION_REASON_BY_RULE_ID.get(finding.rule_id)
+        if reason is None or reason in reasons:
+            continue
+        reasons.append(reason)
+
+    if reasons:
+        return EscalationRecommendation(
+            decision="escalate_before_merge",
+            reasons=tuple(reasons),
+            label_name="promptdrift: escalate-before-merge",
+        )
+
+    return EscalationRecommendation(decision="normal_review")
 
 
 def _artifact_type_map(deterministic_analysis: DiffAnalysis) -> dict[str, str]:
@@ -183,53 +398,17 @@ def _inject_static_drift_summary(comment_body: str, summary_block: str) -> str:
     return f"{summary_prefix.rstrip()}\n\n{summary_block.strip()}\n\n{details_marker}{detail_suffix}"
 
 
-def _sanitize_detail_markdown(detail_markdown: str) -> str:
-    cleaned = detail_markdown.strip()
-    if cleaned.startswith("```") and cleaned.endswith("```"):
-        lines = cleaned.splitlines()
-        if len(lines) >= 2:
-            cleaned = "\n".join(lines[1:-1]).strip()
-    cleaned = _remove_duplicate_summary_lines(cleaned)
-    return _remove_duplicate_risk_level_lines(cleaned)
+def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
+    if "Escalation:" in comment_body:
+        return comment_body
 
+    escalation_line = _format_escalation_line(recommendation)
+    details_marker = "<details>"
+    if details_marker not in comment_body:
+        return f"{comment_body.rstrip()}\n{escalation_line}"
 
-def _remove_duplicate_summary_lines(detail_markdown: str) -> str:
-    lines = detail_markdown.splitlines()
-    cleaned_lines: list[str] = []
-
-    for line in lines:
-        if _is_standalone_summary_line(line):
-            continue
-        cleaned_lines.append(line)
-
-    return "\n".join(cleaned_lines).strip()
-
-
-def _remove_duplicate_risk_level_lines(detail_markdown: str) -> str:
-    lines = detail_markdown.splitlines()
-    seen_risk_level = False
-    cleaned_lines: list[str] = []
-
-    for line in lines:
-        if _is_standalone_risk_level_line(line):
-            if seen_risk_level:
-                continue
-            seen_risk_level = True
-        cleaned_lines.append(line)
-
-    return "\n".join(cleaned_lines).strip()
-
-
-def _is_standalone_risk_level_line(line: str) -> bool:
-    normalized = line.strip()
-    return bool(
-        re.match(r"^(\*\*)?risk level(\*\*)?\s*[:\-]\s*(\*\*)?(low|medium|high)(\*\*)?\.?$", normalized, re.IGNORECASE)
-    )
-
-
-def _is_standalone_summary_line(line: str) -> bool:
-    normalized = line.strip()
-    return bool(re.match(r"^(\*\*)?summary(\*\*)?\s*[:\-]\s*.+$", normalized, re.IGNORECASE))
+    summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
+    return f"{summary_prefix.rstrip()}\n{escalation_line}\n\n{details_marker}{detail_suffix}"
 
 
 def _extract_summary(comment_body: str, *, default: str) -> str:
@@ -374,6 +553,25 @@ def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *,
     )
 
 
+def _apply_escalation_label_for_job(
+    job: AuditJob,
+    recommendation: EscalationRecommendation,
+    settings: WorkerSettings,
+    *,
+    installation_token: str | None = None,
+) -> None:
+    if not recommendation.requires_label:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    ensure_pr_label(
+        job.repo_full,
+        job.pr_number,
+        token,
+        label_name=recommendation.label_name,
+    )
+
+
 def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
     if not deterministic_analysis.artifacts:
         return {}
@@ -439,14 +637,22 @@ def _handle_fallback(
     *,
     error_message: str,
     artifact_snapshots: dict[str, str] | None = None,
+    escalation_recommendation: EscalationRecommendation | None = None,
 ) -> str:
-    fallback_comment = build_fallback_comment(deterministic_analysis, error_message=error_message)
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    fallback_comment = build_fallback_comment(
+        deterministic_analysis,
+        error_message=error_message,
+        escalation_recommendation=recommendation,
+    )
+    fallback_comment = _ensure_escalation_guidance(fallback_comment, recommendation)
     fallback_comment = _inject_static_drift_summary(
         fallback_comment,
         _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots or {}),
     )
     try:
-        github_comment_id = _post_comment_for_job(job, fallback_comment, settings)
+        installation_token = _get_installation_token_for_job(job, settings)
+        github_comment_id = _post_comment_for_job(job, fallback_comment, settings, installation_token=installation_token)
     except Exception as fallback_exc:
         combined_error = f"{error_message}; fallback post failed: {type(fallback_exc).__name__}: {fallback_exc}"
         try:
@@ -470,6 +676,17 @@ def _handle_fallback(
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
 
+    combined_error_message = error_message
+    try:
+        _apply_escalation_label_for_job(
+            job,
+            recommendation,
+            settings,
+            installation_token=installation_token,
+        )
+    except Exception as label_exc:
+        combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+
     try:
         _persist_audit_result(
             job,
@@ -481,13 +698,13 @@ def _handle_fallback(
             comment_body=fallback_comment,
             comment_mode="preliminary_fallback",
             semantic_review_completed=False,
-            error_message=error_message,
+            error_message=combined_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
         )
     except Exception as persist_exc:
         combined_error = (
-            f"{error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
+            f"{combined_error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
         )
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
@@ -496,7 +713,7 @@ def _handle_fallback(
         settings.db_path,
         job.id,
         comment_body=fallback_comment,
-        error_message=error_message,
+        error_message=combined_error_message,
     )
     return "fallback_posted"
 
@@ -504,6 +721,7 @@ def _handle_fallback(
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
     artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+    escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     try:
         comment_body = build_llm_comment(
             job.diff_text,
@@ -511,7 +729,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             llm_client=settings.llm_client,
             model=settings.model,
             timeout_seconds=settings.llm_timeout_seconds,
+            escalation_recommendation=escalation_recommendation,
         )
+        comment_body = _ensure_escalation_guidance(comment_body, escalation_recommendation)
         comment_body = _inject_static_drift_summary(
             comment_body,
             _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots),
@@ -530,10 +750,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             deterministic_analysis,
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
+            escalation_recommendation=escalation_recommendation,
         )
 
     try:
-        github_comment_id = _post_comment_for_job(job, comment_body, settings)
+        installation_token = _get_installation_token_for_job(job, settings)
+        github_comment_id = _post_comment_for_job(job, comment_body, settings, installation_token=installation_token)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         return _handle_fallback(
@@ -542,7 +764,19 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             deterministic_analysis,
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
+            escalation_recommendation=escalation_recommendation,
         )
+
+    audit_error_message = None
+    try:
+        _apply_escalation_label_for_job(
+            job,
+            escalation_recommendation,
+            settings,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
 
     try:
         _persist_audit_result(
@@ -555,6 +789,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             comment_body=comment_body,
             comment_mode="full_review",
             semantic_review_completed=True,
+            error_message=audit_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
         )

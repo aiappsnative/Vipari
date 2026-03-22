@@ -188,6 +188,7 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert len(posted) == 1
     assert "LLM comment" in posted[0][0]
     assert posted[0][1] is None
+    assert "Escalation: **Not recommended**" in posted[0][0]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -235,6 +236,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -264,7 +266,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "PromptDrift Preliminary Audit" in posted[0][0]
+    assert "Detailed Analysis:" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
@@ -303,6 +305,7 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 303,
     )
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -394,11 +397,12 @@ index 1..2
 
     assert comment.startswith("❌ Risk: High")
     assert "Recommendation:" not in comment.splitlines()[0]
-    assert "Sensitive data or internal policy access added" in comment
     assert "<details>" in comment
-    assert "PromptDrift Preliminary Audit" in comment
+    assert "Risk Level: High" in comment
+    assert "Detailed Analysis:" in comment
     assert "Further semantic review may refine this assessment" in comment
     assert "RateLimitError" not in comment
+    assert "Escalation: **Recommended before merge**" in comment
 
 
 def test_build_llm_comment_wraps_tldr_and_collapsible_details(monkeypatch):
@@ -444,6 +448,9 @@ index 1..2
     assert "Full semantic review details" in comment
     assert "Summary:" not in comment
     assert "Risk Level: High" in comment
+    assert "Escalation: **Recommended before merge**" in comment
+    assert "Detailed Analysis:" in comment
+    assert "Sensitive data or internal policy access added" in comment
 
 
 def test_build_llm_comment_uses_first_meaningful_line_when_summary_missing():
@@ -484,6 +491,7 @@ index 1..2
 
     assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt adds a direct instruction")
     assert "Recommendation:" in comment
+    assert "Detailed Analysis:" in comment
 
 
 def test_build_llm_comment_handles_bold_summary_label():
@@ -524,6 +532,7 @@ index 1..2
 
     assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now instructs the assistant")
     assert "Summary:**" not in comment.splitlines()[0]
+    assert "Detailed Analysis:" in comment
 
 
 def test_build_llm_comment_preserves_full_summary_sentence():
@@ -570,6 +579,7 @@ index 1..2
 
     assert comment.splitlines()[0] == f"❌ Risk: High — {full_summary}"
     assert "..." not in comment.splitlines()[0]
+    assert "Detailed Analysis:" in comment
 
 
 def test_build_llm_comment_removes_duplicate_risk_level_lines():
@@ -615,6 +625,7 @@ index 1..2
     )
 
     assert comment.count("Risk Level: High") == 1
+    assert "Detailed Analysis:" in comment
 
 
 def test_build_llm_comment_removes_summary_line_from_detailed_section():
@@ -659,6 +670,115 @@ index 1..2
 
     assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now allows disclosure")
     assert "Summary:" not in comment
+    assert "Detailed Analysis:" in comment
+
+
+def test_build_llm_comment_backfills_detail_when_model_response_is_too_short():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -1 +1 @@
+-Do not reveal internal policy details.
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert "Detailed Analysis:" in comment
+    assert "`prompts/policy.md` [" in comment
+    assert "Guardrail wording may have been weakened" in comment or "Potential guardrail removal detected" in comment
+    assert "Recommendation: Revert before merge." in comment
+
+
+def test_build_llm_comment_normalizes_legacy_rich_output_to_canonical_layout():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "### Reviewer Notes\n\n"
+                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n\n"
+                                "Risk Level: High\n\n"
+                                "Detailed Analysis:\n"
+                                "- Sensitive disclosure instruction added.\n"
+                                "- Guardrails are weakened by permissive language.\n\n"
+                                "Recommendation: Revert before merge."
+                            )
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    expected = "\n".join(
+        [
+            "❌ Risk: High — The prompt now allows disclosure of internal policy details, which weakens existing safeguards.",
+            "Escalation: **Recommended before merge** — capability or blast-radius expansion",
+            "",
+            "<details>",
+            "<summary>Full semantic review details</summary>",
+            "",
+            "Risk Level: High",
+            "Detailed Analysis:",
+            "- Sensitive disclosure instruction added.",
+            "- Guardrails are weakened by permissive language.",
+            "Recommendation: Revert before merge.",
+            "",
+            "</details>",
+        ]
+    )
+
+    assert comment == expected
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
@@ -756,6 +876,7 @@ def test_worker_marks_job_failed_when_persistence_fails_after_fallback_comment_p
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5252)
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
     monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
@@ -916,3 +1037,126 @@ def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):
     assert len(upsert_calls) == 2
     assert upsert_calls[0][3] is None
     assert upsert_calls[1][3] == 8080
+
+
+def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=11,
+        installation_id=123,
+        head_sha="sha-11",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted = []
+    labels = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1111,
+    )
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(posted) == 1
+    assert "Escalation: **Recommended before merge**" in posted[0][0]
+    assert labels == [("doria90/dummyAI", 11, "token", "promptdrift: escalate-before-merge")]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.error_message is None
+
+
+def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=12,
+        installation_id=123,
+        head_sha="sha-12",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+
+    posted = []
+    labels = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1212,
+    )
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(posted) == 1
+    assert "Escalation: **Not recommended**" in posted[0][0]
+    assert labels == []
+
+
+def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=13,
+        installation_id=123,
+        head_sha="sha-13",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1313)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_label(*args, **kwargs):
+        raise RuntimeError("labels unavailable")
+
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", fail_label)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert "Escalation label not applied" in (audit.error_message or "")

@@ -8,7 +8,7 @@ from urllib.request import Request
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services import github_integration
-from services.github_integration import _resolve_private_key_path, generate_jwt
+from services.github_integration import _resolve_private_key_path, ensure_pr_label, generate_jwt
 
 
 def test_resolve_private_key_path_prefers_cwd_when_relative_file_exists(tmp_path, monkeypatch):
@@ -232,3 +232,111 @@ def test_upsert_pr_comment_creates_first_managed_comment_when_none_exists(monkey
     comment_id = github_integration.upsert_pr_comment("doria90/dummyAI", 8, "installation-token", "New audit")
 
     assert comment_id == 303
+
+
+def test_ensure_pr_label_creates_missing_repo_label_and_applies_it(monkeypatch):
+    created_labels = []
+    issue_added_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = []
+
+        def get_labels(self):
+            return self.labels
+
+        def add_to_labels(self, label_name):
+            issue_added_labels.append(label_name)
+            self.labels.append(FakeLabel(label_name))
+
+    class FakeRepo:
+        def __init__(self):
+            self.labels = [FakeLabel("bug")]
+            self.issue = FakeIssue()
+
+        def get_labels(self):
+            return self.labels
+
+        def create_label(self, name, color, description):
+            created_labels.append((name, color, description))
+            self.labels.append(FakeLabel(name))
+
+        def get_issue(self, number):
+            assert number == 9
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    applied = ensure_pr_label("doria90/dummyAI", 9, "installation-token")
+
+    assert applied is True
+    assert created_labels == [
+        (
+            github_integration.PROMPTDRIFT_ESCALATION_LABEL,
+            github_integration.PROMPTDRIFT_ESCALATION_LABEL_COLOR,
+            github_integration.PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+        )
+    ]
+    assert issue_added_labels == [github_integration.PROMPTDRIFT_ESCALATION_LABEL]
+
+
+def test_ensure_pr_label_is_idempotent_when_label_already_exists(monkeypatch):
+    created_labels = []
+    issue_added_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
+
+        def get_labels(self):
+            return self.labels
+
+        def add_to_labels(self, label_name):
+            issue_added_labels.append(label_name)
+
+    class FakeRepo:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
+            self.issue = FakeIssue()
+
+        def get_labels(self):
+            return self.labels
+
+        def create_label(self, name, color, description):
+            created_labels.append((name, color, description))
+
+        def get_issue(self, number):
+            assert number == 10
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    applied = ensure_pr_label("doria90/dummyAI", 10, "installation-token")
+
+    assert applied is False
+    assert created_labels == []
+    assert issue_added_labels == []
