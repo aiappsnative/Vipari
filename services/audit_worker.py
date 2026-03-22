@@ -62,6 +62,13 @@ class EscalationRecommendation:
         return self.decision == "escalate_before_merge" and self.label_name is not None
 
 
+@dataclass(frozen=True)
+class CanonicalCommentDetails:
+    risk_level: str
+    analysis_bullets: tuple[str, ...]
+    recommendation: str
+
+
 def build_llm_comment(
     diff_text: str,
     deterministic_analysis: DiffAnalysis,
@@ -106,14 +113,17 @@ def build_llm_comment(
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
-    return _format_comment_body(
+    canonical_details = _build_semantic_comment_details(
         raw_comment,
+        deterministic_analysis,
+        risk_level=risk_level,
+    )
+    return _format_comment_body(
+        _render_canonical_detail_markdown(canonical_details),
         risk_level=risk_level,
         review_mode="Full semantic review",
         summary=summary,
         escalation_recommendation=recommendation,
-        deterministic_analysis=deterministic_analysis,
-        ensure_substantive_detail=True,
     )
 
 
@@ -125,37 +135,13 @@ def build_fallback_comment(
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     summary = _build_fallback_summary(deterministic_analysis)
-    lines = [
-        "## PromptDrift Preliminary Audit",
-        "",
-        f"Risk Level: **{deterministic_analysis.suggested_risk_level.value}**",
-        "",
-        "This review is based on deterministic risk signals while semantic review is still pending or unavailable.",
-        "",
-        "### Deterministic findings",
-    ]
-
-    if not deterministic_analysis.findings:
-        lines.append("- AI-relevant files were detected, but no deterministic rule findings were triggered.")
-    else:
-        for finding in deterministic_analysis.findings:
-            evidence = "; ".join(finding.evidence[:2]) if finding.evidence else "no evidence excerpt"
-            lines.append(f"- **{finding.severity.value}** `{finding.rule_id}`: {finding.title} — {evidence}")
-
-    lines.extend(
-        [
-            "",
-            "### Suggested reviewer action",
-            "Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
-        ]
-    )
+    canonical_details = _build_fallback_comment_details(deterministic_analysis)
     return _format_comment_body(
-        "\n".join(lines),
+        _render_canonical_detail_markdown(canonical_details),
         risk_level=deterministic_analysis.suggested_risk_level.value,
         review_mode="Deterministic fallback review",
         summary=summary,
         escalation_recommendation=recommendation,
-        deterministic_analysis=deterministic_analysis,
     )
 
 
@@ -166,14 +152,10 @@ def _format_comment_body(
     review_mode: str,
     summary: str,
     escalation_recommendation: EscalationRecommendation,
-    deterministic_analysis: DiffAnalysis | None = None,
-    ensure_substantive_detail: bool = False,
 ) -> str:
     normalized_risk = _normalize_risk_level(risk_level)
     badge = RISK_BADGES[normalized_risk]
-    cleaned_details = _sanitize_detail_markdown(detail_markdown)
-    if ensure_substantive_detail and deterministic_analysis is not None:
-        cleaned_details = _ensure_substantive_semantic_detail(cleaned_details, deterministic_analysis)
+    cleaned_details = detail_markdown.strip()
     return "\n".join(
         [
             f"{badge} — {summary}",
@@ -197,54 +179,150 @@ def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
     return "Escalation: **Not recommended** — stays in the normal review lane"
 
 
-def _ensure_substantive_semantic_detail(detail_markdown: str, deterministic_analysis: DiffAnalysis) -> str:
-    if _has_substantive_detail(detail_markdown):
-        return detail_markdown
+def _build_semantic_comment_details(
+    raw_comment: str,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    risk_level: str,
+) -> CanonicalCommentDetails:
+    analysis_bullets = _extract_analysis_bullets(raw_comment)
+    if len(analysis_bullets) < 2:
+        analysis_bullets = _build_default_analysis_bullets(deterministic_analysis)
 
-    detail_block = _build_semantic_detail_block(deterministic_analysis)
-    recommendation_matcher = re.compile(r"^(\*\*)?recommendation(\*\*)?\s*[:\-]", re.IGNORECASE)
-    lines = detail_markdown.splitlines()
+    recommendation = _extract_recommendation(
+        raw_comment,
+        default=_default_recommendation_for_risk(risk_level),
+    )
 
-    for index, line in enumerate(lines):
-        if not recommendation_matcher.match(line.strip()):
+    return CanonicalCommentDetails(
+        risk_level=_normalize_risk_level(risk_level),
+        analysis_bullets=tuple(analysis_bullets[:4]),
+        recommendation=recommendation,
+    )
+
+
+def _build_fallback_comment_details(deterministic_analysis: DiffAnalysis) -> CanonicalCommentDetails:
+    bullets = [
+        "This review is based on deterministic risk signals while semantic review is still pending or unavailable.",
+    ]
+
+    if not deterministic_analysis.findings:
+        bullets.append("AI-relevant files were detected, but no deterministic rule findings were triggered.")
+    else:
+        for finding in deterministic_analysis.findings[:3]:
+            evidence = "; ".join(finding.evidence[:2]) if finding.evidence else "no evidence excerpt"
+            bullets.append(f"{finding.title}: {evidence}")
+
+    return CanonicalCommentDetails(
+        risk_level=_normalize_risk_level(deterministic_analysis.suggested_risk_level.value),
+        analysis_bullets=tuple(bullets),
+        recommendation="Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
+    )
+
+
+def _render_canonical_detail_markdown(details: CanonicalCommentDetails) -> str:
+    lines = [f"Risk Level: {details.risk_level}", "Detailed Analysis:"]
+    lines.extend(f"- {bullet}" for bullet in details.analysis_bullets)
+    lines.append(f"Recommendation: {details.recommendation}")
+    return "\n".join(lines)
+
+
+def _extract_analysis_bullets(comment_body: str) -> list[str]:
+    lines = comment_body.splitlines()
+    bullets: list[str] = []
+    in_detailed_section = False
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
             continue
 
-        before = "\n".join(lines[:index]).rstrip()
-        after = "\n".join(lines[index:]).lstrip()
-        pieces = [piece for piece in [before, detail_block, after] if piece]
-        return "\n\n".join(pieces).strip()
+        normalized = re.sub(r"^[#>*\s]+", "", stripped).strip()
+        if re.match(r"^(\*\*)?detailed analysis(\*\*)?\s*[:\-]?$", normalized, re.IGNORECASE):
+            in_detailed_section = True
+            continue
+        if re.match(r"^(\*\*)?recommendation(\*\*)?\s*[:\-]", normalized, re.IGNORECASE):
+            break
 
-    if detail_markdown.strip():
-        return f"{detail_markdown.rstrip()}\n\n{detail_block}"
-    return detail_block
+        if in_detailed_section:
+            bullet = re.sub(r"^[-*]\s*", "", stripped).strip()
+            if bullet:
+                bullets.append(_normalize_sentence(bullet))
+
+    if bullets:
+        return bullets
+
+    fallback_lines: list[str] = []
+    skip_patterns = (
+        r"^(\*\*)?summary(\*\*)?\s*[:\-]",
+        r"^(\*\*)?risk level(\*\*)?\s*[:\-]",
+        r"^(\*\*)?recommendation(\*\*)?\s*[:\-]",
+        r"^(\*\*)?reviewer notes(\*\*)?\s*$",
+        r"^(\*\*)?detailed analysis(\*\*)?\s*[:\-]?$",
+    )
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        normalized = re.sub(r"^[#>*\s]+", "", stripped).strip()
+        if any(re.match(pattern, normalized, re.IGNORECASE) for pattern in skip_patterns):
+            continue
+        fallback_lines.append(_normalize_sentence(re.sub(r"^[-*]\s*", "", normalized).strip()))
+
+    return fallback_lines[:4]
 
 
-def _has_substantive_detail(detail_markdown: str) -> bool:
-    bullet_lines = [
-        line for line in detail_markdown.splitlines() if re.match(r"^\s*[-*]\s+", line)
-    ]
-    return len(bullet_lines) >= 2
-
-
-def _build_semantic_detail_block(deterministic_analysis: DiffAnalysis) -> str:
+def _build_default_analysis_bullets(deterministic_analysis: DiffAnalysis) -> list[str]:
     bullets: list[str] = []
 
     for artifact in deterministic_analysis.artifacts[:2]:
         bullets.append(
-            "- "
-            f"`{artifact.relevance.path}` [{artifact.relevance.artifact_type}] changed with "
-            f"{artifact.change.added_count} additions, {artifact.change.removed_count} removals, "
-            f"and {artifact.change.changed_hunks} touched hunks in an AI control surface."
+            f"`{artifact.relevance.path}` [{artifact.relevance.artifact_type}] changed with {artifact.change.added_count} additions, {artifact.change.removed_count} removals, and {artifact.change.changed_hunks} touched hunks in an AI control surface."
         )
 
     for finding in deterministic_analysis.findings[:3]:
         evidence = f" Evidence: {finding.evidence[0]}" if finding.evidence else ""
-        bullets.append(f"- {finding.title}: {finding.rationale}{evidence}")
+        bullets.append(f"{finding.title}: {finding.rationale}{evidence}")
 
     if not bullets:
-        bullets.append("- AI-relevant artifacts changed, so reviewers should confirm the intended behavior and disclosure boundaries still match the approved design.")
+        bullets.append("AI-relevant artifacts changed, so reviewers should confirm the intended behavior and disclosure boundaries still match the approved design.")
 
-    return "\n".join(["### Detailed Analysis", *bullets])
+    return bullets
+
+
+def _extract_recommendation(comment_body: str, *, default: str) -> str:
+    patterns = (
+        r"^(\*\*)?recommendation(\*\*)?\s*[:\-]\s*(.+)$",
+        r"^\*\*recommendation\s*[:\-]\*\*\s*(.+)$",
+    )
+    for raw_line in comment_body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        for pattern in patterns:
+            match = re.match(pattern, stripped, re.IGNORECASE)
+            if match:
+                value = match.group(match.lastindex)
+                return _normalize_sentence(value, default=default)
+    return _normalize_sentence(default, default=default)
+
+
+def _default_recommendation_for_risk(risk_level: str) -> str:
+    normalized = _normalize_risk_level(risk_level)
+    if normalized == "High":
+        return "Escalate before merge and revert or narrow the permissive change until safeguards are restored."
+    if normalized == "Medium":
+        return "Review the changed AI control surface closely and confirm the new behavior is intended before merge."
+    return "Confirm the change is intended and keep the normal review lane."
+
+
+def _normalize_sentence(value: str, *, default: str | None = None) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip(" -*_`\t\r\n")
+    cleaned = re.sub(r"^\*\*(.+?)\*\*$", r"\1", cleaned)
+    if not cleaned and default is not None:
+        cleaned = default.strip()
+    cleaned = cleaned.rstrip(".")
+    return f"{cleaned}." if cleaned else ""
 
 
 def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> EscalationRecommendation:
@@ -331,55 +409,6 @@ def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRec
 
     summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
     return f"{summary_prefix.rstrip()}\n{escalation_line}\n\n{details_marker}{detail_suffix}"
-
-
-def _sanitize_detail_markdown(detail_markdown: str) -> str:
-    cleaned = detail_markdown.strip()
-    if cleaned.startswith("```") and cleaned.endswith("```"):
-        lines = cleaned.splitlines()
-        if len(lines) >= 2:
-            cleaned = "\n".join(lines[1:-1]).strip()
-    cleaned = _remove_duplicate_summary_lines(cleaned)
-    return _remove_duplicate_risk_level_lines(cleaned)
-
-
-def _remove_duplicate_summary_lines(detail_markdown: str) -> str:
-    lines = detail_markdown.splitlines()
-    cleaned_lines: list[str] = []
-
-    for line in lines:
-        if _is_standalone_summary_line(line):
-            continue
-        cleaned_lines.append(line)
-
-    return "\n".join(cleaned_lines).strip()
-
-
-def _remove_duplicate_risk_level_lines(detail_markdown: str) -> str:
-    lines = detail_markdown.splitlines()
-    seen_risk_level = False
-    cleaned_lines: list[str] = []
-
-    for line in lines:
-        if _is_standalone_risk_level_line(line):
-            if seen_risk_level:
-                continue
-            seen_risk_level = True
-        cleaned_lines.append(line)
-
-    return "\n".join(cleaned_lines).strip()
-
-
-def _is_standalone_risk_level_line(line: str) -> bool:
-    normalized = line.strip()
-    return bool(
-        re.match(r"^(\*\*)?risk level(\*\*)?\s*[:\-]\s*(\*\*)?(low|medium|high)(\*\*)?\.?$", normalized, re.IGNORECASE)
-    )
-
-
-def _is_standalone_summary_line(line: str) -> bool:
-    normalized = line.strip()
-    return bool(re.match(r"^(\*\*)?summary(\*\*)?\s*[:\-]\s*.+$", normalized, re.IGNORECASE))
 
 
 def _extract_summary(comment_body: str, *, default: str) -> str:
