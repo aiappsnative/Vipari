@@ -77,11 +77,12 @@ def build_llm_comment(
         "You are an AI Security Auditor. Analyze this code diff. "
         "You will receive deterministic pre-analysis findings, structured semantic review packages, and the raw diff. "
         "Use the semantic review packages as the primary review frame, use deterministic findings as grounding evidence, and use the raw diff as reference detail. "
-        "Return concise reviewer notes in Markdown. "
+        "Return reviewer notes in Markdown using this structure exactly: 'Summary: ...', 'Risk Level: Low|Medium|High', 'Detailed Analysis:', 2-4 bullet points, and 'Recommendation: ...'. "
         "Include a one-sentence line in the form 'Summary: ...' describing what changed and why the risk level fits. "
         "Include an explicit line in the form 'Risk Level: Low|Medium|High'. "
+        "Under 'Detailed Analysis:' provide grounded reviewer reasoning, not generic advice. "
         "Include a short 'Recommendation:' line. "
-        "Keep the detailed section compact and do not use code fences."
+        "Keep the detailed section compact but substantive, and do not use code fences."
     )
     response = llm_client.chat.completions.create(
         model=model,
@@ -111,6 +112,8 @@ def build_llm_comment(
         review_mode="Full semantic review",
         summary=summary,
         escalation_recommendation=recommendation,
+        deterministic_analysis=deterministic_analysis,
+        ensure_substantive_detail=True,
     )
 
 
@@ -152,6 +155,7 @@ def build_fallback_comment(
         review_mode="Deterministic fallback review",
         summary=summary,
         escalation_recommendation=recommendation,
+        deterministic_analysis=deterministic_analysis,
     )
 
 
@@ -162,10 +166,14 @@ def _format_comment_body(
     review_mode: str,
     summary: str,
     escalation_recommendation: EscalationRecommendation,
+    deterministic_analysis: DiffAnalysis | None = None,
+    ensure_substantive_detail: bool = False,
 ) -> str:
     normalized_risk = _normalize_risk_level(risk_level)
     badge = RISK_BADGES[normalized_risk]
     cleaned_details = _sanitize_detail_markdown(detail_markdown)
+    if ensure_substantive_detail and deterministic_analysis is not None:
+        cleaned_details = _ensure_substantive_semantic_detail(cleaned_details, deterministic_analysis)
     return "\n".join(
         [
             f"{badge} — {summary}",
@@ -187,6 +195,56 @@ def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
             return f"Escalation: **Recommended before merge** — {'; '.join(recommendation.reasons)}"
         return "Escalation: **Recommended before merge**"
     return "Escalation: **Not recommended** — stays in the normal review lane"
+
+
+def _ensure_substantive_semantic_detail(detail_markdown: str, deterministic_analysis: DiffAnalysis) -> str:
+    if _has_substantive_detail(detail_markdown):
+        return detail_markdown
+
+    detail_block = _build_semantic_detail_block(deterministic_analysis)
+    recommendation_matcher = re.compile(r"^(\*\*)?recommendation(\*\*)?\s*[:\-]", re.IGNORECASE)
+    lines = detail_markdown.splitlines()
+
+    for index, line in enumerate(lines):
+        if not recommendation_matcher.match(line.strip()):
+            continue
+
+        before = "\n".join(lines[:index]).rstrip()
+        after = "\n".join(lines[index:]).lstrip()
+        pieces = [piece for piece in [before, detail_block, after] if piece]
+        return "\n\n".join(pieces).strip()
+
+    if detail_markdown.strip():
+        return f"{detail_markdown.rstrip()}\n\n{detail_block}"
+    return detail_block
+
+
+def _has_substantive_detail(detail_markdown: str) -> bool:
+    bullet_lines = [
+        line for line in detail_markdown.splitlines() if re.match(r"^\s*[-*]\s+", line)
+    ]
+    return len(bullet_lines) >= 2
+
+
+def _build_semantic_detail_block(deterministic_analysis: DiffAnalysis) -> str:
+    bullets: list[str] = []
+
+    for artifact in deterministic_analysis.artifacts[:2]:
+        bullets.append(
+            "- "
+            f"`{artifact.relevance.path}` [{artifact.relevance.artifact_type}] changed with "
+            f"{artifact.change.added_count} additions, {artifact.change.removed_count} removals, "
+            f"and {artifact.change.changed_hunks} touched hunks in an AI control surface."
+        )
+
+    for finding in deterministic_analysis.findings[:3]:
+        evidence = f" Evidence: {finding.evidence[0]}" if finding.evidence else ""
+        bullets.append(f"- {finding.title}: {finding.rationale}{evidence}")
+
+    if not bullets:
+        bullets.append("- AI-relevant artifacts changed, so reviewers should confirm the intended behavior and disclosure boundaries still match the approved design.")
+
+    return "\n".join(["### Detailed Analysis", *bullets])
 
 
 def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> EscalationRecommendation:

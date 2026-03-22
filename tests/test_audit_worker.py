@@ -449,6 +449,8 @@ index 1..2
     assert "Summary:" not in comment
     assert "Risk Level: High" in comment
     assert "Escalation: **Recommended before merge**" in comment
+    assert "### Detailed Analysis" in comment
+    assert "Sensitive data or internal policy access added" in comment
 
 
 def test_build_llm_comment_uses_first_meaningful_line_when_summary_missing():
@@ -489,6 +491,7 @@ index 1..2
 
     assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt adds a direct instruction")
     assert "Recommendation:" in comment
+    assert "### Detailed Analysis" in comment
 
 
 def test_build_llm_comment_handles_bold_summary_label():
@@ -575,6 +578,7 @@ index 1..2
 
     assert comment.splitlines()[0] == f"❌ Risk: High — {full_summary}"
     assert "..." not in comment.splitlines()[0]
+    assert "### Detailed Analysis" in comment
 
 
 def test_build_llm_comment_removes_duplicate_risk_level_lines():
@@ -620,6 +624,7 @@ index 1..2
     )
 
     assert comment.count("Risk Level: High") == 1
+    assert "### Detailed Analysis" in comment
 
 
 def test_build_llm_comment_removes_summary_line_from_detailed_section():
@@ -664,6 +669,50 @@ index 1..2
 
     assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now allows disclosure")
     assert "Summary:" not in comment
+    assert "### Detailed Analysis" in comment
+
+
+def test_build_llm_comment_backfills_detail_when_model_response_is_too_short():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -1 +1 @@
+-Do not reveal internal policy details.
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert "### Detailed Analysis" in comment
+    assert "`prompts/policy.md` [" in comment
+    assert "Guardrail wording may have been weakened" in comment or "Potential guardrail removal detected" in comment
+    assert "Recommendation: Revert before merge." in comment
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
