@@ -37,9 +37,10 @@ The current `main` branch now includes the first merged static-first drift engin
 In practical terms, PromptDrift currently provides:
 
 - queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and managed PR comments
-- baseline-linked static drift profiling for prompts, configs, and related AI control surfaces
+- escalation-aware PR review with managed comments plus GitHub labels for high-confidence before-merge escalation cases
+- approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
-- a split dashboard surface with portfolio overview and repo-detail drill-down pages
+- a split dashboard surface with portfolio overview and repo-detail drill-down pages, including baseline provenance in repo/history views
 - a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -60,12 +61,14 @@ The dashboard should now be read as two linked product surfaces:
 - claims queued jobs atomically so concurrent workers cannot double-process the same audit
 - performs deterministic analysis of AI-relevant changes
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
-- stores static artifact profiles in audit history so later versions can compare against the previous known baseline
-- injects a compact static drift summary into PR comments so reviewers can see guardrail/capability/autonomy movement against prior baselines
+- stores static artifact profiles in audit history with explicit baseline provenance so later versions can compare against an approved baseline when available
+- keeps PR comments reviewer-focused on risk, escalation, and recommendation rather than internal drift metrics
+- applies a GitHub escalation label for high-confidence before-merge escalation cases
 - exposes read-side trend helpers for repo summaries and artifact drift leaderboards
 - supports baseline-first repository onboarding that persists discovered AI artifacts and baseline versions
 - supports selective historical backfill planning and execution for onboarded artifacts
 - persists historical artifact versions and static profile lineage for backfilled snapshots
+- exposes baseline provenance in dashboard and history read models so fallback vs approved authority is visible outside the PR comment
 - exposes JSON query APIs for repository listings and unified dashboard payloads
 - exposes an overview dashboard API at `GET /api/dashboard/overview`
 - exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`

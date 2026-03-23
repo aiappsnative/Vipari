@@ -44,8 +44,10 @@ This framing should shape roadmap decisions:
 - Purpose: active post-merge baseline for the static-first drift engine
 - Current status:
 	- includes the merged `feature/drift-engine-v1` milestone
+	- includes the merged `feature/pr-escalation-v1` slice
+	- includes the merged `feature/approved-baseline-v1` slice
 	- is green at the full-suite level
-	- now contains the canonical implementation of the dashboard, onboarding, and static drift-profile work
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, and approved-baseline provenance
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-engine-v1`
@@ -109,17 +111,15 @@ This framing should shape roadmap decisions:
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
 
 ### Next prioritized slices after the merge
-1. High-precision PR escalation experience with an opinionated risk taxonomy
-2. Approved-baseline model and review workflow for critical control surfaces
-3. Richer provenance and reviewer workflow context on repo detail pages
-4. Signal fusion improvements between deterministic and semantic findings
-5. More representative OSS/demo data plus an OSS evaluation harness
-6. Production-oriented persistence and deployment hardening
+1. Richer provenance and reviewer workflow context on repo detail pages
+2. Explicit baseline approval action/workflow for critical control surfaces
+3. Signal fusion improvements between deterministic and semantic findings
+4. More representative OSS/demo data plus an OSS evaluation harness
+5. Production-oriented persistence and deployment hardening
 
 Suggested next branch sequence:
-- `feature/pr-escalation-v1`
-- `feature/approved-baseline-v1`
 - `feature/repo-provenance-v1`
+- `feature/baseline-approval-v1`
 - `feature/signal-fusion-v1`
 - `feature/oss-eval-harness-v1`
 
@@ -209,6 +209,16 @@ Planned scope:
 - add author, PR number, commit/date, and clearer baseline-vs-PR provenance labels where available
 - improve repo-detail narratives so reviewers can answer "who changed this, when, and in what review context?"
 - keep the change read-model focused rather than adding more top-level panels
+
+#### 3.5. `feature/baseline-approval-v1`
+
+Purpose:
+- turn approved-baseline provenance into an explicit operator action rather than only an onboarding default
+
+Planned scope:
+- add a minimal action to promote a current artifact version/profile to the approved baseline
+- keep the first version operational and lightweight rather than introducing a heavyweight governance workflow
+- make approval changes visible in provenance and repo-detail history surfaces
 
 #### 4. `feature/signal-fusion-v1`
 
