@@ -11,6 +11,16 @@ from typing import Optional
 from engine.analysis import DiffAnalysis
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, build_attribute_profile, compare_attribute_profiles
+from .baseline_provenance import (
+    BASELINE_SOURCE_NONE,
+    BaselineProvenance,
+    approved_onboarding_provenance,
+    baseline_provenance_from_json,
+    baseline_provenance_to_json,
+    no_baseline_provenance,
+    previous_pr_fallback_provenance,
+)
+from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 
 
 @dataclass(frozen=True)
@@ -120,6 +130,7 @@ class StaticArtifactProfileRecord:
     artifact_type: str
     profile: AgentAttributeProfile
     baseline_profile_id: int | None
+    baseline_provenance: BaselineProvenance | None
     semantic_similarity: float
     semantic_distance: float
     attribute_deltas: dict[str, float]
@@ -134,6 +145,7 @@ class StaticArtifactDriftPreview:
     artifact_type: str
     profile: AgentAttributeProfile
     baseline_profile_id: int | None
+    baseline_provenance: BaselineProvenance | None
     semantic_similarity: float
     semantic_distance: float
     attribute_deltas: dict[str, float]
@@ -284,6 +296,7 @@ def init_audit_record_db(db_path: str) -> None:
                 artifact_type TEXT NOT NULL,
                 profile_json TEXT NOT NULL,
                 baseline_profile_id INTEGER,
+                baseline_provenance_json TEXT,
                 semantic_similarity REAL NOT NULL,
                 semantic_distance REAL NOT NULL,
                 attribute_deltas_json TEXT NOT NULL,
@@ -314,6 +327,10 @@ def init_audit_record_db(db_path: str) -> None:
         audit_comments_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
         if "github_comment_id" not in audit_comments_columns:
             conn.execute("ALTER TABLE audit_comments ADD COLUMN github_comment_id INTEGER")
+
+        static_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(static_artifact_profiles)").fetchall()}
+        if "baseline_provenance_json" not in static_profile_columns:
+            conn.execute("ALTER TABLE static_artifact_profiles ADD COLUMN baseline_provenance_json TEXT")
 
 
 def record_audit_result(
@@ -499,6 +516,7 @@ def record_audit_result(
                 artifact_version_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
                 baseline_profile_id: int | None = None
+                baseline_provenance = no_baseline_provenance()
                 semantic_similarity = 1.0
                 semantic_distance = 0.0
                 attribute_deltas: dict[str, float] = {
@@ -510,10 +528,26 @@ def record_audit_result(
                     "change_frequency": 0.0,
                     "semantic_density": 0.0,
                 }
-                narrative = ["No baseline profile available; stored current profile as a new baseline candidate."]
+                narrative = ["No approved baseline available; stored current profile as a new baseline candidate."]
+                onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact.relevance.path)
 
-                if previous_profile_row is not None:
+                if onboarding_baseline is not None:
+                    baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
+                    semantic_similarity = _term_similarity(signal_terms, onboarding_baseline.signal_terms)
+                    drift_delta = compare_attribute_profiles(
+                        onboarding_baseline.profile,
+                        profile,
+                        semantic_similarity=semantic_similarity,
+                    )
+                    semantic_distance = drift_delta.semantic_distance
+                    attribute_deltas = drift_delta.attribute_deltas
+                    narrative = drift_delta.narrative
+                elif previous_profile_row is not None:
                     baseline_profile_id = previous_profile_row["id"]
+                    baseline_provenance = previous_pr_fallback_provenance(
+                        previous_profile_row["id"],
+                        previous_profile_row["artifact_version_id"],
+                    )
                     baseline_profile = _profile_from_json(previous_profile_row["profile_json"])
                     previous_signal_terms = json.loads(previous_profile_row["signal_terms_json"])
                     semantic_similarity = _term_similarity(signal_terms, previous_signal_terms)
@@ -531,10 +565,10 @@ def record_audit_result(
                     INSERT INTO static_artifact_profiles (
                         audit_id, changed_artifact_id, artifact_version_id,
                         normalized_artifact_id, artifact_path, artifact_type,
-                        profile_json, baseline_profile_id, semantic_similarity,
+                        profile_json, baseline_profile_id, baseline_provenance_json, semantic_similarity,
                         semantic_distance, attribute_deltas_json, narrative_json,
                         signal_terms_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         audit_id,
@@ -545,6 +579,7 @@ def record_audit_result(
                         artifact.relevance.artifact_type,
                         json.dumps(asdict(profile)),
                         baseline_profile_id,
+                        baseline_provenance_to_json(baseline_provenance),
                         semantic_similarity,
                         semantic_distance,
                         json.dumps(attribute_deltas),
@@ -768,9 +803,11 @@ def preview_static_drift_for_artifacts(
         artifact_type = artifact_types_by_path.get(artifact_path, "generic")
         signal_terms = extract_signal_terms_from_text(snapshot_text)
         profile = build_attribute_profile(snapshot_text)
-        baseline_profile = get_latest_static_profile_for_repo_artifact(db_path, repo_full, artifact_path)
+        onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact_path)
+        baseline_profile = None if onboarding_baseline is not None else get_latest_static_profile_for_repo_artifact(db_path, repo_full, artifact_path)
 
         baseline_profile_id: int | None = None
+        baseline_provenance = no_baseline_provenance()
         semantic_similarity = 1.0
         semantic_distance = 0.0
         attribute_deltas: dict[str, float] = {
@@ -782,10 +819,25 @@ def preview_static_drift_for_artifacts(
             "change_frequency": 0.0,
             "semantic_density": 0.0,
         }
-        narrative = ["No baseline profile available; current profile will establish the first baseline."]
+        narrative = ["No approved baseline available; current profile will establish the first baseline."]
 
-        if baseline_profile is not None:
+        if onboarding_baseline is not None:
+            baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
+            semantic_similarity = _term_similarity(signal_terms, onboarding_baseline.signal_terms)
+            drift_delta = compare_attribute_profiles(
+                onboarding_baseline.profile,
+                profile,
+                semantic_similarity=semantic_similarity,
+            )
+            semantic_distance = drift_delta.semantic_distance
+            attribute_deltas = drift_delta.attribute_deltas
+            narrative = drift_delta.narrative
+        elif baseline_profile is not None:
             baseline_profile_id = baseline_profile.id
+            baseline_provenance = previous_pr_fallback_provenance(
+                baseline_profile.id,
+                baseline_profile.artifact_version_id,
+            )
             semantic_similarity = _term_similarity(signal_terms, baseline_profile.signal_terms)
             drift_delta = compare_attribute_profiles(
                 baseline_profile.profile,
@@ -802,6 +854,7 @@ def preview_static_drift_for_artifacts(
                 artifact_type=artifact_type,
                 profile=profile,
                 baseline_profile_id=baseline_profile_id,
+                baseline_provenance=baseline_provenance,
                 semantic_similarity=semantic_similarity,
                 semantic_distance=semantic_distance,
                 attribute_deltas=attribute_deltas,
@@ -828,7 +881,11 @@ def get_repo_static_drift_summary(db_path: str, repo_full: str) -> RepoStaticDri
 
     profiles = [_row_to_static_artifact_profile(row) for row in rows]
     artifact_paths = {profile.artifact_path for profile in profiles}
-    baseline_linked = [profile for profile in profiles if profile.baseline_profile_id is not None]
+    baseline_linked = [
+        profile
+        for profile in profiles
+        if profile.baseline_provenance is not None and profile.baseline_provenance.source_type != BASELINE_SOURCE_NONE
+    ]
     avg_semantic_distance = _average([profile.semantic_distance for profile in baseline_linked])
     avg_guardrail_shift = _average([abs(profile.attribute_deltas["guardrail_robustness"]) for profile in baseline_linked])
     avg_capability_shift = _average([abs(profile.attribute_deltas["capability_risk"]) for profile in baseline_linked])
@@ -998,6 +1055,15 @@ def _row_to_artifact_version(row: sqlite3.Row) -> ArtifactVersionRecord:
 
 
 def _row_to_static_artifact_profile(row: sqlite3.Row) -> StaticArtifactProfileRecord:
+    baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+    if baseline_provenance is None and row["baseline_profile_id"] is not None:
+        baseline_provenance = previous_pr_fallback_provenance(
+            row["baseline_profile_id"],
+            row["artifact_version_id"],
+        )
+    if baseline_provenance is None:
+        baseline_provenance = no_baseline_provenance()
+
     return StaticArtifactProfileRecord(
         id=row["id"],
         audit_id=row["audit_id"],
@@ -1008,6 +1074,7 @@ def _row_to_static_artifact_profile(row: sqlite3.Row) -> StaticArtifactProfileRe
         artifact_type=row["artifact_type"],
         profile=_profile_from_json(row["profile_json"]),
         baseline_profile_id=row["baseline_profile_id"],
+        baseline_provenance=baseline_provenance,
         semantic_similarity=row["semantic_similarity"],
         semantic_distance=row["semantic_distance"],
         attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},

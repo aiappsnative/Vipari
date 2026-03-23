@@ -120,10 +120,14 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].point_count == 3
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
+    assert dashboard.design_profiles[0].baseline_provenance is not None
+    assert dashboard.design_profiles[0].baseline_provenance.source_type == "approved_baseline"
     assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 2
     assert dashboard.artifacts[0].pr_profile_count == 1
+    assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
+    assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
 
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):
@@ -204,6 +208,5 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert len(overview.attention_repos) == 2
     assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
-    assert any(pattern.pattern_key == "baseline_candidate" for pattern in overview.regression_patterns)
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
