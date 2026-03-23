@@ -17,7 +17,7 @@ from .audit_jobs import (
     mark_job_fallback_posted,
     mark_job_retry,
 )
-from .audit_records import get_latest_audit_comment_for_pr, preview_static_drift_for_artifacts, record_audit_result
+from .audit_records import get_latest_audit_comment_for_pr, record_audit_result
 from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 
 
@@ -345,59 +345,6 @@ def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> Es
     return EscalationRecommendation(decision="normal_review")
 
 
-def _artifact_type_map(deterministic_analysis: DiffAnalysis) -> dict[str, str]:
-    return {artifact.relevance.path: artifact.relevance.artifact_type for artifact in deterministic_analysis.artifacts}
-
-
-def _summarize_delta(value: float) -> str:
-    if value > 0:
-        return f"+{value:.2f}"
-    return f"{value:.2f}"
-
-
-def _build_static_drift_summary_block(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings, artifact_snapshots: dict[str, str]) -> str:
-    if not artifact_snapshots:
-        return ""
-
-    previews = preview_static_drift_for_artifacts(
-        settings.db_path,
-        job.repo_full,
-        artifact_snapshots,
-        _artifact_type_map(deterministic_analysis),
-    )
-    if not previews:
-        return ""
-
-    lines = ["### Static drift signals", ""]
-    for preview in previews:
-        if preview.baseline_profile_id is None:
-            lines.append(f"- `{preview.artifact_path}` [{preview.artifact_type}] — no stored baseline yet; this version becomes the first profile baseline.")
-            continue
-
-        lines.append(
-            "- "
-            f"`{preview.artifact_path}` [{preview.artifact_type}] — "
-            f"Guardrails {_summarize_delta(preview.attribute_deltas['guardrail_robustness'])}, "
-            f"Capability {_summarize_delta(preview.attribute_deltas['capability_risk'])}, "
-            f"Autonomy {_summarize_delta(preview.attribute_deltas['autonomy_level'])}, "
-            f"Distance {preview.semantic_distance:.2f}"
-        )
-        if preview.narrative:
-            lines.append(f"  - {preview.narrative[0]}")
-
-    return "\n".join(lines)
-
-
-def _inject_static_drift_summary(comment_body: str, summary_block: str) -> str:
-    if not summary_block.strip():
-        return comment_body
-    details_marker = "<details>"
-    if details_marker not in comment_body:
-        return f"{comment_body.rstrip()}\n\n{summary_block.strip()}"
-    summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
-    return f"{summary_prefix.rstrip()}\n\n{summary_block.strip()}\n\n{details_marker}{detail_suffix}"
-
-
 def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
     if "Escalation:" in comment_body:
         return comment_body
@@ -646,10 +593,6 @@ def _handle_fallback(
         escalation_recommendation=recommendation,
     )
     fallback_comment = _ensure_escalation_guidance(fallback_comment, recommendation)
-    fallback_comment = _inject_static_drift_summary(
-        fallback_comment,
-        _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots or {}),
-    )
     try:
         installation_token = _get_installation_token_for_job(job, settings)
         github_comment_id = _post_comment_for_job(job, fallback_comment, settings, installation_token=installation_token)
@@ -732,10 +675,6 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             escalation_recommendation=escalation_recommendation,
         )
         comment_body = _ensure_escalation_guidance(comment_body, escalation_recommendation)
-        comment_body = _inject_static_drift_summary(
-            comment_body,
-            _build_static_drift_summary_block(job, deterministic_analysis, settings, artifact_snapshots),
-        )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):

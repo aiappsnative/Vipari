@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, compare_attribute_profiles
+from .baseline_provenance import (
+    BaselineProvenance,
+    approved_onboarding_provenance,
+    baseline_provenance_from_json,
+    baseline_provenance_to_json,
+    historical_fallback_provenance,
+    no_baseline_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,7 @@ class HistoricalStaticProfileRecord:
     commit_sha: str
     profile: AgentAttributeProfile
     baseline_profile_id: int | None
+    baseline_provenance: BaselineProvenance | None
     semantic_similarity: float
     semantic_distance: float
     attribute_deltas: dict[str, float]
@@ -243,6 +252,7 @@ def init_onboarding_record_db(db_path: str) -> None:
                 commit_sha TEXT NOT NULL,
                 profile_json TEXT NOT NULL,
                 baseline_profile_id INTEGER,
+                baseline_provenance_json TEXT,
                 semantic_similarity REAL NOT NULL,
                 semantic_distance REAL NOT NULL,
                 attribute_deltas_json TEXT NOT NULL,
@@ -273,6 +283,10 @@ def init_onboarding_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN completed_commit_count INTEGER NOT NULL DEFAULT 0")
         if "last_error" not in historical_backfill_columns:
             conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN last_error TEXT")
+
+        historical_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_static_profiles)").fetchall()}
+        if "baseline_provenance_json" not in historical_profile_columns:
+            conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN baseline_provenance_json TEXT")
 
 
 def record_repository_onboarding(
@@ -393,6 +407,26 @@ def list_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id
     return [_row_to_onboarding_baseline_version(row) for row in rows]
 
 
+def get_latest_onboarding_baseline_for_repo_artifact(
+    db_path: str,
+    repo_full: str,
+    artifact_path: str,
+) -> OnboardingBaselineVersionRecord | None:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM onboarding_baseline_versions
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
+    return _row_to_onboarding_baseline_version(row) if row is not None else None
+
+
 def create_historical_backfill_jobs(
     db_path: str,
     *,
@@ -508,6 +542,16 @@ def record_historical_backfill_versions(
     created_profiles: list[HistoricalStaticProfileRecord] = []
 
     with _connect(db_path) as conn:
+        onboarding_baseline_row = conn.execute(
+            """
+            SELECT *
+            FROM onboarding_baseline_versions
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
         previous_version_row = conn.execute(
             """
             SELECT *
@@ -528,6 +572,8 @@ def record_historical_backfill_versions(
             """,
             (normalized_artifact_id,),
         ).fetchone()
+
+        onboarding_baseline = _row_to_onboarding_baseline_version(onboarding_baseline_row) if onboarding_baseline_row is not None else None
 
         previous_version_id = previous_version_row["id"] if previous_version_row is not None else None
         previous_version_hash = previous_version_row["version_hash"] if previous_version_row is not None else None
@@ -570,6 +616,7 @@ def record_historical_backfill_versions(
             version_id = int(cursor.lastrowid)
 
             baseline_profile_id: int | None = None
+            baseline_provenance = no_baseline_provenance()
             semantic_similarity = 1.0
             semantic_distance = 0.0
             attribute_deltas = {
@@ -581,10 +628,22 @@ def record_historical_backfill_versions(
                 "change_frequency": 0.0,
                 "semantic_density": 0.0,
             }
-            narrative = ["No earlier historical profile available; stored snapshot as the historical baseline."]
+            narrative = ["No approved baseline available; stored snapshot with no explicit comparison baseline."]
 
-            if previous_profile is not None:
+            if onboarding_baseline is not None:
+                baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
+                semantic_similarity = _term_similarity(signal_terms, onboarding_baseline.signal_terms)
+                drift_delta = compare_attribute_profiles(
+                    onboarding_baseline.profile,
+                    profile,
+                    semantic_similarity=semantic_similarity,
+                )
+                semantic_distance = drift_delta.semantic_distance
+                attribute_deltas = drift_delta.attribute_deltas
+                narrative = drift_delta.narrative
+            elif previous_profile is not None:
                 baseline_profile_id = previous_profile_id
+                baseline_provenance = historical_fallback_provenance(previous_profile_id, previous_version_id)
                 semantic_similarity = _term_similarity(signal_terms, previous_signal_terms)
                 drift_delta = compare_attribute_profiles(
                     previous_profile,
@@ -600,9 +659,9 @@ def record_historical_backfill_versions(
                 INSERT INTO historical_static_profiles (
                     backfill_job_id, historical_artifact_version_id, onboarding_id, onboarded_artifact_id,
                     normalized_artifact_id, artifact_path, artifact_type, commit_sha, profile_json,
-                    baseline_profile_id, semantic_similarity, semantic_distance, attribute_deltas_json,
+                    baseline_profile_id, baseline_provenance_json, semantic_similarity, semantic_distance, attribute_deltas_json,
                     narrative_json, signal_terms_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     backfill_job_id,
@@ -615,6 +674,7 @@ def record_historical_backfill_versions(
                     snapshot.commit_sha,
                     json.dumps(_profile_to_json(profile)),
                     baseline_profile_id,
+                    baseline_provenance_to_json(baseline_provenance),
                     semantic_similarity,
                     semantic_distance,
                     json.dumps(attribute_deltas),
@@ -661,6 +721,7 @@ def record_historical_backfill_versions(
                     commit_sha=snapshot.commit_sha,
                     profile=profile,
                     baseline_profile_id=baseline_profile_id,
+                    baseline_provenance=baseline_provenance,
                     semantic_similarity=semantic_similarity,
                     semantic_distance=semantic_distance,
                     attribute_deltas=attribute_deltas,
@@ -790,6 +851,12 @@ def _row_to_historical_artifact_version(row: sqlite3.Row) -> HistoricalArtifactV
 
 
 def _row_to_historical_static_profile(row: sqlite3.Row) -> HistoricalStaticProfileRecord:
+    baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+    if baseline_provenance is None and row["baseline_profile_id"] is not None:
+        baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
+    if baseline_provenance is None:
+        baseline_provenance = no_baseline_provenance()
+
     return HistoricalStaticProfileRecord(
         id=row["id"],
         backfill_job_id=row["backfill_job_id"],
@@ -802,6 +869,7 @@ def _row_to_historical_static_profile(row: sqlite3.Row) -> HistoricalStaticProfi
         commit_sha=row["commit_sha"],
         profile=_profile_from_json(row["profile_json"]),
         baseline_profile_id=row["baseline_profile_id"],
+        baseline_provenance=baseline_provenance,
         semantic_similarity=float(row["semantic_similarity"]),
         semantic_distance=float(row["semantic_distance"]),
         attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},

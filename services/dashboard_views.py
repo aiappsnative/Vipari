@@ -5,6 +5,14 @@ import sqlite3
 from dataclasses import dataclass
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from .baseline_provenance import (
+    BaselineProvenance,
+    approved_onboarding_provenance,
+    baseline_provenance_from_json,
+    historical_fallback_provenance,
+    no_baseline_provenance,
+    previous_pr_fallback_provenance,
+)
 
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
@@ -182,6 +190,7 @@ class RepoArtifactTimelinePoint:
     source: str
     label: str
     created_at: float
+    baseline_provenance: BaselineProvenance | None
     semantic_distance: float
     capability_shift: float
     guardrail_shift: float
@@ -221,6 +230,7 @@ class RepoArtifactDesignProfile:
     drift_from_baseline: float
     baseline_profile: DashboardProfileVector
     current_profile: DashboardProfileVector
+    baseline_provenance: BaselineProvenance | None
     risk_tags: list[str]
     narrative: list[str]
     provenance: RepoArtifactProvenance | None
@@ -446,6 +456,7 @@ class _RepoArtifactProfileContext:
     source_type: str
     label: str
     created_at: float
+    baseline_provenance: BaselineProvenance | None
     semantic_distance: float
     attribute_deltas: dict[str, float]
     narrative: list[str]
@@ -511,7 +522,8 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT artifact_path, commit_sha, created_at, semantic_distance, profile_json, attribute_deltas_json, narrative_json
+            SELECT artifact_path, commit_sha, created_at, baseline_profile_id, baseline_provenance_json,
+                   semantic_distance, profile_json, attribute_deltas_json, narrative_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ?
             ORDER BY created_at ASC, id ASC
@@ -520,11 +532,17 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
         ).fetchall()
         for row in historical_rows:
             artifact_path = row["artifact_path"]
+            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+            if baseline_provenance is None and row["baseline_profile_id"] is not None:
+                baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
+            if baseline_provenance is None:
+                baseline_provenance = no_baseline_provenance()
             contexts[artifact_path] = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="historical",
                 label=f"commit {str(row['commit_sha'])[:7]}",
                 created_at=float(row["created_at"]),
+                baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
                 attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
                 narrative=json.loads(row["narrative_json"]),
@@ -532,7 +550,9 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
 
         pr_rows = conn.execute(
             """
-            SELECT sap.artifact_path, pra.pr_number, pra.head_sha, sap.created_at, sap.semantic_distance, sap.profile_json, sap.attribute_deltas_json, sap.narrative_json
+            SELECT sap.artifact_path, pra.pr_number, pra.head_sha, sap.created_at, sap.baseline_profile_id,
+                   sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance,
+                   sap.profile_json, sap.attribute_deltas_json, sap.narrative_json
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
             WHERE pra.repo_full = ?
@@ -542,11 +562,17 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
         ).fetchall()
         for row in pr_rows:
             artifact_path = row["artifact_path"]
+            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+            if baseline_provenance is None and row["baseline_profile_id"] is not None:
+                baseline_provenance = previous_pr_fallback_provenance(row["baseline_profile_id"], row["artifact_version_id"])
+            if baseline_provenance is None:
+                baseline_provenance = no_baseline_provenance()
             contexts[artifact_path] = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="pull_request",
                 label=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
                 created_at=float(row["created_at"]),
+                baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
                 attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
                 narrative=json.loads(row["narrative_json"]),
@@ -713,7 +739,8 @@ def _build_repo_history_timelines(
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT artifact_path, artifact_type, commit_sha, created_at, semantic_distance, attribute_deltas_json
+            SELECT artifact_path, artifact_type, commit_sha, created_at, baseline_profile_id, baseline_provenance_json,
+                   semantic_distance, attribute_deltas_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ?
             ORDER BY created_at ASC, id ASC
@@ -726,11 +753,17 @@ def _build_repo_history_timelines(
                 continue
             attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
             semantic_distance = float(row["semantic_distance"])
+            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+            if baseline_provenance is None and row["baseline_profile_id"] is not None:
+                baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
+            if baseline_provenance is None:
+                baseline_provenance = no_baseline_provenance()
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
                     source="historical",
                     label=f"commit {str(row['commit_sha'])[:7]}",
                     created_at=float(row["created_at"]),
+                    baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
                     capability_shift=attribute_deltas.get("capability_risk", 0.0),
                     guardrail_shift=attribute_deltas.get("guardrail_robustness", 0.0),
@@ -741,7 +774,8 @@ def _build_repo_history_timelines(
 
         pr_rows = conn.execute(
             """
-            SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, sap.created_at, sap.semantic_distance, sap.attribute_deltas_json
+            SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, sap.created_at, sap.baseline_profile_id,
+                   sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance, sap.attribute_deltas_json
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
             WHERE pra.repo_full = ?
@@ -755,11 +789,17 @@ def _build_repo_history_timelines(
                 continue
             attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
             semantic_distance = float(row["semantic_distance"])
+            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+            if baseline_provenance is None and row["baseline_profile_id"] is not None:
+                baseline_provenance = previous_pr_fallback_provenance(row["baseline_profile_id"], row["artifact_version_id"])
+            if baseline_provenance is None:
+                baseline_provenance = no_baseline_provenance()
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
                     source="pull_request",
                     label=f"PR #{row['pr_number']}",
                     created_at=float(row["created_at"]),
+                    baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
                     capability_shift=attribute_deltas.get("capability_risk", 0.0),
                     guardrail_shift=attribute_deltas.get("guardrail_robustness", 0.0),
@@ -812,6 +852,7 @@ def _build_repo_design_profiles(
             continue
 
         context = profile_context_by_path.get(artifact_path)
+        baseline_provenance = approved_onboarding_provenance(baseline.id)
         baseline_profile = _profile_vector(baseline.profile)
         if context is None:
             current_profile = baseline_profile
@@ -824,6 +865,7 @@ def _build_repo_design_profiles(
             drift_from_baseline = _drift_magnitude(context.semantic_distance, context.attribute_deltas)
             risk_tags = _artifact_risk_tags(artifact, context.attribute_deltas)
             narrative = context.narrative
+            baseline_provenance = context.baseline_provenance or baseline_provenance
             provenance = RepoArtifactProvenance(
                 source_type=context.source_type,
                 label=context.label,
@@ -837,6 +879,7 @@ def _build_repo_design_profiles(
                 drift_from_baseline=drift_from_baseline,
                 baseline_profile=baseline_profile,
                 current_profile=current_profile,
+                baseline_provenance=baseline_provenance,
                 risk_tags=risk_tags,
                 narrative=narrative,
                 provenance=provenance,

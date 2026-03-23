@@ -16,6 +16,7 @@ from services.audit_records import (
     list_changed_artifacts_for_audit,
     list_findings_for_audit,
 )
+from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
 
 
@@ -183,8 +184,7 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert saved is not None
     assert saved.status == "completed"
     assert "LLM comment" in saved.comment_body
-    assert "Static drift signals" in saved.comment_body
-    assert "no stored baseline yet" in saved.comment_body
+    assert "Static drift signals" not in saved.comment_body
     assert len(posted) == 1
     assert "LLM comment" in posted[0][0]
     assert posted[0][1] is None
@@ -207,7 +207,7 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert comment is not None
     assert comment.github_comment_id == 101
     assert comment.comment_mode == "full_review"
-    assert "Static drift signals" in comment.comment_body
+    assert "Static drift signals" not in comment.comment_body
     assert "LLM comment" in comment.comment_body
 
     versions = list_artifact_versions_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md")
@@ -215,6 +215,53 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert versions[0].previous_version_id is None
     assert versions[0].line_count == 2
     assert get_latest_artifact_version_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/policy.md") is not None
+
+
+def test_worker_comment_omits_static_drift_metrics_when_approved_baseline_exists(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/policy.md"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "You must ask one clarifying question before acting.\n",
+    )
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=3,
+        installation_id=123,
+        head_sha="sha-3",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+    posted = []
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 103,
+    )
+    monkeypatch.setattr(
+        "services.audit_worker.fetch_file_content",
+        lambda repo, path, token, ref: "You can act directly without approval.\n",
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert "Static drift signals" not in posted[0]
+    assert "approved baseline (onboarding)" not in posted[0]
 
 
 def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
@@ -965,10 +1012,8 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
     assert second_audit is not None
     assert first_audit.suggested_risk_level == "Low"
     assert second_audit.suggested_risk_level == "High"
-    assert "Static drift signals" in posted[0][1]
-    assert "no stored baseline yet" in posted[0][1]
-    assert "Static drift signals" in posted[1][1]
-    assert "Distance" in posted[1][1]
+    assert "Static drift signals" not in posted[0][1]
+    assert "Static drift signals" not in posted[1][1]
 
 
 

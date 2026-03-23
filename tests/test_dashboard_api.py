@@ -105,7 +105,6 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["risk_state"]["headline"]
     assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
-    assert any(pattern["pattern_key"] == "baseline_candidate" for pattern in overview_payload["regression_patterns"])
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
 
@@ -122,5 +121,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["history_timelines"][0]["point_count"] == 2
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["design_profiles"][0]["baseline_profile"]["guardrail_robustness"] >= 0
+    assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"

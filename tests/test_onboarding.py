@@ -167,12 +167,20 @@ temperature: 0.4
     assert versions[1].previous_version_id == versions[0].id
 
     assert profiles[0].baseline_profile_id is None
-    assert profiles[0].semantic_distance == 0.0
-    assert profiles[1].baseline_profile_id == profiles[0].id
-    assert profiles[1].semantic_distance > 0.0
-    assert profiles[1].attribute_deltas["capability_risk"] > 0.0
-    assert profiles[1].attribute_deltas["guardrail_robustness"] < 0.0
-    assert any("Capability risk increased" in line for line in profiles[1].narrative)
+    assert profiles[0].baseline_provenance is not None
+    assert profiles[0].baseline_provenance.source_type == "approved_baseline"
+    assert profiles[0].baseline_provenance.is_authoritative is True
+    assert profiles[0].semantic_distance > 0.0
+    assert profiles[0].attribute_deltas["capability_risk"] < 0.0
+    assert profiles[0].attribute_deltas["guardrail_robustness"] > 0.0
+
+    assert profiles[1].baseline_profile_id is None
+    assert profiles[1].baseline_provenance is not None
+    assert profiles[1].baseline_provenance.source_type == "approved_baseline"
+    assert profiles[1].semantic_distance >= 0.0
+    assert profiles[1].attribute_deltas["capability_risk"] <= 0.0
+    assert profiles[1].attribute_deltas["guardrail_robustness"] > 0.0
+    assert profiles[1].narrative
 
     assert len(persisted_jobs) == 1
     assert persisted_jobs[0].status == "completed"
