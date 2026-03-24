@@ -19,6 +19,14 @@ function renderRiskTags(tags = []) {
     return tags.map((tag) => `<span class="tag">${tag}</span>`).join("");
 }
 
+function renderProvenance(provenance, fallback = "No PR or history provenance yet") {
+    if (!provenance) {
+        return fallback;
+    }
+    const parts = [provenance.label, provenance.source_ref, provenance.review_context].filter(Boolean);
+    return parts.length ? parts.join(" · ") : fallback;
+}
+
 function renderProfileMetric(label, baselineValue, currentValue) {
     return `
         <div class="profile-metric">
@@ -82,7 +90,7 @@ function renderInsights(items = []) {
                     <div class="insight-title">${item.title}</div>
                     <div><strong>${item.artifact_path}</strong> <span class="muted">(${item.artifact_type})</span></div>
                     <div class="tag-row">${renderRiskTags(designProfiles[item.artifact_path]?.risk_tags || ["baseline only"])}</div>
-                    <div class="meta-tight muted">${designProfiles[item.artifact_path]?.provenance?.label || "No PR or history provenance yet"}</div>
+                    <div class="meta-tight muted">${renderProvenance(designProfiles[item.artifact_path]?.provenance)}</div>
                     <div class="muted" style="margin-top:6px;">${item.rationale}</div>
                     <div style="margin-top:6px;">${item.recommended_action}</div>
                 </div>
@@ -132,11 +140,11 @@ function renderHistoryTimelines(items = []) {
                             (point) => `
                                 <div class="timeline-point">
                                     <div class="timeline-label-row">
-                                        <span class="timeline-label">${point.label}</span>
+                                        <span class="timeline-label">${[point.label, point.source_ref].filter(Boolean).join(" · ")}</span>
                                         <span class="timeline-meta">${point.source === "pull_request" ? "PR" : "History"} · drift ${point.drift_magnitude.toFixed(3)}</span>
                                     </div>
                                     <div class="bar-track"><div class="bar-fill" style="width: ${(point.drift_magnitude / maxDrift) * 100}%"></div></div>
-                                    <div class="timeline-meta muted">Semantic ${point.semantic_distance.toFixed(3)} · Capability ${point.capability_shift.toFixed(3)} · Guardrail ${point.guardrail_shift.toFixed(3)}</div>
+                                    <div class="timeline-meta muted">${[point.review_context, `Semantic ${point.semantic_distance.toFixed(3)}`, `Capability ${point.capability_shift.toFixed(3)}`, `Guardrail ${point.guardrail_shift.toFixed(3)}`].filter(Boolean).join(" · ")}</div>
                                 </div>
                             `
                         )
@@ -160,7 +168,7 @@ function renderDesignProfiles(items = []) {
                             <div class="insight-title">${item.artifact_path}</div>
                             <div class="muted meta-tight">${item.artifact_type} · drift from baseline ${item.drift_from_baseline.toFixed(3)}</div>
                         </div>
-                        <div class="muted">${item.provenance?.label || "Baseline only"}</div>
+                        <div class="muted">${renderProvenance(item.provenance, "Baseline only")}</div>
                     </div>
                     <div class="tag-row">${renderRiskTags(item.risk_tags)}</div>
                     <div class="profile-grid">
