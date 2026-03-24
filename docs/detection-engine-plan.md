@@ -80,7 +80,9 @@ Implemented today:
 - first-pass PR comment integration for static drift summaries when artifact snapshots are available
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
+- a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models
 - dashboard aggregation optimized for larger OSS repositories so per-repo views stay interactive
+- bounded OSS onboarding improvements through narrower discovery candidate selection and direct GitHub contents API reads for artifact content
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -110,6 +112,11 @@ But that alone is not enough for customer value.
 
 The main frontend cleanup has already been completed.
 
+The current branch now proves a more opinionated product shape:
+- overview is a triage-first inbox rather than a flat metrics dashboard,
+- coverage has been separated into a secondary mode,
+- repo detail behaves like a case file with one featured item, a ranked follow-on queue, lower-confidence progressive disclosure, and collapsed deep history.
+
 Future dashboard work should keep following this split:
 - FastAPI route handlers remain thin and focused on routing plus JSON APIs
 - page markup moves into `templates/`
@@ -131,12 +138,15 @@ It should also surface cross-repo hotspots directly, which now includes a first 
 
 Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, and provenance-lite context derived from Git history and PR records.
 
+Recent OSS validation against `doria90/hermes-agent` also showed the current architectural boundary clearly: the dashboard is now useful on real backfilled history, but urgency is still strongest when PromptDrift has PR-linked evidence in addition to historical hotspots.
+
 In other words, the dashboard is now a real first decision surface and should keep evolving in that direction rather than reverting to a raw metrics surface.
 
 The next architectural improvements for this layer are:
 - stronger provenance on repo detail pages
 - denser cross-repo examples and evaluation coverage
 - better signal fusion so the dashboard reflects more trustworthy reviewer priorities
+- richer merged-commit and PR linkage so real OSS repos produce more than history-only urgency
 
 ### Execution model
 

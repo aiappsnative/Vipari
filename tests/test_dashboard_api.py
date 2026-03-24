@@ -104,9 +104,11 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     overview_payload = overview_response.json()
     assert overview_payload["risk_state"]["headline"]
     assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
+    assert overview_payload["highest_risk_items"][0]["review_target"] == "PR #42 · sha-cur"
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
+    assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Approved")
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -117,6 +119,11 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["onboarding"]["default_branch"] == "main"
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["insights"][0]["queue_lane"] == "primary"
+    assert payload["insights"][0]["baseline_label"].startswith("Baseline: Approved")
+    assert payload["insights"][0]["review_target"] == "PR #42 · sha-cur"
+    assert payload["insights"][0]["risk_reasons"]
+    assert payload["lower_confidence_insights"] == []
     assert payload["control_surface_groups"][0]["group_key"] == "prompts"
     assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["history_timelines"][0]["point_count"] == 2

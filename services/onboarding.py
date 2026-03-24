@@ -31,6 +31,36 @@ from .onboarding_records import (
 
 
 DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".py", ".toml"}
+PRIMARY_DISCOVERY_HINTS = {
+    "prompt",
+    "prompts",
+    "system",
+    "policy",
+    "guardrail",
+    "safety",
+    "model",
+    "tool",
+    "rag",
+    "retriev",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "copilot",
+    "inference",
+    "eval",
+    "evaluation",
+    "chat",
+    "completion",
+    "mcp",
+}
+SECONDARY_DISCOVERY_HINTS = {
+    "ai",
+    "llm",
+    "assistant",
+    "agent",
+}
+TEXT_HEAVY_DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".toml"}
 
 
 @dataclass(frozen=True)
@@ -49,9 +79,13 @@ class HistoricalBackfillExecutionResult:
 
 def _is_candidate_path(path: str) -> bool:
     lowered = path.lower()
-    if any(keyword in lowered for keywords, _, _ in PATH_RULES for keyword in keywords):
+    if not any(lowered.endswith(ext) for ext in DISCOVERY_EXTENSIONS):
+        return False
+    if any(hint in lowered for hint in PRIMARY_DISCOVERY_HINTS):
         return True
-    return any(lowered.endswith(ext) for ext in DISCOVERY_EXTENSIONS)
+    return any(lowered.endswith(ext) for ext in TEXT_HEAVY_DISCOVERY_EXTENSIONS) and any(
+        hint in lowered for hint in SECONDARY_DISCOVERY_HINTS
+    )
 
 
 def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtifactInput]:

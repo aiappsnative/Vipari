@@ -111,8 +111,15 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.drift_summary.profile_count == 1
     assert len(dashboard.artifacts) == 1
     assert len(dashboard.insights) == 1
+    assert len(dashboard.lower_confidence_insights) == 0
     assert dashboard.insights[0].artifact_path == "prompts/refund.txt"
+    assert dashboard.insights[0].queue_lane == "primary"
     assert dashboard.insights[0].priority in {"review_now", "watch", "baseline_review"}
+    assert dashboard.insights[0].confidence_label in {"high confidence", "medium confidence", "lower confidence"}
+    assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
+    assert dashboard.insights[0].provenance_summary == "From · PR #42 · sha-cur · full semantic review · semantic complete · risk low"
+    assert dashboard.insights[0].review_target == "PR #42 · sha-cur"
+    assert "historical hotspot" in dashboard.insights[0].risk_reasons
     assert len(dashboard.control_surface_groups) == 1
     assert dashboard.control_surface_groups[0].group_key == "prompts"
     assert len(dashboard.history_timelines) == 1
@@ -219,5 +226,10 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert len(overview.attention_repos) == 2
     assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
+    assert overview.attention_repos[0].highest_baseline_label is not None
+    assert overview.attention_repos[0].highest_review_target == "PR #42 · sha-cur"
+    assert overview.attention_repos[0].lower_confidence_count == 0
+    assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Approved")
+    assert overview.highest_risk_items[0].review_target == "PR #42 · sha-cur"
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]

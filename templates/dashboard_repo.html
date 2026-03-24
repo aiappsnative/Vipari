@@ -14,7 +14,7 @@
             <div>
                 <a class="link" href="/dashboard">← All repositories</a>
                 <h1>{{REPO_FULL}}</h1>
-                <p class="muted">Unified view of onboarding, backfill lineage, and pull-request drift history.</p>
+                <p class="muted hero-copy-tight">Review case file: strongest item first, then the ranked queue, then supporting evidence.</p>
             </div>
             <div class="callout">Live from the local PromptDrift SQLite store</div>
         </div>
@@ -23,38 +23,88 @@
             Static-only analysis: PromptDrift derives these signals from repository code, prompts, and config only. No production traffic or user data is analyzed.
         </div>
 
+        <div id="repo-command-deck" class="section">
+            <div class="card muted">Loading repo command deck...</div>
+        </div>
+
         <div id="summary" class="grid grid-summary"></div>
 
-        <div class="section card">
-            <h2>Baseline vs current design posture</h2>
-            <div id="design-profiles" class="muted">Loading baseline comparison...</div>
-        </div>
+        <div class="casefile-layout section">
+            <div class="casefile-main stack">
+                <div class="card">
+                    <div class="section-kicker">Open next</div>
+                    <h2>Open this first</h2>
+                    <div class="section-hint">Best next source change.</div>
+                    <div id="featured-insight" class="muted">Loading primary review target...</div>
+                </div>
 
-        <div class="grid grid-two-up section">
-            <div class="card">
-                <h2>Needs attention now</h2>
-                <div id="insights" class="muted">Loading prioritized insights...</div>
+                <div class="card">
+                    <div class="section-kicker">Continue reviewing</div>
+                    <h2>Needs review queue</h2>
+                    <div class="section-hint">Next best leads after the first one.</div>
+                    <div id="insights" class="muted">Loading prioritized insights...</div>
+                </div>
+
+                <div class="card">
+                    <div class="section-kicker">Merged or active drift</div>
+                    <h2>Top drifting artifacts</h2>
+                    <div id="leaderboard" class="muted">Loading drift leaderboard...</div>
+                </div>
             </div>
-            <div class="card">
-                <h2>Control surface map</h2>
-                <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
+
+            <aside class="casefile-side stack">
+                <div class="card">
+                    <div class="section-kicker">Why PromptDrift flagged this repo</div>
+                    <h2>Posture and provenance</h2>
+                    <div class="section-hint">Baseline vs current posture.</div>
+                    <div id="design-profiles" class="muted">Loading baseline comparison...</div>
+                </div>
+
+                <div class="card">
+                    <div class="section-kicker">Repo surface map</div>
+                    <h2>Control surface coverage</h2>
+                    <div class="section-hint">Where evidence is concentrated.</div>
+                    <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
+                </div>
+
+                <details class="card collapsible-card">
+                    <summary class="details-summary">
+                        <div>
+                            <div class="section-kicker">Signal hunting</div>
+                            <h2>Lower-confidence findings</h2>
+                            <div class="section-hint">Optional leads only.</div>
+                        </div>
+                        <span class="details-toggle">Show more</span>
+                    </summary>
+                    <div class="section-inner-gap">
+                        <div id="lower-confidence-insights" class="muted">Loading lower-confidence findings...</div>
+                    </div>
+                </details>
+            </aside>
+        </div>
+
+        <details class="section card collapsible-card">
+            <summary class="details-summary">
+                <div>
+                    <div class="section-kicker">Secondary context</div>
+                    <h2>History and full inventory</h2>
+                    <div class="section-hint">Open only when you need the deep trail.</div>
+                </div>
+                <span class="details-toggle">Show more</span>
+            </summary>
+
+            <div class="stack section-inner-gap">
+                <div>
+                    <h3 class="subsection-title">History and drift timeline</h3>
+                    <div id="history-timelines" class="muted">Loading artifact history...</div>
+                </div>
+
+                <div>
+                    <h3 class="subsection-title">Artifact inventory</h3>
+                    <div id="artifacts" class="muted">Loading artifact table...</div>
+                </div>
             </div>
-        </div>
-
-        <div class="section card">
-            <h2>Top drifting pull-request artifacts</h2>
-            <div id="leaderboard" class="muted">Loading drift leaderboard...</div>
-        </div>
-
-        <div class="section card">
-            <h2>History and drift timeline</h2>
-            <div id="history-timelines" class="muted">Loading artifact history...</div>
-        </div>
-
-        <div class="section card">
-            <h2>Artifact inventory</h2>
-            <div id="artifacts" class="muted">Loading artifact table...</div>
-        </div>
+        </details>
     </div>
 </body>
 </html>

@@ -209,12 +209,15 @@ Current implementation status:
 - `execute_repository_history_backfill()` now exists to persist historical artifact versions and static profile lineage for planned jobs
 - operator/query surfaces now exist via JSON API routes, dashboard pages, and a local CLI
 - real OSS validation has now been exercised against `doria90/openfang`, which confirmed both dashboard viability and current discovery noisiness on public repositories
+- real OSS validation has now also been exercised against `doria90/hermes-agent`, which completed onboarding with 22 discovered artifacts, 22 baseline versions, and completed historical backfill jobs
+- candidate-path narrowing plus direct GitHub contents fetches were required to keep larger public-repo onboarding operationally bounded
 - OSS candidate-runner automation and benchmark exports are still pending
 
 Current product takeaway from OSS validation:
 - PromptDrift can now onboard and render a real public repository,
+- it can now sustain a triage-first dashboard flow on real OSS history,
 - but the next milestone is not more raw metrics,
-- it is converting discovery and drift records into customer-facing insights and prioritized review actions.
+- it is denser PR-linked evidence, better discovery precision, and customer-facing insights that hold up outside hand-picked historical hotspots.
 
 ---
 

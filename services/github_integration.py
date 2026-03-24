@@ -5,6 +5,7 @@ import difflib
 import json
 import time
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 import jwt
@@ -137,12 +138,14 @@ def _render_unified_diff(path: str, previous_text: str | None, current_text: str
 
 
 def fetch_file_content(repo_full: str, file_path: str, token: str, *, ref: str) -> str:
-    github_client = Github(auth=Auth.Token(token))
-    repo = github_client.get_repo(repo_full)
-    content = repo.get_contents(file_path, ref=ref)
-    if isinstance(content, list):
-        raise RuntimeError(f"Expected file content for {file_path}, but received a directory listing.")
-    return content.decoded_content.decode("utf-8")
+    encoded_path = urllib.parse.quote(file_path, safe="/")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    url = f"https://api.github.com/repos/{repo_full}/contents/{encoded_path}?ref={encoded_ref}"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github.raw")
+    with urllib.request.urlopen(req) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 def get_repo_default_branch(repo_full: str, token: str) -> str:

@@ -40,15 +40,17 @@ In practical terms, PromptDrift currently provides:
 - escalation-aware PR review with managed comments plus GitHub labels for high-confidence before-merge escalation cases
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
-- a split dashboard surface with portfolio overview and repo-detail drill-down pages, including baseline provenance in repo/history views
+- a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
+- real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
+- bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
 - a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
 The dashboard should now be read as two linked product surfaces:
 
-- `/dashboard` is the portfolio decision surface for triage, hotspots, and control-surface coverage
-- `/dashboard/{owner/repo}` is the repo explanation surface for baseline-relative posture, history, and artifact-level evidence
+- `/dashboard` is the portfolio decision surface for triage, hotspots, and coverage trust, with a secondary coverage mode for inventory and pattern scans
+- `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, and artifact-level evidence
 
 ## What PromptDrift does today
 
@@ -172,14 +174,15 @@ Recent live validation on the active branch covered:
 
 Once the app is running locally, you can inspect the current drift dashboard in the browser:
 
-- `/dashboard` — portfolio risk posture, regression patterns, review queue, and control-surface hotspots
-- `/dashboard/<owner>/<repo>` — baseline-vs-current design posture, timelines, prioritized insights, and artifact inventory
+- `/dashboard` — triage-first portfolio inbox with a primary review target, ranked queue, coverage trust, and a secondary coverage scan mode
+- `/dashboard/<owner>/<repo>` — repo case file with one featured review target, ranked follow-on queue, posture/provenance context, and collapsed history inventory
 
 Recommended 5-minute local inspection flow:
 
-1. Open `/dashboard` first and confirm the portfolio risk-state hero, regression patterns, and highest-risk drift panels render.
-2. Open `/dashboard/<owner>/<repo>` for a seeded repository and confirm the design-posture cards, timeline, and artifact inventory render.
-3. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
+1. Open `/dashboard` first and confirm the portfolio risk-state hero, featured review target, ranked queue, and coverage-trust panels render.
+2. Switch to Coverage mode and confirm the coverage atlas, control-surface coverage, and repo inventory capsules render.
+3. Open `/dashboard/<owner>/<repo>` for a seeded repository and confirm the featured insight, repo command deck, posture explorer, and collapsed history inventory render.
+4. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
 
 You can also inspect or drive the workflow locally with the CLI:
 
@@ -201,7 +204,8 @@ Useful JSON endpoints:
 ## Known limitations
 
 - the queue and durable store are still local SQLite in the current dev shape
-- the dashboard is useful for reviewer decision support, but still needs richer provenance and denser real-world example data
+- the dashboard is now structurally ready for OSS validation, but repo signals are strongest when historical backfill exists and weaker when PR-audit coverage is sparse
+- larger public repos now onboard successfully, but discovery precision and merged-change provenance still need continued refinement
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
 
