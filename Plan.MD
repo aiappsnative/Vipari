@@ -133,7 +133,7 @@ Suggested next branch sequence:
 
 The newly implemented dashboard is now the right structural product surface, but it is not yet the final customer-facing product end state.
 
-Tomorrow's design priority should be to deepen the decision surface with better provenance and stronger real-world examples, not to add more generic metrics.
+The next design priority should be to deepen the decision surface with better provenance and stronger real-world examples, not to add more generic metrics.
 
 Today's architecture priority should be to preserve the extracted frontend split and keep hardening it against payload evolution before adding more product complexity.
 
@@ -164,6 +164,8 @@ Now implemented as the current dashboard baseline:
 - the overview now opens with an explicit portfolio risk-state summary so users see overall exposure before repo-level detail
 - the overview now also highlights highest-risk drift and risk by control surface so the landing page reflects portfolio-wide hotspots before repo drill-down
 - the overview now includes regression-pattern summaries and should fail gracefully when older local payloads omit newer fields
+- the overview now behaves as a triage-first inbox with explicit `Triage` and `Coverage` modes
+- repo detail now behaves as a case file with a featured review target, ranked queue, posture/provenance explorer, lower-confidence disclosure, and collapsed deep history
 
 Important product rule:
 - do not optimize the dashboard for exhaustiveness alone
@@ -172,6 +174,23 @@ Important product rule:
 Important architecture rule:
 - do not continue growing dashboard HTML, CSS, and JavaScript inline in `main.py`
 - use the extracted frontend surface as the only place for future dashboard UI work
+
+### End-of-day checkpoint (2026-03-24)
+
+Completed today on `feature/dashboard-ux-v1`:
+
+- triage-first overview and repo case-file dashboard redesign shipped
+- dashboard read models now expose rationale, recommended action, baseline labels, review targets, confidence labels, and lower-confidence queue separation
+- large-repo onboarding was hardened by narrowing candidate discovery and switching artifact-content reads to the GitHub contents API
+- real OSS onboarding validation completed for `doria90/hermes-agent`
+- live local dashboard verification succeeded on a clean non-reload server at `127.0.0.1:8002`
+
+Tomorrow's highest-value continuation should be:
+
+1. improve signal quality on real OSS repos, especially PR-linked evidence density
+2. tighten merged-commit / PR provenance so repo case files route to better review targets
+3. reduce discovery noise further on large public repositories
+4. turn the current OSS validation path into a more repeatable harness
 
 ### Near-term execution plan
 

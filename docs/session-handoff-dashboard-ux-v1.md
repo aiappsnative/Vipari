@@ -675,3 +675,21 @@ If work continues after this branch is merged, the next highest-value slice shou
 2. improve merged-commit provenance and reviewer target linking
 3. keep refining discovery precision for large OSS repos
 4. evaluate whether the current top-ranked items still hold up across a broader candidate set
+
+## Tomorrow starting checklist
+
+When work resumes, the fastest useful restart path is:
+
+1. start a clean local server without `--reload`
+2. verify [README.md](../README.md) operator steps still match local reality
+3. open `/dashboard` and the `doria90/hermes-agent` repo page first
+4. inspect whether the top-ranked repo and artifact still feel like the right next review target
+5. choose one of the following follow-up slices before touching UI again:
+  - provenance enrichment
+  - PR-linked evidence density
+  - discovery precision on OSS repos
+  - lightweight OSS evaluation harness
+
+Recommended first implementation target tomorrow:
+
+- improve reviewer target quality on real repos by linking more repo insights to concrete PR or merged-commit provenance
