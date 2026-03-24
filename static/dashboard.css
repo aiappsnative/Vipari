@@ -590,13 +590,20 @@ p {
 }
 
 .glance-chip {
-    min-width: 140px;
+    min-width: 0;
     padding: 10px 12px;
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.06);
     display: grid;
     gap: 4px;
+}
+
+.glance-chip strong,
+.glance-chip .link {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .glance-chip-label {
@@ -1467,6 +1474,7 @@ p {
     background: rgba(11, 16, 32, 0.18);
     display: grid;
     gap: 8px;
+    min-width: 0;
 }
 
 .attribute-summary-header {
@@ -1474,6 +1482,13 @@ p {
     justify-content: space-between;
     gap: 12px;
     align-items: center;
+    flex-wrap: wrap;
+}
+
+.attribute-summary-header strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .artifact-card-grid {
@@ -1563,15 +1578,24 @@ p {
 
 .posture-layout {
     display: grid;
-    grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
     gap: 20px;
     align-items: start;
+}
+
+.posture-details {
+    min-width: 0;
+}
+
+.posture-details > * {
+    min-width: 0;
 }
 
 .radar-wrap {
     display: grid;
     gap: 10px;
     justify-items: center;
+    width: 100%;
 }
 
 .radar-chart {
@@ -1770,6 +1794,9 @@ p {
 .insight-title {
     font-weight: 700;
     margin-bottom: 6px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 table {
