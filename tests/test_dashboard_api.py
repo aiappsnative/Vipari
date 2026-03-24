@@ -122,6 +122,15 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_timelines"][0]["point_count"] == 2
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
+    assert payload["design_profiles"][0]["provenance"]["label"] == "Pull request audit"
+    assert payload["design_profiles"][0]["provenance"]["source_ref"] == "PR #42 · sha-cur"
+    assert payload["design_profiles"][0]["provenance"]["review_context"] == "full semantic review · semantic complete · risk low"
     assert payload["design_profiles"][0]["baseline_profile"]["guardrail_robustness"] >= 0
+    assert payload["history_timelines"][0]["points"][0]["label"] == "Historical backfill"
+    assert payload["history_timelines"][0]["points"][0]["source_ref"] == "commit sha-1"
+    assert payload["history_timelines"][0]["points"][0]["review_context"] == "Historical snapshot from backfill"
+    assert payload["history_timelines"][0]["points"][-1]["label"] == "Pull request audit"
+    assert payload["history_timelines"][0]["points"][-1]["source_ref"] == "PR #42 · sha-cur"
+    assert payload["history_timelines"][0]["points"][-1]["review_context"] == "full semantic review · semantic complete · risk low"
     assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"

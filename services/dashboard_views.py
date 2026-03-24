@@ -189,6 +189,8 @@ class RepoDashboardControlSurfaceGroup:
 class RepoArtifactTimelinePoint:
     source: str
     label: str
+    source_ref: str | None
+    review_context: str | None
     created_at: float
     baseline_provenance: BaselineProvenance | None
     semantic_distance: float
@@ -220,6 +222,8 @@ class DashboardProfileVector:
 class RepoArtifactProvenance:
     source_type: str
     label: str
+    source_ref: str | None
+    review_context: str | None
     created_at: float | None
 
 
@@ -455,6 +459,8 @@ class _RepoArtifactProfileContext:
     profile: AgentAttributeProfile
     source_type: str
     label: str
+    source_ref: str | None
+    review_context: str | None
     created_at: float
     baseline_provenance: BaselineProvenance | None
     semantic_distance: float
@@ -540,7 +546,9 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
             contexts[artifact_path] = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="historical",
-                label=f"commit {str(row['commit_sha'])[:7]}",
+                label="Historical backfill",
+                source_ref=f"commit {str(row['commit_sha'])[:7]}",
+                review_context="Historical snapshot from backfill",
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
@@ -550,8 +558,9 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
 
         pr_rows = conn.execute(
             """
-            SELECT sap.artifact_path, pra.pr_number, pra.head_sha, sap.created_at, sap.baseline_profile_id,
-                   sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance,
+             SELECT sap.artifact_path, pra.pr_number, pra.head_sha, pra.status, pra.output_mode,
+                 pra.suggested_risk_level, pra.semantic_review_completed, sap.created_at, sap.baseline_profile_id,
+                 sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance,
                    sap.profile_json, sap.attribute_deltas_json, sap.narrative_json
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
@@ -570,7 +579,14 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
             contexts[artifact_path] = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="pull_request",
-                label=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                label="Pull request audit",
+                source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                review_context=_format_pr_review_context(
+                    output_mode=row["output_mode"],
+                    risk_level=row["suggested_risk_level"],
+                    status=row["status"],
+                    semantic_review_completed=bool(row["semantic_review_completed"]),
+                ),
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
@@ -583,6 +599,16 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
 
 def _normalized_id_prefix(repo_full: str) -> str:
     return f"{repo_full.lower()}::%"
+
+
+def _humanize_output_mode(output_mode: str) -> str:
+    return output_mode.replace("_", " ")
+
+
+def _format_pr_review_context(*, output_mode: str, risk_level: str, status: str, semantic_review_completed: bool) -> str:
+    review_mode = _humanize_output_mode(output_mode)
+    semantic_note = "semantic complete" if semantic_review_completed else status.replace("_", " ")
+    return f"{review_mode} · {semantic_note} · risk {risk_level.lower()}"
 
 
 def _drift_magnitude(semantic_distance: float, attribute_deltas: dict[str, float]) -> float:
@@ -761,7 +787,9 @@ def _build_repo_history_timelines(
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
                     source="historical",
-                    label=f"commit {str(row['commit_sha'])[:7]}",
+                    label="Historical backfill",
+                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
+                    review_context="Historical snapshot from backfill",
                     created_at=float(row["created_at"]),
                     baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
@@ -774,8 +802,9 @@ def _build_repo_history_timelines(
 
         pr_rows = conn.execute(
             """
-            SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, sap.created_at, sap.baseline_profile_id,
-                   sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance, sap.attribute_deltas_json
+             SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, pra.head_sha, pra.status, pra.output_mode,
+                 pra.suggested_risk_level, pra.semantic_review_completed, sap.created_at, sap.baseline_profile_id,
+                 sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance, sap.attribute_deltas_json
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
             WHERE pra.repo_full = ?
@@ -797,7 +826,14 @@ def _build_repo_history_timelines(
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
                     source="pull_request",
-                    label=f"PR #{row['pr_number']}",
+                    label="Pull request audit",
+                    source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                    review_context=_format_pr_review_context(
+                        output_mode=row["output_mode"],
+                        risk_level=row["suggested_risk_level"],
+                        status=row["status"],
+                        semantic_review_completed=bool(row["semantic_review_completed"]),
+                    ),
                     created_at=float(row["created_at"]),
                     baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
@@ -869,6 +905,8 @@ def _build_repo_design_profiles(
             provenance = RepoArtifactProvenance(
                 source_type=context.source_type,
                 label=context.label,
+                source_ref=context.source_ref,
+                review_context=context.review_context,
                 created_at=context.created_at,
             )
 

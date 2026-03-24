@@ -122,12 +122,23 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
     assert dashboard.design_profiles[0].baseline_provenance.source_type == "approved_baseline"
+    assert dashboard.design_profiles[0].provenance is not None
+    assert dashboard.design_profiles[0].provenance.source_type == "pull_request"
+    assert dashboard.design_profiles[0].provenance.label == "Pull request audit"
+    assert dashboard.design_profiles[0].provenance.source_ref == "PR #42 · sha-cur"
+    assert dashboard.design_profiles[0].provenance.review_context == "full semantic review · semantic complete · risk low"
     assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 2
     assert dashboard.artifacts[0].pr_profile_count == 1
     assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
+    assert dashboard.history_timelines[0].points[0].label == "Historical backfill"
+    assert dashboard.history_timelines[0].points[0].source_ref == "commit sha-1"
+    assert dashboard.history_timelines[0].points[0].review_context == "Historical snapshot from backfill"
+    assert dashboard.history_timelines[0].points[-1].label == "Pull request audit"
+    assert dashboard.history_timelines[0].points[-1].source_ref == "PR #42 · sha-cur"
+    assert dashboard.history_timelines[0].points[-1].review_context == "full semantic review · semantic complete · risk low"
 
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):
