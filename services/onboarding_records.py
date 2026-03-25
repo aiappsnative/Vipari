@@ -113,6 +113,7 @@ class HistoricalArtifactVersionRecord:
     line_count: int
     previous_version_id: int | None
     created_at: float
+    content_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -499,11 +500,7 @@ def promote_latest_source_to_onboarding_baseline(
             (repo_full, artifact_path),
         ).fetchone()
 
-        latest_source = latest_pr
-        if latest_historical is not None and (
-            latest_source is None or float(latest_historical["created_at"]) >= float(latest_source["created_at"])
-        ):
-            latest_source = latest_historical
+        latest_source = latest_pr if latest_pr is not None else latest_historical
 
         if latest_source is None:
             return None
@@ -974,6 +971,7 @@ def _row_to_historical_artifact_version(row: sqlite3.Row) -> HistoricalArtifactV
         line_count=row["line_count"],
         previous_version_id=row["previous_version_id"],
         created_at=row["created_at"],
+        content_text=row["content_text"],
     )
 
 

@@ -141,6 +141,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].headline_summary
     assert dashboard.design_profiles[0].drift_label in {"small drift", "medium drift", "large drift"}
     assert dashboard.design_profiles[0].drift_tone in {"low", "medium", "high"}
+    assert dashboard.design_profiles[0].can_promote_source_to_baseline is True
     assert isinstance(dashboard.design_profiles[0].attribute_findings, list)
     if dashboard.design_profiles[0].attribute_findings:
         assert dashboard.design_profiles[0].attribute_findings[0].reason
@@ -257,3 +258,24 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
+
+
+def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable(tmp_path):
+    db_path = str(tmp_path / "dashboard.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert len(dashboard.design_profiles) == 1
+    assert dashboard.design_profiles[0].provenance is None
+    assert dashboard.design_profiles[0].can_promote_source_to_baseline is False

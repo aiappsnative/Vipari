@@ -571,6 +571,14 @@ function renderAttributeFindings(item, sourceLink) {
 }
 
 function renderBaselineControls(item) {
+    if (!item.can_promote_source_to_baseline) {
+        return `
+            <div class="baseline-controls">
+                <div class="meta-tight muted"><strong>Current baseline:</strong> ${item.baseline_provenance?.label || "No baseline"}</div>
+                <div class="meta-tight muted">Store a PR or history source snapshot before promoting a new baseline.</div>
+            </div>
+        `;
+    }
     return `
         <div class="baseline-controls">
             <div class="meta-tight muted"><strong>Current baseline:</strong> ${item.baseline_provenance?.label || "No baseline"}</div>

@@ -284,6 +284,7 @@ class RepoArtifactDesignProfile:
     risk_tags: list[str] = None
     narrative: list[str] = None
     attribute_findings: list[RepoArtifactAttributeFinding] = None
+    can_promote_source_to_baseline: bool = False
     provenance: RepoArtifactProvenance | None = None
 
 
@@ -1597,6 +1598,7 @@ def _build_repo_design_profiles(
             narrative = ["No drift samples yet. This surface is currently represented only by the approved baseline."]
             headline_summary = "No source change with stored drift evidence yet."
             attribute_findings: list[RepoArtifactAttributeFinding] = []
+            can_promote_source_to_baseline = False
             provenance = None
         else:
             current_profile = _profile_vector(context.profile)
@@ -1619,6 +1621,7 @@ def _build_repo_design_profiles(
                 headline_summary = f"{_sentence_source_label(context)} drift detected in {_human_join(changed_labels)}."
             else:
                 headline_summary = f"{_sentence_source_label(context)} changed posture relative to baseline, but no single high-risk attribute dominated."
+            can_promote_source_to_baseline = True
             provenance = RepoArtifactProvenance(
                 source_type=context.source_type,
                 label=context.label,
@@ -1642,6 +1645,7 @@ def _build_repo_design_profiles(
                 risk_tags=risk_tags,
                 narrative=narrative,
                 attribute_findings=attribute_findings,
+                can_promote_source_to_baseline=can_promote_source_to_baseline,
                 provenance=provenance,
             )
         )

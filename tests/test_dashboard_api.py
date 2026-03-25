@@ -29,6 +29,13 @@ max_steps: 6
 temperature: 0.8
 """
 
+PROMPT_MEDIUM = """# Refund Copilot
+Refund customers after checking the billing sandbox.
+Escalate unusual cases for approval.
+max_steps: 4
+temperature: 0.4
+"""
+
 PROMPT_DIFF = """diff --git a/prompts/refund.txt b/prompts/refund.txt
 index 1..2 100644
 --- a/prompts/refund.txt
@@ -143,6 +150,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["design_profiles"][0]["headline_summary"]
     assert payload["design_profiles"][0]["drift_label"] in ["small drift", "medium drift", "large drift"]
     assert payload["design_profiles"][0]["drift_tone"] in ["low", "medium", "high"]
+    assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is True
     assert isinstance(payload["design_profiles"][0]["attribute_findings"], list)
     if payload["design_profiles"][0]["attribute_findings"]:
         assert payload["design_profiles"][0]["attribute_findings"][0]["reason"]
@@ -191,3 +199,66 @@ def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
     assert payload["baseline"]["artifact_path"] == "prompts/refund.txt"
     assert payload["baseline"]["content_text"] == PROMPT_CURRENT
     assert payload["dashboard"]["baseline_version_count"] == 1
+
+
+def test_dashboard_api_promotes_current_pr_source_over_later_backfill_ingestion(tmp_path):
+    db_path = str(tmp_path / "api-dashboard.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_pr_profile(db_path)
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-2": PROMPT_MEDIUM}[ref],
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["baseline"]["content_text"] == PROMPT_CURRENT
+
+
+def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
+    db_path = str(tmp_path / "api-dashboard.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["design_profiles"][0]["provenance"] is None
+    assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is False

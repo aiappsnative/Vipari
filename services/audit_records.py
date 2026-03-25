@@ -117,6 +117,7 @@ class ArtifactVersionRecord:
     line_count: int
     previous_version_id: int | None
     created_at: float
+    content_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1057,6 +1058,7 @@ def _row_to_artifact_version(row: sqlite3.Row) -> ArtifactVersionRecord:
         line_count=row["line_count"],
         previous_version_id=row["previous_version_id"],
         created_at=row["created_at"],
+        content_text=row["content_text"],
     )
 
 
