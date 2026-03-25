@@ -46,8 +46,10 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/drift-engine-v1` milestone
 	- includes the merged `feature/pr-escalation-v1` slice
 	- includes the merged `feature/approved-baseline-v1` slice
-	- is green at the full-suite level
-	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, and approved-baseline provenance
+	- includes the merged `feature/repo-provenance-v1` slice
+	- includes the merged `feature/dashboard-ux-v1` slice
+	- is green at the full-suite level (`83 passed` on the latest local verification)
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, and lightweight baseline promotion
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-engine-v1`
@@ -82,9 +84,9 @@ This framing should shape roadmap decisions:
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
-	- current dashboard is now directionally customer-oriented, but still needs richer provenance and more varied real-world data
+	- current dashboard is now directionally customer-oriented, but still needs denser PR-linked evidence and more varied real-world data
 	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
-	- dashboard still needs stronger provenance and reviewer workflow context to move from insightful to indispensable
+	- dashboard still needs stronger merged-commit linkage and reviewer-target quality on history-heavy OSS repositories
 
 ### Completed slices on `feature/drift-engine-v1`
 1. Diff parsing and AI relevance classification
@@ -111,17 +113,18 @@ This framing should shape roadmap decisions:
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
 
 ### Next prioritized slices after the merge
-1. Richer provenance and reviewer workflow context on repo detail pages
-2. Explicit baseline approval action/workflow for critical control surfaces
-3. Signal fusion improvements between deterministic and semantic findings
-4. More representative OSS/demo data plus an OSS evaluation harness
+1. PR-linked evidence density and merged-commit reviewer-target linkage on real OSS repos
+2. Signal fusion improvements between deterministic and semantic findings
+3. Discovery precision improvements for large OSS onboarding and backfill
+4. More representative OSS/demo data plus a repeatable OSS evaluation harness
 5. Production-oriented persistence and deployment hardening
 
 Suggested next branch sequence:
-- `feature/repo-provenance-v1`
-- `feature/baseline-approval-v1`
+- `feature/repo-evidence-v1`
 - `feature/signal-fusion-v1`
+- `feature/discovery-precision-v1`
 - `feature/oss-eval-harness-v1`
+- `feature/production-persistence-v1`
 
 ### What not to build yet
 
@@ -133,7 +136,7 @@ Suggested next branch sequence:
 
 The newly implemented dashboard is now the right structural product surface, but it is not yet the final customer-facing product end state.
 
-The next design priority should be to deepen the decision surface with better provenance and stronger real-world examples, not to add more generic metrics.
+The next design priority should be to deepen the decision surface with denser PR-linked evidence, stronger merged-commit linkage, and stronger real-world examples, not to add more generic metrics.
 
 Today's architecture priority should be to preserve the extracted frontend split and keep hardening it against payload evolution before adding more product complexity.
 
@@ -185,7 +188,7 @@ Completed today on `feature/dashboard-ux-v1`:
 - real OSS onboarding validation completed for `doria90/hermes-agent`
 - live local dashboard verification succeeded on a clean non-reload server at `127.0.0.1:8002`
 
-Tomorrow's highest-value continuation should be:
+Highest-value follow-on work from that checkpoint was:
 
 1. improve signal quality on real OSS repos, especially PR-linked evidence density
 2. tighten merged-commit / PR provenance so repo case files route to better review targets
@@ -206,58 +209,30 @@ Completed on `feature/dashboard-ux-v1` after the triage-first redesign:
 
 Current validation status:
 
-- full automated suite passes locally (`80 passed`)
-- dashboard-specific suite passes locally (`5 passed`)
-- audit worker suite passes locally (`26 passed`)
+- full automated suite passes locally (`83 passed`)
+- dashboard API/read-model regression coverage passed during final hardening
+- operator/onboarding/static-profile regression coverage passed during final hardening
 
 ### Near-term execution plan
 
-#### 1. `feature/pr-escalation-v1`
+#### Recently completed and now merged to `main`
+
+- `feature/pr-escalation-v1`
+- `feature/approved-baseline-v1`
+- `feature/repo-provenance-v1`
+- `feature/dashboard-ux-v1`
+
+#### 1. `feature/repo-evidence-v1`
 
 Purpose:
-- make the PR review workflow the unmistakable product wedge
+- strengthen reviewer-target quality on real repositories where historical drift exists but PR-linked evidence is sparse
 
 Planned scope:
-- publish a clearer escalation recommendation in PR output
-- add an opinionated static risk taxonomy focused on:
-	- guardrail and policy weakening
-	- capability and blast-radius expansion
-	- autonomy increases
-	- governance bypasses
-	- critical-surface modifications
-- pair PR comments with a GitHub label-based escalation signal rather than jumping straight to hard merge blocking
+- improve merged-commit and PR linkage so repo case files route to better review targets
+- enrich history-backed insights with stronger source attribution and reviewer-facing context
+- keep the read-model focused on actionable evidence rather than new top-level dashboard chrome
 
-#### 2. `feature/approved-baseline-v1`
-
-Purpose:
-- make baseline-relative drift trustworthy by defining one authoritative baseline model across PRs, dashboards, and history views
-
-Planned scope:
-- treat the latest explicitly approved version as the default baseline for a control surface
-- distinguish onboarding baseline, current main, and approved baseline clearly in stored provenance
-- let teams start with sane defaults while nudging them toward explicit approval workflows for critical surfaces
-
-#### 3. `feature/repo-provenance-v1`
-
-Purpose:
-- enrich repo detail pages with stronger reviewer context around where drift came from
-
-Planned scope:
-- add author, PR number, commit/date, and clearer baseline-vs-PR provenance labels where available
-- improve repo-detail narratives so reviewers can answer "who changed this, when, and in what review context?"
-- keep the change read-model focused rather than adding more top-level panels
-
-#### 3.5. `feature/baseline-approval-v1`
-
-Purpose:
-- turn approved-baseline provenance into an explicit operator action rather than only an onboarding default
-
-Planned scope:
-- add a minimal action to promote a current artifact version/profile to the approved baseline
-- keep the first version operational and lightweight rather than introducing a heavyweight governance workflow
-- make approval changes visible in provenance and repo-detail history surfaces
-
-#### 4. `feature/signal-fusion-v1`
+#### 2. `feature/signal-fusion-v1`
 
 Purpose:
 - tighten the relationship between deterministic findings and semantic review output
@@ -267,7 +242,17 @@ Planned scope:
 - improve final reviewer explanations when the two channels disagree
 - add regression fixtures for common conflict cases
 
-#### 5. `feature/oss-eval-harness-v1`
+#### 3. `feature/discovery-precision-v1`
+
+Purpose:
+- reduce onboarding and backfill noise on larger OSS repositories
+
+Planned scope:
+- tighten candidate-path discovery and grouping heuristics further
+- reduce low-value artifact discovery without missing true AI control surfaces
+- improve repo-level summaries so noisy discovery does not pollute reviewer prioritization
+
+#### 4. `feature/oss-eval-harness-v1`
 
 Purpose:
 - make future changes safer by evaluating the engine against representative OSS repos and curated scenarios
@@ -276,6 +261,16 @@ Planned scope:
 - add repeatable seeded-repo runs
 - record expected overview and repo-detail outputs for key scenarios
 - turn recent manual OSS validation into lightweight automated coverage
+
+#### 5. `feature/production-persistence-v1`
+
+Purpose:
+- harden local-stage persistence and deployment assumptions toward a production-ready posture
+
+Planned scope:
+- define the next durable-store step beyond the current local SQLite shape
+- keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
+- document a production-oriented path without overbuilding the local developer workflow
 
 ### Trial success criteria for the next version
 

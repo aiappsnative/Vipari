@@ -1,6 +1,8 @@
-# Session Handoff: `repo-provenance-v1`
+# Session Handoff: `repo-provenance-v1` (Archived)
 
-## Current state
+> Archive note: this slice has already been merged into `main`. This document is preserved as historical implementation context only. For the active roadmap, use [Plan.MD](../Plan.MD). For shipped outcomes, use [CHANGELOG.md](../CHANGELOG.md).
+
+## Archived state
 
 As of 2026-03-23:
 
@@ -20,7 +22,7 @@ Current `main` head:
 
 - `e3c05bc` — `docs: refresh roadmap after baseline merge`
 
-## Next planned slice
+## Historical planned slice
 
 Name:
 
@@ -153,14 +155,14 @@ Core candidates:
 - `tests/test_audit_history.py`
 - `tests/test_operator_api.py`
 
-## First concrete questions to answer next session
+## First concrete questions captured at the time
 
 1. What provenance metadata do we already persist but not surface?
 2. Which repo-detail cards are most important for reviewer trust?
 3. Can we add actor/author context cheaply from current data, or should that wait?
 4. What is the smallest provenance payload that improves reviewer understanding without adding UI debt?
 
-## Suggested first move next session
+## Suggested first move at the time
 
 1. create `feature/repo-provenance-v1`
 2. map current provenance fields and read paths

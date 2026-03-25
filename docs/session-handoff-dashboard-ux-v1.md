@@ -1,6 +1,8 @@
-# Session Handoff: `dashboard-ux-v1`
+# Session Handoff: `dashboard-ux-v1` (Archived)
 
-## Current state
+> Archive note: this slice has already been merged into `main`. This document is preserved as historical implementation context only. For the active roadmap, use [Plan.MD](../Plan.MD). For shipped outcomes, use [CHANGELOG.md](../CHANGELOG.md).
+
+## Archived state
 
 As of 2026-03-24:
 
@@ -24,7 +26,7 @@ Current dashboard limitations:
 - panels feel too equally weighted
 - the dashboard is informative, but not yet optimized for “what should I open next in GitHub?”
 
-## Next planned slice
+## Historical planned slice
 
 Name:
 
@@ -676,7 +678,7 @@ If work continues after this branch is merged, the next highest-value slice shou
 3. keep refining discovery precision for large OSS repos
 4. evaluate whether the current top-ranked items still hold up across a broader candidate set
 
-## Tomorrow starting checklist
+## Historical restart checklist
 
 When work resumes, the fastest useful restart path is:
 
@@ -690,6 +692,6 @@ When work resumes, the fastest useful restart path is:
   - discovery precision on OSS repos
   - lightweight OSS evaluation harness
 
-Recommended first implementation target tomorrow:
+Recommended first implementation target at the time:
 
 - improve reviewer target quality on real repos by linking more repo insights to concrete PR or merged-commit provenance

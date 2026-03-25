@@ -4,7 +4,7 @@
 
 This document describes the first implemented slice of the GitHub-native drift engine: the static drift-profile layer.
 
-It explains what was built, why it exists, how it fits the PromptDrift product thesis, and how it should evolve into persistence, PR-facing summaries, and longitudinal trend analysis.
+It explains what was built, why it exists, how it fits the PromptDrift product thesis, and how it should evolve into stronger repo evidence, better signal fusion, and longitudinal trend analysis.
 
 Read this alongside [SOUL.md](../SOUL.md), [Plan.MD](../Plan.MD), and [docs/detection-engine-plan.md](detection-engine-plan.md).
 
@@ -31,8 +31,8 @@ That is a major conceptual step toward:
 - governance-oriented reporting
 - reviewer-visible design-drift summaries in pull requests
 
-For the future product, the default baseline should not be “previous version” or a raw onboarding snapshot.
-It should be the **latest explicitly approved version** of a control surface, with temporary fallbacks only until an approved baseline exists.
+The current product direction is now explicit:
+the preferred baseline is the **latest explicitly approved version** of a control surface, with onboarding or historical fallbacks used only when no approved baseline exists yet.
 
 ---
 
@@ -121,12 +121,14 @@ Current outputs:
 - `attribute_deltas`
 - `narrative`
 
-This object now informs PR summaries, stored audit records, and trend queries, and it should continue expanding into richer repo-detail provenance and reviewer workflows.
+This object now informs PR summaries, stored audit records, and trend queries.
 
-In the next product version, this object should also support explicit baseline provenance so reviewers can tell whether a drift comparison was computed against:
-- an approved baseline,
-- an onboarding fallback baseline,
-- or a less authoritative historical reference.
+Baseline provenance is now part of the broader product contract around these comparisons:
+- approved baseline when one exists
+- onboarding fallback when no approved baseline exists yet
+- historical fallback when that is the best available reference
+
+The next product improvement is not to invent provenance from scratch, but to make repo evidence and reviewer-target context denser and easier to trust.
 
 ---
 
@@ -278,14 +280,13 @@ The first onboarding integration is now in place through persisted onboarding ba
 
 ## Current limitations
 
-The current implementation deliberately does **not** yet do the following:
+The current implementation deliberately still has important limits:
 
-- attach profile deltas to `pull_request_audits`
-- select a real stored baseline automatically
-- read GitHub review metadata directly from persisted records or live API lookups
-- use embeddings for semantic similarity
-- support artifact-type-specific scoring models
-- generate customer-facing radar/timeline visualizations
+- semantic similarity remains lexical and lightweight rather than embedding-based
+- scoring is still mostly artifact-agnostic and heuristic-first
+- repo-level urgency is still stronger when historical backfill exists than when PR-linked evidence is sparse
+- profile outputs are explainable, but they are not yet fused as tightly as they should be with deterministic and semantic review channels
+- customer-facing visualization remains intentionally lightweight and reviewer-first rather than exhaustive
 
 Current semantic similarity is lexical and lightweight.
 That is acceptable for the first slice because the main goal is architectural progress, not final scoring sophistication.
@@ -297,7 +298,7 @@ That is acceptable for the first slice because the main goal is architectural pr
 ### 1. Enrich persisted profile snapshots
 Extend durable storage with:
 - stronger agent-level identifiers in addition to artifact path lineage
-- explicit baseline provenance types (previous version vs approved baseline vs onboarding baseline)
+- cleaner baseline provenance read models across approved, onboarding, and historical references
 - easier read models for timeline and repo-level aggregations
 
 ### 2. Feed PR review output
@@ -306,11 +307,11 @@ Expand the current compact PR summary block such as:
 - `Capability risk: 0.40 -> 0.58 (+0.18)`
 - `Autonomy: 0.30 -> 0.45 (+0.15)`
 
-### 3. Introduce stored baselines
-Support baseline selection from:
-- previous artifact version
-- onboarding baseline
-- latest approved profile
+### 3. Strengthen repo evidence and reviewer targeting
+Use drift-profile outputs more directly to support:
+- better repo-detail review targets
+- clearer linkage between historical posture movement and concrete PR or merged-change evidence
+- less dependence on raw history accumulation alone
 
 ### 4. Add trend read models
 The first read-side slice now supports:

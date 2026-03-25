@@ -75,14 +75,19 @@ Implemented today:
 - webhook-path signature verification, diff fetch, AI relevance gating, and audit job creation
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
+- escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels for high-confidence cases
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
+- approved-baseline-aware drift comparisons shared across PR review, onboarding history, and dashboard read models
 - first-pass PR comment integration for static drift summaries when artifact snapshots are available
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
 - a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models
+- direct provenance links, concise `what changed / why flagged / where` summaries, and code-level posture evidence in repo and overview dashboard surfaces
+- lightweight baseline promotion from the repo case file using the latest stored source version
 - dashboard aggregation optimized for larger OSS repositories so per-repo views stay interactive
 - bounded OSS onboarding improvements through narrower discovery candidate selection and direct GitHub contents API reads for artifact content
+- persisted snapshot content for onboarding baselines, historical versions, and PR versions so later explanations can cite exact changed lines
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -91,11 +96,11 @@ Implemented today:
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 
 Still intentionally incomplete:
-- a crisp PR escalation workflow with opinionated taxonomy and explicit escalation signals
-- one authoritative approved-baseline model shared by PR review, dashboards, and history views
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
-- a value-first dashboard insights layer that translates artifact history into customer actions and reviewer priorities
+- denser PR-linked evidence on real OSS repos when urgency currently comes mostly from historical backfill
+- richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
+- a repeatable OSS evaluation harness for regression-proofing real-repo behavior
 - production-grade persistence/deployment posture beyond the current local-stage setup
 
 ### Dashboard evolution note
@@ -136,17 +141,18 @@ The overview page should now also be treated as the landing risk surface, with a
 
 It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
 
-Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, and provenance-lite context derived from Git history and PR records.
+Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
 
 Recent OSS validation against `doria90/hermes-agent` also showed the current architectural boundary clearly: the dashboard is now useful on real backfilled history, but urgency is still strongest when PromptDrift has PR-linked evidence in addition to historical hotspots.
 
 In other words, the dashboard is now a real first decision surface and should keep evolving in that direction rather than reverting to a raw metrics surface.
 
 The next architectural improvements for this layer are:
-- stronger provenance on repo detail pages
-- denser cross-repo examples and evaluation coverage
-- better signal fusion so the dashboard reflects more trustworthy reviewer priorities
+- denser PR-linked evidence on real OSS repos
 - richer merged-commit and PR linkage so real OSS repos produce more than history-only urgency
+- stronger discovery precision and grouping on larger OSS repositories
+- better signal fusion so the dashboard reflects more trustworthy reviewer priorities
+- repeatable evaluation coverage so dashboard prioritization changes can be verified against seeded and OSS scenarios
 
 ### Execution model
 

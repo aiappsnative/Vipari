@@ -2,322 +2,276 @@
 
 ## Purpose
 
-This document defines the end-goal validation plan for PromptDrift's onboarding and historical drift capabilities.
+This document now defines the evaluation foundation for real-repository validation and the future `feature/oss-eval-harness-v1` slice.
 
-The target scenario is simple:
+It should be read as a bridge between:
 
-- an open-source repository installs PromptDrift as a GitHub App,
-- PromptDrift discovers the repository's AI-relevant control surface,
-- PromptDrift establishes an initial baseline,
-- PromptDrift selectively digests enough historical evolution to power drift analysis,
-- and PromptDrift produces useful reviewer signals, history views, and dashboard-level summaries.
+- the OSS onboarding and dashboard work already merged on `main`
+- the next product-first iterations (`feature/repo-evidence-v1`, `feature/signal-fusion-v1`, and `feature/discovery-precision-v1`)
+- the later need for a repeatable evaluation harness that keeps those improvements honest
 
-This document is the bridge between today's feature implementation and the final real-world proof that the product works on repositories we do not control.
+The goal is no longer to prove that PromptDrift can touch a public repository at all.
+That proof now exists.
+
+The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop.
 
 ---
 
-## Why this is the right end-goal test
+## Current validated baseline
 
-Yes — this is the right test.
+PromptDrift has already validated meaningful OSS onboarding behavior on real repositories.
 
-It validates the full product story rather than only local unit correctness.
+Confirmed on `main` today:
 
-A successful open-source onboarding evaluation proves that PromptDrift can:
-- onboard a fresh repository with no hand-curated fixtures,
-- find AI-relevant prompts/configs/tooling from repository structure and content,
-- establish meaningful baselines,
-- digest real historical evolution,
-- populate the drift engine with durable history,
-- and surface useful results in the same GitHub-native workflow customers would actually use.
+- baseline-first onboarding works on public repositories
+- selective historical backfill can persist artifact versions and static profile lineage
+- the dashboard can render real repo history and case-file views
+- persisted snapshot content can support code-level posture evidence later
+- large-repo onboarding needed bounded discovery and direct GitHub contents reads to stay operationally reasonable
 
-This is stronger than testing only synthetic repositories because it measures:
-- ambiguity tolerance,
-- generalization,
-- onboarding robustness,
-- scalability of historical digestion,
-- and product usefulness on messy real codebases.
+Known completed live validations:
+
+- `doria90/openfang`
+- `doria90/hermes-agent`
+
+Current takeaway:
+
+- PromptDrift is already past the "toy demo" stage for OSS onboarding
+- the biggest remaining trust gaps are discovery precision, PR-linked evidence density, and repeatability of evaluation outputs
+- the harness should therefore optimize for product usefulness, not only ingest success
 
 ---
 
 ## Evaluation objective
 
-PromptDrift should be able to onboard a selected open-source repository and answer these questions with useful accuracy:
+For each selected OSS repository, PromptDrift should be able to answer these questions with useful, reviewable evidence:
 
-- Where are the likely AI control surfaces in this repo?
-- What should be considered the initial baseline for those artifacts?
-- How have those artifacts evolved over time?
-- Which prompts/configs/tools have drifted most from baseline?
-- Where did guardrails weaken or strengthen?
-- Where did capability or blast radius expand?
-- Does the resulting history support useful PR review and dashboard summaries?
+- where are the likely AI control surfaces?
+- which discovered artifacts look authoritative enough to baseline?
+- how has each important artifact drifted over time?
+- which artifacts deserve reviewer attention now?
+- where is urgency coming from real PR or merged-change evidence versus only historical hotspots?
+- does the resulting dashboard output help a human decide what to inspect next?
+
+---
+
+## Harness contract
+
+The future harness should produce a stable package of evaluation artifacts for each candidate repo.
+
+### Required inputs
+
+- repository identity (`owner/repo`)
+- GitHub App installation context
+- onboarding mode (`baseline_only` or `baseline_plus_backfill`)
+- optional backfill limits or filters
+- optional notes about expected AI control surfaces for manual comparison
+
+### Required workflow steps
+
+1. run repository onboarding
+2. persist the discovered artifact inventory and baseline versions
+3. optionally execute selective historical backfill
+4. collect overview and repo-detail read-model payloads
+5. record a short reviewer judgment against the outputs
+
+### Required outputs
+
+Each run should save or emit:
+
+- onboarding summary
+- discovered artifact inventory
+- baseline coverage summary
+- backfill execution summary
+- repo dashboard payload snapshot
+- overview dashboard payload snapshot
+- top artifacts requiring review
+- manual evaluation notes against a fixed rubric
+
+The purpose of the harness is not only replayability. It is comparability across branches.
 
 ---
 
 ## Product capabilities this evaluation must validate
 
-### 1. App installation and repository discovery
+### 1. Discovery quality
 PromptDrift should:
-- authenticate as a GitHub App,
-- enumerate repository contents safely,
-- detect likely AI-relevant artifact paths,
-- classify them into meaningful categories.
+- detect likely prompts, policies, tool definitions, model-routing config, and agent wiring
+- keep obviously generic code out of the primary artifact set
+- expose confidence or lower-confidence handling when discovery is uncertain
 
-### 2. Baseline-first onboarding
+### 2. Baseline-first onboarding quality
 PromptDrift should:
-- capture a present-day baseline artifact inventory,
-- persist baseline versions and metadata,
-- attach confidence notes where discovery is uncertain.
+- persist a usable initial artifact inventory
+- store baseline versions for discovered control surfaces
+- distinguish stronger findings from weaker discovery guesses
 
-### 3. Selective historical digestion
+### 3. Historical/backfill usefulness
 PromptDrift should:
-- inspect historical commits or PRs relevant to discovered artifacts,
-- avoid replaying the entire commit graph unless explicitly needed,
-- build a useful lineage graph for artifact evolution,
-- produce durable static profile history.
+- build enough artifact history to explain meaningful drift
+- avoid replaying irrelevant repository history
+- preserve clear lineage and provenance for stored versions
 
-### 4. Drift engine usefulness
+### 4. Reviewer usefulness
 PromptDrift should:
-- compute baseline-relative profile deltas,
-- identify top-drifting artifacts,
-- support drift narratives over time,
-- surface the results in reviewer- and dashboard-friendly form.
+- surface plausible high-priority artifacts
+- explain why an artifact is risky or important
+- avoid letting urgency come only from noisy history accumulation
 
-### 5. Dashboard and reporting usefulness
-PromptDrift should eventually show:
-- repo-level summary cards,
-- most-changed artifacts,
-- highest capability-risk shifts,
-- biggest guardrail regressions,
-- strongest governance regressions,
-- timelines of major drift jumps.
-
-It should also answer the practical customer questions:
-- what needs review now,
-- what changed in a meaningful way,
-- which artifacts are noise versus real control surfaces,
-- and what a reviewer should inspect next.
+### 5. Dashboard usefulness
+PromptDrift should:
+- make `/dashboard` useful as a triage surface
+- make `/dashboard/{owner/repo}` useful as a case file
+- help a reviewer decide what to inspect next in GitHub
 
 ---
 
-## Recommended evaluation phases
+## Pass / fail criteria
 
-### Phase 1 — Candidate repo selection
-Build a small candidate set of open-source repositories.
+The harness should grade each run across five dimensions.
 
-Selection criteria:
-- public GitHub repos,
-- visible prompts/configs/agent workflows,
-- meaningful commit history,
-- multiple AI control surfaces,
-- preferably a mix of prompt-heavy and code-wiring-heavy repos.
+### Discovery pass criteria
 
-Good candidate categories:
-- prompt engineering libraries,
-- agent frameworks,
-- LLM application templates,
-- AI assistants with tool definitions,
-- retrieval-augmented example apps.
+Pass when:
+- major obvious AI control surfaces are discovered
+- false positives do not dominate the primary queue
+- artifact categorization is directionally correct
 
-Target set:
-- 3 small repos,
-- 2 medium repos,
-- 1 more complex repo for stretch validation.
+Fail when:
+- the main artifact list is mostly generic code
+- obviously important prompts or policies are missed
+- lower-confidence findings overwhelm the useful queue
 
-### Phase 2 — Baseline-first onboarding validation
-For each selected repository, test whether PromptDrift can:
-- identify candidate AI artifacts,
-- classify artifact type,
-- create an onboarding inventory,
-- store baseline versions,
-- explain confidence and coverage.
+### Baseline pass criteria
 
-Success criteria:
-- high recall on obvious AI control surfaces,
-- low confusion between generic code and AI-control code,
-- reasonable artifact categorization,
-- baseline persistence works without manual cleanup.
+Pass when:
+- most high-confidence discovered artifacts receive baseline versions
+- baseline provenance is visible enough to interpret drift later
 
-### Phase 3 — Historical digestion validation
-For each repository, run selective backfill on discovered artifacts.
+Fail when:
+- important artifacts lack a baseline without clear reason
+- baseline state is too ambiguous to trust later comparisons
 
-PromptDrift should:
-- ingest only relevant history,
-- link artifact versions cleanly,
-- create static profile history,
-- preserve repo/path provenance,
-- avoid excessive duplicate history.
+### Historical/backfill pass criteria
 
-Success criteria:
-- history is complete enough to explain major drift,
-- baseline-to-current comparisons are meaningful,
-- top-drifting artifacts are plausible to a human reviewer,
-- runtime is operationally bounded.
+Pass when:
+- history explains major drift on important artifacts
+- duplicate or fragmented lineage is limited
+- runtime remains operationally bounded for the repo size
 
-### Phase 4 — Reviewer output validation
-Replay selected historical PRs or commit deltas through PromptDrift.
+Fail when:
+- lineage is sparse or incoherent
+- backfill cost is disproportionate to the value of the resulting history
 
-PromptDrift should produce:
-- deterministic findings,
-- semantic review notes,
-- static drift summaries,
-- profile deltas against prior baselines.
+### Reviewer-output pass criteria
 
-Success criteria:
-- reviewer output is understandable,
-- summaries highlight the right dimensions,
-- obvious guardrail/capability changes are surfaced,
-- output is not dominated by noise.
+Pass when:
+- top-ranked items feel plausible to a human reviewer
+- explanations point to meaningful guardrail, capability, autonomy, or governance movement
+- repo detail suggests a credible next review target
 
-### Phase 5 — Dashboard/read-side validation
-Once dashboard and trend surfaces exist, validate that they answer:
-- what drifted most,
-- what changed most often,
-- what got riskier,
-- what governance weakened,
-- what patterns matter at repo level.
-- and what the customer should do next.
+Fail when:
+- urgency is driven mainly by accumulated historical noise
+- ranking feels arbitrary or disconnected from concrete evidence
 
-Success criteria:
-- dashboard summaries are directionally correct,
-- results match repository history reasonably well,
-- a human can use them to prioritize inspection,
-- and the dashboard can distinguish operator/debug metrics from customer-facing review guidance.
+### Dashboard pass criteria
+
+Pass when:
+- overview and repo-detail surfaces agree with the observed repository history
+- a human can use them to choose what to inspect next
+- the product story stays reviewer-first rather than metrics-first
+
+Fail when:
+- outputs are interesting but not actionable
+- dashboard ranking contradicts available provenance and evidence
 
 ---
 
-## Evaluation harness requirements
+## Candidate repository strategy
 
-To support this test well, PromptDrift will need:
-- onboarding inventory persistence,
-- selective historical ingest jobs,
-- static profile read models,
-- top-drifting artifact queries,
-- repo-level aggregation queries,
-- exportable evaluation snapshots,
-- an operator-friendly way to re-run onboarding/backfill for a selected repo.
+The harness should keep a small but diverse candidate set.
 
-Recommended future harness components:
-- `onboard_repository()` workflow,
-- `backfill_repository_history()` workflow,
-- repo-level evaluation fixture exporter,
-- benchmark script for candidate repos,
-- comparison report between expected vs discovered AI control surfaces.
+### Current confirmed candidates
 
-Current implementation status:
-- `onboard_repository()` now exists as a baseline-first onboarding workflow
-- selective historical backfill-job planning now exists for discovered artifacts
-- `execute_repository_history_backfill()` now exists to persist historical artifact versions and static profile lineage for planned jobs
-- operator/query surfaces now exist via JSON API routes, dashboard pages, and a local CLI
-- real OSS validation has now been exercised against `doria90/openfang`, which confirmed both dashboard viability and current discovery noisiness on public repositories
-- real OSS validation has now also been exercised against `doria90/hermes-agent`, which completed onboarding with 22 discovered artifacts, 22 baseline versions, and completed historical backfill jobs
-- candidate-path narrowing plus direct GitHub contents fetches were required to keep larger public-repo onboarding operationally bounded
-- OSS candidate-runner automation and benchmark exports are still pending
+- `doria90/openfang`
+- `doria90/hermes-agent`
 
-Current product takeaway from OSS validation:
-- PromptDrift can now onboard and render a real public repository,
-- it can now sustain a triage-first dashboard flow on real OSS history,
-- but the next milestone is not more raw metrics,
-- it is denser PR-linked evidence, better discovery precision, and customer-facing insights that hold up outside hand-picked historical hotspots.
+### Target expansion shape
+
+- 2–3 smaller prompt-heavy repos
+- 2 medium repos with agent wiring or tool definitions
+- 1 larger stretch repo with noisier structure and meaningful history
+
+Preferred repo traits:
+
+- public GitHub availability
+- visible prompts, policies, or agent workflow config
+- meaningful commit history
+- at least a few distinct AI control surfaces
+- a mix of text-heavy and code-wiring-heavy layouts
 
 ---
 
 ## What to measure
 
-### Discovery quality
-- count of discovered AI artifacts,
-- precision/recall against manual spot-checks,
-- artifact-type classification quality,
-- confidence distribution.
+### Quantitative checks
 
-### Baseline quality
-- percent of discovered artifacts with persisted baseline,
-- onboarding completeness,
-- false-positive artifact baselines.
+- discovered artifact count
+- percent of high-confidence artifacts with persisted baselines
+- historical versions linked per artifact
+- onboarding duration per repo
+- backfill duration per repo
+- failed or retried operations
 
-### Historical digestion quality
-- artifact lineage coverage,
-- number of linked historical versions,
-- duplicate/fragmented history rate,
-- ingest runtime and storage cost.
+### Qualitative checks
 
-### Drift usefulness
-- plausibility of top-drifting artifacts,
-- correctness of obvious guardrail/capability/autonomy changes,
-- dashboard usefulness in human spot review,
-- reviewer usefulness of PR summary blocks.
+- precision of the primary artifact queue
+- plausibility of top-drifting artifacts
+- clarity of provenance and review-target explanations
+- usefulness of repo case-file output for a human reviewer
 
-### Operational metrics
-- onboarding duration per repo,
-- historical backfill duration,
-- storage growth per repo,
-- number of failed/retried ingest tasks.
+The harness should keep both kinds of measurements. Product usefulness cannot be reduced to counts alone.
 
 ---
 
-## Risks and guardrails
+## Immediate gaps this harness must expose
 
-### Risk: over-consuming full history
-Guardrail:
-- start baseline-first,
-- use selective historical backfill only on discovered artifacts,
-- keep time/cost bounded.
+This document should shape the next iterations by making the current weak spots explicit.
 
-### Risk: AI artifact discovery is too noisy
-Guardrail:
-- store discovery confidence,
-- make artifact purpose probabilistic,
-- allow later manual overrides if necessary.
+The harness needs to tell us:
 
-### Risk: dashboard becomes misleading before baselines are trustworthy
-Guardrail:
-- clearly label onboarding confidence,
-- distinguish baseline-first data from backfilled history,
-- avoid overclaiming on low-confidence repos.
+1. whether `feature/repo-evidence-v1` actually improves reviewer-target quality
+2. whether `feature/signal-fusion-v1` makes ranking and explanations more trustworthy
+3. whether `feature/discovery-precision-v1` reduces low-value artifacts without missing real control surfaces
+4. whether later changes improve repo usefulness across more than one hand-picked repository
 
-### Risk: open-source repos vary wildly in structure
-Guardrail:
-- test across repo categories,
-- compare by cohort rather than treating one repo as decisive,
-- treat candidate set expansion as an ongoing evaluation program.
+That means the harness should preserve enough output to compare branch-to-branch behavior, not only branch-to-main pass/fail status.
 
 ---
 
-## Definition of success
+## Implementation notes for `feature/oss-eval-harness-v1`
 
-The end-goal test is successful when PromptDrift can onboard selected open-source repos and produce outputs that a human reviewer would judge as useful and directionally correct.
+The future harness slice should stay lightweight.
 
-At minimum, that means:
-- onboarding finds the major AI control surfaces,
-- historical digestion builds usable artifact/profile history,
-- top drift candidates are plausible,
-- PR summaries highlight meaningful design movement,
-- dashboard-level summaries help prioritize review.
+Recommended components:
 
----
+- a small candidate-repo registry
+- one reproducible runner for onboarding and optional backfill
+- saved payload snapshots for overview and repo detail
+- a fixed evaluator rubric stored alongside run results
+- one branch-comparison summary that calls out product regressions or improvements
 
-## Immediate preparation plan
-
-### What to build next
-1. Read-side trend queries over persisted static profiles.
-2. Repo-level aggregation helpers for top-drifting artifacts.
-3. Onboarding inventory data model.
-4. Selective historical ingest job model.
-5. Simple operator CLI/API to onboard and backfill a repository.
-6. Dashboard primitives backed by those read models.
-
-### What to prepare in parallel
-- shortlist candidate OSS repos,
-- define manual review rubrics for discovery quality,
-- define a benchmark report format,
-- save sample outputs for regression comparison.
+It should not become a heavyweight benchmarking platform before PromptDrift has stronger repo evidence and discovery quality.
 
 ---
 
 ## Summary
 
-The final proof of PromptDrift should not be a synthetic demo.
+PromptDrift has already shown it can onboard and render real OSS repositories.
 
-It should be this:
+The next step is to make that proof repeatable.
+
+This evaluation plan exists to ensure that future product work is judged by whether it improves discovery trust, reviewer-target quality, and real decision usefulness on repositories we do not control.
 
 **a real public repository installs PromptDrift, PromptDrift discovers its AI control surface, digests enough history to build drift intelligence, and produces PR and dashboard outputs that are actually useful.**
 

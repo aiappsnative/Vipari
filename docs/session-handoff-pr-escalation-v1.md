@@ -1,14 +1,16 @@
-# Session Handoff: `feature/pr-escalation-v1`
+# Session Handoff: `feature/pr-escalation-v1` (Archived)
+
+> Archive note: this slice has already been merged into `main`. This document is preserved as historical implementation context only. For the active roadmap, use [Plan.MD](../Plan.MD). For shipped outcomes, use [CHANGELOG.md](../CHANGELOG.md).
 
 ## Status
 
-This branch was created from `main` on 2026-03-21 to begin the next planned slice:
+This branch was created from `main` on 2026-03-21 to begin the planned slice described by this historical note:
 
 - branch: `feature/pr-escalation-v1`
 - strategic docs already updated on `main`
 - local working tree was clean before this handoff note was added
 
-## Goal for the next session
+## Historical goal for the follow-on session
 
 Make the pull-request review workflow the clear product wedge by adding a high-signal escalation path:
 
@@ -125,9 +127,9 @@ A strong first pass should:
 
 Note:
 
-- a full-suite run was not captured cleanly tonight because an earlier terminal test invocation ended with an interruption while collecting tests; re-run the full suite tomorrow from repo root before or after the first implementation pass
+- a full-suite run was not captured cleanly that night because an earlier terminal test invocation ended with an interruption while collecting tests; the follow-on session was expected to re-run the full suite from repo root before or after the first implementation pass
 
-## Suggested first move tomorrow
+## Suggested first move at the time
 
 Start in this order:
 

@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-03-25 — Dashboard provenance, baseline promotion, and roadmap refresh
+
+### Added
+- direct provenance links from dashboard surfaces to backing PRs or commits when source context exists
+- concise `What changed`, `Why flagged`, and `Where` summaries in overview and repo case-file read models
+- persisted snapshot content for onboarding baselines, historical versions, and PR versions so dashboard posture views can cite exact code-level evidence
+- qualitative posture drift labels plus per-attribute comparison details in repo case files
+- lightweight approved-baseline promotion from the repo case file using the latest stored source version
+- idempotent handling for unchanged baseline promotions
+- roadmap and architecture doc refreshes aligned to the merged dashboard, provenance, and approved-baseline work
+
+### Changed
+- dashboard UX now behaves as a triage-first portfolio inbox with a linked repo case-file workflow
+- portfolio and repo detail surfaces now emphasize reviewer targets, provenance, and actionable posture context over generic metrics
+- canonical planning now prioritizes repo evidence, signal fusion, discovery precision, OSS evaluation harness work, and production persistence in that order
+
+### Verified
+- full automated suite passed locally (`83 passed`)
+- dashboard API and read-model regression coverage passed during final hardening
+- operator, onboarding, and static-profile regression coverage passed during final hardening
+- live OSS onboarding and dashboard validation remained successful for `doria90/openfang` and `doria90/hermes-agent`
+
+### Product impact
+- PromptDrift now presents a more credible reviewer workflow on real repositories by pairing drift posture with concrete provenance and baseline authority
+- the next product gap is clearer: stronger PR-linked evidence and reviewer-target quality are now more valuable than additional dashboard chrome
+
+## 2026-03-24 — Dashboard UX hardened for portfolio triage
+
+### Added
+- triage-first overview mode and separate coverage mode for `/dashboard`
+- repo case-file layout with a featured review target, ranked follow-on queue, posture explorer, and lower-confidence progressive disclosure
+- overview risk-state summary, highest-risk drift panel, and control-surface risk panels
+- dashboard payload compatibility hardening so older or sparse payloads degrade safely in the browser
+- larger-repo onboarding improvements through narrower discovery candidate selection and direct GitHub contents API reads
+
+### Changed
+- dashboard frontend was fully split into dedicated `templates/` and `static/` assets rather than continuing inline growth in `main.py`
+- repo detail was repositioned from a generic detail page into a reviewer-focused case file
+
+### Verified
+- real OSS onboarding validation completed for `doria90/hermes-agent`
+- clean local dashboard verification succeeded on a non-reload server instance
+
+### Product impact
+- PromptDrift now has a structurally coherent portfolio surface for triage and repo-level investigation
+- the dashboard is now worth hardening as a product surface, but trust still depends on denser evidence and better reviewer targeting
+
 ## 2026-03-15 — Detection engine and GitHub App flow hardened
 
 ### Added

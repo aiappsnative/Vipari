@@ -1,6 +1,8 @@
-# Session Handoff: `approved-baseline-v1`
+# Session Handoff: `approved-baseline-v1` (Archived)
 
-## Current state
+> Archive note: this slice has already been merged into `main`. This document is preserved as historical implementation context only. For the current roadmap, see [Plan.MD](../Plan.MD). For shipped outcomes, see [CHANGELOG.md](../CHANGELOG.md).
+
+## Archived state
 
 As of 2026-03-22:
 
@@ -15,7 +17,7 @@ Current `main` head after merge:
 
 - `6cb394b` — merge of `feature/pr-escalation-v1`
 
-## Next planned slice
+## Historical planned slice
 
 Name:
 
@@ -134,7 +136,7 @@ Tests should lock in:
 - dashboard/read-side labels match persisted provenance
 - old data degrades gracefully when baseline provenance fields are absent
 
-## Likely files to inspect first tomorrow
+## Likely files to inspect first at the time
 
 Core candidates:
 
@@ -148,14 +150,14 @@ Core candidates:
 - `tests/test_onboarding.py`
 - `tests/test_audit_history.py`
 
-## First concrete questions to answer tomorrow
+## First concrete questions captured at the time
 
 1. Where is the effective baseline selected today for static drift deltas?
 2. What persistence model is the smallest change that can carry baseline provenance cleanly?
 3. Which existing user-facing surfaces already imply a baseline, and how should they label it?
 4. What is the smallest explicit approval concept that creates trust without adding workflow bloat yet?
 
-## Suggested first move tomorrow
+## Suggested first move at the time
 
 1. create `feature/approved-baseline-v1`
 2. map all current baseline-selection code paths

@@ -32,7 +32,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the first merged static-first drift engine milestone.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, and dashboard UX hardening slices.
 
 In practical terms, PromptDrift currently provides:
 
@@ -212,9 +212,10 @@ Useful JSON endpoints:
 
 - the queue and durable store are still local SQLite in the current dev shape
 - the dashboard is now structurally ready for OSS validation, but repo signals are strongest when historical backfill exists and weaker when PR-audit coverage is sparse
-- larger public repos now onboard successfully, but discovery precision and merged-change provenance still need continued refinement
+- larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
+- real OSS repos still need denser PR-linked evidence so urgency is not driven mainly by historical hotspots
 
 ## Safe repo practices
 
