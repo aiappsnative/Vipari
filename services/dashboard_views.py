@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -67,10 +68,13 @@ class DashboardOverviewAttentionRepo:
     highest_priority: str
     highest_insight_title: str | None
     highest_insight_artifact_path: str | None
+    highest_change_summary: str | None
+    highest_flag_summary: str | None
     highest_rationale: str | None
     highest_recommended_action: str | None
     highest_baseline_label: str | None
     highest_review_target: str | None
+    highest_review_url: str | None
     insight_count: int
     lower_confidence_count: int
     review_now_count: int
@@ -127,6 +131,9 @@ class DashboardOverviewRegressionEntry:
     baseline_label: str
     provenance_summary: str
     review_target: str | None
+    review_url: str | None
+    change_summary: str
+    flag_summary: str
     rationale: str
     recommended_action: str
     drift_magnitude: float
@@ -172,10 +179,10 @@ class RepoDashboardArtifactEntry:
     latest_pr_semantic_distance: float
     latest_pr_capability_shift: float
     latest_pr_guardrail_shift: float
-    latest_pr_governance_shift: float
-    latest_pr_autonomy_shift: float
-    leaderboard_drift_magnitude: float
-    latest_activity_at: float
+    latest_pr_governance_shift: float = 0.0
+    latest_pr_autonomy_shift: float = 0.0
+    leaderboard_drift_magnitude: float = 0.0
+    latest_activity_at: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -184,16 +191,19 @@ class RepoDashboardInsightEntry:
     artifact_path: str
     artifact_type: str
     priority: str
-    queue_lane: str
-    score: float
-    confidence_label: str
-    baseline_label: str
-    provenance_summary: str
-    review_target: str | None
-    updated_at: float | None
-    risk_reasons: list[str]
-    rationale: str
-    recommended_action: str
+    queue_lane: str = "primary"
+    score: float = 0.0
+    confidence_label: str = "lower confidence"
+    baseline_label: str = "Baseline: none"
+    provenance_summary: str = ""
+    review_target: str | None = None
+    review_url: str | None = None
+    change_summary: str = ""
+    flag_summary: str = ""
+    updated_at: float | None = None
+    risk_reasons: list[str] = None
+    rationale: str = ""
+    recommended_action: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,15 +219,16 @@ class RepoDashboardControlSurfaceGroup:
 class RepoArtifactTimelinePoint:
     source: str
     label: str
-    source_ref: str | None
-    review_context: str | None
-    created_at: float
-    baseline_provenance: BaselineProvenance | None
-    semantic_distance: float
-    capability_shift: float
-    guardrail_shift: float
-    autonomy_shift: float
-    drift_magnitude: float
+    source_ref: str | None = None
+    source_url: str | None = None
+    review_context: str | None = None
+    created_at: float = 0.0
+    baseline_provenance: BaselineProvenance | None = None
+    semantic_distance: float = 0.0
+    capability_shift: float = 0.0
+    guardrail_shift: float = 0.0
+    autonomy_shift: float = 0.0
+    drift_magnitude: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -242,9 +253,21 @@ class DashboardProfileVector:
 class RepoArtifactProvenance:
     source_type: str
     label: str
-    source_ref: str | None
-    review_context: str | None
-    created_at: float | None
+    source_ref: str | None = None
+    source_url: str | None = None
+    review_context: str | None = None
+    created_at: float | None = None
+
+
+@dataclass(frozen=True)
+class RepoArtifactAttributeFinding:
+    attribute_key: str
+    label: str
+    direction: str
+    delta: float
+    reason: str
+    evidence: list[str]
+    remediation: str
 
 
 @dataclass(frozen=True)
@@ -252,12 +275,16 @@ class RepoArtifactDesignProfile:
     artifact_path: str
     artifact_type: str
     drift_from_baseline: float
-    baseline_profile: DashboardProfileVector
-    current_profile: DashboardProfileVector
-    baseline_provenance: BaselineProvenance | None
-    risk_tags: list[str]
-    narrative: list[str]
-    provenance: RepoArtifactProvenance | None
+    drift_label: str = "small drift"
+    drift_tone: str = "low"
+    baseline_profile: DashboardProfileVector | None = None
+    current_profile: DashboardProfileVector | None = None
+    baseline_provenance: BaselineProvenance | None = None
+    headline_summary: str = ""
+    risk_tags: list[str] = None
+    narrative: list[str] = None
+    attribute_findings: list[RepoArtifactAttributeFinding] = None
+    provenance: RepoArtifactProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -268,13 +295,13 @@ class RepoDashboardView:
     pull_request_audit_count: int
     baseline_version_count: int
     drift_summary: RepoStaticDriftSummary
-    top_drifting_artifacts: list[ArtifactDriftLeaderboardEntry]
-    insights: list[RepoDashboardInsightEntry]
-    lower_confidence_insights: list[RepoDashboardInsightEntry]
-    control_surface_groups: list[RepoDashboardControlSurfaceGroup]
-    history_timelines: list[RepoArtifactHistoryTimeline]
-    design_profiles: list[RepoArtifactDesignProfile]
-    artifacts: list[RepoDashboardArtifactEntry]
+    top_drifting_artifacts: list[ArtifactDriftLeaderboardEntry] = None
+    insights: list[RepoDashboardInsightEntry] = None
+    lower_confidence_insights: list[RepoDashboardInsightEntry] = None
+    control_surface_groups: list[RepoDashboardControlSurfaceGroup] = None
+    history_timelines: list[RepoArtifactHistoryTimeline] = None
+    design_profiles: list[RepoArtifactDesignProfile] = None
+    artifacts: list[RepoDashboardArtifactEntry] = None
 
 
 def list_repo_dashboard_index(db_path: str) -> list[RepoDashboardIndexEntry]:
@@ -488,12 +515,15 @@ class _RepoArtifactProfileContext:
     source_type: str
     label: str
     source_ref: str | None
+    source_url: str | None
     review_context: str | None
     created_at: float
     baseline_provenance: BaselineProvenance | None
     semantic_distance: float
     attribute_deltas: dict[str, float]
     narrative: list[str]
+    signal_terms: list[str]
+    content_text: str | None
 
 
 def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[str, float | int]]:
@@ -559,11 +589,13 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT artifact_path, commit_sha, created_at, baseline_profile_id, baseline_provenance_json,
-                   semantic_distance, profile_json, attribute_deltas_json, narrative_json
-            FROM historical_static_profiles
-            WHERE normalized_artifact_id LIKE ?
-            ORDER BY created_at ASC, id ASC
+             SELECT hsp.artifact_path, hsp.commit_sha, hsp.created_at, hsp.baseline_profile_id, hsp.baseline_provenance_json,
+                 hsp.semantic_distance, hsp.profile_json, hsp.attribute_deltas_json, hsp.narrative_json, hsp.signal_terms_json,
+                 hav.content_text AS content_text
+             FROM historical_static_profiles hsp
+             INNER JOIN historical_artifact_versions hav ON hav.id = hsp.historical_artifact_version_id
+             WHERE hsp.normalized_artifact_id LIKE ?
+            ORDER BY hsp.created_at ASC, hsp.id ASC
             """,
             (_normalized_id_prefix(repo_full),),
         ).fetchall()
@@ -579,12 +611,15 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 source_type="historical",
                 label="Historical backfill",
                 source_ref=f"commit {str(row['commit_sha'])[:7]}",
+                source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
                 review_context="Historical snapshot from backfill",
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
                 attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
                 narrative=json.loads(row["narrative_json"]),
+                signal_terms=json.loads(row["signal_terms_json"]),
+                content_text=row["content_text"],
             )
 
         pr_rows = conn.execute(
@@ -592,9 +627,11 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
              SELECT sap.artifact_path, pra.pr_number, pra.head_sha, pra.status, pra.output_mode,
                  pra.suggested_risk_level, pra.semantic_review_completed, sap.created_at, sap.baseline_profile_id,
                  sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance,
-                   sap.profile_json, sap.attribute_deltas_json, sap.narrative_json
+                                     sap.profile_json, sap.attribute_deltas_json, sap.narrative_json, sap.signal_terms_json,
+                                     av.content_text AS content_text
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            INNER JOIN artifact_versions av ON av.id = sap.artifact_version_id
             WHERE pra.repo_full = ?
             ORDER BY sap.created_at ASC, sap.id ASC
             """,
@@ -612,6 +649,7 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 source_type="pull_request",
                 label="Pull request audit",
                 source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                source_url=_github_pull_request_url(repo_full, int(row["pr_number"])),
                 review_context=_format_pr_review_context(
                     output_mode=row["output_mode"],
                     risk_level=row["suggested_risk_level"],
@@ -623,6 +661,8 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 semantic_distance=float(row["semantic_distance"]),
                 attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
                 narrative=json.loads(row["narrative_json"]),
+                signal_terms=json.loads(row["signal_terms_json"]),
+                content_text=row["content_text"],
             )
 
     return contexts
@@ -630,6 +670,14 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
 
 def _normalized_id_prefix(repo_full: str) -> str:
     return f"{repo_full.lower()}::%"
+
+
+def _github_pull_request_url(repo_full: str, pr_number: int) -> str:
+    return f"https://github.com/{repo_full}/pull/{pr_number}"
+
+
+def _github_commit_url(repo_full: str, commit_sha: str) -> str:
+    return f"https://github.com/{repo_full}/commit/{commit_sha}"
 
 
 def _humanize_output_mode(output_mode: str) -> str:
@@ -679,6 +727,9 @@ def _build_repo_insights(
             baseline_label=_baseline_label(baseline, context),
             provenance_summary=_provenance_summary(context),
             review_target=_review_target(context),
+            review_url=_review_url(context),
+            change_summary=_change_summary(artifact, context),
+            flag_summary=_flag_summary(artifact, priority),
             updated_at=(context.created_at if context is not None else artifact.latest_activity_at or None),
             risk_reasons=_insight_reasons(artifact),
             rationale=rationale,
@@ -876,6 +927,481 @@ def _review_target(context: _RepoArtifactProfileContext | None) -> str | None:
     return context.source_ref or context.label
 
 
+def _review_url(context: _RepoArtifactProfileContext | None) -> str | None:
+    if context is None:
+        return None
+    return context.source_url
+
+
+def _change_summary(artifact: RepoDashboardArtifactEntry, context: _RepoArtifactProfileContext | None) -> str:
+    attribute_deltas = _attribute_deltas_for_summary(artifact, context)
+    source_label = _sentence_source_label(context)
+    changed_labels = _changed_attribute_labels(attribute_deltas)
+    if changed_labels:
+        return f"{source_label} drift detected in {_human_join(changed_labels)}."
+    if artifact.latest_historical_drift_magnitude > 0.35:
+        return f"{source_label} drift detected relative to baseline; no single high-risk attribute dominated."
+    return "No material baseline-relative shift has been isolated yet."
+
+
+def _flag_summary(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
+        return "Flagged because a critical surface broadened authority while guardrails weakened."
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
+        return "Flagged because a critical surface gained broader authority than the baseline."
+    if artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
+        return "Flagged because authority expanded while safety boundaries weakened."
+    if artifact.latest_pr_capability_shift > 0.05:
+        return "Flagged because capability expanded on a monitored control surface."
+    if artifact.latest_pr_guardrail_shift < -0.05:
+        return "Flagged because guardrails look weaker than the approved baseline."
+    if artifact.latest_pr_governance_shift < -0.05:
+        return "Flagged because governance or approval posture looks weaker than baseline."
+    if artifact.latest_pr_autonomy_shift > 0.05:
+        return "Flagged because the system appears more autonomous than baseline."
+    if artifact.latest_historical_drift_magnitude > 0.35:
+        return "Flagged because repeated historical design movement makes this worth human review."
+    if priority == "baseline_review":
+        return "Flagged because this looks like a high-value AI control surface that still needs stronger evidence."
+    return "Flagged because this artifact still contributes meaningful AI-control-surface risk."
+
+
+def _attribute_deltas_for_summary(
+    artifact: RepoDashboardArtifactEntry,
+    context: _RepoArtifactProfileContext | None,
+) -> dict[str, float]:
+    if context is not None:
+        return context.attribute_deltas
+    return {
+        "capability_risk": artifact.latest_pr_capability_shift,
+        "guardrail_robustness": artifact.latest_pr_guardrail_shift,
+        "governance_strength": artifact.latest_pr_governance_shift,
+        "autonomy_level": artifact.latest_pr_autonomy_shift,
+        "stability_vs_creativity": 0.0,
+    }
+
+
+def _sentence_source_label(context: _RepoArtifactProfileContext | None) -> str:
+    if context is None:
+        return "Latest change"
+    label = context.source_ref or context.label or "Latest change"
+    return f"{label[0].upper()}{label[1:]}" if label else "Latest change"
+
+
+def _human_join(values: list[str]) -> str:
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
+def _flagged_attribute_labels(attribute_deltas: dict[str, float]) -> list[str]:
+    labels: list[str] = []
+    if float(attribute_deltas.get("guardrail_robustness", 0.0)) <= -0.03:
+        labels.append("guardrails")
+    if float(attribute_deltas.get("capability_risk", 0.0)) >= 0.03:
+        labels.append("capability")
+    if float(attribute_deltas.get("autonomy_level", 0.0)) >= 0.03:
+        labels.append("autonomy")
+    if float(attribute_deltas.get("governance_strength", 0.0)) <= -0.03:
+        labels.append("governance")
+    return labels
+
+
+def _changed_attribute_labels(attribute_deltas: dict[str, float]) -> list[str]:
+    labels: list[str] = []
+    if abs(float(attribute_deltas.get("guardrail_robustness", 0.0))) >= 0.03:
+        labels.append("guardrails")
+    if abs(float(attribute_deltas.get("capability_risk", 0.0))) >= 0.03:
+        labels.append("capability")
+    if abs(float(attribute_deltas.get("autonomy_level", 0.0))) >= 0.03:
+        labels.append("autonomy")
+    if abs(float(attribute_deltas.get("governance_strength", 0.0))) >= 0.03:
+        labels.append("governance")
+    if abs(float(attribute_deltas.get("stability_vs_creativity", 0.0))) >= 0.03:
+        labels.append("stability")
+    return labels
+
+
+def _classify_drift_magnitude(drift_magnitude: float) -> tuple[str, str]:
+    if drift_magnitude >= 0.5:
+        return ("large drift", "high")
+    if drift_magnitude >= 0.2:
+        return ("medium drift", "medium")
+    return ("small drift", "low")
+
+
+def _build_attribute_findings(
+    baseline_profile: AgentAttributeProfile,
+    current_profile: AgentAttributeProfile,
+    attribute_deltas: dict[str, float],
+    baseline_signal_terms: list[str],
+    current_signal_terms: list[str],
+    baseline_content: str | None,
+    current_content: str | None,
+) -> list[RepoArtifactAttributeFinding]:
+    findings: list[RepoArtifactAttributeFinding] = []
+    line_evidence = _line_diff_evidence_by_attribute(baseline_content, current_content)
+
+    guardrail_delta = float(attribute_deltas.get("guardrail_robustness", 0.0))
+    if abs(guardrail_delta) >= 0.03:
+        findings.append(
+            RepoArtifactAttributeFinding(
+                attribute_key="guardrail_robustness",
+                label="Guardrails",
+                direction="weakened" if guardrail_delta < 0 else "strengthened",
+                delta=round(guardrail_delta, 4),
+                reason=_guardrail_reason(baseline_profile.signals, current_profile.signals),
+                evidence=(
+                    line_evidence.get("guardrail_robustness")
+                    or _guardrail_evidence(
+                    baseline_profile.signals,
+                    current_profile.signals,
+                    baseline_signal_terms,
+                    current_signal_terms,
+                    )
+                ),
+                remediation=(
+                    "Add explicit limits, refusal/escalation language, or approval checks around the risky action before accepting this drift."
+                    if guardrail_delta < 0
+                    else "If this stronger guardrail posture is intentional, consider approving it into the baseline so future alerts stay focused."
+                ),
+            )
+        )
+
+    capability_delta = float(attribute_deltas.get("capability_risk", 0.0))
+    if abs(capability_delta) >= 0.03:
+        findings.append(
+            RepoArtifactAttributeFinding(
+                attribute_key="capability_risk",
+                label="Capability",
+                direction="expanded" if capability_delta > 0 else "reduced",
+                delta=round(capability_delta, 4),
+                reason=_capability_reason(baseline_profile.signals, current_profile.signals, capability_delta),
+                evidence=(
+                    line_evidence.get("capability_risk")
+                    or _capability_evidence(
+                    baseline_profile.signals,
+                    current_profile.signals,
+                    baseline_signal_terms,
+                    current_signal_terms,
+                    )
+                ),
+                remediation=(
+                    "Reduce write or production authority, prefer sandbox/test targets, and require explicit approval for sensitive actions."
+                    if capability_delta > 0
+                    else "Confirm the reduced authority is intentional and, if correct, consider updating the approved baseline."
+                ),
+            )
+        )
+
+    autonomy_delta = float(attribute_deltas.get("autonomy_level", 0.0))
+    if abs(autonomy_delta) >= 0.03:
+        findings.append(
+            RepoArtifactAttributeFinding(
+                attribute_key="autonomy_level",
+                label="Autonomy",
+                direction="increased" if autonomy_delta > 0 else "decreased",
+                delta=round(autonomy_delta, 4),
+                reason=_autonomy_reason(baseline_profile.signals, current_profile.signals, autonomy_delta),
+                evidence=(
+                    line_evidence.get("autonomy_level")
+                    or _autonomy_evidence(
+                    baseline_profile.signals,
+                    current_profile.signals,
+                    baseline_signal_terms,
+                    current_signal_terms,
+                    )
+                ),
+                remediation=(
+                    "Lower step depth, remove parallel execution, or add human checkpoints so the workflow stays reviewable."
+                    if autonomy_delta > 0
+                    else "Confirm the lower-autonomy posture is intended and consider approving it into the baseline if it reflects the desired design."
+                ),
+            )
+        )
+
+    stability_delta = float(attribute_deltas.get("stability_vs_creativity", 0.0))
+    if abs(stability_delta) >= 0.03:
+        findings.append(
+            RepoArtifactAttributeFinding(
+                attribute_key="stability_vs_creativity",
+                label="Stability",
+                direction="more stable" if stability_delta > 0 else "more creative",
+                delta=round(stability_delta, 4),
+                reason=_stability_reason(baseline_profile.signals, current_profile.signals, stability_delta),
+                evidence=(
+                    line_evidence.get("stability_vs_creativity")
+                    or _stability_evidence(
+                        baseline_profile.signals,
+                        current_profile.signals,
+                    )
+                ),
+                remediation=(
+                    "If a more deterministic posture is intended, consider approving it into the baseline so future alerts stay focused on new behavior shifts."
+                    if stability_delta > 0
+                    else "If extra creativity is intentional, bound it with explicit output constraints or tighter sampling settings before approving it into the baseline."
+                ),
+            )
+        )
+
+    governance_delta = float(attribute_deltas.get("governance_strength", 0.0))
+    if abs(governance_delta) >= 0.03:
+        findings.append(
+            RepoArtifactAttributeFinding(
+                attribute_key="governance_strength",
+                label="Governance",
+                direction="weakened" if governance_delta < 0 else "strengthened",
+                delta=round(governance_delta, 4),
+                reason=(
+                    "Review or approval signals appear weaker than the stored baseline posture."
+                    if governance_delta < 0
+                    else "Review or approval signals appear stronger than the stored baseline posture."
+                ),
+                evidence=line_evidence.get("governance_strength", []),
+                remediation=(
+                    "Restore ownership, approval, or audit expectations before treating this version as the intended baseline."
+                    if governance_delta < 0
+                    else "If the stronger governance posture is intended, consider approving it into the baseline."
+                ),
+            )
+        )
+
+    return findings
+
+
+def _line_diff_evidence_by_attribute(
+    baseline_content: str | None,
+    current_content: str | None,
+) -> dict[str, list[str]]:
+    if not baseline_content or not current_content:
+        return {}
+
+    baseline_lines = baseline_content.splitlines()
+    current_lines = current_content.splitlines()
+    matcher = difflib.SequenceMatcher(a=baseline_lines, b=current_lines)
+    evidence: dict[str, list[str]] = {
+        "guardrail_robustness": [],
+        "capability_risk": [],
+        "autonomy_level": [],
+        "governance_strength": [],
+        "stability_vs_creativity": [],
+    }
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        removed = [(line_no + 1, baseline_lines[line_no]) for line_no in range(i1, i2)]
+        added = [(line_no + 1, current_lines[line_no]) for line_no in range(j1, j2)]
+        for attribute_key in evidence.keys():
+            snippets = _attribute_line_snippets(attribute_key, removed, added)
+            for snippet in snippets:
+                if snippet not in evidence[attribute_key]:
+                    evidence[attribute_key].append(snippet)
+    return {key: values[:3] for key, values in evidence.items() if values}
+
+
+def _attribute_line_snippets(
+    attribute_key: str,
+    removed: list[tuple[int, str]],
+    added: list[tuple[int, str]],
+) -> list[str]:
+    keyword_map = {
+        "guardrail_robustness": ("must", "never", "do not", "only", "required", "approval", "escalate", "refuse"),
+        "capability_risk": ("write", "delete", "update", "create", "send", "refund", "production", "prod", "tool", "deploy"),
+        "autonomy_level": ("parallel", "multi-step", "planner", "max_steps", "steps", "human review", "approval"),
+        "governance_strength": ("approval", "review", "audit", "codeowners", "security", "owner"),
+        "stability_vs_creativity": ("temperature", "top_p", "creative", "deterministic", "random", "sampling"),
+    }
+    keywords = keyword_map[attribute_key]
+
+    def relevant(entries: list[tuple[int, str]]) -> list[tuple[int, str]]:
+        return [(line_no, text) for line_no, text in entries if any(keyword in text.lower() for keyword in keywords)]
+
+    removed_relevant = relevant(removed)
+    added_relevant = relevant(added)
+    snippets: list[str] = []
+    for line_no, text in removed_relevant[:2]:
+        snippets.append(f"Removed baseline line {line_no}: {text.strip()}")
+    for line_no, text in added_relevant[:2]:
+        snippets.append(f"Added current line {line_no}: {text.strip()}")
+    return snippets[:3]
+
+
+def _guardrail_reason(baseline: StaticSignals, current: StaticSignals) -> str:
+    reasons: list[str] = []
+    baseline_guardrail_total = sum(baseline.guardrail_counts.values())
+    current_guardrail_total = sum(current.guardrail_counts.values())
+    if current.constraint_count < baseline.constraint_count:
+        reasons.append(f"constraints dropped from {baseline.constraint_count} to {current.constraint_count}")
+    if current.explicit_limit_count < baseline.explicit_limit_count:
+        reasons.append(f"explicit limits dropped from {baseline.explicit_limit_count} to {current.explicit_limit_count}")
+    if current_guardrail_total < baseline_guardrail_total:
+        reasons.append(f"guardrail/refusal cues dropped from {baseline_guardrail_total} to {current_guardrail_total}")
+    if current.ambiguity_count > baseline.ambiguity_count:
+        reasons.append(f"ambiguous language rose from {baseline.ambiguity_count} to {current.ambiguity_count}")
+    if reasons:
+        return f"PromptDrift detected weaker guardrail posture because {'; '.join(reasons[:2])}."
+    return "PromptDrift detected weaker guardrail posture because constraint and refusal signals no longer match the approved baseline."
+
+
+def _capability_reason(baseline: StaticSignals, current: StaticSignals, delta: float) -> str:
+    reasons: list[str] = []
+    if current.write_signal_count > baseline.write_signal_count:
+        reasons.append(f"write/modify actions rose from {baseline.write_signal_count} to {current.write_signal_count}")
+    if current.sensitive_tool_count > baseline.sensitive_tool_count:
+        reasons.append(f"sensitive-tool references rose from {baseline.sensitive_tool_count} to {current.sensitive_tool_count}")
+    if current.prod_signal_count > baseline.prod_signal_count:
+        reasons.append(f"production-facing references rose from {baseline.prod_signal_count} to {current.prod_signal_count}")
+    if current.systems_touched_count > baseline.systems_touched_count:
+        reasons.append(f"systems touched rose from {baseline.systems_touched_count} to {current.systems_touched_count}")
+    if current.sandbox_signal_count < baseline.sandbox_signal_count:
+        reasons.append(f"sandbox/test references dropped from {baseline.sandbox_signal_count} to {current.sandbox_signal_count}")
+    if current.human_review_count < baseline.human_review_count:
+        reasons.append(f"human-review gates dropped from {baseline.human_review_count} to {current.human_review_count}")
+    if reasons:
+        prefix = "broader authority" if delta > 0 else "reduced authority"
+        return f"PromptDrift detected {prefix} because {'; '.join(reasons[:2])}."
+    return (
+        "PromptDrift detected broader authority because the artifact now signals more sensitive or production-facing actions than the baseline."
+        if delta > 0
+        else "PromptDrift detected reduced authority because the artifact now signals fewer sensitive or production-facing actions than the baseline."
+    )
+
+
+def _autonomy_reason(baseline: StaticSignals, current: StaticSignals, delta: float) -> str:
+    reasons: list[str] = []
+    if current.max_steps > baseline.max_steps:
+        reasons.append(f"max step depth rose from {baseline.max_steps} to {current.max_steps}")
+    if current.parallelism_signal_count > baseline.parallelism_signal_count:
+        reasons.append(
+            f"parallel or multi-step execution cues rose from {baseline.parallelism_signal_count} to {current.parallelism_signal_count}"
+        )
+    if current.human_review_count < baseline.human_review_count:
+        reasons.append(f"human-review gates dropped from {baseline.human_review_count} to {current.human_review_count}")
+    if current.write_signal_count > baseline.write_signal_count:
+        reasons.append(f"action-oriented steps rose from {baseline.write_signal_count} to {current.write_signal_count}")
+    if reasons:
+        prefix = "more independent execution" if delta > 0 else "less independent execution"
+        return f"PromptDrift detected {prefix} because {'; '.join(reasons[:2])}."
+    return (
+        "PromptDrift detected more independent execution because the workflow now allows deeper or less supervised action than the baseline."
+        if delta > 0
+        else "PromptDrift detected less independent execution because the workflow now allows shallower or more supervised action than the baseline."
+    )
+
+
+def _stability_reason(baseline: StaticSignals, current: StaticSignals, delta: float) -> str:
+    reasons: list[str] = []
+    if baseline.temperature is not None and current.temperature is not None and current.temperature != baseline.temperature:
+        direction = "down" if current.temperature < baseline.temperature else "up"
+        reasons.append(f"temperature moved {direction} from {baseline.temperature:g} to {current.temperature:g}")
+    if baseline.top_p is not None and current.top_p is not None and current.top_p != baseline.top_p:
+        direction = "down" if current.top_p < baseline.top_p else "up"
+        reasons.append(f"top_p moved {direction} from {baseline.top_p:g} to {current.top_p:g}")
+    if reasons:
+        prefix = "more stable and deterministic" if delta > 0 else "more variable and creative"
+        return f"PromptDrift detected {prefix} behavior because {'; '.join(reasons[:2])}."
+    return (
+        "PromptDrift detected more stable and deterministic behavior because the current sampling settings are tighter than the baseline."
+        if delta > 0
+        else "PromptDrift detected more variable and creative behavior because the current sampling settings are looser than the baseline."
+    )
+
+
+def _added_removed_signal_terms(baseline_terms: list[str], current_terms: list[str]) -> tuple[list[str], list[str]]:
+    baseline_set = {term for term in baseline_terms if term}
+    current_set = {term for term in current_terms if term}
+    added = sorted(current_set - baseline_set)
+    removed = sorted(baseline_set - current_set)
+    return added, removed
+
+
+def _guardrail_evidence(
+    baseline: StaticSignals,
+    current: StaticSignals,
+    baseline_terms: list[str],
+    current_terms: list[str],
+) -> list[str]:
+    evidence: list[str] = []
+    if current.constraint_count != baseline.constraint_count:
+        evidence.append(f"Constraint markers changed from {baseline.constraint_count} to {current.constraint_count}.")
+    if current.explicit_limit_count != baseline.explicit_limit_count:
+        evidence.append(f"Explicit limits changed from {baseline.explicit_limit_count} to {current.explicit_limit_count}.")
+    baseline_total = sum(baseline.guardrail_counts.values())
+    current_total = sum(current.guardrail_counts.values())
+    if current_total != baseline_total:
+        evidence.append(f"Guardrail/refusal cues changed from {baseline_total} to {current_total}.")
+    added, removed = _added_removed_signal_terms(baseline_terms, current_terms)
+    if removed:
+        evidence.append(f"Code no longer signals: {_human_join(removed[:3])}.")
+    if added and not evidence:
+        evidence.append(f"New code signals include: {_human_join(added[:3])}.")
+    return evidence[:3]
+
+
+def _capability_evidence(
+    baseline: StaticSignals,
+    current: StaticSignals,
+    baseline_terms: list[str],
+    current_terms: list[str],
+) -> list[str]:
+    evidence: list[str] = []
+    if current.write_signal_count != baseline.write_signal_count:
+        evidence.append(f"Write/modify actions changed from {baseline.write_signal_count} to {current.write_signal_count}.")
+    if current.prod_signal_count != baseline.prod_signal_count:
+        evidence.append(f"Production/live references changed from {baseline.prod_signal_count} to {current.prod_signal_count}.")
+    if current.sandbox_signal_count != baseline.sandbox_signal_count:
+        evidence.append(f"Sandbox/test references changed from {baseline.sandbox_signal_count} to {current.sandbox_signal_count}.")
+    if current.sensitive_tool_count != baseline.sensitive_tool_count:
+        evidence.append(f"Sensitive-tool references changed from {baseline.sensitive_tool_count} to {current.sensitive_tool_count}.")
+    added, removed = _added_removed_signal_terms(baseline_terms, current_terms)
+    if added:
+        evidence.append(f"New code signals include: {_human_join(added[:3])}.")
+    elif removed:
+        evidence.append(f"Code no longer signals: {_human_join(removed[:3])}.")
+    return evidence[:3]
+
+
+def _autonomy_evidence(
+    baseline: StaticSignals,
+    current: StaticSignals,
+    baseline_terms: list[str],
+    current_terms: list[str],
+) -> list[str]:
+    evidence: list[str] = []
+    if current.max_steps != baseline.max_steps:
+        evidence.append(f"Max step depth changed from {baseline.max_steps} to {current.max_steps}.")
+    if current.parallelism_signal_count != baseline.parallelism_signal_count:
+        evidence.append(
+            f"Parallel or multi-step execution cues changed from {baseline.parallelism_signal_count} to {current.parallelism_signal_count}."
+        )
+    if current.human_review_count != baseline.human_review_count:
+        evidence.append(f"Human-review cues changed from {baseline.human_review_count} to {current.human_review_count}.")
+    added, removed = _added_removed_signal_terms(baseline_terms, current_terms)
+    if added and "parallel" in " ".join(added[:3]):
+        evidence.append(f"New code signals include: {_human_join(added[:3])}.")
+    elif removed and not evidence:
+        evidence.append(f"Code no longer signals: {_human_join(removed[:3])}.")
+    return evidence[:3]
+
+
+def _stability_evidence(
+    baseline: StaticSignals,
+    current: StaticSignals,
+) -> list[str]:
+    evidence: list[str] = []
+    if baseline.temperature is not None and current.temperature is not None and current.temperature != baseline.temperature:
+        evidence.append(f"Temperature changed from {baseline.temperature:g} to {current.temperature:g}.")
+    if baseline.top_p is not None and current.top_p is not None and current.top_p != baseline.top_p:
+        evidence.append(f"top_p changed from {baseline.top_p:g} to {current.top_p:g}.")
+    if not evidence:
+        evidence.append("Sampling-related settings changed relative to the baseline.")
+    return evidence[:3]
+
+
 def _build_control_surface_groups(artifacts: list[RepoDashboardArtifactEntry]) -> list[RepoDashboardControlSurfaceGroup]:
     label_by_group = {
         "prompts": "Prompts and instructions",
@@ -960,6 +1486,7 @@ def _build_repo_history_timelines(
                     source="historical",
                     label="Historical backfill",
                     source_ref=f"commit {str(row['commit_sha'])[:7]}",
+                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
                     review_context="Historical snapshot from backfill",
                     created_at=float(row["created_at"]),
                     baseline_provenance=baseline_provenance,
@@ -999,6 +1526,7 @@ def _build_repo_history_timelines(
                     source="pull_request",
                     label="Pull request audit",
                     source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
+                    source_url=_github_pull_request_url(repo_full, int(row["pr_number"])),
                     review_context=_format_pr_review_context(
                         output_mode=row["output_mode"],
                         risk_level=row["suggested_risk_level"],
@@ -1064,19 +1592,38 @@ def _build_repo_design_profiles(
         if context is None:
             current_profile = baseline_profile
             drift_from_baseline = 0.0
+            drift_label, drift_tone = _classify_drift_magnitude(drift_from_baseline)
             risk_tags = ["baseline only"]
             narrative = ["No drift samples yet. This surface is currently represented only by the approved baseline."]
+            headline_summary = "No source change with stored drift evidence yet."
+            attribute_findings: list[RepoArtifactAttributeFinding] = []
             provenance = None
         else:
             current_profile = _profile_vector(context.profile)
             drift_from_baseline = _drift_magnitude(context.semantic_distance, context.attribute_deltas)
+            drift_label, drift_tone = _classify_drift_magnitude(drift_from_baseline)
             risk_tags = _artifact_risk_tags(artifact, context.attribute_deltas)
             narrative = context.narrative
             baseline_provenance = context.baseline_provenance or baseline_provenance
+            attribute_findings = _build_attribute_findings(
+                baseline.profile,
+                context.profile,
+                context.attribute_deltas,
+                baseline.signal_terms,
+                context.signal_terms,
+                baseline.content_text,
+                context.content_text,
+            )
+            changed_labels = [finding.label.lower() for finding in attribute_findings]
+            if changed_labels:
+                headline_summary = f"{_sentence_source_label(context)} drift detected in {_human_join(changed_labels)}."
+            else:
+                headline_summary = f"{_sentence_source_label(context)} changed posture relative to baseline, but no single high-risk attribute dominated."
             provenance = RepoArtifactProvenance(
                 source_type=context.source_type,
                 label=context.label,
                 source_ref=context.source_ref,
+                source_url=context.source_url,
                 review_context=context.review_context,
                 created_at=context.created_at,
             )
@@ -1086,11 +1633,15 @@ def _build_repo_design_profiles(
                 artifact_path=artifact.artifact_path,
                 artifact_type=artifact.artifact_type,
                 drift_from_baseline=drift_from_baseline,
+                drift_label=drift_label,
+                drift_tone=drift_tone,
                 baseline_profile=baseline_profile,
                 current_profile=current_profile,
                 baseline_provenance=baseline_provenance,
+                headline_summary=headline_summary,
                 risk_tags=risk_tags,
                 narrative=narrative,
+                attribute_findings=attribute_findings,
                 provenance=provenance,
             )
         )
@@ -1113,10 +1664,13 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 highest_priority=top_insight.priority if top_insight is not None else "baseline_review",
                 highest_insight_title=top_insight.title if top_insight is not None else None,
                 highest_insight_artifact_path=top_insight.artifact_path if top_insight is not None else None,
+                highest_change_summary=top_insight.change_summary if top_insight is not None else None,
+                highest_flag_summary=top_insight.flag_summary if top_insight is not None else None,
                 highest_rationale=top_insight.rationale if top_insight is not None else None,
                 highest_recommended_action=top_insight.recommended_action if top_insight is not None else None,
                 highest_baseline_label=top_insight.baseline_label if top_insight is not None else None,
                 highest_review_target=top_insight.review_target if top_insight is not None else None,
+                highest_review_url=top_insight.review_url if top_insight is not None else None,
                 insight_count=len(view.insights),
                 lower_confidence_count=len(view.lower_confidence_insights),
                 review_now_count=sum(1 for insight in view.insights if insight.priority == "review_now"),
@@ -1382,6 +1936,9 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                     baseline_label=insight.baseline_label,
                     provenance_summary=insight.provenance_summary,
                     review_target=insight.review_target,
+                    review_url=insight.review_url,
+                    change_summary=insight.change_summary,
+                    flag_summary=insight.flag_summary,
                     rationale=insight.rationale,
                     recommended_action=insight.recommended_action,
                     drift_magnitude=drift_magnitude,

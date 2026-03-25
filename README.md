@@ -41,6 +41,10 @@ In practical terms, PromptDrift currently provides:
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
+- repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
+- concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
+- baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
+- a lightweight baseline-promotion action that lets operators promote the latest stored source version as the approved baseline for an artifact
 - real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
 - bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
 - a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
@@ -50,7 +54,7 @@ For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, s
 The dashboard should now be read as two linked product surfaces:
 
 - `/dashboard` is the portfolio decision surface for triage, hotspots, and coverage trust, with a secondary coverage mode for inventory and pattern scans
-- `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, and artifact-level evidence
+- `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, artifact-level evidence, and approved-baseline promotion
 
 ## What PromptDrift does today
 
@@ -71,6 +75,7 @@ The dashboard should now be read as two linked product surfaces:
 - supports selective historical backfill planning and execution for onboarded artifacts
 - persists historical artifact versions and static profile lineage for backfilled snapshots
 - exposes baseline provenance in dashboard and history read models so fallback vs approved authority is visible outside the PR comment
+- stores baseline, historical, and PR snapshot content so dashboard explanations can attach code-level evidence to posture drift
 - exposes JSON query APIs for repository listings and unified dashboard payloads
 - exposes an overview dashboard API at `GET /api/dashboard/overview`
 - exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`
@@ -182,7 +187,8 @@ Recommended 5-minute local inspection flow:
 1. Open `/dashboard` first and confirm the portfolio risk-state hero, featured review target, ranked queue, and coverage-trust panels render.
 2. Switch to Coverage mode and confirm the coverage atlas, control-surface coverage, and repo inventory capsules render.
 3. Open `/dashboard/<owner>/<repo>` for a seeded repository and confirm the featured insight, repo command deck, posture explorer, and collapsed history inventory render.
-4. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
+4. In the repo case file, confirm the provenance links open the backing PR or commit, the posture explorer shows per-attribute findings, and the baseline action is available when a stored source version exists.
+5. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
 
 You can also inspect or drive the workflow locally with the CLI:
 
@@ -200,6 +206,7 @@ Useful JSON endpoints:
 - `GET /api/repos/{owner/repo}/dashboard`
 - `POST /api/repos/{owner/repo}/onboard`
 - `POST /api/repos/{owner/repo}/backfill`
+- `POST /api/repos/{owner/repo}/artifacts/{artifact_path}/baseline`
 
 ## Known limitations
 

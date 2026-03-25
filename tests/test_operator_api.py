@@ -289,19 +289,19 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "PromptDrift Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     assert "portfolio-risk-state" in index_response.text
-    assert "Regression patterns" in index_response.text
+    assert "Recurring change patterns" in index_response.text
     assert "No production traffic or user data is analyzed" in index_response.text
-    assert "Highest-risk drift" in index_response.text
+    assert "Why these are rising" in index_response.text
     assert "Risk by control surface" in index_response.text
-    assert "Review queue" in index_response.text
+    assert "Ranked queue" in index_response.text
     assert "Control surface coverage" in index_response.text
 
     assert repo_response.status_code == 200
-    assert "Unified view of onboarding, backfill lineage, and pull-request drift history." in repo_response.text
+    assert "Review case file: strongest item first, then the ranked queue, then supporting evidence." in repo_response.text
     assert "Static-only analysis" in repo_response.text
-    assert "Baseline vs current design posture" in repo_response.text
-    assert "Needs attention now" in repo_response.text
-    assert "Control surface map" in repo_response.text
+    assert "Baseline vs current posture." in repo_response.text
+    assert "Needs review queue" in repo_response.text
+    assert "Control surface coverage" in repo_response.text
     assert "History and drift timeline" in repo_response.text
     assert "promptdrift-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text

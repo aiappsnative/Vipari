@@ -78,6 +78,7 @@ class OnboardingBaselineVersionRecord:
     line_count: int
     profile: AgentAttributeProfile
     created_at: float
+    content_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ def init_onboarding_record_db(db_path: str) -> None:
                 version_hash TEXT NOT NULL,
                 signal_terms_json TEXT NOT NULL,
                 line_count INTEGER NOT NULL,
+                content_text TEXT,
                 profile_json TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 FOREIGN KEY(onboarding_id) REFERENCES repository_onboardings(id) ON DELETE CASCADE,
@@ -229,6 +231,7 @@ def init_onboarding_record_db(db_path: str) -> None:
                 version_hash TEXT NOT NULL,
                 signal_terms_json TEXT NOT NULL,
                 line_count INTEGER NOT NULL,
+                content_text TEXT,
                 previous_version_id INTEGER,
                 created_at REAL NOT NULL,
                 FOREIGN KEY(backfill_job_id) REFERENCES historical_backfill_jobs(id) ON DELETE CASCADE,
@@ -277,6 +280,14 @@ def init_onboarding_record_db(db_path: str) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_historical_static_profiles_normalized_id ON historical_static_profiles(normalized_artifact_id, created_at)"
         )
+
+        baseline_columns = {row["name"] for row in conn.execute("PRAGMA table_info(onboarding_baseline_versions)").fetchall()}
+        if "content_text" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN content_text TEXT")
+
+        historical_version_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_artifact_versions)").fetchall()}
+        if "content_text" not in historical_version_columns:
+            conn.execute("ALTER TABLE historical_artifact_versions ADD COLUMN content_text TEXT")
 
         historical_backfill_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_backfill_jobs)").fetchall()}
         if "completed_commit_count" not in historical_backfill_columns:
@@ -336,8 +347,8 @@ def record_repository_onboarding(
                 """
                 INSERT INTO onboarding_baseline_versions (
                     onboarding_id, onboarded_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
-                    version_hash, signal_terms_json, line_count, profile_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    version_hash, signal_terms_json, line_count, content_text, profile_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     onboarding_id,
@@ -348,6 +359,7 @@ def record_repository_onboarding(
                     hashlib.sha256(artifact.baseline_content.encode("utf-8")).hexdigest(),
                     json.dumps(signal_terms),
                     len([line for line in artifact.baseline_content.splitlines() if line.strip()]),
+                    artifact.baseline_content,
                     json.dumps(_profile_to_json(profile)),
                     now,
                 ),
@@ -423,6 +435,119 @@ def get_latest_onboarding_baseline_for_repo_artifact(
             LIMIT 1
             """,
             (normalized_artifact_id,),
+        ).fetchone()
+    return _row_to_onboarding_baseline_version(row) if row is not None else None
+
+
+def promote_latest_source_to_onboarding_baseline(
+    db_path: str,
+    repo_full: str,
+    artifact_path: str,
+) -> OnboardingBaselineVersionRecord | None:
+    normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
+    now = time.time()
+    with _connect(db_path) as conn:
+        onboarding = conn.execute(
+            """
+            SELECT *
+            FROM repository_onboardings
+            WHERE repo_full = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (repo_full,),
+        ).fetchone()
+        if onboarding is None:
+            return None
+
+        onboarded_artifact = conn.execute(
+            """
+            SELECT *
+            FROM onboarded_artifacts
+            WHERE onboarding_id = ? AND artifact_path = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (onboarding["id"], artifact_path),
+        ).fetchone()
+        if onboarded_artifact is None:
+            return None
+
+        latest_historical = conn.execute(
+            """
+            SELECT hav.artifact_type, hav.version_hash, hav.signal_terms_json, hav.line_count, hav.content_text,
+                   hsp.profile_json, hsp.created_at
+            FROM historical_static_profiles hsp
+            INNER JOIN historical_artifact_versions hav ON hav.id = hsp.historical_artifact_version_id
+            WHERE hsp.normalized_artifact_id = ?
+            ORDER BY hsp.created_at DESC, hsp.id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
+        latest_pr = conn.execute(
+            """
+            SELECT av.artifact_type, av.version_hash, av.signal_terms_json, av.line_count, av.content_text,
+                   sap.profile_json, sap.created_at
+            FROM static_artifact_profiles sap
+            INNER JOIN artifact_versions av ON av.id = sap.artifact_version_id
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ? AND sap.artifact_path = ?
+            ORDER BY sap.created_at DESC, sap.id DESC
+            LIMIT 1
+            """,
+            (repo_full, artifact_path),
+        ).fetchone()
+
+        latest_source = latest_pr
+        if latest_historical is not None and (
+            latest_source is None or float(latest_historical["created_at"]) >= float(latest_source["created_at"])
+        ):
+            latest_source = latest_historical
+
+        if latest_source is None:
+            return None
+
+        latest_baseline = conn.execute(
+            """
+            SELECT *
+            FROM onboarding_baseline_versions
+            WHERE normalized_artifact_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized_artifact_id,),
+        ).fetchone()
+        if latest_baseline is not None and latest_baseline["version_hash"] == latest_source["version_hash"]:
+            return _row_to_onboarding_baseline_version(latest_baseline)
+
+        conn.execute(
+            """
+            INSERT INTO onboarding_baseline_versions (
+                onboarding_id, onboarded_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
+                version_hash, signal_terms_json, line_count, content_text, profile_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                onboarding["id"],
+                onboarded_artifact["id"],
+                normalized_artifact_id,
+                artifact_path,
+                latest_source["artifact_type"],
+                latest_source["version_hash"],
+                latest_source["signal_terms_json"],
+                latest_source["line_count"],
+                latest_source["content_text"],
+                latest_source["profile_json"],
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE repository_onboardings SET updated_at = ? WHERE id = ?",
+            (now, onboarding["id"]),
+        )
+        row = conn.execute(
+            "SELECT * FROM onboarding_baseline_versions WHERE id = last_insert_rowid()"
         ).fetchone()
     return _row_to_onboarding_baseline_version(row) if row is not None else None
 
@@ -595,8 +720,8 @@ def record_historical_backfill_versions(
                 INSERT INTO historical_artifact_versions (
                     backfill_job_id, onboarding_id, onboarded_artifact_id, normalized_artifact_id,
                     artifact_path, artifact_type, commit_sha, version_hash, signal_terms_json,
-                    line_count, previous_version_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    line_count, content_text, previous_version_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     backfill_job_id,
@@ -609,6 +734,7 @@ def record_historical_backfill_versions(
                     version_hash,
                     json.dumps(signal_terms),
                     len([line for line in snapshot.content.splitlines() if line.strip()]),
+                    snapshot.content,
                     previous_version_id,
                     created_at,
                 ),
@@ -809,6 +935,7 @@ def _row_to_onboarding_baseline_version(row: sqlite3.Row) -> OnboardingBaselineV
         version_hash=row["version_hash"],
         signal_terms=json.loads(row["signal_terms_json"]),
         line_count=row["line_count"],
+        content_text=row["content_text"],
         profile=_profile_from_json(row["profile_json"]),
         created_at=row["created_at"],
     )

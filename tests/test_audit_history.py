@@ -50,7 +50,12 @@ def _process_accepted_pr(
     )
 
     assert process_next_job_once(settings) is True
-    assert posted == [(repo_full, pr_number, f"Accepted review for PR {pr_number}", None)]
+    assert len(posted) == 1
+    assert posted[0][0] == repo_full
+    assert posted[0][1] == pr_number
+    assert posted[0][3] is None
+    assert posted[0][2].startswith(f"Accepted review for PR {pr_number}")
+    assert "Escalation:" in posted[0][2]
 
 
 def test_dummyai_history_evolves_across_accepted_prs(tmp_path, monkeypatch):

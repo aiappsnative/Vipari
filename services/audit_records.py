@@ -276,6 +276,7 @@ def init_audit_record_db(db_path: str) -> None:
                 version_hash TEXT NOT NULL,
                 signal_terms_json TEXT NOT NULL,
                 line_count INTEGER NOT NULL,
+                content_text TEXT,
                 previous_version_id INTEGER,
                 created_at REAL NOT NULL,
                 FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE,
@@ -323,6 +324,10 @@ def init_audit_record_db(db_path: str) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_static_artifact_profiles_normalized_id ON static_artifact_profiles(normalized_artifact_id, created_at)"
         )
+
+        artifact_version_columns = {row["name"] for row in conn.execute("PRAGMA table_info(artifact_versions)").fetchall()}
+        if "content_text" not in artifact_version_columns:
+            conn.execute("ALTER TABLE artifact_versions ADD COLUMN content_text TEXT")
 
         audit_comments_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
         if "github_comment_id" not in audit_comments_columns:
@@ -497,8 +502,8 @@ def record_audit_result(
                     """
                     INSERT INTO artifact_versions (
                         audit_id, changed_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
-                        version_hash, signal_terms_json, line_count, previous_version_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        version_hash, signal_terms_json, line_count, content_text, previous_version_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         audit_id,
@@ -509,6 +514,7 @@ def record_audit_result(
                         hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
                         json.dumps(signal_terms),
                         len([line for line in snapshot_text.splitlines() if line.strip()]),
+                        snapshot_text,
                         previous_version["id"] if previous_version is not None else None,
                         now,
                     ),

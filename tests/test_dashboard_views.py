@@ -78,7 +78,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
         list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
-        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
     )
     plan_repository_history_backfill(
         db_path,
@@ -105,8 +105,8 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.onboarding is not None
     assert dashboard.baseline_version_count == 1
     assert dashboard.backfill.completed_job_count == 1
-    assert dashboard.backfill.total_historical_versions == 2
-    assert dashboard.backfill.total_historical_profiles == 2
+    assert dashboard.backfill.total_historical_versions == 3
+    assert dashboard.backfill.total_historical_profiles == 3
     assert dashboard.pull_request_audit_count == 1
     assert dashboard.drift_summary.profile_count == 1
     assert len(dashboard.artifacts) == 1
@@ -119,12 +119,15 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
     assert dashboard.insights[0].provenance_summary == "From · PR #42 · sha-cur · full semantic review · semantic complete · risk low"
     assert dashboard.insights[0].review_target == "PR #42 · sha-cur"
+    assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert dashboard.insights[0].change_summary
+    assert dashboard.insights[0].flag_summary.startswith("Flagged because")
     assert "historical hotspot" in dashboard.insights[0].risk_reasons
     assert len(dashboard.control_surface_groups) == 1
     assert dashboard.control_surface_groups[0].group_key == "prompts"
     assert len(dashboard.history_timelines) == 1
     assert dashboard.history_timelines[0].artifact_path == "prompts/refund.txt"
-    assert dashboard.history_timelines[0].point_count == 3
+    assert dashboard.history_timelines[0].point_count == 4
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
@@ -133,18 +136,33 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].provenance.source_type == "pull_request"
     assert dashboard.design_profiles[0].provenance.label == "Pull request audit"
     assert dashboard.design_profiles[0].provenance.source_ref == "PR #42 · sha-cur"
+    assert dashboard.design_profiles[0].provenance.source_url == "https://github.com/doria90/dummyAI/pull/42"
     assert dashboard.design_profiles[0].provenance.review_context == "full semantic review · semantic complete · risk low"
+    assert dashboard.design_profiles[0].headline_summary
+    assert dashboard.design_profiles[0].drift_label in {"small drift", "medium drift", "large drift"}
+    assert dashboard.design_profiles[0].drift_tone in {"low", "medium", "high"}
+    assert isinstance(dashboard.design_profiles[0].attribute_findings, list)
+    if dashboard.design_profiles[0].attribute_findings:
+        assert dashboard.design_profiles[0].attribute_findings[0].reason
+        assert isinstance(dashboard.design_profiles[0].attribute_findings[0].evidence, list)
+        assert dashboard.design_profiles[0].attribute_findings[0].remediation
+    assert any(
+        finding.attribute_key == "stability_vs_creativity"
+        for finding in dashboard.design_profiles[0].attribute_findings
+    )
     assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
-    assert dashboard.artifacts[0].historical_version_count == 2
+    assert dashboard.artifacts[0].historical_version_count == 3
     assert dashboard.artifacts[0].pr_profile_count == 1
     assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
     assert dashboard.history_timelines[0].points[0].label == "Historical backfill"
     assert dashboard.history_timelines[0].points[0].source_ref == "commit sha-1"
+    assert dashboard.history_timelines[0].points[0].source_url == "https://github.com/doria90/dummyAI/commit/sha-1"
     assert dashboard.history_timelines[0].points[0].review_context == "Historical snapshot from backfill"
     assert dashboard.history_timelines[0].points[-1].label == "Pull request audit"
     assert dashboard.history_timelines[0].points[-1].source_ref == "PR #42 · sha-cur"
+    assert dashboard.history_timelines[0].points[-1].source_url == "https://github.com/doria90/dummyAI/pull/42"
     assert dashboard.history_timelines[0].points[-1].review_context == "full semantic review · semantic complete · risk low"
 
 
@@ -228,8 +246,14 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
     assert overview.attention_repos[0].highest_baseline_label is not None
     assert overview.attention_repos[0].highest_review_target == "PR #42 · sha-cur"
+    assert overview.attention_repos[0].highest_review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert overview.attention_repos[0].highest_change_summary
+    assert (overview.attention_repos[0].highest_flag_summary or "").startswith("Flagged because")
     assert overview.attention_repos[0].lower_confidence_count == 0
     assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Approved")
     assert overview.highest_risk_items[0].review_target == "PR #42 · sha-cur"
+    assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert overview.highest_risk_items[0].change_summary
+    assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]

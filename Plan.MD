@@ -192,6 +192,24 @@ Tomorrow's highest-value continuation should be:
 3. reduce discovery noise further on large public repositories
 4. turn the current OSS validation path into a more repeatable harness
 
+### Dashboard provenance and baseline checkpoint (2026-03-25)
+
+Completed on `feature/dashboard-ux-v1` after the triage-first redesign:
+
+- repo and overview dashboard read models now expose direct provenance URLs, compact `what changed / why flagged / where` summaries, and clearer review targets
+- repo case files now surface qualitative drift labels (`small`, `medium`, `large`) instead of raw top-line drift numbers
+- full posture comparison now includes per-attribute findings with reason, remediation, and code-level evidence when stored baseline/current snapshots exist
+- snapshot content is now persisted for onboarding baselines, historical artifact versions, and PR artifact versions so later dashboard explanations can cite exact changed lines
+- repo case files now allow a lightweight operator action to promote the latest stored source version to the approved baseline
+- baseline promotion is idempotent for unchanged versions so repeated actions do not create duplicate approved-baseline rows
+- dashboard, audit history, operator API, and full repository test suites were brought back to green after these changes
+
+Current validation status:
+
+- full automated suite passes locally (`80 passed`)
+- dashboard-specific suite passes locally (`5 passed`)
+- audit worker suite passes locally (`26 passed`)
+
 ### Near-term execution plan
 
 #### 1. `feature/pr-escalation-v1`

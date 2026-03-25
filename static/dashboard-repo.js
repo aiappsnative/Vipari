@@ -117,10 +117,33 @@ function formatTimestamp(timestamp) {
     }
 }
 
+function renderBriefRows({ changeSummary, flagSummary, whereLabel, whereUrl }) {
+    const rows = [
+        changeSummary ? `<div class="brief-row"><span class="brief-label">What changed</span><span class="brief-copy">${changeSummary}</span></div>` : "",
+        flagSummary ? `<div class="brief-row"><span class="brief-label">Why flagged</span><span class="brief-copy">${flagSummary}</span></div>` : "",
+        whereLabel ? `<div class="brief-row"><span class="brief-label">Where</span><span class="brief-copy">${whereUrl ? `<a class="link" href="${whereUrl}" target="_blank" rel="noreferrer noopener">${whereLabel}</a>` : whereLabel}</span></div>` : "",
+    ].filter(Boolean);
+    if (!rows.length) {
+        return "";
+    }
+    return `<div class="brief-panel">${rows.join("")}</div>`;
+}
+
+function renderOpenChangeLink(label, url, className = "cta-link") {
+    if (!url) {
+        return `<span class="${className}">${label}</span>`;
+    }
+    return `<a class="${className}" href="${url}" data-open-source-change="${url}" target="_blank" rel="noreferrer noopener">${label}</a>`;
+}
+
 function renderInsightCard(item, designProfile, tone = "primary") {
     const combinedReasons = [...new Set([...(item.risk_reasons || []), ...((designProfile && designProfile.risk_tags) || [])])];
     const updatedAt = formatTimestamp(item.updated_at);
     const targetLabel = item.review_target || "repo detail";
+    const targetMarkup = item.review_url
+        ? `<a class="link" href="${item.review_url}" data-open-source-change="${item.review_url}" target="_blank" rel="noreferrer noopener">${targetLabel}</a>`
+        : targetLabel;
+    const ctaMarkup = renderOpenChangeLink("Open source change →", item.review_url);
     const signalStrength = clamp(
         (item.priority === "review_now" ? 0.92 : item.priority === "watch" ? 0.64 : 0.36)
         + (combinedReasons.includes("critical surface") ? 0.08 : 0)
@@ -144,9 +167,15 @@ function renderInsightCard(item, designProfile, tone = "primary") {
                 <div class="tag-row">${renderRiskTags(combinedReasons)}</div>
                 <div class="glance-strip">
                     <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_label}</strong></div>
-                    <div class="glance-chip"><span class="glance-chip-label">Source</span><strong>${item.review_target || "repo detail"}</strong></div>
+                    <div class="glance-chip"><span class="glance-chip-label">Source</span><strong>${targetMarkup}</strong></div>
                     ${updatedAt ? `<div class="glance-chip"><span class="glance-chip-label">Updated</span><strong>${updatedAt}</strong></div>` : ""}
                 </div>
+                ${renderBriefRows({
+                    changeSummary: item.change_summary,
+                    flagSummary: item.flag_summary,
+                    whereLabel: targetLabel,
+                    whereUrl: item.review_url,
+                })}
                 <details class="micro-detail">
                     <summary>Why this is here</summary>
                     <div class="micro-detail-body">
@@ -157,7 +186,7 @@ function renderInsightCard(item, designProfile, tone = "primary") {
             </div>
             <div class="triage-card-footer triage-card-footer-split">
                 <span class="muted">Target: ${targetLabel}</span>
-                <span class="cta-link">Open source change →</span>
+                ${ctaMarkup}
             </div>
         </div>
     `;
@@ -460,6 +489,9 @@ function driftLabel(field, baselineValue, currentValue) {
 }
 
 function sourceHref(provenance) {
+    if (provenance?.source_url) {
+        return provenance.source_url;
+    }
     if (!provenance?.source_ref) {
         return null;
     }
@@ -499,6 +531,54 @@ function attributeChangeSummary(item) {
     });
 }
 
+function attributeFindingForLabel(item, label) {
+    const field = DESIGN_PROFILE_FIELDS.find((entry) => entry.label === label);
+    if (!field) {
+        return null;
+    }
+    return asArray(item.attribute_findings || []).find((finding) => finding.attribute_key === field.key) || null;
+}
+
+function renderAttributeFindings(item, sourceLink) {
+    const findings = asArray(item.attribute_findings || []);
+    if (!findings.length) {
+        return "";
+    }
+    return `
+        <details class="micro-detail">
+            <summary>Why PromptDrift thinks so</summary>
+            <div class="micro-detail-body attribute-summary-list">
+                ${findings.map((finding) => `
+                    <div class="attribute-summary-card">
+                        <div class="attribute-summary-header">
+                            <strong>${finding.label}</strong>
+                            <span class="pill pill-${Math.abs(finding.delta) >= 0.12 ? "high" : Math.abs(finding.delta) >= 0.05 ? "medium" : "low"}">${finding.direction}</span>
+                        </div>
+                        <div class="meta-tight muted">${finding.reason}</div>
+                        ${asArray(finding.evidence).length ? `
+                            <div class="meta-tight"><strong>Changed code:</strong></div>
+                            <ul class="evidence-list">
+                                ${asArray(finding.evidence).map((entry) => `<li>${entry}</li>`).join("")}
+                            </ul>
+                        ` : ""}
+                        <div class="meta-tight">${finding.remediation}</div>
+                        ${sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open source change", sourceLink, "link")}</div>` : ""}
+                    </div>
+                `).join("")}
+            </div>
+        </details>
+    `;
+}
+
+function renderBaselineControls(item) {
+    return `
+        <div class="baseline-controls">
+            <div class="meta-tight muted"><strong>Current baseline:</strong> ${item.baseline_provenance?.label || "No baseline"}</div>
+            <button type="button" class="baseline-action-button" data-promote-baseline="${encodeURIComponent(item.artifact_path)}">Use current source as baseline</button>
+        </div>
+    `;
+}
+
 function renderAttributeSummary(item) {
     const sourceLink = sourceHref(item.provenance);
     const changes = attributeChangeSummary(item);
@@ -507,22 +587,73 @@ function renderAttributeSummary(item) {
             <div class="glance-strip">
                 <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_provenance?.label || "No baseline"}</strong></div>
                 <div class="glance-chip"><span class="glance-chip-label">Current source</span><strong>${renderProvenance(item.provenance, "Baseline only")}</strong></div>
-                ${sourceLink ? `<div class="glance-chip"><span class="glance-chip-label">Open change</span><strong><a class="link" href="${sourceLink}" target="_blank" rel="noopener noreferrer">${item.provenance?.source_ref || "View source change"}</a></strong></div>` : ""}
+                ${sourceLink ? `<div class="glance-chip"><span class="glance-chip-label">Open change</span><strong>${renderOpenChangeLink(item.provenance?.source_ref || "View source change", sourceLink, "link")}</strong></div>` : ""}
             </div>
-            <div class="attribute-summary-list">
-                ${changes.map((change) => `
-                    <div class="attribute-summary-card">
-                        <div class="attribute-summary-header">
-                            <strong>${change.label}</strong>
-                            <span class="pill ${change.state === "no_change" ? "pill-no-change" : `pill-drift pill-${change.impact}`}">${change.state === "no_change" ? "no change" : "drift detected"}</span>
+            ${renderBaselineControls(item)}
+            <div class="brief-panel">
+                <div class="brief-row"><span class="brief-label">Summary</span><span class="brief-copy">${item.headline_summary || "Baseline-relative posture changed."}</span></div>
+            </div>
+            ${renderAttributeFindings(item, sourceLink)}
+            <details class="micro-detail">
+                <summary>Full posture comparison</summary>
+                <div class="micro-detail-body attribute-summary-list">
+                    ${changes.map((change) => `
+                        <div class="attribute-summary-card">
+                            <div class="attribute-summary-header">
+                                <strong>${change.label}</strong>
+                                <span class="pill ${change.state === "no_change" ? "pill-no-change" : `pill-drift pill-${change.impact}`}">${change.state === "no_change" ? "no change" : "drift detected"}</span>
+                            </div>
+                            <div class="meta-tight muted">${change.summary}</div>
+                        ${(() => {
+                            const finding = attributeFindingForLabel(item, change.label);
+                            if (change.state === "no_change" || !finding) {
+                                return "";
+                            }
+                            return `
+                            <div class="meta-tight"><strong>What in the code changed:</strong></div>
+                            <ul class="evidence-list">
+                                ${asArray(finding.evidence || []).map((entry) => `<li>${entry}</li>`).join("")}
+                            </ul>
+                            <div class="meta-tight">${finding.reason || ""}</div>
+                            <div class="meta-tight">${finding.remediation || ""}</div>
+                        `;
+                        })()}
+                        ${change.state !== "no_change" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
                         </div>
-                        <div class="meta-tight muted">${change.summary}</div>
-                        ${change.state !== "no_change" && sourceLink ? `<div class="meta-tight"><a class="link" href="${sourceLink}" target="_blank" rel="noopener noreferrer">Open relevant change</a></div>` : ""}
-                    </div>
-                `).join("")}
-            </div>
+                    `).join("")}
+                </div>
+            </details>
         </div>
     `;
+}
+
+function bindOpenSourceChangeLinks(scope = document) {
+    scope.querySelectorAll("[data-open-source-change]").forEach((link) => {
+        if (link.dataset.boundOpenSourceChange === "true") {
+            return;
+        }
+        link.dataset.boundOpenSourceChange = "true";
+        link.addEventListener("click", (event) => {
+            const url = link.getAttribute("data-open-source-change");
+            if (!url) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            window.open(url, "_blank", "noopener,noreferrer");
+        });
+    });
+}
+
+async function promoteBaseline(artifactPath) {
+    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${artifactPath}/baseline`, {
+        method: "POST",
+    });
+    if (!response.ok) {
+        const message = `Baseline update failed with ${response.status}`;
+        throw new Error(message);
+    }
+    await loadDashboard();
 }
 
 function renderRadarChart(item) {
@@ -585,7 +716,7 @@ function renderDesignProfileDetail(item) {
             <div class="posture-details stack compact-stack">
                 <div>
                     <div class="insight-title">${item.artifact_path}</div>
-                    <div class="muted meta-tight">${item.artifact_type} · drift from baseline ${item.drift_from_baseline.toFixed(3)}</div>
+                    <div class="muted meta-tight">${item.artifact_type} · <span class="pill pill-${item.drift_tone || "low"}">${item.drift_label || "small drift"}</span></div>
                 </div>
                 ${renderAttributeSummary(item)}
                 <div class="tag-row">${renderRiskTags(item.risk_tags)}</div>
@@ -605,6 +736,26 @@ function bindDesignProfiles(items = []) {
     const renderSelected = () => {
         const selected = items.find((item) => item.artifact_path === select.value) || items[0];
         detail.innerHTML = renderDesignProfileDetail(selected);
+        bindOpenSourceChangeLinks(detail);
+        detail.querySelectorAll("[data-promote-baseline]").forEach((button) => {
+            button.addEventListener("click", async () => {
+                const encodedPath = button.getAttribute("data-promote-baseline");
+                if (!encodedPath) {
+                    return;
+                }
+                const originalText = button.textContent;
+                button.disabled = true;
+                button.textContent = "Updating baseline...";
+                try {
+                    await promoteBaseline(encodedPath);
+                } catch (error) {
+                    button.disabled = false;
+                    button.textContent = originalText || "Use current source as baseline";
+                    const message = error instanceof Error ? error.message : "Unable to update baseline";
+                    window.alert(message);
+                }
+            });
+        });
     };
 
     select.addEventListener("change", renderSelected);
@@ -718,6 +869,7 @@ async function loadDashboard() {
         setSectionHtml("leaderboard", renderLeaderboard(leaderboard));
         setSectionHtml("history-timelines", renderHistoryTimelines(historyTimelines));
         setSectionHtml("artifacts", renderArtifacts(artifacts));
+        bindOpenSourceChangeLinks(document);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${message}</div>`;

@@ -21,6 +21,7 @@ from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_i
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.onboarding_records import promote_latest_source_to_onboarding_baseline
 
 # load environment variables
 load_dotenv()
@@ -173,6 +174,22 @@ async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest):
             "executed_backfill_job_count": len(executed_jobs),
             "completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
             "failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
+            "dashboard": asdict(dashboard),
+        }
+    )
+
+
+@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
+async def promote_artifact_baseline(repo_full: str, artifact_path: str):
+    baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "artifact_path": artifact_path,
+            "baseline": asdict(baseline),
             "dashboard": asdict(dashboard),
         }
     )

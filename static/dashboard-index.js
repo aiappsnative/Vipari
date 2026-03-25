@@ -103,6 +103,25 @@ function createRingMeter({ value = 0, label = "", tone = "accent", size = 136, s
     `;
 }
 
+function linkedText(label, href) {
+    if (!label) {
+        return "";
+    }
+    return href ? `<a class="link" href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>` : label;
+}
+
+function renderBriefRows({ changeSummary, flagSummary, whereLabel, whereUrl, allowLinks = true }) {
+    const rows = [
+        changeSummary ? `<div class="brief-row"><span class="brief-label">What changed</span><span class="brief-copy">${changeSummary}</span></div>` : "",
+        flagSummary ? `<div class="brief-row"><span class="brief-label">Why flagged</span><span class="brief-copy">${flagSummary}</span></div>` : "",
+        whereLabel ? `<div class="brief-row"><span class="brief-label">Where</span><span class="brief-copy">${allowLinks ? linkedText(whereLabel, whereUrl) : whereLabel}</span></div>` : "",
+    ].filter(Boolean);
+    if (!rows.length) {
+        return "";
+    }
+    return `<div class="brief-panel">${rows.join("")}</div>`;
+}
+
 function renderMiniSignalRow(repo, rank) {
     const intensity = clamp(priorityWeight(repo.highest_priority) + Math.min(repo.review_now_count * 0.08, 0.24), 0.12, 1);
     const barWidth = Math.round(intensity * 100);
@@ -346,6 +365,13 @@ function renderAttentionRepos(items = [], startRank = 1) {
                         <div class="triage-summary">${repo.highest_insight_title || "No prioritized repo insight yet"}</div>
                         <div class="meta-tight muted">${repo.highest_insight_artifact_path || "No lead artifact yet"}</div>
                         ${repo.highest_baseline_label ? `<div class="meta-tight"><strong>${repo.highest_baseline_label}</strong></div>` : ""}
+                        ${renderBriefRows({
+                            changeSummary: repo.highest_change_summary,
+                            flagSummary: repo.highest_flag_summary,
+                            whereLabel: repo.highest_review_target,
+                            whereUrl: repo.highest_review_url,
+                            allowLinks: false,
+                        })}
                         ${repo.highest_rationale ? `<div class="meta-tight muted">${repo.highest_rationale}</div>` : ""}
                         ${repo.highest_recommended_action ? `<div class="meta-tight">${repo.highest_recommended_action}</div>` : ""}
                     </div>
@@ -384,6 +410,13 @@ function renderPrimaryReviewFocus(repo) {
                 ${repo.highest_baseline_label ? `<div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${repo.highest_baseline_label}</strong></div>` : ""}
                 ${repo.highest_review_target ? `<div class="glance-chip"><span class="glance-chip-label">Open next</span><strong>${repo.highest_review_target}</strong></div>` : ""}
             </div>
+            ${renderBriefRows({
+                changeSummary: repo.highest_change_summary,
+                flagSummary: repo.highest_flag_summary,
+                whereLabel: repo.highest_review_target,
+                whereUrl: repo.highest_review_url,
+                allowLinks: false,
+            })}
             ${repo.highest_rationale ? `<div class="meta-tight muted">${repo.highest_rationale}</div>` : ""}
             ${repo.highest_recommended_action ? `<div class="focus-action">${repo.highest_recommended_action}</div>` : ""}
             <div class="focus-footer">
@@ -413,6 +446,12 @@ function renderHighestRiskItems(items = []) {
                     <div>
                         <div><strong>${item.repo_full}</strong> · ${item.title}</div>
                         <div class="meta-tight muted">${item.artifact_path}</div>
+                        ${renderBriefRows({
+                            changeSummary: item.change_summary,
+                            flagSummary: item.flag_summary,
+                            whereLabel: item.review_target,
+                            whereUrl: item.review_url,
+                        })}
                     </div>
                 </div>
             `
