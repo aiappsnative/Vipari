@@ -69,6 +69,12 @@ class CanonicalCommentDetails:
     recommendation: str
 
 
+@dataclass(frozen=True)
+class SignalFusionAssessment:
+    risk_level: str
+    escalation_recommendation: EscalationRecommendation
+
+
 def build_llm_comment(
     diff_text: str,
     deterministic_analysis: DiffAnalysis,
@@ -108,7 +114,10 @@ def build_llm_comment(
         timeout=timeout_seconds,
     )
     raw_comment = response.choices[0].message.content or "Audit failed: empty response from AI model."
-    risk_level = _extract_risk_level(raw_comment, default=deterministic_analysis.suggested_risk_level.value)
+    risk_level = _fuse_risk_levels(
+        deterministic_analysis.suggested_risk_level.value,
+        _extract_risk_level(raw_comment, default=deterministic_analysis.suggested_risk_level.value),
+    )
     summary = _extract_summary(
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
@@ -345,11 +354,77 @@ def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> Es
     return EscalationRecommendation(decision="normal_review")
 
 
-def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
-    if "Escalation:" in comment_body:
-        return comment_body
+def _semantic_recommendation_requires_escalation(recommendation: str) -> bool:
+    lowered = recommendation.lower()
+    escalation_hints = (
+        "escalate before merge",
+        "revert before merge",
+        "do not merge",
+        "block merge",
+        "hold before merge",
+    )
+    return any(hint in lowered for hint in escalation_hints)
 
+
+def _fuse_risk_levels(deterministic_risk: str, semantic_risk: str) -> str:
+    normalized_deterministic = _normalize_risk_level(deterministic_risk)
+    normalized_semantic = _normalize_risk_level(semantic_risk)
+    order = {"Low": 0, "Medium": 1, "High": 2}
+    if order[normalized_semantic] >= order[normalized_deterministic]:
+        return normalized_semantic
+    return normalized_deterministic
+
+
+def _build_signal_fusion_assessment(
+    comment_body: str,
+    deterministic_analysis: DiffAnalysis,
+) -> SignalFusionAssessment:
+    deterministic_risk = deterministic_analysis.suggested_risk_level.value
+    semantic_risk = _extract_risk_level(comment_body, default=deterministic_risk)
+    fused_risk = _fuse_risk_levels(deterministic_risk, semantic_risk)
+    semantic_recommendation = _extract_recommendation(
+        comment_body,
+        default=_default_recommendation_for_risk(fused_risk),
+    )
+
+    base_recommendation = _build_escalation_recommendation(deterministic_analysis)
+    reasons = list(base_recommendation.reasons)
+    if fused_risk == "High" and _semantic_recommendation_requires_escalation(semantic_recommendation):
+        semantic_reason = "semantic review flagged merge-blocking risk"
+        if semantic_reason not in reasons:
+            reasons.append(semantic_reason)
+
+    if reasons:
+        escalation_recommendation = EscalationRecommendation(
+            decision="escalate_before_merge",
+            reasons=tuple(reasons),
+            label_name="promptdrift: escalate-before-merge",
+        )
+    else:
+        escalation_recommendation = EscalationRecommendation(decision="normal_review")
+
+    return SignalFusionAssessment(
+        risk_level=fused_risk,
+        escalation_recommendation=escalation_recommendation,
+    )
+
+
+def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
     escalation_line = _format_escalation_line(recommendation)
+    if "Escalation:" in comment_body:
+        lines = comment_body.splitlines()
+        updated_lines: list[str] = []
+        replaced = False
+        for line in lines:
+            if line.startswith("Escalation:"):
+                if not replaced:
+                    updated_lines.append(escalation_line)
+                    replaced = True
+                continue
+            updated_lines.append(line)
+        if replaced:
+            return "\n".join(updated_lines)
+
     details_marker = "<details>"
     if details_marker not in comment_body:
         return f"{comment_body.rstrip()}\n{escalation_line}"
@@ -553,6 +628,7 @@ def _persist_audit_result(
     comment_body: str | None,
     comment_mode: str | None,
     semantic_review_completed: bool,
+    suggested_risk_level: str | None = None,
     error_message: str | None = None,
     github_comment_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
@@ -571,6 +647,7 @@ def _persist_audit_result(
         comment_body=comment_body,
         comment_mode=comment_mode,
         semantic_review_completed=semantic_review_completed,
+        suggested_risk_level=suggested_risk_level,
         error_message=error_message,
         artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
@@ -674,7 +751,8 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             timeout_seconds=settings.llm_timeout_seconds,
             escalation_recommendation=escalation_recommendation,
         )
-        comment_body = _ensure_escalation_guidance(comment_body, escalation_recommendation)
+        fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
+        comment_body = _ensure_escalation_guidance(comment_body, fusion_assessment.escalation_recommendation)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -710,7 +788,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     try:
         _apply_escalation_label_for_job(
             job,
-            escalation_recommendation,
+            fusion_assessment.escalation_recommendation,
             settings,
             installation_token=installation_token,
         )
@@ -728,6 +806,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             comment_body=comment_body,
             comment_mode="full_review",
             semantic_review_completed=True,
+            suggested_risk_level=fusion_assessment.risk_level,
             error_message=audit_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,

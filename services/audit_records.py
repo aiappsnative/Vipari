@@ -354,12 +354,14 @@ def record_audit_result(
     comment_body: str | None,
     comment_mode: str | None,
     semantic_review_completed: bool,
+    suggested_risk_level: str | None = None,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
 ) -> PullRequestAuditRecord:
     now = time.time()
     artifact_snapshots = artifact_snapshots or {}
+    persisted_risk_level = suggested_risk_level or deterministic_analysis.suggested_risk_level.value
     with _connect(db_path) as conn:
         existing = conn.execute(
             "SELECT id, created_at FROM pull_request_audits WHERE job_id = ?",
@@ -386,7 +388,7 @@ def record_audit_result(
                     completion_mode,
                     output_mode,
                     deterministic_analysis.deterministic_score,
-                    deterministic_analysis.suggested_risk_level.value,
+                    persisted_risk_level,
                     int(semantic_review_completed),
                     error_message,
                     now,
@@ -422,7 +424,7 @@ def record_audit_result(
                     completion_mode,
                     output_mode,
                     deterministic_analysis.deterministic_score,
-                    deterministic_analysis.suggested_risk_level.value,
+                    persisted_risk_level,
                     int(semantic_review_completed),
                     error_message,
                     now,
