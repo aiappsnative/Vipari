@@ -23,6 +23,7 @@ from services.oss_eval_harness import (
     resolve_oss_eval_target,
     run_oss_evaluation,
 )
+from services.persistence import get_persistence_status
 
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -72,6 +73,13 @@ def cmd_list_repos(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
     init_db(db_path)
     _write_json({"repos": [asdict(item) for item in list_repo_dashboard_index(db_path)]})
+    return 0
+
+
+def cmd_persistence_status(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args.db)
+    init_db(db_path)
+    _write_json(asdict(get_persistence_status(db_path)))
     return 0
 
 
@@ -207,6 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list-repos", help="List repos with onboarding data")
     list_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
     list_parser.set_defaults(func=cmd_list_repos)
+
+    persistence_parser = subparsers.add_parser("persistence-status", help="Print the current persistence backend and logical table layout")
+    persistence_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    persistence_parser.set_defaults(func=cmd_persistence_status)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Print the unified dashboard payload for a repo")
     dashboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
