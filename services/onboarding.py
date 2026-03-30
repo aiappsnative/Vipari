@@ -31,7 +31,7 @@ from .onboarding_records import (
 
 
 DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".py", ".toml"}
-PRIMARY_DISCOVERY_HINTS = {
+STRONG_DISCOVERY_HINTS = {
     "prompt",
     "prompts",
     "system",
@@ -39,28 +39,48 @@ PRIMARY_DISCOVERY_HINTS = {
     "guardrail",
     "safety",
     "model",
-    "tool",
     "rag",
     "retriev",
     "llm",
     "openai",
     "anthropic",
     "claude",
-    "copilot",
     "inference",
-    "eval",
-    "evaluation",
     "chat",
     "completion",
-    "mcp",
 }
 SECONDARY_DISCOVERY_HINTS = {
+    "tool",
+    "mcp",
     "ai",
-    "llm",
     "assistant",
     "agent",
+    "copilot",
+    "eval",
+    "evaluation",
 }
 TEXT_HEAVY_DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".toml"}
+NOISY_DISCOVERY_SEGMENTS = {
+    ".github",
+    "__pycache__",
+    "docs",
+    "doc",
+    "example",
+    "examples",
+    "fixture",
+    "fixtures",
+    "reference",
+    "references",
+    "sample",
+    "samples",
+    "schema",
+    "schemas",
+    "skill",
+    "skills",
+    "test",
+    "tests",
+    "vendor",
+}
 
 
 @dataclass(frozen=True)
@@ -81,11 +101,46 @@ def _is_candidate_path(path: str) -> bool:
     lowered = path.lower()
     if not any(lowered.endswith(ext) for ext in DISCOVERY_EXTENSIONS):
         return False
-    if any(hint in lowered for hint in PRIMARY_DISCOVERY_HINTS):
-        return True
-    return any(lowered.endswith(ext) for ext in TEXT_HEAVY_DISCOVERY_EXTENSIONS) and any(
-        hint in lowered for hint in SECONDARY_DISCOVERY_HINTS
-    )
+
+    score = _candidate_path_score(path)
+    if any(lowered.endswith(ext) for ext in TEXT_HEAVY_DISCOVERY_EXTENSIONS):
+        return score >= 1
+    return score >= 3
+
+
+def _path_segments(path: str) -> list[str]:
+    return [segment for segment in path.lower().replace("\\", "/").split("/") if segment]
+
+
+def _candidate_path_score(path: str) -> int:
+    lowered = path.lower()
+    segments = _path_segments(path)
+    score = 0
+
+    strong_hits = sum(1 for hint in STRONG_DISCOVERY_HINTS if hint in lowered)
+    secondary_hits = sum(1 for hint in SECONDARY_DISCOVERY_HINTS if hint in lowered)
+    noisy_hits = sum(1 for segment in segments if segment in NOISY_DISCOVERY_SEGMENTS)
+
+    score += strong_hits * 3
+    score += secondary_hits
+    score -= noisy_hits * 2
+
+    filename = segments[-1] if segments else lowered
+    if filename.startswith("test_") or filename.endswith("_test.py"):
+        score -= 2
+
+    return score
+
+
+def _discovery_confidence(path: str, reason: str) -> float:
+    score = _candidate_path_score(path)
+    if "Content indicates" in reason:
+        return 0.82 if score >= 1 else 0.74
+    if score >= 6:
+        return 0.95
+    if score >= 3:
+        return 0.88
+    return 0.72
 
 
 def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtifactInput]:
@@ -95,13 +150,12 @@ def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtif
         relevance = classify_changed_file(changed_file)
         if not relevance.ai_relevant:
             continue
-        confidence = 0.9 if "Path indicates" in relevance.reason else 0.7
         discovered.append(
             DiscoveredArtifactInput(
                 artifact_path=path,
                 artifact_type=relevance.artifact_type,
                 discovery_reason=relevance.reason,
-                confidence=confidence,
+                confidence=_discovery_confidence(path, relevance.reason),
                 baseline_content=content,
             )
         )

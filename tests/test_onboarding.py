@@ -44,6 +44,34 @@ def test_onboard_repository_discovers_and_persists_ai_artifacts(tmp_path):
     assert all(baseline.line_count >= 1 for baseline in result.baseline_versions)
 
 
+def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_candidates(tmp_path):
+    db_path = str(tmp_path / "onboarding.db")
+    init_db(db_path)
+
+    files = {
+        "tests/tools/test_mcp_oauth.py": "def test_flow():\n    return 'assistant token'\n",
+        "skills/github/github-auth/SKILL.md": "AI assistant guidance for auth flows.",
+        "docs/reference/assistant-architecture.md": "This document explains the assistant architecture.",
+        "docs/prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+        "config/model.yaml": "model: gpt-4.1\ntemperature: 0.2\n",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["config/model.yaml", "docs/prompts/system.txt"]
+    assert result.artifacts[0].confidence >= 0.88
+    assert result.artifacts[1].confidence >= 0.72
+    assert result.onboarding.discovered_artifact_count == 2
+
+
 def test_plan_repository_history_backfill_creates_jobs_for_onboarded_artifacts(tmp_path):
     db_path = str(tmp_path / "onboarding.db")
     init_db(db_path)
