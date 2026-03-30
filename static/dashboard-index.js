@@ -136,7 +136,7 @@ function renderMiniSignalRow(repo, rank) {
                 <div class="signal-bar"><span style="width:${barWidth}%"></span></div>
                 <div class="signal-subline">${repo.highest_insight_title || "No prioritized insight yet"}</div>
             </div>
-            <div class="signal-meta">${repo.highest_review_target || "Open"}</div>
+            <div class="signal-meta">${repo.highest_evidence_label || repo.highest_review_target || "Open"}</div>
         </a>
     `;
 }
@@ -364,6 +364,7 @@ function renderAttentionRepos(items = [], startRank = 1) {
                     <div class="triage-card-body">
                         <div class="triage-summary">${repo.highest_insight_title || "No prioritized repo insight yet"}</div>
                         <div class="meta-tight muted">${repo.highest_insight_artifact_path || "No lead artifact yet"}</div>
+                        ${repo.highest_evidence_label ? `<div class="meta-tight"><strong>${repo.highest_evidence_label}</strong></div>` : ""}
                         ${repo.highest_baseline_label ? `<div class="meta-tight"><strong>${repo.highest_baseline_label}</strong></div>` : ""}
                         ${renderBriefRows({
                             changeSummary: repo.highest_change_summary,
@@ -372,6 +373,7 @@ function renderAttentionRepos(items = [], startRank = 1) {
                             whereUrl: repo.highest_review_url,
                             allowLinks: false,
                         })}
+                        ${repo.highest_evidence_summary ? `<div class="meta-tight muted">${repo.highest_evidence_summary}</div>` : ""}
                         ${repo.highest_rationale ? `<div class="meta-tight muted">${repo.highest_rationale}</div>` : ""}
                         ${repo.highest_recommended_action ? `<div class="meta-tight">${repo.highest_recommended_action}</div>` : ""}
                     </div>
@@ -407,6 +409,7 @@ function renderPrimaryReviewFocus(repo) {
                     <span class="glance-chip-label">Artifact</span>
                     <strong>${repo.highest_insight_artifact_path || "No lead artifact yet"}</strong>
                 </div>
+                ${repo.highest_evidence_label ? `<div class="glance-chip"><span class="glance-chip-label">Evidence</span><strong>${repo.highest_evidence_label}</strong></div>` : ""}
                 ${repo.highest_baseline_label ? `<div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${repo.highest_baseline_label}</strong></div>` : ""}
                 ${repo.highest_review_target ? `<div class="glance-chip"><span class="glance-chip-label">Open next</span><strong>${repo.highest_review_target}</strong></div>` : ""}
             </div>
@@ -417,6 +420,7 @@ function renderPrimaryReviewFocus(repo) {
                 whereUrl: repo.highest_review_url,
                 allowLinks: false,
             })}
+            ${repo.highest_evidence_summary ? `<div class="meta-tight muted">${repo.highest_evidence_summary}</div>` : ""}
             ${repo.highest_rationale ? `<div class="meta-tight muted">${repo.highest_rationale}</div>` : ""}
             ${repo.highest_recommended_action ? `<div class="focus-action">${repo.highest_recommended_action}</div>` : ""}
             <div class="focus-footer">
@@ -446,12 +450,14 @@ function renderHighestRiskItems(items = []) {
                     <div>
                         <div><strong>${item.repo_full}</strong> · ${item.title}</div>
                         <div class="meta-tight muted">${item.artifact_path}</div>
+                        ${item.evidence_label ? `<div class="meta-tight"><strong>${item.evidence_label}</strong></div>` : ""}
                         ${renderBriefRows({
                             changeSummary: item.change_summary,
                             flagSummary: item.flag_summary,
                             whereLabel: item.review_target,
                             whereUrl: item.review_url,
                         })}
+                        ${item.evidence_summary ? `<div class="meta-tight muted">${item.evidence_summary}</div>` : ""}
                     </div>
                 </div>
             `

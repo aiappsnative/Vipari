@@ -116,13 +116,20 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.insights[0].queue_lane == "primary"
     assert dashboard.insights[0].priority in {"review_now", "watch", "baseline_review"}
     assert dashboard.insights[0].confidence_label in {"high confidence", "medium confidence", "lower confidence"}
+    assert dashboard.insights[0].evidence_label == "PR + history"
+    assert dashboard.insights[0].evidence_summary.startswith("Open PR #42 · sha-cur first;")
     assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
-    assert dashboard.insights[0].provenance_summary == "From · PR #42 · sha-cur · full semantic review · semantic complete · risk low"
+    assert dashboard.insights[0].provenance_summary.startswith("From · PR #42 · sha-cur · full semantic review · semantic complete · risk low")
     assert dashboard.insights[0].review_target == "PR #42 · sha-cur"
     assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert dashboard.insights[0].supporting_review_target is not None
+    assert dashboard.insights[0].supporting_review_target.startswith("commit sha-")
+    assert dashboard.insights[0].supporting_review_url is not None
+    assert dashboard.insights[0].supporting_review_url.startswith("https://github.com/doria90/dummyAI/commit/")
     assert dashboard.insights[0].change_summary
     assert dashboard.insights[0].flag_summary.startswith("Flagged because")
     assert "historical hotspot" in dashboard.insights[0].risk_reasons
+    assert "pr-linked evidence" in dashboard.insights[0].risk_reasons
     assert len(dashboard.control_surface_groups) == 1
     assert dashboard.control_surface_groups[0].group_key == "prompts"
     assert len(dashboard.history_timelines) == 1
@@ -245,6 +252,8 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert len(overview.attention_repos) == 2
     assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
+    assert overview.attention_repos[0].highest_evidence_label == "PR + history"
+    assert overview.attention_repos[0].highest_evidence_summary.startswith("Open PR #42 · sha-cur first;")
     assert overview.attention_repos[0].highest_baseline_label is not None
     assert overview.attention_repos[0].highest_review_target == "PR #42 · sha-cur"
     assert overview.attention_repos[0].highest_review_url == "https://github.com/doria90/dummyAI/pull/42"
@@ -252,6 +261,8 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert (overview.attention_repos[0].highest_flag_summary or "").startswith("Flagged because")
     assert overview.attention_repos[0].lower_confidence_count == 0
     assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Approved")
+    assert overview.highest_risk_items[0].evidence_label == "PR + history"
+    assert overview.highest_risk_items[0].evidence_summary.startswith("Open PR #42 · sha-cur first;")
     assert overview.highest_risk_items[0].review_target == "PR #42 · sha-cur"
     assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
     assert overview.highest_risk_items[0].change_summary
@@ -279,3 +290,45 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].provenance is None
     assert dashboard.design_profiles[0].can_promote_source_to_baseline is False
+    assert dashboard.insights[0].evidence_label == "baseline only"
+    assert dashboard.insights[0].evidence_summary == "No stored PR or merged-history evidence yet."
+
+
+def test_build_repo_dashboard_view_uses_history_target_when_pr_evidence_is_missing(tmp_path):
+    db_path = str(tmp_path / "dashboard-history-only.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert dashboard.insights[0].evidence_label == "history only"
+    assert dashboard.insights[0].evidence_summary == "Only merged-history evidence is available right now; start with commit sha-2."
+    assert dashboard.insights[0].review_target == "commit sha-2"
+    assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert dashboard.insights[0].supporting_review_target is None
+    assert "history-only evidence" in dashboard.insights[0].risk_reasons

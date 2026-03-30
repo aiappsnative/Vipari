@@ -140,6 +140,12 @@ function renderInsightCard(item, designProfile, tone = "primary") {
     const combinedReasons = [...new Set([...(item.risk_reasons || []), ...((designProfile && designProfile.risk_tags) || [])])];
     const updatedAt = formatTimestamp(item.updated_at);
     const targetLabel = item.review_target || "repo detail";
+    const supportingTargetLabel = item.supporting_review_target || null;
+    const supportingTargetMarkup = supportingTargetLabel
+        ? (item.supporting_review_url
+            ? `<a class="link" href="${item.supporting_review_url}" data-open-source-change="${item.supporting_review_url}" target="_blank" rel="noreferrer noopener">${supportingTargetLabel}</a>`
+            : supportingTargetLabel)
+        : "";
     const targetMarkup = item.review_url
         ? `<a class="link" href="${item.review_url}" data-open-source-change="${item.review_url}" target="_blank" rel="noreferrer noopener">${targetLabel}</a>`
         : targetLabel;
@@ -167,7 +173,9 @@ function renderInsightCard(item, designProfile, tone = "primary") {
                 <div class="tag-row">${renderRiskTags(combinedReasons)}</div>
                 <div class="glance-strip">
                     <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_label}</strong></div>
+                    <div class="glance-chip"><span class="glance-chip-label">Evidence</span><strong>${item.evidence_label || "baseline only"}</strong></div>
                     <div class="glance-chip"><span class="glance-chip-label">Source</span><strong>${targetMarkup}</strong></div>
+                    ${supportingTargetLabel ? `<div class="glance-chip"><span class="glance-chip-label">Merged context</span><strong>${supportingTargetMarkup}</strong></div>` : ""}
                     ${updatedAt ? `<div class="glance-chip"><span class="glance-chip-label">Updated</span><strong>${updatedAt}</strong></div>` : ""}
                 </div>
                 ${renderBriefRows({
@@ -179,6 +187,7 @@ function renderInsightCard(item, designProfile, tone = "primary") {
                 <details class="micro-detail">
                     <summary>Why this is here</summary>
                     <div class="micro-detail-body">
+                        ${item.evidence_summary ? `<div class="meta-tight muted">${item.evidence_summary}</div>` : ""}
                         <div class="meta-tight muted">${item.rationale}</div>
                         <div class="meta-tight">${item.recommended_action}</div>
                     </div>

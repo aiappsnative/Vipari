@@ -68,6 +68,8 @@ class DashboardOverviewAttentionRepo:
     highest_priority: str
     highest_insight_title: str | None
     highest_insight_artifact_path: str | None
+    highest_evidence_label: str | None
+    highest_evidence_summary: str | None
     highest_change_summary: str | None
     highest_flag_summary: str | None
     highest_rationale: str | None
@@ -128,6 +130,8 @@ class DashboardOverviewRegressionEntry:
     title: str
     priority: str
     confidence_label: str
+    evidence_label: str
+    evidence_summary: str
     baseline_label: str
     provenance_summary: str
     review_target: str | None
@@ -194,10 +198,14 @@ class RepoDashboardInsightEntry:
     queue_lane: str = "primary"
     score: float = 0.0
     confidence_label: str = "lower confidence"
+    evidence_label: str = "baseline only"
+    evidence_summary: str = ""
     baseline_label: str = "Baseline: none"
     provenance_summary: str = ""
     review_target: str | None = None
     review_url: str | None = None
+    supporting_review_target: str | None = None
+    supporting_review_url: str | None = None
     change_summary: str = ""
     flag_summary: str = ""
     updated_at: float | None = None
@@ -417,7 +425,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
     jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
     metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
-    profile_context_by_path = _load_repo_artifact_profile_context(db_path, repo_full)
+    profile_context_by_path = _load_repo_artifact_profile_contexts(db_path, repo_full)
 
     artifact_entries: list[RepoDashboardArtifactEntry] = []
     total_historical_versions = sum(metrics["historical_version_count"] for metrics in metrics_by_path.values())
@@ -452,7 +460,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
 
     artifact_entries.sort(
         key=lambda entry: (
-            -_insight_score(entry),
+            -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
             -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
             entry.artifact_path,
         )
@@ -527,6 +535,12 @@ class _RepoArtifactProfileContext:
     content_text: str | None
 
 
+@dataclass(frozen=True)
+class _RepoArtifactEvidenceBundle:
+    latest_pull_request: _RepoArtifactProfileContext | None = None
+    latest_historical: _RepoArtifactProfileContext | None = None
+
+
 def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[str, float | int]]:
     metrics_by_path: dict[str, dict[str, float | int]] = {}
 
@@ -585,8 +599,8 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
     return metrics_by_path
 
 
-def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[str, _RepoArtifactProfileContext]:
-    contexts: dict[str, _RepoArtifactProfileContext] = {}
+def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[str, _RepoArtifactEvidenceBundle]:
+    contexts: dict[str, _RepoArtifactEvidenceBundle] = {}
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
@@ -607,7 +621,7 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
-            contexts[artifact_path] = _RepoArtifactProfileContext(
+            context = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="historical",
                 label="Historical backfill",
@@ -621,6 +635,11 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 narrative=json.loads(row["narrative_json"]),
                 signal_terms=json.loads(row["signal_terms_json"]),
                 content_text=row["content_text"],
+            )
+            bundle = contexts.get(artifact_path, _RepoArtifactEvidenceBundle())
+            contexts[artifact_path] = _RepoArtifactEvidenceBundle(
+                latest_pull_request=bundle.latest_pull_request,
+                latest_historical=context,
             )
 
         pr_rows = conn.execute(
@@ -645,7 +664,7 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 baseline_provenance = previous_pr_fallback_provenance(row["baseline_profile_id"], row["artifact_version_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
-            contexts[artifact_path] = _RepoArtifactProfileContext(
+            context = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
                 source_type="pull_request",
                 label="Pull request audit",
@@ -665,8 +684,27 @@ def _load_repo_artifact_profile_context(db_path: str, repo_full: str) -> dict[st
                 signal_terms=json.loads(row["signal_terms_json"]),
                 content_text=row["content_text"],
             )
+            bundle = contexts.get(artifact_path, _RepoArtifactEvidenceBundle())
+            contexts[artifact_path] = _RepoArtifactEvidenceBundle(
+                latest_pull_request=context,
+                latest_historical=bundle.latest_historical,
+            )
 
     return contexts
+
+
+def _preferred_profile_context(bundle: _RepoArtifactEvidenceBundle | None) -> _RepoArtifactProfileContext | None:
+    if bundle is None:
+        return None
+    return bundle.latest_pull_request or bundle.latest_historical
+
+
+def _supporting_profile_context(bundle: _RepoArtifactEvidenceBundle | None) -> _RepoArtifactProfileContext | None:
+    if bundle is None:
+        return None
+    if bundle.latest_pull_request is not None and bundle.latest_historical is not None:
+        return bundle.latest_historical
+    return None
 
 
 def _normalized_id_prefix(repo_full: str) -> str:
@@ -704,19 +742,20 @@ def _drift_magnitude(semantic_distance: float, attribute_deltas: dict[str, float
 def _build_repo_insights(
     artifacts: list[RepoDashboardArtifactEntry],
     baseline_by_path,
-    profile_context_by_path: dict[str, _RepoArtifactProfileContext],
+    profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
 ) -> tuple[list[RepoDashboardInsightEntry], list[RepoDashboardInsightEntry]]:
     primary_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     lower_confidence_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     for artifact in artifacts:
-        score = _insight_score(artifact)
+        evidence_bundle = profile_context_by_path.get(artifact.artifact_path)
+        score = _insight_score(artifact, evidence_bundle)
         priority = "review_now" if score >= 1.25 else "watch" if score >= 0.6 else "baseline_review"
         baseline = baseline_by_path.get(artifact.artifact_path)
-        context = profile_context_by_path.get(artifact.artifact_path)
+        context = _preferred_profile_context(evidence_bundle)
         queue_lane = _insight_queue_lane(artifact, priority, score)
         title = _insight_title(artifact, priority)
-        rationale = _insight_rationale(artifact, priority)
-        recommended_action = _insight_action(artifact, priority)
+        rationale = _insight_rationale(artifact, priority, evidence_bundle)
+        recommended_action = _insight_action(artifact, priority, evidence_bundle)
         insight = RepoDashboardInsightEntry(
             title=title,
             artifact_path=artifact.artifact_path,
@@ -725,14 +764,18 @@ def _build_repo_insights(
             queue_lane=queue_lane,
             score=score,
             confidence_label=_confidence_label(artifact.discovery_confidence),
-            baseline_label=_baseline_label(baseline, context),
-            provenance_summary=_provenance_summary(context),
-            review_target=_review_target(context),
-            review_url=_review_url(context),
-            change_summary=_change_summary(artifact, context),
-            flag_summary=_flag_summary(artifact, priority),
+            evidence_label=_evidence_label(evidence_bundle),
+            evidence_summary=_evidence_summary(evidence_bundle),
+            baseline_label=_baseline_label(baseline, evidence_bundle),
+            provenance_summary=_provenance_summary(evidence_bundle),
+            review_target=_review_target(evidence_bundle),
+            review_url=_review_url(evidence_bundle),
+            supporting_review_target=_supporting_review_target(evidence_bundle),
+            supporting_review_url=_supporting_review_url(evidence_bundle),
+            change_summary=_change_summary(artifact, evidence_bundle),
+            flag_summary=_flag_summary(artifact, priority, evidence_bundle),
             updated_at=(context.created_at if context is not None else artifact.latest_activity_at or None),
-            risk_reasons=_insight_reasons(artifact),
+            risk_reasons=_insight_reasons(artifact, evidence_bundle),
             rationale=rationale,
             recommended_action=recommended_action,
         )
@@ -750,7 +793,10 @@ def _build_repo_insights(
     return [entry for _, entry in primary_ranked[:8]], [entry for _, entry in lower_confidence_ranked[:6]]
 
 
-def _insight_score(artifact: RepoDashboardArtifactEntry) -> float:
+def _insight_score(
+    artifact: RepoDashboardArtifactEntry,
+    evidence_bundle: _RepoArtifactEvidenceBundle | None = None,
+) -> float:
     type_weight = {
         "guardrail": 0.5,
         "system_prompt": 0.42,
@@ -770,6 +816,12 @@ def _insight_score(artifact: RepoDashboardArtifactEntry) -> float:
     confidence_bonus = artifact.discovery_confidence * 0.14
     recency_bonus = 0.12 if artifact.latest_activity_at > 0 else 0.0
     history_bonus = min(artifact.historical_version_count, 5) * 0.04
+    pr_evidence_bonus = 0.2 if evidence_bundle is not None and evidence_bundle.latest_pull_request is not None else 0.0
+    history_only_penalty = (
+        0.12
+        if evidence_bundle is not None and evidence_bundle.latest_pull_request is None and evidence_bundle.latest_historical is not None
+        else 0.0
+    )
     return round(
         type_weight
         + blast_radius
@@ -780,7 +832,9 @@ def _insight_score(artifact: RepoDashboardArtifactEntry) -> float:
         + autonomy_increase
         + confidence_bonus
         + recency_bonus
-        + history_bonus,
+        + history_bonus
+        + pr_evidence_bonus
+        - history_only_penalty,
         4,
     )
 
@@ -801,8 +855,13 @@ def _insight_title(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
     return "Potentially important control surface"
 
 
-def _insight_rationale(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
+def _insight_rationale(
+    artifact: RepoDashboardArtifactEntry,
+    priority: str,
+    evidence_bundle: _RepoArtifactEvidenceBundle | None,
+) -> str:
     baseline_context = "relative to the current baseline"
+    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
     if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
         return f"A critical control surface broadened authority {baseline_context}, increasing blast radius and review urgency."
     if artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
@@ -814,13 +873,20 @@ def _insight_rationale(artifact: RepoDashboardArtifactEntry, priority: str) -> s
     if artifact.latest_pr_governance_shift < -0.05:
         return f"Recent pull-request history weakened governance or approval posture {baseline_context}."
     if artifact.latest_historical_drift_magnitude > 0.35:
+        if not has_pr_evidence:
+            return "Merged history shows meaningful design movement, but no PR-linked evidence is stored yet, so the latest commit trail should be reviewed first."
         return "Historical snapshots show meaningful design movement that deserves a human read."
     if priority == "baseline_review":
         return "This artifact looks like a real AI control surface but does not yet have meaningful drift context."
     return "This artifact is likely part of the AI control surface and should stay on the review radar."
 
 
-def _insight_action(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
+def _insight_action(
+    artifact: RepoDashboardArtifactEntry,
+    priority: str,
+    evidence_bundle: _RepoArtifactEvidenceBundle | None,
+) -> str:
+    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
     if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
         return "Escalate this surface to the AI platform owner before merge and inspect the linked PR or commit first."
     if artifact.latest_pr_capability_shift > 0.05:
@@ -830,6 +896,8 @@ def _insight_action(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
     if artifact.latest_pr_governance_shift < -0.05:
         return "Check whether approvals, review gates, or audit instructions were weakened and route this change for human review."
     if artifact.latest_historical_drift_magnitude > 0.35:
+        if not has_pr_evidence:
+            return "Open the linked merged commit first, then compare it against the approved baseline and nearby history before escalating."
         return "Open the artifact history and compare the earliest and latest versions to understand the behavior shift."
     if priority == "baseline_review":
         return "Confirm whether this is a true AI control surface and keep it in the monitored baseline set."
@@ -879,7 +947,10 @@ def _blast_radius_weight(artifact: RepoDashboardArtifactEntry) -> float:
     return 0.0
 
 
-def _insight_reasons(artifact: RepoDashboardArtifactEntry) -> list[str]:
+def _insight_reasons(
+    artifact: RepoDashboardArtifactEntry,
+    evidence_bundle: _RepoArtifactEvidenceBundle | None,
+) -> list[str]:
     reasons: list[str] = []
     if _blast_radius_weight(artifact) >= 0.45:
         reasons.append("critical surface")
@@ -893,12 +964,17 @@ def _insight_reasons(artifact: RepoDashboardArtifactEntry) -> list[str]:
         reasons.append("autonomy increased")
     if artifact.latest_historical_drift_magnitude > 0.35:
         reasons.append("historical hotspot")
+    if evidence_bundle is not None and evidence_bundle.latest_pull_request is not None:
+        reasons.append("pr-linked evidence")
+    elif evidence_bundle is not None and evidence_bundle.latest_historical is not None:
+        reasons.append("history-only evidence")
     if not reasons:
         reasons.append(_confidence_label(artifact.discovery_confidence))
     return reasons
 
 
-def _baseline_label(baseline, context: _RepoArtifactProfileContext | None) -> str:
+def _baseline_label(baseline, evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
+    context = _preferred_profile_context(evidence_bundle)
     provenance = context.baseline_provenance if context is not None else None
     if provenance is None and baseline is not None:
         provenance = approved_onboarding_provenance(baseline.id)
@@ -915,26 +991,73 @@ def _baseline_label(baseline, context: _RepoArtifactProfileContext | None) -> st
     return "Baseline: none yet"
 
 
-def _provenance_summary(context: _RepoArtifactProfileContext | None) -> str:
+def _evidence_label(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
+    if evidence_bundle is None:
+        return "baseline only"
+    if evidence_bundle.latest_pull_request is not None and evidence_bundle.latest_historical is not None:
+        return "PR + history"
+    if evidence_bundle.latest_pull_request is not None:
+        return "PR-linked"
+    if evidence_bundle.latest_historical is not None:
+        return "history only"
+    return "baseline only"
+
+
+def _evidence_summary(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
+    if evidence_bundle is None:
+        return "No stored PR or merged-history evidence yet."
+    preferred = _preferred_profile_context(evidence_bundle)
+    supporting = _supporting_profile_context(evidence_bundle)
+    if preferred is None:
+        return "No stored PR or merged-history evidence yet."
+    if supporting is not None:
+        return f"Open {preferred.source_ref or preferred.label} first; supporting merged history is available from {supporting.source_ref or supporting.label}."
+    if evidence_bundle.latest_pull_request is not None:
+        return f"PR-linked evidence is available from {preferred.source_ref or preferred.label}."
+    return f"Only merged-history evidence is available right now; start with {preferred.source_ref or preferred.label}."
+
+
+def _provenance_summary(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
+    context = _preferred_profile_context(evidence_bundle)
     if context is None:
         return "No PR or history provenance yet"
     parts = ["From", context.source_ref or context.label, context.review_context]
+    supporting = _supporting_profile_context(evidence_bundle)
+    if supporting is not None:
+        parts.append(f"supporting merged history {supporting.source_ref or supporting.label}")
     return " · ".join(part for part in parts if part)
 
 
-def _review_target(context: _RepoArtifactProfileContext | None) -> str | None:
+def _review_target(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str | None:
+    context = _preferred_profile_context(evidence_bundle)
     if context is None:
         return None
     return context.source_ref or context.label
 
 
-def _review_url(context: _RepoArtifactProfileContext | None) -> str | None:
+def _review_url(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str | None:
+    context = _preferred_profile_context(evidence_bundle)
     if context is None:
         return None
     return context.source_url
 
 
-def _change_summary(artifact: RepoDashboardArtifactEntry, context: _RepoArtifactProfileContext | None) -> str:
+def _supporting_review_target(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str | None:
+    context = _supporting_profile_context(evidence_bundle)
+    if context is None:
+        return None
+    return context.source_ref or context.label
+
+
+def _supporting_review_url(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str | None:
+    context = _supporting_profile_context(evidence_bundle)
+    if context is None:
+        return None
+    return context.source_url
+
+
+def _change_summary(artifact: RepoDashboardArtifactEntry, evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
+    context = _preferred_profile_context(evidence_bundle)
     attribute_deltas = _attribute_deltas_for_summary(artifact, context)
     source_label = _sentence_source_label(context)
     changed_labels = _changed_attribute_labels(attribute_deltas)
@@ -945,7 +1068,12 @@ def _change_summary(artifact: RepoDashboardArtifactEntry, context: _RepoArtifact
     return "No material baseline-relative shift has been isolated yet."
 
 
-def _flag_summary(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
+def _flag_summary(
+    artifact: RepoDashboardArtifactEntry,
+    priority: str,
+    evidence_bundle: _RepoArtifactEvidenceBundle | None,
+) -> str:
+    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
     if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
         return "Flagged because a critical surface broadened authority while guardrails weakened."
     if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
@@ -961,6 +1089,8 @@ def _flag_summary(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
     if artifact.latest_pr_autonomy_shift > 0.05:
         return "Flagged because the system appears more autonomous than baseline."
     if artifact.latest_historical_drift_magnitude > 0.35:
+        if not has_pr_evidence:
+            return "Flagged because merged history shows repeated design movement, but no PR-linked evidence is stored yet."
         return "Flagged because repeated historical design movement makes this worth human review."
     if priority == "baseline_review":
         return "Flagged because this looks like a high-value AI control surface that still needs stronger evidence."
@@ -1569,7 +1699,7 @@ def _build_repo_design_profiles(
     artifacts: list[RepoDashboardArtifactEntry],
     insights: list[RepoDashboardInsightEntry],
     baseline_by_path,
-    profile_context_by_path: dict[str, _RepoArtifactProfileContext],
+    profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
 ) -> list[RepoArtifactDesignProfile]:
     artifact_by_path = {artifact.artifact_path: artifact for artifact in artifacts}
     ordered_paths: list[str] = []
@@ -1587,7 +1717,7 @@ def _build_repo_design_profiles(
         if artifact is None or baseline is None:
             continue
 
-        context = profile_context_by_path.get(artifact_path)
+        context = _preferred_profile_context(profile_context_by_path.get(artifact_path))
         baseline_provenance = approved_onboarding_provenance(baseline.id)
         baseline_profile = _profile_vector(baseline.profile)
         if context is None:
@@ -1668,6 +1798,8 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 highest_priority=top_insight.priority if top_insight is not None else "baseline_review",
                 highest_insight_title=top_insight.title if top_insight is not None else None,
                 highest_insight_artifact_path=top_insight.artifact_path if top_insight is not None else None,
+                highest_evidence_label=top_insight.evidence_label if top_insight is not None else None,
+                highest_evidence_summary=top_insight.evidence_summary if top_insight is not None else None,
                 highest_change_summary=top_insight.change_summary if top_insight is not None else None,
                 highest_flag_summary=top_insight.flag_summary if top_insight is not None else None,
                 highest_rationale=top_insight.rationale if top_insight is not None else None,
@@ -1937,6 +2069,8 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                     title=insight.title,
                     priority=insight.priority,
                     confidence_label=insight.confidence_label,
+                    evidence_label=insight.evidence_label,
+                    evidence_summary=insight.evidence_summary,
                     baseline_label=insight.baseline_label,
                     provenance_summary=insight.provenance_summary,
                     review_target=insight.review_target,

@@ -116,6 +116,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
+    assert overview_payload["attention_repos"][0]["highest_evidence_label"] == "PR + history"
+    assert overview_payload["attention_repos"][0]["highest_evidence_summary"].startswith("Open PR #42 · sha-cur first;")
     assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Approved")
     assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/pull/42"
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
@@ -131,9 +133,13 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
+    assert payload["insights"][0]["evidence_label"] == "PR + history"
+    assert payload["insights"][0]["evidence_summary"].startswith("Open PR #42 · sha-cur first;")
     assert payload["insights"][0]["baseline_label"].startswith("Baseline: Approved")
     assert payload["insights"][0]["review_target"] == "PR #42 · sha-cur"
     assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert payload["insights"][0]["supporting_review_target"].startswith("commit sha-")
+    assert payload["insights"][0]["supporting_review_url"].startswith("https://github.com/doria90/dummyAI/commit/")
     assert payload["insights"][0]["change_summary"]
     assert payload["insights"][0]["flag_summary"].startswith("Flagged because")
     assert payload["insights"][0]["risk_reasons"]
@@ -262,3 +268,5 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     payload = repo_response.json()
     assert payload["design_profiles"][0]["provenance"] is None
     assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is False
+    assert payload["insights"][0]["evidence_label"] == "baseline only"
+    assert payload["insights"][0]["evidence_summary"] == "No stored PR or merged-history evidence yet."
