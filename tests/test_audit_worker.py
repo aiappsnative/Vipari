@@ -763,6 +763,51 @@ index 1..2
     assert "Recommendation: Revert before merge." in comment
 
 
+def test_build_llm_comment_keeps_deterministic_risk_as_floor_when_model_understates_risk():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "Summary: The change looks limited and should stay in the normal lane.\n"
+                                "Risk Level: Low\n"
+                                "Recommendation: Confirm the change is intended and keep the normal review lane."
+                            )
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+    )
+
+    assert comment.startswith("❌ Risk: High")
+    assert "Risk Level: High" in comment
+    assert "Escalation: **Recommended before merge**" in comment
+
+
 def test_build_llm_comment_normalizes_legacy_rich_output_to_canonical_layout():
     analysis = analyze_diff(
         """diff --git a/prompts/policy.md b/prompts/policy.md
@@ -1125,6 +1170,68 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
     assert audit is not None
     assert audit.status == "completed"
     assert audit.error_message is None
+
+
+def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signal(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=111,
+        installation_id=123,
+        head_sha="sha-111",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+
+    posted = []
+    labels = []
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "\n".join(
+            [
+                "❌ Risk: High — The semantic review found a behavior-changing AI risk that should not merge yet.",
+                "Escalation: **Not recommended** — stays in the normal review lane",
+                "",
+                "<details>",
+                "<summary>Full semantic review details</summary>",
+                "",
+                "Risk Level: High",
+                "Detailed Analysis:",
+                "- The change alters AI behavior in a way that deserves merge-blocking review.",
+                "Recommendation: Revert before merge.",
+                "",
+                "</details>",
+            ]
+        ),
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 2111,
+    )
+    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(posted) == 1
+    assert "Escalation: **Recommended before merge**" in posted[0][0]
+    assert "semantic review flagged merge-blocking risk" in posted[0][0]
+    assert labels == [("doria90/dummyAI", 111, "token", "promptdrift: escalate-before-merge")]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.suggested_risk_level == "High"
 
 
 def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
