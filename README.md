@@ -197,7 +197,12 @@ python scripts/repo_ops.py list-repos
 python scripts/repo_ops.py dashboard owner/repo
 python scripts/repo_ops.py onboard owner/repo <installation_id> --plan-backfill --execute-backfill
 python scripts/repo_ops.py backfill owner/repo <installation_id>
+python scripts/repo_ops.py list-eval-candidates
+python scripts/repo_ops.py eval-run openfang <installation_id> --run-label main-openfang --compare-to artifacts/oss-evals/main/openfang/run-package.json
+python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to/baseline-run-package.json
 ```
+
+The OSS evaluation harness writes repeatable run packages under `artifacts/oss-evals/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, and a fixed evaluator rubric so branch-to-branch comparison stays lightweight but reproducible.
 
 Useful JSON endpoints:
 

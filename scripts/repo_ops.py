@@ -17,6 +17,12 @@ from services.audit_jobs import init_db
 from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
 from services.github_integration import generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.oss_eval_harness import (
+    compare_oss_eval_package_files,
+    list_oss_eval_candidates,
+    resolve_oss_eval_target,
+    run_oss_evaluation,
+)
 
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -39,6 +45,27 @@ def _require_installation_token(installation_id: int) -> str:
 
 def _write_json(payload: object) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _default_eval_output_root() -> str:
+    return str(PROJECT_ROOT / "artifacts" / "oss-evals")
+
+
+def _detect_git_branch() -> str:
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "unknown"
+    branch_name = result.stdout.strip()
+    return branch_name or "unknown"
 
 
 def cmd_list_repos(args: argparse.Namespace) -> int:
@@ -117,6 +144,62 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_eval_candidates(_: argparse.Namespace) -> int:
+    _write_json({"candidates": [asdict(candidate) for candidate in list_oss_eval_candidates()]})
+    return 0
+
+
+def cmd_eval_run(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args.db)
+    init_db(db_path)
+    target = resolve_oss_eval_target(args.target)
+    token = _require_installation_token(args.installation_id)
+    output_root = args.output_dir or _default_eval_output_root()
+    branch_name = args.branch or _detect_git_branch()
+    mode = args.mode or target.recommended_mode
+    commit_limit = args.commit_limit if args.commit_limit is not None else target.commit_limit_per_artifact
+    expected_control_surfaces = list(target.expected_control_surfaces)
+    if args.expect_control_surface:
+        expected_control_surfaces.extend(args.expect_control_surface)
+
+    result = run_oss_evaluation(
+        db_path,
+        repo_full=target.repo_full,
+        installation_id=args.installation_id,
+        token=token,
+        mode=mode,
+        commit_limit_per_artifact=commit_limit,
+        output_root=output_root,
+        branch_name=branch_name,
+        candidate_key=target.key,
+        expected_control_surfaces=expected_control_surfaces,
+        manual_notes=args.notes or target.notes,
+        run_label=args.run_label,
+        compare_to_package_path=args.compare_to,
+    )
+    payload = {
+        "repo_full": target.repo_full,
+        "candidate_key": target.key,
+        "package_path": result.package_path,
+        "repo_dashboard_path": result.repo_dashboard_path,
+        "overview_dashboard_path": result.overview_dashboard_path,
+        "comparison_path": result.comparison_path,
+        "run": result.package,
+    }
+    _write_json(payload)
+    return 0
+
+
+def cmd_eval_compare(args: argparse.Namespace) -> int:
+    summary = compare_oss_eval_package_files(args.current_package, args.baseline_package)
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    _write_json(summary)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PromptDrift repo operator CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -144,6 +227,37 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
     backfill_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
     backfill_parser.set_defaults(func=cmd_backfill)
+
+    eval_candidates_parser = subparsers.add_parser("list-eval-candidates", help="List curated OSS evaluation candidates")
+    eval_candidates_parser.set_defaults(func=cmd_list_eval_candidates)
+
+    eval_run_parser = subparsers.add_parser("eval-run", help="Run the repeatable OSS evaluation harness for a curated candidate or owner/repo")
+    eval_run_parser.add_argument("target", help="Candidate key or owner/repo name to evaluate")
+    eval_run_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
+    eval_run_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    eval_run_parser.add_argument("--output-dir", help="Directory where evaluation artifacts should be written")
+    eval_run_parser.add_argument("--commit-limit", type=int, help="Max historical commits per artifact when planning backfill")
+    eval_run_parser.add_argument(
+        "--mode",
+        choices=["baseline_only", "baseline_plus_backfill"],
+        help="Whether to only baseline the repo or also plan and execute backfill",
+    )
+    eval_run_parser.add_argument("--branch", help="Branch label to store in the saved evaluation package")
+    eval_run_parser.add_argument("--run-label", help="Stable label for the saved evaluation package")
+    eval_run_parser.add_argument("--notes", help="Manual reviewer notes to store alongside the run package")
+    eval_run_parser.add_argument(
+        "--expect-control-surface",
+        action="append",
+        help="Expected AI control surface to record in the evaluator rubric (may be passed multiple times)",
+    )
+    eval_run_parser.add_argument("--compare-to", help="Path to a previously saved run-package.json to compare against")
+    eval_run_parser.set_defaults(func=cmd_eval_run)
+
+    eval_compare_parser = subparsers.add_parser("eval-compare", help="Compare two saved OSS evaluation packages")
+    eval_compare_parser.add_argument("current_package", help="Path to the newer run-package.json")
+    eval_compare_parser.add_argument("baseline_package", help="Path to the baseline run-package.json")
+    eval_compare_parser.add_argument("--output", help="Optional path for saving the comparison summary JSON")
+    eval_compare_parser.set_defaults(func=cmd_eval_compare)
 
     return parser
 

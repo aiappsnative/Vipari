@@ -27,6 +27,7 @@ dist/
 # Logs
 *.log
 *.db
+artifacts/oss-evals/
 
 # Keys
 *.pem

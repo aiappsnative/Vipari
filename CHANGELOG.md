@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-30 — OSS evaluation harness groundwork
+
+### Added
+- repeatable OSS evaluation harness orchestration for onboarding, optional backfill, and saved dashboard payload snapshots
+- curated candidate registry for previously validated public repositories
+- saved evaluator rubric and branch-comparison summaries for branch-to-branch OSS validation packages
+- new operator CLI commands to list candidates, run evaluations, and compare saved evaluation packages
+
+### Verified
+- automated coverage for evaluation-package generation and saved-package comparison
+- CLI regression coverage for curated candidate listing and comparison summaries
+
 ## 2026-03-25 — Dashboard provenance, baseline promotion, and roadmap refresh
 
 ### Added
