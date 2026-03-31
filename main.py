@@ -115,7 +115,9 @@ async def dashboard_overview():
 
 @app.get("/api/persistence")
 async def persistence_status():
-    return JSONResponse(asdict(get_persistence_status(AUDIT_DB_PATH)))
+    payload = asdict(get_persistence_status(AUDIT_DB_PATH))
+    payload.pop("database_path", None)
+    return JSONResponse(payload)
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
