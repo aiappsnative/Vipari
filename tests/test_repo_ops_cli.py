@@ -76,6 +76,24 @@ def test_repo_ops_list_repos_cli_outputs_seeded_repository(tmp_path):
     assert payload["repos"][0]["discovered_artifact_count"] == 1
 
 
+def test_repo_ops_persistence_status_cli_outputs_backend_metadata(tmp_path):
+    db_path = str(tmp_path / "cli.db")
+    init_db(db_path)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/repo_ops.py", "persistence-status", "--db", db_path],
+        cwd=os.path.abspath(os.path.dirname(os.path.dirname(__file__))),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["backend"] == "sqlite"
+    assert payload["production_target"] == "postgresql"
+    assert "audit_jobs" in payload["operational_tables"]
+
+
 def test_repo_ops_dashboard_cli_outputs_unified_repo_payload(tmp_path):
     db_path = str(tmp_path / "cli.db")
     init_db(db_path)

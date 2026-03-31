@@ -22,6 +22,7 @@ from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import promote_latest_source_to_onboarding_baseline
+from services.persistence import get_persistence_status
 
 # load environment variables
 load_dotenv()
@@ -110,6 +111,13 @@ async def list_repos():
 @app.get("/api/dashboard/overview")
 async def dashboard_overview():
     return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH)))
+
+
+@app.get("/api/persistence")
+async def persistence_status():
+    payload = asdict(get_persistence_status(AUDIT_DB_PATH))
+    payload.pop("database_path", None)
+    return JSONResponse(payload)
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")

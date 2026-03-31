@@ -5,9 +5,9 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, compare_attribute_profiles
+from .persistence import connect_sqlite
 from .baseline_provenance import (
     BaselineProvenance,
     approved_onboarding_provenance,
@@ -139,14 +139,10 @@ class HistoricalStaticProfileRecord:
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    return connect_sqlite(db_path, foreign_keys=True)
 
 
 def init_onboarding_record_db(db_path: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.execute(
             """

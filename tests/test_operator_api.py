@@ -274,6 +274,21 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     assert payload["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
 
 
+def test_persistence_api_returns_backend_metadata(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/persistence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"] == "sqlite"
+    assert payload["production_target"] == "postgresql"
+    assert "audit_jobs" in payload["operational_tables"]
+    assert "database_path" not in payload
+
+
 def test_dashboard_html_pages_render(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")

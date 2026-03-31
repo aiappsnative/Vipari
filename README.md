@@ -194,6 +194,7 @@ You can also inspect or drive the workflow locally with the CLI:
 
 ```bash
 python scripts/repo_ops.py list-repos
+python scripts/repo_ops.py persistence-status
 python scripts/repo_ops.py dashboard owner/repo
 python scripts/repo_ops.py onboard owner/repo <installation_id> --plan-backfill --execute-backfill
 python scripts/repo_ops.py backfill owner/repo <installation_id>
@@ -206,6 +207,7 @@ The OSS evaluation harness writes repeatable run packages under `artifacts/oss-e
 
 Useful JSON endpoints:
 
+- `GET /api/persistence`
 - `GET /api/repos`
 - `GET /api/dashboard/overview`
 - `GET /api/repos/{owner/repo}/dashboard`
@@ -215,7 +217,7 @@ Useful JSON endpoints:
 
 ## Known limitations
 
-- the queue and durable store are still local SQLite in the current dev shape
+- the current backend is still SQLite, but persistence metadata now makes the logical boundary explicit: operational queue tables vs durable audit/history tables, with PostgreSQL remaining the production target
 - the dashboard is now structurally ready for OSS validation, but repo signals are strongest when historical backfill exists and weaker when PR-audit coverage is sparse
 - larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
 - no production deployment packaging or multi-tenant control plane yet

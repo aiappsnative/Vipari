@@ -3,8 +3,9 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
+
+from .persistence import connect_sqlite, init_persistence_metadata
 
 
 @dataclass(frozen=True)
@@ -25,13 +26,10 @@ class AuditJob:
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    return connection
+    return connect_sqlite(db_path)
 
 
 def init_db(db_path: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -58,6 +56,7 @@ def init_db(db_path: str) -> None:
 
     init_audit_record_db(db_path)
     init_onboarding_record_db(db_path)
+    init_persistence_metadata(db_path)
 
 
 def _row_to_job(row: sqlite3.Row) -> AuditJob:

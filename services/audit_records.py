@@ -5,12 +5,12 @@ import json
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Optional
 
 from engine.analysis import DiffAnalysis
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, build_attribute_profile, compare_attribute_profiles
+from .persistence import connect_sqlite
 from .baseline_provenance import (
     BASELINE_SOURCE_NONE,
     BaselineProvenance,
@@ -184,14 +184,10 @@ class ArtifactDriftLeaderboardEntry:
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    return connect_sqlite(db_path, foreign_keys=True)
 
 
 def init_audit_record_db(db_path: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.execute(
             """

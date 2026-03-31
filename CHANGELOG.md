@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-30 — Production persistence groundwork
+
+### Added
+- shared persistence helpers for SQLite connection hardening and persisted backend metadata
+- explicit logical persistence boundary between operational queue tables and durable audit/history tables
+- operator CLI and API status surfaces for current backend, schema version, and table-group layout
+
+### Changed
+- all SQLite connections now use one shared configuration path with WAL mode, busy timeout, and durable-table foreign key enforcement where needed
+
+### Verified
+- regression coverage for persistence metadata, CLI status output, and API status output
+
 ## 2026-03-30 — OSS evaluation harness groundwork
 
 ### Added
