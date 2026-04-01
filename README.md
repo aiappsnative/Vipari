@@ -38,9 +38,11 @@ In practical terms, PromptDrift currently provides:
 
 - queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and managed PR comments
 - escalation-aware PR review with managed comments plus GitHub labels for high-confidence before-merge escalation cases
+- persisted pull-request lifecycle state across audit jobs and durable audit records, including close/reopen and merge metadata
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
+- landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
 - repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
 - baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
@@ -84,6 +86,7 @@ The dashboard should now be read as two linked product surfaces:
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - posts a managed PR comment and replaces the previous managed comment on later PR updates
 - persists audit, finding, artifact, and comment history for later analysis
+- updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
 
 ## High-level architecture
@@ -218,11 +221,11 @@ Useful JSON endpoints:
 ## Known limitations
 
 - the current backend is still SQLite, but persistence metadata now makes the logical boundary explicit: operational queue tables vs durable audit/history tables, with PostgreSQL remaining the production target
-- the dashboard is now structurally ready for OSS validation, but repo signals are strongest when historical backfill exists and weaker when PR-audit coverage is sparse
+- the dashboard is now structurally ready for OSS validation, but landed posture intentionally depends on approved baselines plus merged-history evidence rather than proposal-only PR audits
 - larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
 - no production deployment packaging or multi-tenant control plane yet
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
-- real OSS repos still need denser PR-linked evidence so urgency is not driven mainly by historical hotspots
+- PR review, dashboard prioritization, and landed-history narratives still need tighter synthesis so proposal-only evidence is visible without contaminating merged-history drift
 
 ## Safe repo practices
 

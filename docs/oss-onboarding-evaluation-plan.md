@@ -37,7 +37,7 @@ Known completed live validations:
 Current takeaway:
 
 - PromptDrift is already past the "toy demo" stage for OSS onboarding
-- the biggest remaining trust gaps are discovery precision, PR-linked evidence density, and repeatability of evaluation outputs
+- the biggest remaining trust gaps are discovery precision, proposal-vs-landed evidence synthesis, and repeatability of evaluation outputs
 - the harness should therefore optimize for product usefulness, not only ingest success
 
 ---

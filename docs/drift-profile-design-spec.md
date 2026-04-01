@@ -284,7 +284,7 @@ The current implementation deliberately still has important limits:
 
 - semantic similarity remains lexical and lightweight rather than embedding-based
 - scoring is still mostly artifact-agnostic and heuristic-first
-- repo-level urgency is still stronger when historical backfill exists than when PR-linked evidence is sparse
+- landed posture intentionally depends on approved baselines plus merged-history evidence, while proposal-only PR audits still need clearer reviewer-facing synthesis
 - profile outputs are explainable, but they are not yet fused as tightly as they should be with deterministic and semantic review channels
 - customer-facing visualization remains intentionally lightweight and reviewer-first rather than exhaustive
 

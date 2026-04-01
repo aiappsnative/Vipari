@@ -27,6 +27,8 @@ dist/
 # Logs
 *.log
 *.db
+*.db-shm
+*.db-wal
 artifacts/oss-evals/
 
 # Keys

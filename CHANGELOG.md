@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-01 — PR lifecycle persistence and landed-history-only evidence hardening
+
+### Added
+- persisted PR lifecycle fields across queued audit jobs and durable pull-request audit records
+- regression coverage for reopened PR handling so stale `closed_at` and `merged_at` timestamps are cleared when a PR returns to `open`
+
+### Changed
+- webhook lifecycle handling now updates stored PR state on `opened`, `synchronize`, `closed`, and `reopened` events without preserving stale closure metadata
+- repo dashboard, overview dashboard, and trend tests now consistently treat proposal-only PR audits as separate from landed merged-history evidence
+- local git hygiene now ignores SQLite WAL/SHM sidecar files generated during live validation
+
+### Verified
+- live lifecycle validation completed against `doria90/dummyAI` PR #43 across open, close, and reopen transitions
+- full automated suite passed locally (`98 passed`)
+
+### Product impact
+- PromptDrift now preserves PR lifecycle truth without leaking stale state into audit history
+- landed drift posture is now consistently derived from approved baselines plus merged-history evidence, reducing the risk of proposal-only PRs contaminating landed drift views
+
 ## 2026-03-30 — Production persistence groundwork
 
 ### Added
@@ -49,7 +68,7 @@
 
 ### Product impact
 - PromptDrift now presents a more credible reviewer workflow on real repositories by pairing drift posture with concrete provenance and baseline authority
-- the next product gap is clearer: stronger PR-linked evidence and reviewer-target quality are now more valuable than additional dashboard chrome
+- the next product gap is clearer: stronger reviewer-queue synthesis and reviewer-target quality are now more valuable than additional dashboard chrome
 
 ## 2026-03-24 — Dashboard UX hardened for portfolio triage
 

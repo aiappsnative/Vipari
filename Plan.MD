@@ -48,8 +48,8 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/approved-baseline-v1` slice
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
-	- is green at the full-suite level (`83 passed` on the latest local verification)
-	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, and lightweight baseline promotion
+	- is green at the full-suite level (`98 passed` on the latest local verification)
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, and persisted PR lifecycle state
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-engine-v1`
@@ -84,7 +84,7 @@ This framing should shape roadmap decisions:
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
-	- current dashboard is now directionally customer-oriented, but still needs denser PR-linked evidence and more varied real-world data
+	- current dashboard is now directionally customer-oriented, but reviewer queues still need tighter synthesis between proposal-only PR audits and landed-history posture
 	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
 	- dashboard still needs stronger merged-commit linkage and reviewer-target quality on history-heavy OSS repositories
 
@@ -113,11 +113,11 @@ This framing should shape roadmap decisions:
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
 
 ### Next prioritized slices after the merge
-1. PR-linked evidence density and merged-commit reviewer-target linkage on real OSS repos
-2. Signal fusion improvements between deterministic and semantic findings
-3. Discovery precision improvements for large OSS onboarding and backfill
-4. More representative OSS/demo data plus a repeatable OSS evaluation harness
-5. Production-oriented persistence and deployment hardening
+1. Signal fusion improvements between deterministic and semantic findings
+2. Discovery precision improvements for large OSS onboarding and backfill
+3. More representative OSS/demo data plus a repeatable OSS evaluation harness
+4. Production-oriented persistence and deployment hardening
+5. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos
 
 Suggested next branch sequence:
 - `feature/repo-evidence-v1`
@@ -136,7 +136,7 @@ Suggested next branch sequence:
 
 The newly implemented dashboard is now the right structural product surface, but it is not yet the final customer-facing product end state.
 
-The next design priority should be to deepen the decision surface with denser PR-linked evidence, stronger merged-commit linkage, and stronger real-world examples, not to add more generic metrics.
+The next design priority should be to deepen the decision surface with stronger proposal-vs-landed evidence synthesis, stronger merged-commit linkage, and stronger real-world examples, not to add more generic metrics.
 
 Today's architecture priority should be to preserve the extracted frontend split and keep hardening it against payload evolution before adding more product complexity.
 
@@ -190,7 +190,7 @@ Completed today on `feature/dashboard-ux-v1`:
 
 Highest-value follow-on work from that checkpoint was:
 
-1. improve signal quality on real OSS repos, especially PR-linked evidence density
+1. improve signal quality and proposal-vs-landed evidence synthesis on real OSS repos
 2. tighten merged-commit / PR provenance so repo case files route to better review targets
 3. reduce discovery noise further on large public repositories
 4. turn the current OSS validation path into a more repeatable harness
@@ -209,7 +209,7 @@ Completed on `feature/dashboard-ux-v1` after the triage-first redesign:
 
 Current validation status:
 
-- full automated suite passes locally (`83 passed`)
+- full automated suite passes locally (`98 passed`)
 - dashboard API/read-model regression coverage passed during final hardening
 - operator/onboarding/static-profile regression coverage passed during final hardening
 
@@ -225,9 +225,10 @@ Current validation status:
 #### 1. `feature/repo-evidence-v1`
 
 Purpose:
-- strengthen reviewer-target quality on real repositories where historical drift exists but PR-linked evidence is sparse
+- strengthen reviewer-target quality on real repositories where historical drift exists and proposal-only PR audits need clearer separation and synthesis
 
 Planned scope:
+- preserve the landed-only rule for dashboard posture while making proposal-only PR audit context easier to interpret in reviewer queues
 - improve merged-commit and PR linkage so repo case files route to better review targets
 - enrich history-backed insights with stronger source attribution and reviewer-facing context
 - keep the read-model focused on actionable evidence rather than new top-level dashboard chrome

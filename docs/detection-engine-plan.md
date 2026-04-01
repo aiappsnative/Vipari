@@ -98,7 +98,7 @@ Implemented today:
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
-- denser PR-linked evidence on real OSS repos when urgency currently comes mostly from historical backfill
+- clearer reviewer-queue synthesis between proposal-only PR audits and landed merged-history evidence on real OSS repos
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
 - a repeatable OSS evaluation harness for regression-proofing real-repo behavior
 - production-grade persistence/deployment posture beyond the current local-stage setup
@@ -143,12 +143,12 @@ It should also surface cross-repo hotspots directly, which now includes a first 
 
 Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
 
-Recent OSS validation against `doria90/hermes-agent` also showed the current architectural boundary clearly: the dashboard is now useful on real backfilled history, but urgency is still strongest when PromptDrift has PR-linked evidence in addition to historical hotspots.
+Recent live validation, including `doria90/dummyAI`, also showed the current architectural boundary clearly: dashboard posture should remain landed-only and history-backed, while proposal-only PR audits need their own reviewer-facing synthesis rather than being mixed into landed drift evidence.
 
 In other words, the dashboard is now a real first decision surface and should keep evolving in that direction rather than reverting to a raw metrics surface.
 
 The next architectural improvements for this layer are:
-- denser PR-linked evidence on real OSS repos
+- clearer proposal-vs-landed evidence synthesis on real OSS repos
 - richer merged-commit and PR linkage so real OSS repos produce more than history-only urgency
 - stronger discovery precision and grouping on larger OSS repositories
 - better signal fusion so the dashboard reflects more trustworthy reviewer priorities
