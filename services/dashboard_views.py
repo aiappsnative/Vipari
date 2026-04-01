@@ -12,7 +12,6 @@ from .baseline_provenance import (
     baseline_provenance_from_json,
     historical_fallback_provenance,
     no_baseline_provenance,
-    previous_pr_fallback_provenance,
 )
 
 from .audit_records import (
@@ -179,6 +178,10 @@ class RepoDashboardArtifactEntry:
     historical_profile_count: int
     latest_historical_semantic_distance: float
     latest_historical_drift_magnitude: float
+    latest_historical_capability_shift: float
+    latest_historical_guardrail_shift: float
+    latest_historical_governance_shift: float
+    latest_historical_autonomy_shift: float
     pr_profile_count: int
     latest_pr_semantic_distance: float
     latest_pr_capability_shift: float
@@ -360,9 +363,9 @@ def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
             detail="Repositories that currently contain at least one high-priority `review now` insight.",
         ),
         DashboardOverviewMetric(
-            label="Pull-request audits",
+            label="PR audits (proposal evidence)",
             value=total_pr_audits,
-            detail="Persisted PR audit runs represented across the current repository set.",
+            detail="Before-merge audit runs recorded for reviewer workflow; not counted as landed drift evidence.",
         ),
         DashboardOverviewMetric(
             label="Backfill jobs",
@@ -447,6 +450,10 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
                 historical_profile_count=metrics["historical_profile_count"],
                 latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
                 latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
+                latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
+                latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
+                latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
+                latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
                 pr_profile_count=metrics["pr_profile_count"],
                 latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
                 latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
@@ -508,6 +515,10 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "historical_profile_count": 0,
         "latest_historical_semantic_distance": 0.0,
         "latest_historical_drift_magnitude": 0.0,
+        "latest_historical_capability_shift": 0.0,
+        "latest_historical_guardrail_shift": 0.0,
+        "latest_historical_governance_shift": 0.0,
+        "latest_historical_autonomy_shift": 0.0,
         "pr_profile_count": 0,
         "latest_pr_semantic_distance": 0.0,
         "latest_pr_capability_shift": 0.0,
@@ -573,27 +584,10 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
             semantic_distance = float(row["semantic_distance"])
             metrics["latest_historical_semantic_distance"] = semantic_distance
             metrics["latest_historical_drift_magnitude"] = _drift_magnitude(semantic_distance, attribute_deltas)
-            metrics["latest_activity_at"] = max(float(metrics["latest_activity_at"]), float(row["created_at"]))
-
-        pr_profile_rows = conn.execute(
-            """
-            SELECT sap.artifact_path, sap.semantic_distance, sap.attribute_deltas_json, sap.created_at
-            FROM static_artifact_profiles sap
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ?
-            ORDER BY sap.created_at ASC, sap.id ASC
-            """,
-            (repo_full,),
-        ).fetchall()
-        for row in pr_profile_rows:
-            metrics = metrics_by_path.setdefault(row["artifact_path"], _empty_artifact_metrics())
-            metrics["pr_profile_count"] = int(metrics["pr_profile_count"]) + 1
-            attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
-            metrics["latest_pr_semantic_distance"] = float(row["semantic_distance"])
-            metrics["latest_pr_capability_shift"] = attribute_deltas.get("capability_risk", 0.0)
-            metrics["latest_pr_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
-            metrics["latest_pr_governance_shift"] = attribute_deltas.get("governance_strength", 0.0)
-            metrics["latest_pr_autonomy_shift"] = attribute_deltas.get("autonomy_level", 0.0)
+            metrics["latest_historical_capability_shift"] = attribute_deltas.get("capability_risk", 0.0)
+            metrics["latest_historical_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
+            metrics["latest_historical_governance_shift"] = attribute_deltas.get("governance_strength", 0.0)
+            metrics["latest_historical_autonomy_shift"] = attribute_deltas.get("autonomy_level", 0.0)
             metrics["latest_activity_at"] = max(float(metrics["latest_activity_at"]), float(row["created_at"]))
 
     return metrics_by_path
@@ -640,54 +634,6 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
             contexts[artifact_path] = _RepoArtifactEvidenceBundle(
                 latest_pull_request=bundle.latest_pull_request,
                 latest_historical=context,
-            )
-
-        pr_rows = conn.execute(
-            """
-             SELECT sap.artifact_path, pra.pr_number, pra.head_sha, pra.status, pra.output_mode,
-                 pra.suggested_risk_level, pra.semantic_review_completed, sap.created_at, sap.baseline_profile_id,
-                 sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance,
-                                     sap.profile_json, sap.attribute_deltas_json, sap.narrative_json, sap.signal_terms_json,
-                                     av.content_text AS content_text
-            FROM static_artifact_profiles sap
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            INNER JOIN artifact_versions av ON av.id = sap.artifact_version_id
-            WHERE pra.repo_full = ?
-            ORDER BY sap.created_at ASC, sap.id ASC
-            """,
-            (repo_full,),
-        ).fetchall()
-        for row in pr_rows:
-            artifact_path = row["artifact_path"]
-            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
-            if baseline_provenance is None and row["baseline_profile_id"] is not None:
-                baseline_provenance = previous_pr_fallback_provenance(row["baseline_profile_id"], row["artifact_version_id"])
-            if baseline_provenance is None:
-                baseline_provenance = no_baseline_provenance()
-            context = _RepoArtifactProfileContext(
-                profile=_profile_from_json(row["profile_json"]),
-                source_type="pull_request",
-                label="Pull request audit",
-                source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
-                source_url=_github_pull_request_url(repo_full, int(row["pr_number"])),
-                review_context=_format_pr_review_context(
-                    output_mode=row["output_mode"],
-                    risk_level=row["suggested_risk_level"],
-                    status=row["status"],
-                    semantic_review_completed=bool(row["semantic_review_completed"]),
-                ),
-                created_at=float(row["created_at"]),
-                baseline_provenance=baseline_provenance,
-                semantic_distance=float(row["semantic_distance"]),
-                attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
-                narrative=json.loads(row["narrative_json"]),
-                signal_terms=json.loads(row["signal_terms_json"]),
-                content_text=row["content_text"],
-            )
-            bundle = contexts.get(artifact_path, _RepoArtifactEvidenceBundle())
-            contexts[artifact_path] = _RepoArtifactEvidenceBundle(
-                latest_pull_request=context,
-                latest_historical=bundle.latest_historical,
             )
 
     return contexts
@@ -809,19 +755,14 @@ def _insight_score(
     }.get(artifact.artifact_type, 0.15)
     drift_signal = max(artifact.leaderboard_drift_magnitude, artifact.latest_historical_drift_magnitude)
     blast_radius = _blast_radius_weight(artifact)
-    guardrail_regression = abs(min(artifact.latest_pr_guardrail_shift, 0.0))
-    governance_regression = abs(min(artifact.latest_pr_governance_shift, 0.0))
-    capability_expansion = max(artifact.latest_pr_capability_shift, 0.0)
-    autonomy_increase = max(artifact.latest_pr_autonomy_shift, 0.0)
+    guardrail_regression = abs(min(artifact.latest_historical_guardrail_shift, 0.0))
+    governance_regression = abs(min(artifact.latest_historical_governance_shift, 0.0))
+    capability_expansion = max(artifact.latest_historical_capability_shift, 0.0)
+    autonomy_increase = max(artifact.latest_historical_autonomy_shift, 0.0)
     confidence_bonus = artifact.discovery_confidence * 0.14
     recency_bonus = 0.12 if artifact.latest_activity_at > 0 else 0.0
     history_bonus = min(artifact.historical_version_count, 5) * 0.04
-    pr_evidence_bonus = 0.2 if evidence_bundle is not None and evidence_bundle.latest_pull_request is not None else 0.0
-    history_only_penalty = (
-        0.12
-        if evidence_bundle is not None and evidence_bundle.latest_pull_request is None and evidence_bundle.latest_historical is not None
-        else 0.0
-    )
+    history_only_penalty = 0.0
     return round(
         type_weight
         + blast_radius
@@ -833,20 +774,19 @@ def _insight_score(
         + confidence_bonus
         + recency_bonus
         + history_bonus
-        + pr_evidence_bonus
         - history_only_penalty,
         4,
     )
 
 
 def _insight_title(artifact: RepoDashboardArtifactEntry, priority: str) -> str:
-    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_historical_capability_shift > 0.05:
         return "Critical control surface expanded authority"
-    if artifact.latest_pr_capability_shift > 0.05:
+    if artifact.latest_historical_capability_shift > 0.05:
         return "Capability expansion needs review"
-    if artifact.latest_pr_guardrail_shift < -0.05:
+    if artifact.latest_historical_guardrail_shift < -0.05:
         return "Guardrail regression needs review"
-    if artifact.latest_pr_governance_shift < -0.05:
+    if artifact.latest_historical_governance_shift < -0.05:
         return "Governance regression needs review"
     if artifact.latest_historical_drift_magnitude > 0.35:
         return "Historical drift hotspot"
@@ -861,20 +801,20 @@ def _insight_rationale(
     evidence_bundle: _RepoArtifactEvidenceBundle | None,
 ) -> str:
     baseline_context = "relative to the current baseline"
-    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
-    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
+    has_history = evidence_bundle is not None and evidence_bundle.latest_historical is not None
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_historical_capability_shift > 0.05:
         return f"A critical control surface broadened authority {baseline_context}, increasing blast radius and review urgency."
-    if artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
-        return f"Recent pull-request drift suggests broader authority while guardrails weakened {baseline_context}."
-    if artifact.latest_pr_capability_shift > 0.05:
-        return f"Recent pull-request history increased capability risk {baseline_context}."
-    if artifact.latest_pr_guardrail_shift < -0.05:
-        return f"Recent pull-request history weakened guardrail posture {baseline_context}."
-    if artifact.latest_pr_governance_shift < -0.05:
-        return f"Recent pull-request history weakened governance or approval posture {baseline_context}."
+    if artifact.latest_historical_capability_shift > 0.05 and artifact.latest_historical_guardrail_shift < -0.05:
+        return f"Merged history suggests broader authority while guardrails weakened {baseline_context}."
+    if artifact.latest_historical_capability_shift > 0.05:
+        return f"Merged history increased capability risk {baseline_context}."
+    if artifact.latest_historical_guardrail_shift < -0.05:
+        return f"Merged history weakened guardrail posture {baseline_context}."
+    if artifact.latest_historical_governance_shift < -0.05:
+        return f"Merged history weakened governance or approval posture {baseline_context}."
     if artifact.latest_historical_drift_magnitude > 0.35:
-        if not has_pr_evidence:
-            return "Merged history shows meaningful design movement, but no PR-linked evidence is stored yet, so the latest commit trail should be reviewed first."
+        if not has_history:
+            return "Merged history shows meaningful design movement, but no merged commit snapshot is stored yet, so the latest commit trail should be reviewed first."
         return "Historical snapshots show meaningful design movement that deserves a human read."
     if priority == "baseline_review":
         return "This artifact looks like a real AI control surface but does not yet have meaningful drift context."
@@ -886,17 +826,17 @@ def _insight_action(
     priority: str,
     evidence_bundle: _RepoArtifactEvidenceBundle | None,
 ) -> str:
-    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
-    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
-        return "Escalate this surface to the AI platform owner before merge and inspect the linked PR or commit first."
-    if artifact.latest_pr_capability_shift > 0.05:
-        return "Inspect authority, tool access, and production-facing behavior in the linked PR before accepting this change."
-    if artifact.latest_pr_guardrail_shift < -0.05:
-        return "Review missing constraints, escalation paths, and refusal language in the linked PR before merge."
-    if artifact.latest_pr_governance_shift < -0.05:
+    has_history = evidence_bundle is not None and evidence_bundle.latest_historical is not None
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_historical_capability_shift > 0.05:
+        return "Escalate this surface to the AI platform owner and inspect the linked merged commit first."
+    if artifact.latest_historical_capability_shift > 0.05:
+        return "Inspect authority, tool access, and production-facing behavior in the linked merged commit before accepting this change."
+    if artifact.latest_historical_guardrail_shift < -0.05:
+        return "Review missing constraints, escalation paths, and refusal language in the linked merged commit before updating the baseline."
+    if artifact.latest_historical_governance_shift < -0.05:
         return "Check whether approvals, review gates, or audit instructions were weakened and route this change for human review."
     if artifact.latest_historical_drift_magnitude > 0.35:
-        if not has_pr_evidence:
+        if not has_history:
             return "Open the linked merged commit first, then compare it against the approved baseline and nearby history before escalating."
         return "Open the artifact history and compare the earliest and latest versions to understand the behavior shift."
     if priority == "baseline_review":
@@ -954,19 +894,17 @@ def _insight_reasons(
     reasons: list[str] = []
     if _blast_radius_weight(artifact) >= 0.45:
         reasons.append("critical surface")
-    if artifact.latest_pr_capability_shift > 0.05:
+    if artifact.latest_historical_capability_shift > 0.05:
         reasons.append("capability expanded")
-    if artifact.latest_pr_guardrail_shift < -0.05:
+    if artifact.latest_historical_guardrail_shift < -0.05:
         reasons.append("guardrails weakened")
-    if artifact.latest_pr_governance_shift < -0.05:
+    if artifact.latest_historical_governance_shift < -0.05:
         reasons.append("governance weakened")
-    if artifact.latest_pr_autonomy_shift > 0.05:
+    if artifact.latest_historical_autonomy_shift > 0.05:
         reasons.append("autonomy increased")
     if artifact.latest_historical_drift_magnitude > 0.35:
         reasons.append("historical hotspot")
-    if evidence_bundle is not None and evidence_bundle.latest_pull_request is not None:
-        reasons.append("pr-linked evidence")
-    elif evidence_bundle is not None and evidence_bundle.latest_historical is not None:
+    if evidence_bundle is not None and evidence_bundle.latest_historical is not None:
         reasons.append("history-only evidence")
     if not reasons:
         reasons.append(_confidence_label(artifact.discovery_confidence))
@@ -994,10 +932,6 @@ def _baseline_label(baseline, evidence_bundle: _RepoArtifactEvidenceBundle | Non
 def _evidence_label(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
     if evidence_bundle is None:
         return "baseline only"
-    if evidence_bundle.latest_pull_request is not None and evidence_bundle.latest_historical is not None:
-        return "PR + history"
-    if evidence_bundle.latest_pull_request is not None:
-        return "PR-linked"
     if evidence_bundle.latest_historical is not None:
         return "history only"
     return "baseline only"
@@ -1005,22 +939,20 @@ def _evidence_label(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
 
 def _evidence_summary(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
     if evidence_bundle is None:
-        return "No stored PR or merged-history evidence yet."
+        return "No merged-history evidence yet."
     preferred = _preferred_profile_context(evidence_bundle)
     supporting = _supporting_profile_context(evidence_bundle)
     if preferred is None:
-        return "No stored PR or merged-history evidence yet."
+        return "No merged-history evidence yet."
     if supporting is not None:
         return f"Open {preferred.source_ref or preferred.label} first; supporting merged history is available from {supporting.source_ref or supporting.label}."
-    if evidence_bundle.latest_pull_request is not None:
-        return f"PR-linked evidence is available from {preferred.source_ref or preferred.label}."
     return f"Only merged-history evidence is available right now; start with {preferred.source_ref or preferred.label}."
 
 
 def _provenance_summary(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> str:
     context = _preferred_profile_context(evidence_bundle)
     if context is None:
-        return "No PR or history provenance yet"
+        return "No merged-history provenance yet"
     parts = ["From", context.source_ref or context.label, context.review_context]
     supporting = _supporting_profile_context(evidence_bundle)
     if supporting is not None:
@@ -1073,24 +1005,24 @@ def _flag_summary(
     priority: str,
     evidence_bundle: _RepoArtifactEvidenceBundle | None,
 ) -> str:
-    has_pr_evidence = evidence_bundle is not None and evidence_bundle.latest_pull_request is not None
-    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
+    has_history = evidence_bundle is not None and evidence_bundle.latest_historical is not None
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_historical_capability_shift > 0.05 and artifact.latest_historical_guardrail_shift < -0.05:
         return "Flagged because a critical surface broadened authority while guardrails weakened."
-    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_pr_capability_shift > 0.05:
+    if _blast_radius_weight(artifact) >= 0.45 and artifact.latest_historical_capability_shift > 0.05:
         return "Flagged because a critical surface gained broader authority than the baseline."
-    if artifact.latest_pr_capability_shift > 0.05 and artifact.latest_pr_guardrail_shift < -0.05:
+    if artifact.latest_historical_capability_shift > 0.05 and artifact.latest_historical_guardrail_shift < -0.05:
         return "Flagged because authority expanded while safety boundaries weakened."
-    if artifact.latest_pr_capability_shift > 0.05:
+    if artifact.latest_historical_capability_shift > 0.05:
         return "Flagged because capability expanded on a monitored control surface."
-    if artifact.latest_pr_guardrail_shift < -0.05:
+    if artifact.latest_historical_guardrail_shift < -0.05:
         return "Flagged because guardrails look weaker than the approved baseline."
-    if artifact.latest_pr_governance_shift < -0.05:
+    if artifact.latest_historical_governance_shift < -0.05:
         return "Flagged because governance or approval posture looks weaker than baseline."
-    if artifact.latest_pr_autonomy_shift > 0.05:
+    if artifact.latest_historical_autonomy_shift > 0.05:
         return "Flagged because the system appears more autonomous than baseline."
     if artifact.latest_historical_drift_magnitude > 0.35:
-        if not has_pr_evidence:
-            return "Flagged because merged history shows repeated design movement, but no PR-linked evidence is stored yet."
+        if not has_history:
+            return "Flagged because merged history shows repeated design movement, but no merged commit snapshot is stored yet."
         return "Flagged because repeated historical design movement makes this worth human review."
     if priority == "baseline_review":
         return "Flagged because this looks like a high-value AI control surface that still needs stronger evidence."
@@ -1104,10 +1036,10 @@ def _attribute_deltas_for_summary(
     if context is not None:
         return context.attribute_deltas
     return {
-        "capability_risk": artifact.latest_pr_capability_shift,
-        "guardrail_robustness": artifact.latest_pr_guardrail_shift,
-        "governance_strength": artifact.latest_pr_governance_shift,
-        "autonomy_level": artifact.latest_pr_autonomy_shift,
+        "capability_risk": artifact.latest_historical_capability_shift,
+        "guardrail_robustness": artifact.latest_historical_guardrail_shift,
+        "governance_strength": artifact.latest_historical_governance_shift,
+        "autonomy_level": artifact.latest_historical_autonomy_shift,
         "stability_vs_creativity": 0.0,
     }
 
@@ -1629,51 +1561,6 @@ def _build_repo_history_timelines(
                 )
             )
 
-        pr_rows = conn.execute(
-            """
-             SELECT sap.artifact_path, sap.artifact_type, pra.pr_number, pra.head_sha, pra.status, pra.output_mode,
-                 pra.suggested_risk_level, pra.semantic_review_completed, sap.created_at, sap.baseline_profile_id,
-                 sap.baseline_provenance_json, sap.artifact_version_id, sap.semantic_distance, sap.attribute_deltas_json
-            FROM static_artifact_profiles sap
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ?
-            ORDER BY sap.created_at ASC, sap.id ASC
-            """,
-            (repo_full,),
-        ).fetchall()
-        for row in pr_rows:
-            artifact_path = row["artifact_path"]
-            if artifact_path not in points_by_path:
-                continue
-            attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
-            semantic_distance = float(row["semantic_distance"])
-            baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
-            if baseline_provenance is None and row["baseline_profile_id"] is not None:
-                baseline_provenance = previous_pr_fallback_provenance(row["baseline_profile_id"], row["artifact_version_id"])
-            if baseline_provenance is None:
-                baseline_provenance = no_baseline_provenance()
-            points_by_path[artifact_path].append(
-                RepoArtifactTimelinePoint(
-                    source="pull_request",
-                    label="Pull request audit",
-                    source_ref=f"PR #{row['pr_number']} · {str(row['head_sha'])[:7]}",
-                    source_url=_github_pull_request_url(repo_full, int(row["pr_number"])),
-                    review_context=_format_pr_review_context(
-                        output_mode=row["output_mode"],
-                        risk_level=row["suggested_risk_level"],
-                        status=row["status"],
-                        semantic_review_completed=bool(row["semantic_review_completed"]),
-                    ),
-                    created_at=float(row["created_at"]),
-                    baseline_provenance=baseline_provenance,
-                    semantic_distance=semantic_distance,
-                    capability_shift=attribute_deltas.get("capability_risk", 0.0),
-                    guardrail_shift=attribute_deltas.get("guardrail_robustness", 0.0),
-                    autonomy_shift=attribute_deltas.get("autonomy_level", 0.0),
-                    drift_magnitude=_drift_magnitude(semantic_distance, attribute_deltas),
-                )
-            )
-
     timelines: list[RepoArtifactHistoryTimeline] = []
     for artifact_path, points in points_by_path.items():
         if not points:
@@ -1834,13 +1721,13 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
 def _artifact_risk_tags(artifact: RepoDashboardArtifactEntry, attribute_deltas: dict[str, float] | None = None) -> list[str]:
     attribute_deltas = attribute_deltas or {}
     tags: list[str] = []
-    if attribute_deltas.get("capability_risk", artifact.latest_pr_capability_shift) > 0.05:
+    if attribute_deltas.get("capability_risk", artifact.latest_historical_capability_shift) > 0.05:
         tags.append("capability expanded")
-    if attribute_deltas.get("guardrail_robustness", artifact.latest_pr_guardrail_shift) < -0.05:
+    if attribute_deltas.get("guardrail_robustness", artifact.latest_historical_guardrail_shift) < -0.05:
         tags.append("guardrails weakened")
-    if attribute_deltas.get("governance_strength", artifact.latest_pr_governance_shift) < -0.05:
+    if attribute_deltas.get("governance_strength", artifact.latest_historical_governance_shift) < -0.05:
         tags.append("governance weakened")
-    if attribute_deltas.get("autonomy_level", artifact.latest_pr_autonomy_shift) > 0.05:
+    if attribute_deltas.get("autonomy_level", artifact.latest_historical_autonomy_shift) > 0.05:
         tags.append("autonomy increased")
     if artifact.latest_historical_drift_magnitude > 0.35:
         tags.append("historical hotspot")
@@ -1874,7 +1761,7 @@ def _build_overview_regression_patterns(repo_views: list[RepoDashboardView]) -> 
         (
             "historical_hotspot",
             "Historical hotspots",
-            "Stored history shows repeated design movement even when recent PR signals are limited.",
+            "Stored history shows repeated design movement even when recent landed signals are limited.",
         ),
         (
             "baseline_candidate",
@@ -1908,9 +1795,9 @@ def _build_overview_regression_patterns(repo_views: list[RepoDashboardView]) -> 
             drift_magnitude = max(
                 artifact.leaderboard_drift_magnitude,
                 artifact.latest_historical_drift_magnitude,
-                abs(min(artifact.latest_pr_guardrail_shift, 0.0)),
-                max(artifact.latest_pr_capability_shift, 0.0),
-                max(artifact.latest_pr_autonomy_shift, 0.0),
+                abs(min(artifact.latest_historical_guardrail_shift, 0.0)),
+                max(artifact.latest_historical_capability_shift, 0.0),
+                max(artifact.latest_historical_autonomy_shift, 0.0),
             )
             for pattern_key in matches:
                 group = grouped[pattern_key]
@@ -1950,13 +1837,13 @@ def _build_overview_regression_patterns(repo_views: list[RepoDashboardView]) -> 
 
 def _artifact_regression_pattern_keys(artifact: RepoDashboardArtifactEntry) -> list[str]:
     pattern_keys: list[str] = []
-    if artifact.latest_pr_capability_shift > 0.05:
+    if artifact.latest_historical_capability_shift > 0.05:
         pattern_keys.append("capability_expansion")
-    if artifact.latest_pr_guardrail_shift < -0.05:
+    if artifact.latest_historical_guardrail_shift < -0.05:
         pattern_keys.append("guardrail_weakening")
-    if artifact.latest_pr_governance_shift < -0.05:
+    if artifact.latest_historical_governance_shift < -0.05:
         pattern_keys.append("governance_weakening")
-    if artifact.latest_pr_autonomy_shift > 0.05:
+    if artifact.latest_historical_autonomy_shift > 0.05:
         pattern_keys.append("autonomy_increase")
     if artifact.latest_historical_drift_magnitude > 0.35:
         pattern_keys.append("historical_hotspot")
@@ -2058,8 +1945,8 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
             drift_magnitude = max(
                 artifact.leaderboard_drift_magnitude,
                 artifact.latest_historical_drift_magnitude,
-                abs(min(artifact.latest_pr_guardrail_shift, 0.0)),
-                max(artifact.latest_pr_capability_shift, 0.0),
+                abs(min(artifact.latest_historical_guardrail_shift, 0.0)),
+                max(artifact.latest_historical_capability_shift, 0.0),
             )
             items.append(
                 DashboardOverviewRegressionEntry(
@@ -2080,8 +1967,8 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                     rationale=insight.rationale,
                     recommended_action=insight.recommended_action,
                     drift_magnitude=drift_magnitude,
-                    capability_shift=artifact.latest_pr_capability_shift,
-                    guardrail_shift=artifact.latest_pr_guardrail_shift,
+                    capability_shift=artifact.latest_historical_capability_shift,
+                    guardrail_shift=artifact.latest_historical_guardrail_shift,
                 )
             )
 

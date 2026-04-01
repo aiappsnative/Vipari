@@ -2,6 +2,7 @@ import os
 import hmac
 import hashlib
 import asyncio
+from datetime import datetime
 from dataclasses import asdict
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError
@@ -15,7 +16,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from engine.relevance import needs_audit as engine_needs_audit
-from services.audit_jobs import create_audit_job, init_db
+from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.audit_worker import AuditWorker, WorkerSettings
@@ -23,6 +24,7 @@ from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, g
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
+from services.audit_records import update_pull_request_audit_state
 
 # load environment variables
 load_dotenv()
@@ -252,6 +254,15 @@ async def fetch_diff_with_retry(
     raise RuntimeError("Failed to fetch PR diff after retry attempts.")
 
 
+def _parse_github_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     if not await verify_signature(request):
@@ -263,16 +274,53 @@ async def webhook(request: Request):
 
     payload = await request.json()
     action = payload.get("action")
-    if action not in ("opened", "synchronize"):
+    if action not in ("opened", "synchronize", "closed", "reopened"):
         return JSONResponse({"message": "ignored"})
 
     installation_id = payload.get("installation", {}).get("id")
     repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
-    base_sha = payload.get("pull_request", {}).get("base", {}).get("sha")
-    head_sha = payload.get("pull_request", {}).get("head", {}).get("sha")
+    pull_request = payload.get("pull_request", {})
+    base_sha = pull_request.get("base", {}).get("sha")
+    head_sha = pull_request.get("head", {}).get("sha")
+    pr_state = pull_request.get("state")
+    pr_merged = pull_request.get("merged")
+    pr_closed_at = _parse_github_timestamp(pull_request.get("closed_at"))
+    pr_merged_at = _parse_github_timestamp(pull_request.get("merged_at"))
+    pr_merge_commit_sha = pull_request.get("merge_commit_sha")
+    pr_updated_at = _parse_github_timestamp(pull_request.get("updated_at"))
 
-    if not all([installation_id, repo_full, pr_number, head_sha]):
+    if not all([installation_id, repo_full, pr_number]):
+        raise HTTPException(status_code=400, detail="Missing payload data")
+
+    if action in ("closed", "reopened"):
+        update_job_pr_state(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+            pr_closed_at=pr_closed_at,
+            pr_merged_at=pr_merged_at,
+            pr_merge_commit_sha=pr_merge_commit_sha,
+            pr_updated_at=pr_updated_at,
+        )
+        update_pull_request_audit_state(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+            pr_closed_at=pr_closed_at,
+            pr_merged_at=pr_merged_at,
+            pr_merge_commit_sha=pr_merge_commit_sha,
+            pr_updated_at=pr_updated_at,
+        )
+        return JSONResponse({"message": "pr state updated"})
+
+    if not head_sha:
         raise HTTPException(status_code=400, detail="Missing payload data")
 
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
@@ -296,6 +344,12 @@ async def webhook(request: Request):
         installation_id=installation_id,
         head_sha=head_sha,
         diff_text=diff_text,
+        pr_state=pr_state,
+        pr_merged=pr_merged,
+        pr_closed_at=pr_closed_at,
+        pr_merged_at=pr_merged_at,
+        pr_merge_commit_sha=pr_merge_commit_sha,
+        pr_updated_at=pr_updated_at,
     )
 
     return JSONResponse({"message": "audit queued", "job_id": job.id})

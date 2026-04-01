@@ -8,6 +8,15 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db, mark_job_completed, mark_job_failed
+from services.audit_jobs import (
+    claim_next_job,
+    create_audit_job,
+    get_job,
+    init_db,
+    mark_job_completed,
+    mark_job_failed,
+    update_job_pr_state,
+)
 from services.audit_records import (
     get_audit_comment_for_audit,
     get_latest_artifact_version_for_repo_artifact,
@@ -15,6 +24,8 @@ from services.audit_records import (
     list_artifact_versions_for_repo_artifact,
     list_changed_artifacts_for_audit,
     list_findings_for_audit,
+    record_audit_result,
+    update_pull_request_audit_state,
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
@@ -144,6 +155,108 @@ def test_create_audit_job_does_not_requeue_completed_same_sha_job(tmp_path):
     assert recreated.installation_id == 123
     assert recreated.diff_text.endswith("index 1..2\n")
     assert recreated.comment_body == "posted"
+
+
+def test_update_job_pr_state_clears_closed_timestamp_when_pr_reopens(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=303,
+        installation_id=123,
+        head_sha="sha-303",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+    )
+
+    update_job_pr_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=303,
+        head_sha="sha-303",
+        pr_state="open",
+        pr_merged=False,
+        pr_closed_at=None,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha-2",
+        pr_updated_at=222.0,
+    )
+
+    saved = get_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_state == "open"
+    assert saved.pr_merged is False
+    assert saved.pr_closed_at is None
+    assert saved.pr_merged_at is None
+    assert saved.pr_merge_commit_sha == "merge-sha-2"
+    assert saved.pr_updated_at == 222.0
+
+
+def test_update_pull_request_audit_state_clears_closed_timestamp_when_pr_reopens(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        installation_id=123,
+        head_sha="sha-304",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+    )
+    analysis = analyze_diff("diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n")
+    record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        installation_id=123,
+        head_sha="sha-304",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    update_pull_request_audit_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        head_sha="sha-304",
+        pr_state="open",
+        pr_merged=False,
+        pr_closed_at=None,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha-2",
+        pr_updated_at=222.0,
+    )
+
+    saved = get_pull_request_audit_for_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_state == "open"
+    assert saved.pr_merged is False
+    assert saved.pr_closed_at is None
+    assert saved.pr_merged_at is None
+    assert saved.pr_merge_commit_sha == "merge-sha-2"
+    assert saved.pr_updated_at == 222.0
 
 
 def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):

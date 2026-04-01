@@ -55,9 +55,9 @@ def _repo_dashboard(lower_confidence_count: int = 1):
                 "artifact_type": "prompt",
                 "priority": "review_now",
                 "recommended_action": "Inspect the latest drift and escalation posture.",
-                "review_target": "PR #42 · sha-cur",
-                "review_url": "https://github.com/doria90/dummyAI/pull/42",
-                "evidence_summary": "Open PR #42 · sha-cur first; historical hotspot persists.",
+                "review_target": "commit sha-2",
+                "review_url": "https://github.com/doria90/dummyAI/commit/sha-2",
+                "evidence_summary": "Only merged-history evidence is available right now; start with commit sha-2.",
                 "confidence_label": "high confidence",
                 "queue_lane": "primary",
             }

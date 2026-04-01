@@ -313,13 +313,12 @@ function renderLowerConfidenceInsights(items = []) {
     `;
 }
 
-function renderEvidenceStream({ baselineVersionCount = 0, historicalVersions = 0, pullRequestAuditCount = 0 }) {
-    const total = Math.max(baselineVersionCount + historicalVersions + pullRequestAuditCount, 1);
+function renderEvidenceStream({ baselineVersionCount = 0, historicalVersions = 0 }) {
+    const total = Math.max(baselineVersionCount + historicalVersions, 1);
     return `
         <div class="evidence-stream">
             <span class="evidence-segment evidence-segment-baseline" style="width:${(baselineVersionCount / total) * 100}%"></span>
             <span class="evidence-segment evidence-segment-history" style="width:${(historicalVersions / total) * 100}%"></span>
-            <span class="evidence-segment evidence-segment-pr" style="width:${(pullRequestAuditCount / total) * 100}%"></span>
         </div>
     `;
 }
@@ -380,12 +379,10 @@ function renderRepoCommandDeck({ payload, insights = [], lowerConfidenceInsights
                 ${renderEvidenceStream({
                     baselineVersionCount: asNumber(payload.baseline_version_count),
                     historicalVersions: asNumber(backfill.total_historical_versions),
-                    pullRequestAuditCount: asNumber(payload.pull_request_audit_count),
                 })}
                 <div class="lane-spectrum-legend lane-spectrum-legend-dense">
                     <span><strong>${asNumber(payload.baseline_version_count)}</strong> baselines</span>
                     <span><strong>${asNumber(backfill.total_historical_versions)}</strong> history</span>
-                    <span><strong>${asNumber(payload.pull_request_audit_count)}</strong> PR audits</span>
                 </div>
             </div>
             <div class="card pulse-panel">
@@ -817,7 +814,7 @@ function renderArtifacts(items = []) {
                     <div class="artifact-card-stats">
                         <span>baseline ${item.baseline_line_count}</span>
                         <span>history ${item.historical_version_count}</span>
-                        <span>PR ${item.pr_profile_count}</span>
+                        <span>profiles ${item.historical_profile_count}</span>
                     </div>
                     <div class="artifact-card-meta">latest drift ${latestDrift.toFixed(3)}</div>
                     <div class="artifact-card-reason">${item.discovery_reason}</div>
@@ -867,7 +864,11 @@ async function loadDashboard() {
                     asNumber(backfill.total_historical_versions),
                     `Historical profiles: ${asNumber(backfill.total_historical_profiles)}`
                 ),
-                renderMetricGlyphCard("PR audits", asNumber(payload.pull_request_audit_count), `PR profiles: ${asNumber(driftSummary.profile_count)}`),
+                renderMetricGlyphCard(
+                    "PR audits (proposal)",
+                    asNumber(payload.pull_request_audit_count),
+                    "Proposal evidence is excluded from landed drift views."
+                ),
                 renderMetricGlyphCard(
                     "Avg semantic distance",
                     asNumber(driftSummary.avg_semantic_distance).toFixed(3),

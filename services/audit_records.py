@@ -31,6 +31,12 @@ class PullRequestAuditRecord:
     pr_number: int
     installation_id: int
     head_sha: str
+    pr_state: str | None
+    pr_merged: bool | None
+    pr_closed_at: float | None
+    pr_merged_at: float | None
+    pr_merge_commit_sha: str | None
+    pr_updated_at: float | None
     status: str
     completion_mode: str
     output_mode: str
@@ -198,6 +204,12 @@ def init_audit_record_db(db_path: str) -> None:
                 pr_number INTEGER NOT NULL,
                 installation_id INTEGER NOT NULL,
                 head_sha TEXT NOT NULL,
+                pr_state TEXT,
+                pr_merged INTEGER,
+                pr_closed_at REAL,
+                pr_merged_at REAL,
+                pr_merge_commit_sha TEXT,
+                pr_updated_at REAL,
                 status TEXT NOT NULL,
                 completion_mode TEXT NOT NULL,
                 output_mode TEXT NOT NULL,
@@ -211,6 +223,19 @@ def init_audit_record_db(db_path: str) -> None:
             )
             """
         )
+        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+        if "pr_state" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_state TEXT")
+        if "pr_merged" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged INTEGER")
+        if "pr_closed_at" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_closed_at REAL")
+        if "pr_merged_at" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged_at REAL")
+        if "pr_merge_commit_sha" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merge_commit_sha TEXT")
+        if "pr_updated_at" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS changed_artifacts (
@@ -343,6 +368,12 @@ def record_audit_result(
     pr_number: int,
     installation_id: int,
     head_sha: str,
+    pr_state: str | None = None,
+    pr_merged: bool | None = None,
+    pr_closed_at: float | None = None,
+    pr_merged_at: float | None = None,
+    pr_merge_commit_sha: str | None = None,
+    pr_updated_at: float | None = None,
     deterministic_analysis: DiffAnalysis,
     status: str,
     completion_mode: str,
@@ -358,9 +389,28 @@ def record_audit_result(
     now = time.time()
     artifact_snapshots = artifact_snapshots or {}
     persisted_risk_level = suggested_risk_level or deterministic_analysis.suggested_risk_level.value
+    (
+        pr_state,
+        pr_merged_value,
+        pr_closed_at,
+        pr_merged_at,
+        pr_merge_commit_sha,
+        pr_updated_at,
+    ) = _normalize_pr_lifecycle_fields(
+        pr_state=pr_state,
+        pr_merged=pr_merged,
+        pr_closed_at=pr_closed_at,
+        pr_merged_at=pr_merged_at,
+        pr_merge_commit_sha=pr_merge_commit_sha,
+        pr_updated_at=pr_updated_at,
+    )
     with _connect(db_path) as conn:
         existing = conn.execute(
-            "SELECT id, created_at FROM pull_request_audits WHERE job_id = ?",
+            """
+            SELECT id, created_at, pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at
+            FROM pull_request_audits
+            WHERE job_id = ?
+            """,
             (job_id,),
         ).fetchone()
 
@@ -369,10 +419,11 @@ def record_audit_result(
                 """
                 INSERT INTO pull_request_audits (
                     job_id, repo_full, pr_number, installation_id, head_sha,
+                    pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode,
                     deterministic_score, suggested_risk_level, semantic_review_completed,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -380,6 +431,12 @@ def record_audit_result(
                     pr_number,
                     installation_id,
                     head_sha,
+                    pr_state,
+                    pr_merged_value,
+                    pr_closed_at,
+                    pr_merged_at,
+                    pr_merge_commit_sha,
+                    pr_updated_at,
                     status,
                     completion_mode,
                     output_mode,
@@ -401,6 +458,12 @@ def record_audit_result(
                     pr_number = ?,
                     installation_id = ?,
                     head_sha = ?,
+                    pr_state = ?,
+                    pr_merged = ?,
+                    pr_closed_at = ?,
+                    pr_merged_at = ?,
+                    pr_merge_commit_sha = ?,
+                    pr_updated_at = ?,
                     status = ?,
                     completion_mode = ?,
                     output_mode = ?,
@@ -416,6 +479,12 @@ def record_audit_result(
                     pr_number,
                     installation_id,
                     head_sha,
+                    pr_state,
+                    pr_merged_value,
+                    pr_closed_at,
+                    pr_merged_at,
+                    pr_merge_commit_sha,
+                    pr_updated_at,
                     status,
                     completion_mode,
                     output_mode,
@@ -875,33 +944,54 @@ def get_repo_static_drift_summary(db_path: str, repo_full: str) -> RepoStaticDri
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT sap.*
-            FROM static_artifact_profiles sap
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ?
-            ORDER BY sap.created_at ASC, sap.id ASC
+            SELECT artifact_path, semantic_distance, attribute_deltas_json, baseline_provenance_json
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ?
+            ORDER BY created_at ASC, id ASC
             """,
-            (repo_full,),
+            (f"{repo_full.lower()}::%",),
         ).fetchall()
 
-    profiles = [_row_to_static_artifact_profile(row) for row in rows]
-    artifact_paths = {profile.artifact_path for profile in profiles}
+    profiles: list[dict[str, object]] = []
+    for row in rows:
+        attribute_deltas = json.loads(row["attribute_deltas_json"])
+        baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+        profiles.append(
+            {
+                "artifact_path": row["artifact_path"],
+                "semantic_distance": float(row["semantic_distance"]),
+                "attribute_deltas": attribute_deltas,
+                "baseline_provenance": baseline_provenance,
+            }
+        )
+
+    artifact_paths = {profile["artifact_path"] for profile in profiles}
     baseline_linked = [
         profile
         for profile in profiles
-        if profile.baseline_provenance is not None and profile.baseline_provenance.source_type != BASELINE_SOURCE_NONE
+        if profile["baseline_provenance"] is not None
+        and profile["baseline_provenance"].source_type != BASELINE_SOURCE_NONE
     ]
-    avg_semantic_distance = _average([profile.semantic_distance for profile in baseline_linked])
-    avg_guardrail_shift = _average([abs(profile.attribute_deltas["guardrail_robustness"]) for profile in baseline_linked])
-    avg_capability_shift = _average([abs(profile.attribute_deltas["capability_risk"]) for profile in baseline_linked])
-    avg_autonomy_shift = _average([abs(profile.attribute_deltas["autonomy_level"]) for profile in baseline_linked])
+    avg_semantic_distance = _average([float(profile["semantic_distance"]) for profile in baseline_linked])
+    avg_guardrail_shift = _average(
+        [abs(float(profile["attribute_deltas"]["guardrail_robustness"])) for profile in baseline_linked]
+    )
+    avg_capability_shift = _average(
+        [abs(float(profile["attribute_deltas"]["capability_risk"])) for profile in baseline_linked]
+    )
+    avg_autonomy_shift = _average(
+        [abs(float(profile["attribute_deltas"]["autonomy_level"])) for profile in baseline_linked]
+    )
 
     highest_capability_artifact_path: str | None = None
     highest_capability_delta = 0.0
     if baseline_linked:
-        highest_capability = max(baseline_linked, key=lambda profile: profile.attribute_deltas["capability_risk"])
-        highest_capability_artifact_path = highest_capability.artifact_path
-        highest_capability_delta = round(highest_capability.attribute_deltas["capability_risk"], 4)
+        highest_capability = max(
+            baseline_linked,
+            key=lambda profile: float(profile["attribute_deltas"]["capability_risk"]),
+        )
+        highest_capability_artifact_path = str(highest_capability["artifact_path"])
+        highest_capability_delta = round(float(highest_capability["attribute_deltas"]["capability_risk"]), 4)
 
     return RepoStaticDriftSummary(
         repo_full=repo_full,
@@ -921,35 +1011,53 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT sap.*
-            FROM static_artifact_profiles sap
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ?
-            ORDER BY sap.created_at ASC, sap.id ASC
+            SELECT id, artifact_path, artifact_type, semantic_distance, attribute_deltas_json, narrative_json, created_at
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ?
+            ORDER BY created_at ASC, id ASC
             """,
-            (repo_full,),
+            (f"{repo_full.lower()}::%",),
         ).fetchall()
 
-    grouped: dict[str, list[StaticArtifactProfileRecord]] = {}
-    for profile in (_row_to_static_artifact_profile(row) for row in rows):
-        grouped.setdefault(profile.artifact_path, []).append(profile)
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        grouped.setdefault(row["artifact_path"], []).append(
+            {
+                "id": int(row["id"]),
+                "artifact_path": row["artifact_path"],
+                "artifact_type": row["artifact_type"],
+                "semantic_distance": float(row["semantic_distance"]),
+                "attribute_deltas": json.loads(row["attribute_deltas_json"]),
+                "narrative": json.loads(row["narrative_json"]),
+                "created_at": float(row["created_at"]),
+            }
+        )
 
     leaderboard: list[ArtifactDriftLeaderboardEntry] = []
     for artifact_path, profiles in grouped.items():
         latest = profiles[-1]
+        attribute_deltas = latest["attribute_deltas"]
+        semantic_distance = float(latest["semantic_distance"])
+        drift_magnitude = round(
+            abs(float(attribute_deltas["guardrail_robustness"]))
+            + abs(float(attribute_deltas["capability_risk"]))
+            + abs(float(attribute_deltas["autonomy_level"]))
+            + semantic_distance,
+            4,
+        )
         leaderboard.append(
             ArtifactDriftLeaderboardEntry(
                 artifact_path=artifact_path,
-                artifact_type=latest.artifact_type,
-                latest_profile_id=latest.id,
+                artifact_type=str(latest["artifact_type"]),
+                latest_profile_id=int(latest["id"]),
                 sample_count=len(profiles),
-                latest_created_at=latest.created_at,
-                semantic_distance=latest.semantic_distance,
-                guardrail_shift=round(latest.attribute_deltas["guardrail_robustness"], 4),
-                capability_shift=round(latest.attribute_deltas["capability_risk"], 4),
-                autonomy_shift=round(latest.attribute_deltas["autonomy_level"], 4),
-                drift_magnitude=_drift_magnitude(latest),
-                narrative=latest.narrative,
+                latest_created_at=float(latest["created_at"]),
+                semantic_distance=semantic_distance,
+                guardrail_shift=round(float(attribute_deltas["guardrail_robustness"]), 4),
+                capability_shift=round(float(attribute_deltas["capability_risk"]), 4),
+                autonomy_shift=round(float(attribute_deltas["autonomy_level"]), 4),
+                drift_magnitude=drift_magnitude,
+                narrative=list(latest["narrative"]),
             )
         )
 
@@ -965,6 +1073,12 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         pr_number=row["pr_number"],
         installation_id=row["installation_id"],
         head_sha=row["head_sha"],
+        pr_state=row["pr_state"],
+        pr_merged=(bool(row["pr_merged"]) if row["pr_merged"] is not None else None),
+        pr_closed_at=row["pr_closed_at"],
+        pr_merged_at=row["pr_merged_at"],
+        pr_merge_commit_sha=row["pr_merge_commit_sha"],
+        pr_updated_at=row["pr_updated_at"],
         status=row["status"],
         completion_mode=row["completion_mode"],
         output_mode=row["output_mode"],
@@ -975,6 +1089,122 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _normalize_pr_lifecycle_fields(
+    *,
+    pr_state: str | None,
+    pr_merged: bool | None,
+    pr_closed_at: float | None,
+    pr_merged_at: float | None,
+    pr_merge_commit_sha: str | None,
+    pr_updated_at: float | None,
+) -> tuple[str | None, int | None, float | None, float | None, str | None, float | None]:
+    normalized_pr_merged = int(pr_merged) if pr_merged is not None else None
+    normalized_pr_closed_at = pr_closed_at
+    normalized_pr_merged_at = pr_merged_at
+
+    if pr_state == "open" and pr_merged is False:
+        normalized_pr_closed_at = None
+        normalized_pr_merged_at = None
+
+    return (
+        pr_state,
+        normalized_pr_merged,
+        normalized_pr_closed_at,
+        normalized_pr_merged_at,
+        pr_merge_commit_sha,
+        pr_updated_at,
+    )
+
+
+def update_pull_request_audit_state(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str | None,
+    pr_state: str | None,
+    pr_merged: bool | None,
+    pr_closed_at: float | None,
+    pr_merged_at: float | None,
+    pr_merge_commit_sha: str | None,
+    pr_updated_at: float | None,
+) -> None:
+    (
+        pr_state,
+        pr_merged_value,
+        pr_closed_at,
+        pr_merged_at,
+        pr_merge_commit_sha,
+        pr_updated_at,
+    ) = _normalize_pr_lifecycle_fields(
+        pr_state=pr_state,
+        pr_merged=pr_merged,
+        pr_closed_at=pr_closed_at,
+        pr_merged_at=pr_merged_at,
+        pr_merge_commit_sha=pr_merge_commit_sha,
+        pr_updated_at=pr_updated_at,
+    )
+    with _connect(db_path) as conn:
+        if head_sha:
+            conn.execute(
+                """
+                UPDATE pull_request_audits
+                SET pr_state = ?,
+                    pr_merged = ?,
+                    pr_closed_at = ?,
+                    pr_merged_at = ?,
+                    pr_merge_commit_sha = ?,
+                    pr_updated_at = ?,
+                    updated_at = ?
+                WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
+                """,
+                (
+                    pr_state,
+                    pr_merged_value,
+                    pr_closed_at,
+                    pr_merged_at,
+                    pr_merge_commit_sha,
+                    pr_updated_at,
+                    time.time(),
+                    repo_full,
+                    pr_number,
+                    head_sha,
+                ),
+            )
+            return
+
+        conn.execute(
+            """
+            UPDATE pull_request_audits
+            SET pr_state = ?,
+                pr_merged = ?,
+                pr_closed_at = ?,
+                pr_merged_at = ?,
+                pr_merge_commit_sha = ?,
+                pr_updated_at = ?,
+                updated_at = ?
+            WHERE id = (
+                SELECT id
+                FROM pull_request_audits
+                WHERE repo_full = ? AND pr_number = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            )
+            """,
+            (
+                pr_state,
+                pr_merged_value,
+                pr_closed_at,
+                pr_merged_at,
+                pr_merge_commit_sha,
+                pr_updated_at,
+                time.time(),
+                repo_full,
+                pr_number,
+            ),
+        )
 
 
 def _row_to_changed_artifact(row: sqlite3.Row) -> ChangedArtifactRecord:

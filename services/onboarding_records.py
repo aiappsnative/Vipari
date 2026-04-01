@@ -482,21 +482,7 @@ def promote_latest_source_to_onboarding_baseline(
             """,
             (normalized_artifact_id,),
         ).fetchone()
-        latest_pr = conn.execute(
-            """
-            SELECT av.artifact_type, av.version_hash, av.signal_terms_json, av.line_count, av.content_text,
-                   sap.profile_json, sap.created_at
-            FROM static_artifact_profiles sap
-            INNER JOIN artifact_versions av ON av.id = sap.artifact_version_id
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ? AND sap.artifact_path = ?
-            ORDER BY sap.created_at DESC, sap.id DESC
-            LIMIT 1
-            """,
-            (repo_full, artifact_path),
-        ).fetchone()
-
-        latest_source = latest_pr if latest_pr is not None else latest_historical
+        latest_source = latest_historical
 
         if latest_source is None:
             return None

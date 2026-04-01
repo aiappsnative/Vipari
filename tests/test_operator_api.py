@@ -127,8 +127,8 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                         drift_magnitude=0.4,
                     ),
                     RepoArtifactTimelinePoint(
-                        source="pull_request",
-                        label="PR #42",
+                        source="historical",
+                        label="commit sha-2",
                         created_at=2.0,
                         semantic_distance=0.3,
                         capability_shift=0.2,
@@ -160,7 +160,7 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 ),
                 risk_tags=["capability expanded", "autonomy increased"],
                 narrative=["Capability risk increased due to broader or more sensitive actions."],
-                provenance=RepoArtifactProvenance(source_type="pull_request", label="PR #42 · sha-cur", created_at=2.0),
+                provenance=RepoArtifactProvenance(source_type="historical", label="commit sha-2", created_at=2.0),
             )
         ],
         artifacts=[
@@ -174,6 +174,10 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 historical_profile_count=2,
                 latest_historical_semantic_distance=0.3,
                 latest_historical_drift_magnitude=0.7,
+                latest_historical_capability_shift=0.2,
+                latest_historical_guardrail_shift=-0.1,
+                latest_historical_governance_shift=0.0,
+                latest_historical_autonomy_shift=0.1,
                 pr_profile_count=0,
                 latest_pr_semantic_distance=0.0,
                 latest_pr_capability_shift=0.0,
