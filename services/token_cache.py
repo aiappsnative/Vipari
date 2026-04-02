@@ -8,13 +8,11 @@ from redis import asyncio as redis_asyncio
 from config import get_settings
 
 
-_LOCAL_CACHE_TTL_SECONDS = 55 * 60
+DEFAULT_LOCAL_CACHE_TTL_MINUTES = 55
+# Cache slightly under GitHub's one-hour installation-token expiry to avoid serving stale credentials.
+_LOCAL_CACHE_TTL_SECONDS = DEFAULT_LOCAL_CACHE_TTL_MINUTES * 60
 _local_cache: dict[int, tuple[str, float]] = {}
 _redis_client: Any | None = None
-
-
-def _local_cache_key(installation_id: int) -> int:
-    return installation_id
 
 
 def _redis_key(installation_id: int) -> str:
@@ -36,12 +34,12 @@ async def get_installation_token(installation_id: int) -> str | None:
     if redis_client is not None:
         return await redis_client.get(_redis_key(installation_id))
 
-    cached = _local_cache.get(_local_cache_key(installation_id))
+    cached = _local_cache.get(installation_id)
     if cached is None:
         return None
     token, expires_at = cached
     if expires_at <= time.time():
-        _local_cache.pop(_local_cache_key(installation_id), None)
+        _local_cache.pop(installation_id, None)
         return None
     return token
 
@@ -53,7 +51,7 @@ async def set_installation_token(installation_id: int, token: str, expires_in: i
         await redis_client.set(_redis_key(installation_id), token, ex=ttl_seconds)
         return
 
-    _local_cache[_local_cache_key(installation_id)] = (token, time.time() + ttl_seconds)
+    _local_cache[installation_id] = (token, time.time() + ttl_seconds)
 
 
 def clear_local_token_cache() -> None:

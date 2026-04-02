@@ -4,8 +4,7 @@ import hmac
 import json
 import os
 import sys
-import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -38,7 +37,7 @@ def test_local_sqlite_queue_round_trip(tmp_path):
 
         await queue.nack(messages[0].receipt_handle, 1)
         assert await queue.dequeue(1) == []
-        time.sleep(1.1)
+        await asyncio.sleep(1.1)
 
         messages = await queue.dequeue(1)
         assert len(messages) == 1
@@ -137,7 +136,7 @@ def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
             }
         )
         message = (await queue.dequeue(1))[0]
-        await _process_message(queue, message, get_settings(), configure_logging("worker-test"), object())
+        await _process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock())
         assert await queue.dequeue(1) == []
 
     with patch("services.cloud_worker.fetch_diff_with_retry") as fetch_diff:

@@ -34,6 +34,8 @@ class QueueBackend(Protocol):
 
     async def move_to_dlq(self, receipt_handle: str) -> None: ...
 
+    async def depth(self) -> int: ...
+
 
 class LocalSQLiteQueue:
     def __init__(self, db_path: str, *, visibility_timeout_seconds: int = DEFAULT_VISIBILITY_TIMEOUT_SECONDS):
@@ -170,6 +172,7 @@ class SQSQueue:
         self.queue_url = queue_url
         self.dlq_url = dlq_url
         self.client = boto3.client("sqs")
+        self._inflight_bodies: dict[str, str] = {}
 
     async def enqueue(self, message: dict[str, Any]) -> str:
         response = await asyncio.to_thread(
@@ -190,6 +193,7 @@ class SQSQueue:
         )
         messages = []
         for item in response.get("Messages", []):
+            self._inflight_bodies[item["ReceiptHandle"]] = item["Body"]
             messages.append(
                 QueueMessage(
                     message_id=item["MessageId"],
@@ -201,9 +205,11 @@ class SQSQueue:
         return messages
 
     async def ack(self, receipt_handle: str) -> None:
+        self._inflight_bodies.pop(receipt_handle, None)
         await asyncio.to_thread(self.client.delete_message, QueueUrl=self.queue_url, ReceiptHandle=receipt_handle)
 
     async def nack(self, receipt_handle: str, delay_seconds: int) -> None:
+        self._inflight_bodies.pop(receipt_handle, None)
         await asyncio.to_thread(
             self.client.change_message_visibility,
             QueueUrl=self.queue_url,
@@ -212,17 +218,10 @@ class SQSQueue:
         )
 
     async def move_to_dlq(self, receipt_handle: str) -> None:
-        message = await asyncio.to_thread(
-            self.client.receive_message,
-            QueueUrl=self.queue_url,
-            MaxNumberOfMessages=1,
-            VisibilityTimeout=0,
-        )
-        body = None
-        for item in message.get("Messages", []):
-            if item["ReceiptHandle"] == receipt_handle:
-                body = item["Body"]
-                break
+        body = self._inflight_bodies.pop(receipt_handle, None)
         if body is not None:
             await asyncio.to_thread(self.client.send_message, QueueUrl=self.dlq_url, MessageBody=body)
         await self.ack(receipt_handle)
+
+    async def depth(self) -> int:
+        return 0

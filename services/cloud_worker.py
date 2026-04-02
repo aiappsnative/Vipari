@@ -24,6 +24,9 @@ JOBS_PROCESSED = Counter("promptdrift_jobs_processed_total", "Processed worker j
 JOB_DURATION = Histogram("promptdrift_job_duration_seconds", "Worker phase duration", ["phase"])
 QUEUE_DEPTH = Gauge("promptdrift_queue_depth", "Current queue depth")
 OPENAI_TOKENS = Counter("promptdrift_openai_tokens_used_total", "Estimated OpenAI tokens used")
+BASE_RETRY_DELAY_SECONDS = 5
+MAX_RETRY_DELAY_SECONDS = 300
+CHARS_PER_TOKEN_ESTIMATE = 4
 
 
 def build_queue_backend(settings: Settings) -> QueueBackend:
@@ -38,12 +41,17 @@ async def _get_installation_token_for_worker(installation_id: int, settings: Set
         return cached
     jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
     token = request_installation_token(jwt_token, installation_id)
-    await set_installation_token(installation_id, token, 55 * 60)
+    await set_installation_token(installation_id, token, 60 * 60)
     return token
 
 
 def _retry_delay_seconds(attempt_count: int) -> int:
-    return min(300, 5 * (2 ** max(0, attempt_count - 1)))
+    return min(MAX_RETRY_DELAY_SECONDS, BASE_RETRY_DELAY_SECONDS * (2 ** max(0, attempt_count - 1)))
+
+
+def _estimate_token_count(text: str) -> int:
+    # Intentional coarse heuristic for metrics only; PromptDrift does not currently ship a tokenizer dependency here.
+    return max(1, len(text) // CHARS_PER_TOKEN_ESTIMATE)
 
 
 async def _update_queue_depth(queue: QueueBackend) -> None:
@@ -140,9 +148,7 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
             ),
         )
 
-    OPENAI_TOKENS.inc(max(1, len(diff_text.split())))
-    with JOB_DURATION.labels(phase="post_comment").time():
-        pass
+    OPENAI_TOKENS.inc(_estimate_token_count(diff_text))
 
     if result == "retry_wait":
         saved = get_job(settings.resolved_db_path, job.id)
@@ -159,6 +165,8 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
 
 async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     settings = get_settings()
+    if not settings.ai_api_key:
+        raise RuntimeError("OPENAI_API_KEY or FOUNDRY_API_KEY must be configured for the worker service.")
     logger = configure_logging("worker")
     queue = queue_backend or build_queue_backend(settings)
     llm_client = OpenAI(api_key=settings.ai_api_key, base_url=settings.azure_openai_endpoint or None)

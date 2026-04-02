@@ -7,6 +7,7 @@ services:
       - "8001:8001"
     environment:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-development-secret}
+      # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
@@ -30,6 +31,7 @@ services:
       FOUNDRY_API_KEY: ${FOUNDRY_API_KEY:-}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
       AI_MODEL: ${AI_MODEL:-gpt-4o}
+      # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}

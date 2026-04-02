@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -29,13 +30,16 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
     queue = queue_backend or build_queue_backend(settings)
     logger = configure_logging("webhook-ingress")
 
-    app = FastAPI()
-    instrument_fastapi(app)
-
-    @app.on_event("startup")
-    async def startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if not settings.github_webhook_secret:
+            raise RuntimeError("GITHUB_WEBHOOK_SECRET must be configured for the webhook service.")
         init_webhook_delivery_db(db_path)
         cleanup_webhook_deliveries(db_path)
+        yield
+
+    app = FastAPI(lifespan=lifespan)
+    instrument_fastapi(app)
 
     @app.get("/health")
     async def health():

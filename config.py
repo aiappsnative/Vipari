@@ -54,6 +54,8 @@ class Settings(BaseSettings):
             sqlite_path = self.database_url.removeprefix("sqlite:///")
             if sqlite_path:
                 return sqlite_path
+        if self.database_url and not self.database_url.startswith("sqlite:///"):
+            return self.audit_db_path
         return self.audit_db_path
 
 

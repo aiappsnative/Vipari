@@ -5,7 +5,9 @@ import time
 from .persistence import connect_sqlite
 
 
-DELIVERY_TTL_SECONDS = 48 * 60 * 60
+DELIVERY_TTL_HOURS = 48
+# Keep delivery dedupe records for two days so repeated GitHub redeliveries are ignored during retries/debugging.
+DELIVERY_TTL_SECONDS = DELIVERY_TTL_HOURS * 60 * 60
 
 
 def init_webhook_delivery_db(db_path: str) -> None:
