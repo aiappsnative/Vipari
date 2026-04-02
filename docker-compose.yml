@@ -1,0 +1,87 @@
+services:
+  webhook-ingress:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    ports:
+      - "8001:8001"
+    environment:
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-development-secret}
+      QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./promptdrift.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - promptdrift-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FOUNDRY_API_KEY: ${FOUNDRY_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o}
+      QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./promptdrift.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8003}
+    volumes:
+      - promptdrift-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8002:8002"
+    environment:
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./promptdrift.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+    volumes:
+      - promptdrift-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: promptdrift
+      POSTGRES_USER: pd
+      POSTGRES_PASSWORD: pd
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pd -d promptdrift"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  promptdrift-data:

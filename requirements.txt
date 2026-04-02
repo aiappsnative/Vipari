@@ -5,6 +5,12 @@ openai
 python-dotenv
 pyjwt
 cryptography
+asyncpg
+boto3
+prometheus-client
+prometheus-fastapi-instrumentator
+pydantic-settings
+redis
 
 # test dependencies
 pytest
