@@ -175,6 +175,7 @@ Recent live validation on the active branch covered:
 
 - risky opened PR flow with durable audit persistence and bot comment posting
 - synchronize re-audit flow with exact-SHA diff reconstruction and managed comment replacement
+- PR close and reopen lifecycle validation with durable state updates and stale timestamp clearing
 - non-AI PR flow returning `no relevant changes` without queueing an audit
 - invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
 
@@ -202,11 +203,13 @@ python scripts/repo_ops.py dashboard owner/repo
 python scripts/repo_ops.py onboard owner/repo <installation_id> --plan-backfill --execute-backfill
 python scripts/repo_ops.py backfill owner/repo <installation_id>
 python scripts/repo_ops.py list-eval-candidates
-python scripts/repo_ops.py eval-run openfang <installation_id> --run-label main-openfang --compare-to artifacts/oss-evals/main/openfang/run-package.json
+python scripts/repo_ops.py eval-run openfang <installation_id> --run-label main-openfang --compare-to artifacts/oss-evals/main/doria90-openfang/main-openfang/run-package.json
 python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to/baseline-run-package.json
 ```
 
 The OSS evaluation harness writes repeatable run packages under `artifacts/oss-evals/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, and a fixed evaluator rubric so branch-to-branch comparison stays lightweight but reproducible.
+
+Checked-in reference artifacts for past live validation can also appear under `live/oss-evals/` when a snapshot is intentionally preserved for handoff or comparison.
 
 Useful JSON endpoints:
 
@@ -217,6 +220,10 @@ Useful JSON endpoints:
 - `POST /api/repos/{owner/repo}/onboard`
 - `POST /api/repos/{owner/repo}/backfill`
 - `POST /api/repos/{owner/repo}/artifacts/{artifact_path}/baseline`
+
+Operational note:
+
+- local SQLite may create `promptdrift.db-wal` and `promptdrift.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
 
 ## Known limitations
 

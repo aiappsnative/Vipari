@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document now defines the evaluation foundation for real-repository validation and the future `feature/oss-eval-harness-v1` slice.
+This document now defines the evaluation foundation for real-repository validation and the next hardening phase of `feature/oss-eval-harness-v1`.
 
 It should be read as a bridge between:
 
@@ -13,7 +13,14 @@ It should be read as a bridge between:
 The goal is no longer to prove that PromptDrift can touch a public repository at all.
 That proof now exists.
 
-The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop.
+The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop, building on the harness groundwork that already exists on `main`.
+
+Shipped groundwork on `main` already includes:
+
+- CLI-driven eval candidate listing and eval runs
+- repeatable saved run packages under `artifacts/oss-evals/`
+- saved repo and overview dashboard payload snapshots
+- branch-to-branch comparison summaries for eval packages
 
 ---
 
@@ -57,7 +64,7 @@ For each selected OSS repository, PromptDrift should be able to answer these que
 
 ## Harness contract
 
-The future harness should produce a stable package of evaluation artifacts for each candidate repo.
+The harness should continue producing a stable package of evaluation artifacts for each candidate repo, with the next work focused on expanding coverage quality rather than inventing the mechanism from scratch.
 
 ### Required inputs
 

@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This document defines the target architecture for the next-generation PromptDrift detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [docs/detection-engine-diagram.mmd](docs/detection-engine-diagram.mmd).
+This document defines the target architecture for the next-generation PromptDrift detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [detection-engine-diagram.mmd](detection-engine-diagram.mmd).
 
 This document is intentionally architecture-focused. Roadmap sequencing lives in [Plan.MD](../Plan.MD), while product and local-usage guidance lives in [README.md](../README.md).
 
-It should be read together with [SOUL.md](SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
+It should be read together with [SOUL.md](../SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
 
 The core design principle is a **hybrid engine**:
 
@@ -67,7 +67,7 @@ The design should also now favor:
 
 ## High-level architecture
 
-### Current implementation snapshot (March 2026)
+### Current implementation snapshot (April 2026)
 
 The current `main` branch already implements a meaningful subset of this target architecture.
 
@@ -88,19 +88,22 @@ Implemented today:
 - dashboard aggregation optimized for larger OSS repositories so per-repo views stay interactive
 - bounded OSS onboarding improvements through narrower discovery candidate selection and direct GitHub contents API reads for artifact content
 - persisted snapshot content for onboarding baselines, historical versions, and PR versions so later explanations can cite exact changed lines
+- persisted PR lifecycle metadata across audit jobs and durable PR audit records so close, reopen, and merge state stay queryable over time
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
 - reviewer-facing comment formatting with TLDR risk summary and collapsible details, without repeating the summary inside the expanded section
 - GitHub App auth hardening, transient opened-PR diff retry handling, and exact-SHA synchronize diff reconstruction
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
+- landed dashboard posture derived from approved baselines plus merged-history evidence, while proposal-only PR audit evidence stays separate from landed drift views
+- shipped groundwork for repeatable OSS evaluation packages and CLI-driven branch-to-branch comparison
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
 - richer PR comment integration for attribute-delta summaries beyond the current compact summary block
 - clearer reviewer-queue synthesis between proposal-only PR audits and landed merged-history evidence on real OSS repos
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
-- a repeatable OSS evaluation harness for regression-proofing real-repo behavior
+- expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
 - production-grade persistence/deployment posture beyond the current local-stage setup
 
 ### Dashboard evolution note
@@ -367,9 +370,9 @@ It answers questions such as:
 - persist enough data for future trend and history views
 
 ### Current implementation note
-The first durable baseline linkage now compares the current artifact snapshot against the latest persisted profile for the same repo/path pair.
+The active baseline-selection path is now stronger than the first durable implementation: PromptDrift prefers approved baseline provenance when available, falls back through onboarding or historical references when needed, and only uses weaker lineage paths as explicit fallback behavior.
 
-That is not yet the final baseline-selection strategy, but it is the first working durable form of baseline-aware profile history.
+That means the system is no longer simply comparing against the latest persisted profile for a repo/path pair, even though older persisted history is still part of the fallback chain.
 
 The first reviewer-facing presentation of this data now appears as a compact static drift block inserted into PR comments ahead of the detailed semantic review section.
 
