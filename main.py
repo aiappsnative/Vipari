@@ -1,4 +1,3 @@
-import os
 import hmac
 import hashlib
 import asyncio
@@ -10,11 +9,11 @@ from urllib.error import HTTPError
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from dotenv import load_dotenv
 from github.GithubException import GithubException
 from openai import OpenAI
 from pydantic import BaseModel
 
+from config import get_settings
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
@@ -26,30 +25,28 @@ from services.onboarding_records import promote_latest_source_to_onboarding_base
 from services.persistence import get_persistence_status
 from services.audit_records import update_pull_request_audit_state
 
-# load environment variables
-load_dotenv()
+settings = get_settings()
 
-GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
-GITHUB_PRIVATE_KEY_PATH = os.getenv("GITHUB_PRIVATE_KEY_PATH")
-GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FOUNDRY_API_KEY = os.getenv("FOUNDRY_API_KEY")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-AI_MODEL = os.getenv("AI_MODEL", "gpt-4o")
-AI_API_KEY = FOUNDRY_API_KEY or OPENAI_API_KEY
-AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", os.path.join(os.path.dirname(__file__), "promptdrift.db"))
-AUDIT_WORKER_ENABLED = os.getenv("AUDIT_WORKER_ENABLED", "1") == "1"
-LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
-AUDIT_MAX_ATTEMPTS = int(os.getenv("AUDIT_MAX_ATTEMPTS", "5"))
-AUDIT_MAX_RETRY_WINDOW_SECONDS = float(os.getenv("AUDIT_MAX_RETRY_WINDOW_SECONDS", "5400"))
-AUDIT_WORKER_POLL_SECONDS = float(os.getenv("AUDIT_WORKER_POLL_SECONDS", "2"))
-PR_DIFF_FETCH_ATTEMPTS = int(os.getenv("PR_DIFF_FETCH_ATTEMPTS", "3"))
-PR_DIFF_FETCH_RETRY_SECONDS = float(os.getenv("PR_DIFF_FETCH_RETRY_SECONDS", "2"))
+GITHUB_APP_ID = settings.github_app_id
+GITHUB_PRIVATE_KEY_PATH = settings.github_private_key_path
+GITHUB_WEBHOOK_SECRET = settings.github_webhook_secret
+OPENAI_API_KEY = settings.openai_api_key
+FOUNDRY_API_KEY = settings.foundry_api_key
+AZURE_OPENAI_ENDPOINT = settings.azure_openai_endpoint
+AI_MODEL = settings.ai_model
+AI_API_KEY = settings.ai_api_key
+AUDIT_DB_PATH = settings.resolved_db_path
+AUDIT_WORKER_ENABLED = settings.audit_worker_enabled and bool(
+    GITHUB_APP_ID and GITHUB_PRIVATE_KEY_PATH and GITHUB_WEBHOOK_SECRET and AI_API_KEY
+)
+LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
+AUDIT_MAX_ATTEMPTS = settings.audit_max_attempts
+AUDIT_MAX_RETRY_WINDOW_SECONDS = settings.audit_max_retry_window_seconds
+AUDIT_WORKER_POLL_SECONDS = settings.audit_worker_poll_seconds
+PR_DIFF_FETCH_ATTEMPTS = settings.pr_diff_fetch_attempts
+PR_DIFF_FETCH_RETRY_SECONDS = settings.pr_diff_fetch_retry_seconds
 
-if not all([GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, GITHUB_WEBHOOK_SECRET, AI_API_KEY]):
-    raise RuntimeError("Required environment variables are missing. Check .env or .env.example")
-
-client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None)
+client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
 worker: AuditWorker | None = None
 
 
@@ -58,6 +55,7 @@ async def lifespan(_: FastAPI):
     global worker
     init_db(AUDIT_DB_PATH)
     if AUDIT_WORKER_ENABLED:
+        assert client is not None
         worker = AuditWorker(
             WorkerSettings(
                 db_path=AUDIT_DB_PATH,
