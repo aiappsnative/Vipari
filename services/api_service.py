@@ -65,29 +65,35 @@ def create_api_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_index_page():
+    async def dashboard_index_page(request: Request):
+        _require_admin_token(request, settings)
         return HTMLResponse(render_dashboard_index_page())
 
     @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
-    async def dashboard_repo_page(repo_full: str):
+    async def dashboard_repo_page(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full))
 
     @app.get("/api/repos")
-    async def list_repos():
+    async def list_repos(request: Request):
+        _require_admin_token(request, settings)
         return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(db_path)]})
 
     @app.get("/api/dashboard/overview")
-    async def dashboard_overview():
+    async def dashboard_overview(request: Request):
+        _require_admin_token(request, settings)
         return JSONResponse(asdict(build_dashboard_overview_view(db_path)))
 
     @app.get("/api/persistence")
-    async def persistence_status():
+    async def persistence_status(request: Request):
+        _require_admin_token(request, settings)
         payload = asdict(get_persistence_status(db_path))
         payload.pop("database_path", None)
         return JSONResponse(payload)
 
     @app.get("/api/repos/{repo_full:path}/dashboard")
-    async def repo_dashboard(repo_full: str):
+    async def repo_dashboard(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
 
     @app.post("/api/repos/{repo_full:path}/onboard")

@@ -208,13 +208,14 @@ def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch
     db_path = str(tmp_path / "fresh-api.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'ignored.db'}")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "read-token")
     monkeypatch.delenv("ENABLE_METRICS", raising=False)
     _reset_settings_cache()
 
     app = create_api_app()
 
     with TestClient(app) as client:
-        response = client.get("/api/repos")
+        response = client.get("/api/repos", headers={"Authorization": "Bearer read-token"})
         metrics_response = client.get("/metrics")
 
     assert response.status_code == 200
@@ -258,6 +259,27 @@ def test_api_write_routes_require_admin_token(tmp_path, monkeypatch):
 
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
+
+
+def test_api_read_routes_require_admin_token(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "secured-read-api.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "read-secret-token")
+    monkeypatch.delenv("ENABLE_METRICS", raising=False)
+    _reset_settings_cache()
+
+    app = create_api_app()
+
+    with TestClient(app) as client:
+        unauthorized_json = client.get("/api/repos")
+        authorized_json = client.get("/api/repos", headers={"X-Admin-Token": "read-secret-token"})
+        unauthorized_html = client.get("/dashboard")
+        authorized_html = client.get("/dashboard", headers={"Authorization": "Bearer read-secret-token"})
+
+    assert unauthorized_json.status_code == 401
+    assert authorized_json.status_code == 200
+    assert unauthorized_html.status_code == 401
+    assert authorized_html.status_code == 200
 
 
 def test_metrics_can_be_enabled_explicitly(tmp_path, monkeypatch):
