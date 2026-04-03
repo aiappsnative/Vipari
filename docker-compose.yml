@@ -6,12 +6,13 @@ services:
     ports:
       - "8001:8001"
     environment:
-      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-development-secret}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
       - promptdrift-data:/data
     depends_on:
@@ -37,6 +38,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ENABLE_METRICS: ${ENABLE_METRICS:-false}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8003}
     volumes:
@@ -54,11 +56,13 @@ services:
     ports:
       - "8002:8002"
     environment:
+      API_ADMIN_TOKEN: ${API_ADMIN_TOKEN:?API_ADMIN_TOKEN must be set}
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
       - promptdrift-data:/data
     depends_on:

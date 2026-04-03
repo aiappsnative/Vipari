@@ -178,7 +178,8 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
 
     init_db(settings.resolved_db_path)
     cleanup_webhook_deliveries(settings.resolved_db_path)
-    start_http_server(settings.worker_metrics_port)
+    if settings.enable_metrics:
+        start_http_server(settings.worker_metrics_port)
 
     async def queue_depth_poller() -> None:
         while True:

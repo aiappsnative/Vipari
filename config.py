@@ -24,9 +24,11 @@ class Settings(BaseSettings):
     audit_db_path: str = DEFAULT_DB_PATH
 
     redis_url: str = ""
+    api_admin_token: str = ""
 
     worker_concurrency: int = 4
     worker_max_retries: int = 3
+    enable_metrics: bool = False
     audit_worker_enabled: bool = True
     audit_max_attempts: int = 5
     audit_max_retry_window_seconds: float = 5400.0

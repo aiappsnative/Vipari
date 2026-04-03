@@ -40,5 +40,7 @@ def configure_logging(service: str) -> logging.Logger:
     return logger
 
 
-def instrument_fastapi(app) -> None:
+def instrument_fastapi(app, *, enabled: bool = False) -> None:
+    if not enabled:
+        return
     Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)

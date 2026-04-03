@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from config import get_settings
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
@@ -16,6 +18,32 @@ from .onboarding import execute_repository_history_backfill, onboard_repository,
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
 from .audit_jobs import init_db
+
+
+class RepositoryOnboardingRequest(BaseModel):
+    installation_id: int
+    commit_limit_per_artifact: int = 10
+    plan_backfill: bool = True
+    execute_backfill: bool = False
+
+
+class RepositoryBackfillRequest(BaseModel):
+    installation_id: int
+
+
+def _require_admin_token(request: Request, settings) -> None:
+    configured_token = settings.api_admin_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="API admin token is not configured.")
+
+    authorization = request.headers.get("Authorization", "")
+    bearer_prefix = "Bearer "
+    provided_token = request.headers.get("X-Admin-Token", "")
+    if authorization.startswith(bearer_prefix):
+        provided_token = authorization[len(bearer_prefix):].strip()
+
+    if not provided_token or not hmac.compare_digest(provided_token, configured_token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def create_api_app() -> FastAPI:
@@ -30,7 +58,7 @@ def create_api_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
-    instrument_fastapi(app)
+    instrument_fastapi(app, enabled=settings.enable_metrics)
 
     @app.get("/health")
     async def health():
@@ -63,29 +91,30 @@ def create_api_app() -> FastAPI:
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
 
     @app.post("/api/repos/{repo_full:path}/onboard")
-    async def run_repo_onboarding(repo_full: str, payload: dict):
+    async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):
+        _require_admin_token(request, settings)
         jwt_token = generate_jwt(
             settings.github_app_id,
             settings.github_private_key_path,
             settings.resolved_github_private_key,
         )
-        token = get_installation_token(jwt_token, payload["installation_id"])
+        token = get_installation_token(jwt_token, payload.installation_id)
         onboarding_result = onboard_repository(
             db_path,
             repo_full=repo_full,
-            installation_id=payload["installation_id"],
+            installation_id=payload.installation_id,
             token=token,
         )
         planned_jobs = []
-        if payload.get("plan_backfill", True):
+        if payload.plan_backfill:
             planned_jobs = plan_repository_history_backfill(
                 db_path,
                 repo_full=repo_full,
                 token=token,
-                commit_limit_per_artifact=payload.get("commit_limit_per_artifact", 10),
+                commit_limit_per_artifact=payload.commit_limit_per_artifact,
             )
         executed_jobs = []
-        if payload.get("execute_backfill", False):
+        if payload.execute_backfill:
             executed_jobs = execute_repository_history_backfill(db_path, repo_full=repo_full, token=token)
         logger.info("Processed onboarding request", extra={"repo": repo_full})
         return JSONResponse(
@@ -101,13 +130,14 @@ def create_api_app() -> FastAPI:
         )
 
     @app.post("/api/repos/{repo_full:path}/backfill")
-    async def run_repo_backfill(repo_full: str, payload: dict):
+    async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest, request: Request):
+        _require_admin_token(request, settings)
         jwt_token = generate_jwt(
             settings.github_app_id,
             settings.github_private_key_path,
             settings.resolved_github_private_key,
         )
-        token = get_installation_token(jwt_token, payload["installation_id"])
+        token = get_installation_token(jwt_token, payload.installation_id)
         executed_jobs = execute_repository_history_backfill(db_path, repo_full=repo_full, token=token)
         return JSONResponse(
             {
@@ -120,7 +150,8 @@ def create_api_app() -> FastAPI:
         )
 
     @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
-    async def promote_artifact_baseline(repo_full: str, artifact_path: str):
+    async def promote_artifact_baseline(repo_full: str, artifact_path: str, request: Request):
+        _require_admin_token(request, settings)
         baseline = promote_latest_source_to_onboarding_baseline(db_path, repo_full, artifact_path)
         if baseline is None:
             raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")

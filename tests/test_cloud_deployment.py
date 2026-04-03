@@ -208,15 +208,18 @@ def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch
     db_path = str(tmp_path / "fresh-api.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'ignored.db'}")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.delenv("ENABLE_METRICS", raising=False)
     _reset_settings_cache()
 
     app = create_api_app()
 
     with TestClient(app) as client:
         response = client.get("/api/repos")
+        metrics_response = client.get("/metrics")
 
     assert response.status_code == 200
     assert response.json() == {"repos": []}
+    assert metrics_response.status_code == 404
 
 
 def test_explicit_audit_db_path_wins_for_shared_sqlite_volume(monkeypatch, tmp_path):
@@ -228,3 +231,44 @@ def test_explicit_audit_db_path_wins_for_shared_sqlite_volume(monkeypatch, tmp_p
     settings = get_settings()
 
     assert settings.resolved_db_path == shared_path
+
+
+def test_api_write_routes_require_admin_token(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "secured-api.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "super-secret-token")
+    monkeypatch.delenv("ENABLE_METRICS", raising=False)
+    _reset_settings_cache()
+
+    app = create_api_app()
+
+    with patch("services.api_service.generate_jwt", return_value="jwt"), patch(
+        "services.api_service.get_installation_token", return_value="installation-token"
+    ), patch("services.api_service.execute_repository_history_backfill", return_value=[]):
+        with TestClient(app) as client:
+            unauthorized = client.post(
+                "/api/repos/doria90/dummyAI/backfill",
+                json={"installation_id": 123},
+            )
+            authorized = client.post(
+                "/api/repos/doria90/dummyAI/backfill",
+                headers={"Authorization": "Bearer super-secret-token"},
+                json={"installation_id": 123},
+            )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_metrics_can_be_enabled_explicitly(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "metrics-api.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("ENABLE_METRICS", "true")
+    _reset_settings_cache()
+
+    app = create_api_app()
+
+    with TestClient(app) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 200
