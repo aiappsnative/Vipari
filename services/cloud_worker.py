@@ -39,7 +39,11 @@ async def _get_installation_token_for_worker(installation_id: int, settings: Set
     cached = await get_installation_token(installation_id)
     if cached:
         return cached
-    jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
+    jwt_token = generate_jwt(
+        settings.github_app_id,
+        settings.github_private_key_path,
+        settings.resolved_github_private_key,
+    )
     token = request_installation_token(jwt_token, installation_id)
     await set_installation_token(installation_id, token, 60 * 60)
     return token
@@ -139,6 +143,7 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
                 db_path=settings.resolved_db_path,
                 github_app_id=settings.github_app_id,
                 github_private_key_path=settings.github_private_key_path,
+                github_app_private_key=settings.resolved_github_private_key,
                 llm_client=llm_client,
                 model=settings.ai_model,
                 llm_timeout_seconds=settings.llm_timeout_seconds,

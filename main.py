@@ -37,7 +37,7 @@ AI_MODEL = settings.ai_model
 AI_API_KEY = settings.ai_api_key
 AUDIT_DB_PATH = settings.resolved_db_path
 AUDIT_WORKER_ENABLED = settings.audit_worker_enabled and bool(
-    GITHUB_APP_ID and GITHUB_PRIVATE_KEY_PATH and GITHUB_WEBHOOK_SECRET and AI_API_KEY
+    settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET and AI_API_KEY
 )
 LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
 AUDIT_MAX_ATTEMPTS = settings.audit_max_attempts
@@ -61,6 +61,7 @@ async def lifespan(_: FastAPI):
                 db_path=AUDIT_DB_PATH,
                 github_app_id=GITHUB_APP_ID,
                 github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+                github_app_private_key=settings.resolved_github_private_key,
                 llm_client=client,
                 model=AI_MODEL,
                 llm_timeout_seconds=LLM_TIMEOUT_SECONDS,

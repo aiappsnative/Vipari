@@ -49,7 +49,19 @@ class Settings(BaseSettings):
         return self.foundry_api_key or self.openai_api_key
 
     @property
+    def resolved_github_private_key(self) -> str:
+        if not self.github_app_private_key:
+            return ""
+        return self.github_app_private_key.replace("\\n", "\n")
+
+    @property
+    def has_github_app_credentials(self) -> bool:
+        return bool(self.github_app_id and (self.github_private_key_path or self.resolved_github_private_key))
+
+    @property
     def resolved_db_path(self) -> str:
+        if "audit_db_path" in self.model_fields_set and self.audit_db_path:
+            return self.audit_db_path
         if self.database_url.startswith("sqlite:///"):
             sqlite_path = self.database_url.removeprefix("sqlite:///")
             if sqlite_path:

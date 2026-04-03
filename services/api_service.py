@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +15,7 @@ from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
+from .audit_jobs import init_db
 
 
 def create_api_app() -> FastAPI:
@@ -21,7 +23,12 @@ def create_api_app() -> FastAPI:
     db_path = settings.resolved_db_path
     logger = configure_logging("api")
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        init_db(db_path)
+        yield
+
+    app = FastAPI(lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
     instrument_fastapi(app)
 
@@ -57,7 +64,11 @@ def create_api_app() -> FastAPI:
 
     @app.post("/api/repos/{repo_full:path}/onboard")
     async def run_repo_onboarding(repo_full: str, payload: dict):
-        jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
+        jwt_token = generate_jwt(
+            settings.github_app_id,
+            settings.github_private_key_path,
+            settings.resolved_github_private_key,
+        )
         token = get_installation_token(jwt_token, payload["installation_id"])
         onboarding_result = onboard_repository(
             db_path,
@@ -91,7 +102,11 @@ def create_api_app() -> FastAPI:
 
     @app.post("/api/repos/{repo_full:path}/backfill")
     async def run_repo_backfill(repo_full: str, payload: dict):
-        jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
+        jwt_token = generate_jwt(
+            settings.github_app_id,
+            settings.github_private_key_path,
+            settings.resolved_github_private_key,
+        )
         token = get_installation_token(jwt_token, payload["installation_id"])
         executed_jobs = execute_repository_history_backfill(db_path, repo_full=repo_full, token=token)
         return JSONResponse(

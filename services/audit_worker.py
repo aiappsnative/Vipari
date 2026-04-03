@@ -28,6 +28,7 @@ class WorkerSettings:
     github_private_key_path: str
     llm_client: object
     model: str
+    github_app_private_key: str = ""
     llm_timeout_seconds: float = 30.0
     max_attempts: int = 5
     max_retry_window_seconds: float = 5400.0
@@ -559,7 +560,11 @@ def _should_retry(job: AuditJob, settings: WorkerSettings) -> bool:
 
 
 def _get_installation_token_for_job(job: AuditJob, settings: WorkerSettings) -> str:
-    jwt_token = generate_jwt(settings.github_app_id, settings.github_private_key_path)
+    jwt_token = generate_jwt(
+        settings.github_app_id,
+        settings.github_private_key_path,
+        settings.github_app_private_key,
+    )
     return get_installation_token(jwt_token, job.installation_id)
 
 

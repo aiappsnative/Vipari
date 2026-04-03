@@ -19,6 +19,7 @@ from services.observability import configure_logging
 from services.queue import LocalSQLiteQueue
 from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
 from services.webhook_service import create_webhook_app
+from services.api_service import create_api_app
 
 
 def _reset_settings_cache():
@@ -88,6 +89,52 @@ def test_webhook_deduplication_only_enqueues_once(tmp_path, monkeypatch):
     assert messages[0].payload["delivery_id"] == "delivery-1"
 
 
+def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-retry.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    _reset_settings_cache()
+
+    class FlakyQueue:
+        def __init__(self):
+            self.messages = []
+            self.failures = 1
+
+        async def enqueue(self, message):
+            if self.failures > 0:
+                self.failures -= 1
+                raise RuntimeError("temporary enqueue failure")
+            self.messages.append(message)
+            return "message-1"
+
+    queue = FlakyQueue()
+    app = create_webhook_app(queue)
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {"number": 7, "base": {"sha": "base"}, "head": {"sha": "head"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        headers = {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-retry",
+            "Content-Type": "application/json",
+        }
+        first = client.post("/webhook", content=body, headers=headers)
+        second = client.post("/webhook", content=body, headers=headers)
+
+    assert first.status_code == 500
+    assert second.status_code == 202
+    assert len(queue.messages) == 1
+    assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
 def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
     db_path = str(tmp_path / "worker.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -155,3 +202,29 @@ def test_token_cache_falls_back_to_in_process_cache(monkeypatch):
         assert await get_installation_token(321) == "cached-token"
 
     asyncio.run(exercise_cache())
+
+
+def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "fresh-api.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'ignored.db'}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+
+    app = create_api_app()
+
+    with TestClient(app) as client:
+        response = client.get("/api/repos")
+
+    assert response.status_code == 200
+    assert response.json() == {"repos": []}
+
+
+def test_explicit_audit_db_path_wins_for_shared_sqlite_volume(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
+    shared_path = str(tmp_path / "shared" / "promptdrift.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", shared_path)
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.resolved_db_path == shared_path

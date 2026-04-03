@@ -11,10 +11,11 @@ from .cloud_common import build_webhook_envelope, verify_signature
 from .observability import configure_logging, instrument_fastapi
 from .queue import LocalSQLiteQueue, QueueBackend, SQSQueue
 from .webhook_deliveries import (
+    claim_webhook_delivery,
     cleanup_webhook_deliveries,
     init_webhook_delivery_db,
     mark_webhook_delivery_enqueued,
-    register_webhook_delivery,
+    mark_webhook_delivery_pending,
 )
 
 
@@ -59,16 +60,22 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
         if not delivery_id:
             raise HTTPException(status_code=400, detail="Missing delivery id")
 
-        if not register_webhook_delivery(db_path, delivery_id, event):
+        if not claim_webhook_delivery(db_path, delivery_id, event):
             logger.info("Ignored duplicate webhook delivery", extra={"delivery_id": delivery_id})
             return JSONResponse({"message": "duplicate ignored"}, status_code=202)
 
         payload = json.loads(body.decode("utf-8"))
         envelope = build_webhook_envelope(payload, delivery_id=delivery_id)
         if envelope is None:
+            mark_webhook_delivery_enqueued(db_path, delivery_id)
             return JSONResponse({"message": "ignored"}, status_code=202)
 
-        message_id = await queue.enqueue(envelope)
+        try:
+            message_id = await queue.enqueue(envelope)
+        except Exception:
+            mark_webhook_delivery_pending(db_path, delivery_id)
+            logger.exception("Failed to enqueue webhook delivery", extra={"delivery_id": delivery_id})
+            raise
         mark_webhook_delivery_enqueued(db_path, delivery_id)
         logger.info("Enqueued webhook delivery", extra={"delivery_id": delivery_id, "job_id": message_id})
         return JSONResponse({"message": "queued", "message_id": message_id}, status_code=202)

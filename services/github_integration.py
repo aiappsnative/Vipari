@@ -36,17 +36,27 @@ def _resolve_private_key_path(private_key_path: str) -> Path:
     return cwd_candidate
 
 
-def generate_jwt(app_id: str, private_key_path: str) -> str:
+def _load_private_key(private_key_path: str, private_key: str | None = None) -> str:
+    if private_key:
+        return private_key.replace("\\n", "\n")
+
+    if not private_key_path:
+        raise RuntimeError("A GitHub App private key path or inline private key must be configured.")
+
     resolved_private_key_path = _resolve_private_key_path(private_key_path)
-    with open(resolved_private_key_path, "r") as file_handle:
-        private_key = file_handle.read()
+    with open(resolved_private_key_path, "r", encoding="utf-8") as file_handle:
+        return file_handle.read()
+
+
+def generate_jwt(app_id: str, private_key_path: str, private_key: str | None = None) -> str:
+    resolved_private_key = _load_private_key(private_key_path, private_key)
     now = int(time.time())
     payload = {
         "iat": now - JWT_ISSUED_AT_SKEW_SECONDS,
         "exp": now + JWT_LIFETIME_SECONDS,
         "iss": str(app_id),
     }
-    token = jwt.encode(payload, private_key, algorithm="RS256")
+    token = jwt.encode(payload, resolved_private_key, algorithm="RS256")
     return token.decode("utf-8") if isinstance(token, bytes) else token
 
 
