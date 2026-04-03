@@ -142,6 +142,7 @@ class DashboardOverviewRegressionEntry:
     drift_magnitude: float
     capability_shift: float
     guardrail_shift: float
+    attribute_profile: list["AttributeProfileDimension"] | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,7 @@ class RepoDashboardInsightEntry:
     risk_reasons: list[str] = None
     rationale: str = ""
     recommended_action: str = ""
+    attribute_profile: list["AttributeProfileDimension"] | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,32 @@ class DashboardProfileVector:
 
 
 @dataclass(frozen=True)
+class AttributeProfileDimension:
+    attribute_key: str
+    label: str
+    baseline_value: str
+    current_value: str
+    direction: str
+    state: str
+    confidence_label: str
+    confidence_score: float
+    reason: str
+    evidence: list[str] = None
+    remediation: str = ""
+    baseline_score: float | None = None
+    current_score: float | None = None
+    delta: float | None = None
+
+
+@dataclass(frozen=True)
+class ArtifactAttributeProfile:
+    artifact_path: str
+    artifact_type: str
+    control_surface_label: str
+    dimensions: list[AttributeProfileDimension]
+
+
+@dataclass(frozen=True)
 class RepoArtifactProvenance:
     source_type: str
     label: str
@@ -295,6 +323,7 @@ class RepoArtifactDesignProfile:
     risk_tags: list[str] = None
     narrative: list[str] = None
     attribute_findings: list[RepoArtifactAttributeFinding] = None
+    attribute_profile: list[AttributeProfileDimension] = None
     can_promote_source_to_baseline: bool = False
     provenance: RepoArtifactProvenance | None = None
 
@@ -698,6 +727,19 @@ def _build_repo_insights(
         priority = "review_now" if score >= 1.25 else "watch" if score >= 0.6 else "baseline_review"
         baseline = baseline_by_path.get(artifact.artifact_path)
         context = _preferred_profile_context(evidence_bundle)
+        attribute_profile = None
+        if baseline is not None and context is not None:
+            attribute_profile = build_artifact_attribute_profile(
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                baseline_profile=baseline.profile,
+                current_profile=context.profile,
+                attribute_deltas=context.attribute_deltas,
+                baseline_signal_terms=baseline.signal_terms,
+                current_signal_terms=context.signal_terms,
+                baseline_content=baseline.content_text,
+                current_content=context.content_text,
+            ).dimensions
         queue_lane = _insight_queue_lane(artifact, priority, score)
         title = _insight_title(artifact, priority)
         rationale = _insight_rationale(artifact, priority, evidence_bundle)
@@ -724,6 +766,7 @@ def _build_repo_insights(
             risk_reasons=_insight_reasons(artifact, evidence_bundle),
             rationale=rationale,
             recommended_action=recommended_action,
+            attribute_profile=attribute_profile,
         )
         ranked_list = primary_ranked if queue_lane == "primary" else lower_confidence_ranked
         ranked_list.append(
@@ -1236,6 +1279,300 @@ def _build_attribute_findings(
     return findings
 
 
+def build_artifact_attribute_profile(
+    *,
+    artifact_path: str,
+    artifact_type: str,
+    baseline_profile: AgentAttributeProfile | None,
+    current_profile: AgentAttributeProfile | None,
+    attribute_deltas: dict[str, float] | None,
+    baseline_signal_terms: list[str] | None = None,
+    current_signal_terms: list[str] | None = None,
+    baseline_content: str | None = None,
+    current_content: str | None = None,
+) -> ArtifactAttributeProfile:
+    attribute_deltas = attribute_deltas or {}
+    baseline_signal_terms = baseline_signal_terms or []
+    current_signal_terms = current_signal_terms or []
+
+    findings: list[RepoArtifactAttributeFinding] = []
+    if baseline_profile is not None and current_profile is not None:
+        findings = _build_attribute_findings(
+            baseline_profile,
+            current_profile,
+            attribute_deltas,
+            baseline_signal_terms,
+            current_signal_terms,
+            baseline_content,
+            current_content,
+        )
+    findings_by_key = {finding.attribute_key: finding for finding in findings}
+
+    dimensions = [
+        _build_numeric_attribute_dimension(
+            attribute_key="guardrail_robustness",
+            label="Guardrail robustness",
+            baseline_profile=baseline_profile,
+            current_profile=current_profile,
+            baseline_value_getter=lambda profile: profile.guardrail_robustness,
+            current_value_getter=lambda profile: profile.guardrail_robustness,
+            attribute_deltas=attribute_deltas,
+            finding=findings_by_key.get("guardrail_robustness"),
+        ),
+        _build_numeric_attribute_dimension(
+            attribute_key="capability_risk",
+            label="Capability risk",
+            baseline_profile=baseline_profile,
+            current_profile=current_profile,
+            baseline_value_getter=lambda profile: profile.capability_risk,
+            current_value_getter=lambda profile: profile.capability_risk,
+            attribute_deltas=attribute_deltas,
+            finding=findings_by_key.get("capability_risk"),
+        ),
+        _build_numeric_attribute_dimension(
+            attribute_key="autonomy_level",
+            label="Autonomy level",
+            baseline_profile=baseline_profile,
+            current_profile=current_profile,
+            baseline_value_getter=lambda profile: profile.autonomy_level,
+            current_value_getter=lambda profile: profile.autonomy_level,
+            attribute_deltas=attribute_deltas,
+            finding=findings_by_key.get("autonomy_level"),
+        ),
+        _build_numeric_attribute_dimension(
+            attribute_key="governance_strength",
+            label="Governance strength",
+            baseline_profile=baseline_profile,
+            current_profile=current_profile,
+            baseline_value_getter=lambda profile: profile.governance_strength,
+            current_value_getter=lambda profile: profile.governance_strength,
+            attribute_deltas=attribute_deltas,
+            finding=findings_by_key.get("governance_strength"),
+        ),
+        _build_numeric_attribute_dimension(
+            attribute_key="model_config_posture",
+            label="Model config posture",
+            baseline_profile=baseline_profile,
+            current_profile=current_profile,
+            baseline_value_getter=lambda profile: profile.stability_vs_creativity,
+            current_value_getter=lambda profile: profile.stability_vs_creativity,
+            attribute_deltas={"model_config_posture": float(attribute_deltas.get("stability_vs_creativity", 0.0))},
+            finding=findings_by_key.get("stability_vs_creativity"),
+        ),
+        _build_control_surface_dimension(artifact_type),
+    ]
+
+    return ArtifactAttributeProfile(
+        artifact_path=artifact_path,
+        artifact_type=artifact_type,
+        control_surface_label=_control_surface_label(_artifact_group_key_from_type(artifact_type)),
+        dimensions=dimensions,
+    )
+
+
+def _build_numeric_attribute_dimension(
+    *,
+    attribute_key: str,
+    label: str,
+    baseline_profile: AgentAttributeProfile | None,
+    current_profile: AgentAttributeProfile | None,
+    baseline_value_getter,
+    current_value_getter,
+    attribute_deltas: dict[str, float],
+    finding: RepoArtifactAttributeFinding | None,
+) -> AttributeProfileDimension:
+    baseline_score = baseline_value_getter(baseline_profile) if baseline_profile is not None else None
+    current_score = current_value_getter(current_profile) if current_profile is not None else None
+    delta = float(attribute_deltas.get(attribute_key, 0.0)) if baseline_profile is not None and current_profile is not None else None
+    state = _attribute_state(delta, baseline_score, current_score)
+    confidence_score = _attribute_confidence_score(
+        attribute_key=attribute_key,
+        delta=delta,
+        evidence_count=len(finding.evidence) if finding and finding.evidence else 0,
+        has_baseline=baseline_profile is not None,
+        has_current=current_profile is not None,
+    )
+    return AttributeProfileDimension(
+        attribute_key=attribute_key,
+        label=label,
+        baseline_value=_attribute_bucket_label(attribute_key, baseline_score),
+        current_value=_attribute_bucket_label(attribute_key, current_score),
+        direction=_attribute_direction(attribute_key, delta, state),
+        state=state,
+        confidence_label=_confidence_band_label(confidence_score),
+        confidence_score=confidence_score,
+        reason=(finding.reason if finding is not None else _default_attribute_reason(attribute_key, state)),
+        evidence=(finding.evidence if finding is not None else []),
+        remediation=(finding.remediation if finding is not None else _default_attribute_remediation(attribute_key, state)),
+        baseline_score=round(float(baseline_score), 4) if baseline_score is not None else None,
+        current_score=round(float(current_score), 4) if current_score is not None else None,
+        delta=round(float(delta), 4) if delta is not None else None,
+    )
+
+
+def _build_control_surface_dimension(artifact_type: str) -> AttributeProfileDimension:
+    value = _control_surface_value(artifact_type)
+    confidence_score = 0.95
+    return AttributeProfileDimension(
+        attribute_key="control_surface_type",
+        label="Control surface type",
+        baseline_value=value,
+        current_value=value,
+        direction="unchanged",
+        state="no_change",
+        confidence_label=_confidence_band_label(confidence_score),
+        confidence_score=confidence_score,
+        reason=f"PromptDrift classifies this artifact as {value.lower()} based on the detected artifact type `{artifact_type}`.",
+        evidence=[f"Artifact type: {artifact_type}"],
+        remediation="No remediation needed unless this artifact was misclassified.",
+    )
+
+
+def _attribute_state(delta: float | None, baseline_score: float | None, current_score: float | None) -> str:
+    if baseline_score is None or current_score is None:
+        return "unknown"
+    if delta is None or abs(delta) < 0.03:
+        return "no_change"
+    return "drift_detected"
+
+
+def _attribute_bucket_label(attribute_key: str, score: float | None) -> str:
+    if score is None:
+        return "unknown"
+    if attribute_key == "guardrail_robustness":
+        if score >= 0.7:
+            return "strong"
+        if score >= 0.4:
+            return "moderate"
+        return "weak"
+    if attribute_key == "capability_risk":
+        if score >= 0.7:
+            return "high"
+        if score >= 0.4:
+            return "moderate"
+        return "low"
+    if attribute_key == "autonomy_level":
+        if score >= 0.7:
+            return "high"
+        if score >= 0.4:
+            return "moderate"
+        return "low"
+    if attribute_key == "governance_strength":
+        if score >= 0.7:
+            return "strong"
+        if score >= 0.4:
+            return "moderate"
+        return "weak"
+    if attribute_key == "model_config_posture":
+        if score >= 0.7:
+            return "deterministic"
+        if score >= 0.4:
+            return "balanced"
+        return "exploratory"
+    return f"{score:.2f}"
+
+
+def _attribute_direction(attribute_key: str, delta: float | None, state: str) -> str:
+    if state == "unknown":
+        return "unknown"
+    if state == "no_change" or delta is None:
+        return "unchanged"
+    if attribute_key == "guardrail_robustness":
+        return "strengthened" if delta > 0 else "weakened"
+    if attribute_key == "capability_risk":
+        return "expanded" if delta > 0 else "reduced"
+    if attribute_key == "autonomy_level":
+        return "increased" if delta > 0 else "decreased"
+    if attribute_key == "governance_strength":
+        return "strengthened" if delta > 0 else "weakened"
+    if attribute_key == "model_config_posture":
+        return "more deterministic" if delta > 0 else "more exploratory"
+    return "changed"
+
+
+def _attribute_confidence_score(
+    *,
+    attribute_key: str,
+    delta: float | None,
+    evidence_count: int,
+    has_baseline: bool,
+    has_current: bool,
+) -> float:
+    if attribute_key == "control_surface_type":
+        return 0.95
+    score = 0.4
+    if has_baseline:
+        score += 0.18
+    if has_current:
+        score += 0.18
+    if evidence_count:
+        score += min(evidence_count, 2) * 0.08
+    if delta is not None and abs(delta) >= 0.1:
+        score += 0.08
+    return round(min(score, 0.95), 2)
+
+
+def _confidence_band_label(score: float) -> str:
+    if score >= 0.8:
+        return "high confidence"
+    if score >= 0.6:
+        return "medium confidence"
+    return "lower confidence"
+
+
+def _default_attribute_reason(attribute_key: str, state: str) -> str:
+    if state == "unknown":
+        return "PromptDrift could not compare this dimension because no approved baseline was available for the changed artifact."
+    return {
+        "guardrail_robustness": "PromptDrift did not detect a material guardrail shift relative to the approved baseline.",
+        "capability_risk": "PromptDrift did not detect a material capability or blast-radius shift relative to the approved baseline.",
+        "autonomy_level": "PromptDrift did not detect a material autonomy shift relative to the approved baseline.",
+        "governance_strength": "PromptDrift did not detect a material governance shift relative to the approved baseline.",
+        "model_config_posture": "PromptDrift did not detect a material model sampling posture shift relative to the approved baseline.",
+    }.get(attribute_key, "PromptDrift did not detect a material change for this dimension.")
+
+
+def _default_attribute_remediation(attribute_key: str, state: str) -> str:
+    if state == "unknown":
+        return "Approve a stable baseline for this artifact so future reviews can compare posture changes directly."
+    return {
+        "guardrail_robustness": "Keep explicit limits and refusal or escalation language aligned to the approved design.",
+        "capability_risk": "Keep authority scoped to the minimum operational surface needed for the intended behavior.",
+        "autonomy_level": "Keep step depth and independent execution aligned with the intended review posture.",
+        "governance_strength": "Keep review, approval, and accountability cues aligned with the baseline governance expectations.",
+        "model_config_posture": "Keep sampling and determinism settings aligned with the approved model operating mode.",
+    }.get(attribute_key, "Keep this dimension aligned with the approved baseline.")
+
+
+def _control_surface_value(artifact_type: str) -> str:
+    return {
+        "prompt": "Prompt and instructions",
+        "system_prompt": "Prompt and instructions",
+        "guardrail": "Guardrails and policy",
+        "policy": "Guardrails and policy",
+        "model_config": "Model and generation config",
+        "tooling": "Tooling and orchestration",
+        "retrieval": "Retrieval and knowledge",
+        "ai_code": "Agent code and assets",
+    }.get(artifact_type, "Other AI-related surface")
+
+
+def _artifact_group_key_from_type(artifact_type: str) -> str:
+    if artifact_type in {"prompt", "system_prompt"}:
+        return "prompts"
+    if artifact_type in {"guardrail", "policy"}:
+        return "guardrails"
+    if artifact_type == "model_config":
+        return "models"
+    if artifact_type == "tooling":
+        return "tools"
+    if artifact_type == "retrieval":
+        return "retrieval"
+    if artifact_type == "ai_code":
+        return "agents"
+    return "other"
+
+
 def _line_diff_evidence_by_attribute(
     baseline_content: str | None,
     current_content: str | None,
@@ -1497,19 +1834,7 @@ def _build_control_surface_groups(artifacts: list[RepoDashboardArtifactEntry]) -
 
 
 def _artifact_group_key(artifact: RepoDashboardArtifactEntry) -> str:
-    if artifact.artifact_type in {"prompt", "system_prompt"}:
-        return "prompts"
-    if artifact.artifact_type in {"guardrail", "policy"}:
-        return "guardrails"
-    if artifact.artifact_type == "model_config":
-        return "models"
-    if artifact.artifact_type == "tooling":
-        return "tools"
-    if artifact.artifact_type == "retrieval":
-        return "retrieval"
-    if artifact.artifact_type == "ai_code":
-        return "agents"
-    return "other"
+    return _artifact_group_key_from_type(artifact.artifact_type)
 
 
 def _build_repo_history_timelines(
@@ -1615,6 +1940,17 @@ def _build_repo_design_profiles(
             narrative = ["No drift samples yet. This surface is currently represented only by the approved baseline."]
             headline_summary = "No source change with stored drift evidence yet."
             attribute_findings: list[RepoArtifactAttributeFinding] = []
+            attribute_profile = build_artifact_attribute_profile(
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                baseline_profile=baseline.profile,
+                current_profile=baseline.profile,
+                attribute_deltas={},
+                baseline_signal_terms=baseline.signal_terms,
+                current_signal_terms=baseline.signal_terms,
+                baseline_content=baseline.content_text,
+                current_content=baseline.content_text,
+            ).dimensions
             can_promote_source_to_baseline = False
             provenance = None
         else:
@@ -1633,6 +1969,17 @@ def _build_repo_design_profiles(
                 baseline.content_text,
                 context.content_text,
             )
+            attribute_profile = build_artifact_attribute_profile(
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                baseline_profile=baseline.profile,
+                current_profile=context.profile,
+                attribute_deltas=context.attribute_deltas,
+                baseline_signal_terms=baseline.signal_terms,
+                current_signal_terms=context.signal_terms,
+                baseline_content=baseline.content_text,
+                current_content=context.content_text,
+            ).dimensions
             changed_labels = [finding.label.lower() for finding in attribute_findings]
             if changed_labels:
                 headline_summary = f"{_sentence_source_label(context)} drift detected in {_human_join(changed_labels)}."
@@ -1662,6 +2009,7 @@ def _build_repo_design_profiles(
                 risk_tags=risk_tags,
                 narrative=narrative,
                 attribute_findings=attribute_findings,
+                attribute_profile=attribute_profile,
                 can_promote_source_to_baseline=can_promote_source_to_baseline,
                 provenance=provenance,
             )
@@ -1969,6 +2317,7 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                     drift_magnitude=drift_magnitude,
                     capability_shift=artifact.latest_historical_capability_shift,
                     guardrail_shift=artifact.latest_historical_guardrail_shift,
+                    attribute_profile=insight.attribute_profile,
                 )
             )
 

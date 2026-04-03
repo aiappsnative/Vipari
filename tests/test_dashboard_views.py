@@ -147,6 +147,15 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].drift_label in {"small drift", "medium drift", "large drift"}
     assert dashboard.design_profiles[0].drift_tone in {"low", "medium", "high"}
     assert dashboard.design_profiles[0].can_promote_source_to_baseline is True
+    assert len(dashboard.design_profiles[0].attribute_profile) == 6
+    assert any(
+        dimension.attribute_key == "model_config_posture"
+        for dimension in dashboard.design_profiles[0].attribute_profile
+    )
+    assert any(
+        dimension.attribute_key == "control_surface_type"
+        for dimension in dashboard.design_profiles[0].attribute_profile
+    )
     assert isinstance(dashboard.design_profiles[0].attribute_findings, list)
     if dashboard.design_profiles[0].attribute_findings:
         assert dashboard.design_profiles[0].attribute_findings[0].reason
@@ -265,6 +274,8 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-1"
     assert overview.highest_risk_items[0].change_summary
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
+    assert len(overview.highest_risk_items[0].attribute_profile) == 6
+    assert overview.highest_risk_items[0].attribute_profile[0].label == "Guardrail robustness"
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
 
@@ -288,6 +299,7 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].provenance is None
     assert dashboard.design_profiles[0].can_promote_source_to_baseline is False
+    assert len(dashboard.design_profiles[0].attribute_profile) == 6
     assert dashboard.insights[0].evidence_label == "baseline only"
     assert dashboard.insights[0].evidence_summary == "No merged-history evidence yet."
 
