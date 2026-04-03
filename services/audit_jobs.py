@@ -355,6 +355,25 @@ def claim_next_job(db_path: str, now: float | None = None) -> Optional[AuditJob]
     return _row_to_job(claimed) if claimed is not None else None
 
 
+def claim_job_by_id(db_path: str, job_id: int, now: float | None = None) -> Optional[AuditJob]:
+    current_time = now or time.time()
+    with _connect(db_path) as conn:
+        claimed = conn.execute(
+            """
+            UPDATE audit_jobs
+            SET status = 'processing',
+                attempt_count = attempt_count + 1,
+                updated_at = ?
+            WHERE id = ?
+              AND status IN ('queued', 'retry_wait')
+              AND next_attempt_at <= ?
+            RETURNING *
+            """,
+            (current_time, job_id, current_time),
+        ).fetchone()
+    return _row_to_job(claimed) if claimed is not None else None
+
+
 def mark_job_retry(db_path: str, job_id: int, *, error_message: str, retry_at: float) -> None:
     with _connect(db_path) as conn:
         conn.execute(

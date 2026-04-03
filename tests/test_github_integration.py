@@ -60,6 +60,25 @@ def test_generate_jwt_uses_safe_expiration_window(tmp_path, monkeypatch):
     assert github_integration.JWT_LIFETIME_SECONDS < 10 * 60
 
 
+def test_generate_jwt_supports_inline_private_key(monkeypatch):
+    captured = {}
+
+    def fake_encode(payload, private_key, algorithm):
+        captured['payload'] = payload
+        captured['private_key'] = private_key
+        captured['algorithm'] = algorithm
+        return 'encoded-inline-token'
+
+    monkeypatch.setattr(github_integration.time, 'time', lambda: 1_700_000_100)
+    monkeypatch.setattr(github_integration.jwt, 'encode', fake_encode)
+
+    token = generate_jwt('2963335', '', 'line-one\\nline-two')
+
+    assert token == 'encoded-inline-token'
+    assert captured['private_key'] == 'line-one\nline-two'
+    assert captured['algorithm'] == 'RS256'
+
+
 def test_fetch_compare_diff_uses_compare_endpoint(monkeypatch):
     captured = {}
 

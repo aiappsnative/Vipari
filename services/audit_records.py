@@ -360,6 +360,20 @@ def init_audit_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE static_artifact_profiles ADD COLUMN baseline_provenance_json TEXT")
 
 
+def has_completed_audit(db_path: str, *, repo_full: str, pr_number: int, head_sha: str) -> bool:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM pull_request_audits
+            WHERE repo_full = ? AND pr_number = ? AND head_sha = ? AND status = 'completed'
+            LIMIT 1
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+    return row is not None
+
+
 def record_audit_result(
     db_path: str,
     *,
