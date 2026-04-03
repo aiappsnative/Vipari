@@ -49,7 +49,8 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
 	- is green at the full-suite level (`98 passed` on the latest local verification)
-	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, and persisted PR lifecycle state
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
+	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-engine-v1`
@@ -117,7 +118,7 @@ This framing should shape roadmap decisions:
 2. Signal fusion improvements between deterministic and semantic findings
 3. Discovery precision improvements for large OSS onboarding and backfill
 4. Expanded OSS evaluation harness coverage for seeded and real-repo scenarios
-5. Production-oriented persistence and deployment hardening
+5. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
 
 Suggested next branch sequence:
 - `feature/repo-evidence-v1`
@@ -221,6 +222,7 @@ Current validation status:
 - `feature/approved-baseline-v1`
 - `feature/repo-provenance-v1`
 - `feature/dashboard-ux-v1`
+- cloud deployment scaffolding split with secured webhook/worker/api service boundaries
 
 #### 1. `feature/repo-evidence-v1`
 
@@ -269,9 +271,9 @@ Purpose:
 - harden local-stage persistence and deployment assumptions toward a production-ready posture
 
 Planned scope:
-- define the next durable-store step beyond the current local SQLite shape
+- define the next durable-store step beyond the current SQLite-first split scaffolding
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
-- document a production-oriented path without overbuilding the local developer workflow
+- document a production-oriented path without overbuilding the local developer workflow or weakening the current fail-closed deployment defaults
 
 ### Trial success criteria for the next version
 

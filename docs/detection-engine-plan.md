@@ -74,6 +74,7 @@ The current `main` branch already implements a meaningful subset of this target 
 Implemented today:
 - webhook-path signature verification, diff fetch, AI relevance gating, and audit job creation
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
+- split-service execution scaffolding with dedicated webhook ingress, worker, and dashboard/API entrypoints
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels for high-confidence cases
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
@@ -97,6 +98,10 @@ Implemented today:
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 - landed dashboard posture derived from approved baselines plus merged-history evidence, while proposal-only PR audit evidence stays separate from landed drift views
 - shipped groundwork for repeatable OSS evaluation packages and CLI-driven branch-to-branch comparison
+- queue abstractions for local SQLite and SQS-style split execution, plus Redis-backed installation-token caching with in-process fallback
+- retry-safe webhook delivery deduplication so ingress failures do not permanently drop redelivered GitHub events
+- split API/dashboard route protection via admin token, with metrics exposure disabled by default unless explicitly enabled
+- Docker and compose scaffolding for running PromptDrift as separately deployable webhook, worker, and API services
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
@@ -104,7 +109,7 @@ Still intentionally incomplete:
 - clearer reviewer-queue synthesis between proposal-only PR audits and landed merged-history evidence on real OSS repos
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
-- production-grade persistence/deployment posture beyond the current local-stage setup
+- production-grade persistence/deployment posture beyond the current SQLite-first split-service scaffolding
 
 ### Dashboard evolution note
 

@@ -135,7 +135,7 @@ Copy [.env.example](.env.example) to `.env` and fill in your real values.
 Required variables:
 
 - `GITHUB_APP_ID`
-- `GITHUB_PRIVATE_KEY_PATH`
+- `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_APP_PRIVATE_KEY`
 - `GITHUB_WEBHOOK_SECRET`
 - `OPENAI_API_KEY` or `FOUNDRY_API_KEY`
 - `AZURE_OPENAI_ENDPOINT`
@@ -146,6 +146,11 @@ Optional variables:
 - `FOUNDRY_PROJECT_ENDPOINT`
 - `GITHUB_PAT`
 - `NGROK_AUTHTOKEN`
+- `AUDIT_DB_PATH`
+- `REDIS_URL`
+- `QUEUE_BACKEND`, `SQS_QUEUE_URL`, and `SQS_DLQ_URL`
+- `API_ADMIN_TOKEN` for the split API service
+- `ENABLE_METRICS` (defaults to `false`)
 
 ## Installation
 
@@ -160,6 +165,24 @@ Run the service locally:
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+## Cloud deployment scaffolding
+
+`main` now includes a first-pass split deployment shape for cloud-oriented hosting:
+
+- `run_webhook.py` for webhook ingress
+- `run_worker.py` for the async audit worker
+- `run_api.py` for dashboard and operator APIs
+- `docker-compose.yml` plus dedicated Dockerfiles for the three services
+
+Important deployment rules for this split surface:
+
+- the webhook ingress should be the only internet-facing unauthenticated route surface
+- the split API service requires `API_ADMIN_TOKEN`; dashboard pages and JSON APIs are protected by that token
+- Prometheus metrics are disabled by default and only exposed when `ENABLE_METRICS=true`
+- SQLite remains the default local/shared-volume store in the scaffolding; PostgreSQL is still the longer-term production target
+
+You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
 
 ## Local end-to-end testing
 
@@ -221,6 +244,8 @@ Useful JSON endpoints:
 - `POST /api/repos/{owner/repo}/backfill`
 - `POST /api/repos/{owner/repo}/artifacts/{artifact_path}/baseline`
 
+When using the split API service, these dashboard and JSON routes require the configured `API_ADMIN_TOKEN` via `Authorization: Bearer ...` or `X-Admin-Token`.
+
 Operational note:
 
 - local SQLite may create `promptdrift.db-wal` and `promptdrift.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
@@ -230,7 +255,7 @@ Operational note:
 - the current backend is still SQLite, but persistence metadata now makes the logical boundary explicit: operational queue tables vs durable audit/history tables, with PostgreSQL remaining the production target
 - the dashboard is now structurally ready for OSS validation, but landed posture intentionally depends on approved baselines plus merged-history evidence rather than proposal-only PR audits
 - larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
-- no production deployment packaging or multi-tenant control plane yet
+- cloud deployment scaffolding is now landed, but the deployed shape is still SQLite-first, effectively single-tenant, and not yet a full production control plane
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
 - PR review, dashboard prioritization, and landed-history narratives still need tighter synthesis so proposal-only evidence is visible without contaminating merged-history drift
 

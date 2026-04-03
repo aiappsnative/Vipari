@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-04-03 — Cloud deployment scaffolding and deployment-surface hardening
+
+### Added
+- split service entrypoints for webhook ingress, async worker execution, and dashboard/API serving
+- shared deployment configuration for queue backend selection, Redis-backed installation-token caching, inline GitHub App private key support, and optional metrics gating
+- local SQLite queue backend plus SQS queue abstraction for split-service execution
+- webhook delivery tracking with retry-safe deduplication and redelivery recovery after enqueue failures
+- Docker-based deployment scaffolding with dedicated webhook, worker, and API images plus a compose definition
+- regression coverage for split deployment behavior, API auth requirements, metrics gating, and inline GitHub App key handling
+
+### Changed
+- split API/dashboard routes now fail closed behind `API_ADMIN_TOKEN` instead of exposing repo posture and operator actions anonymously
+- deployment scaffolding now fails closed when required ingress or API secrets are missing
+- metrics exposure is opt-in rather than on by default for published HTTP services
+- `main.py` now shares centralized settings and GitHub App credential resolution with the split services
+
+### Verified
+- deployment-focused regression suite passed locally (`20 passed` for cloud deployment and GitHub integration coverage)
+- strict review pass completed against PR #13, including reliability, security, and attacker-surface checks before merge
+
+### Product impact
+- PromptDrift now has a credible cloud-oriented execution shape without regressing local monolith workflows
+- the next deployment work should focus on production-grade persistence and operating posture rather than inventing service boundaries from scratch
+
 ## 2026-04-01 — PR lifecycle persistence and landed-history-only evidence hardening
 
 ### Added
