@@ -153,16 +153,17 @@ def test_fetch_commit_pair_diff_reconstructs_diff_from_git_trees(monkeypatch):
     assert "+Keep explanations concise." in diff
 
 
-def test_upsert_pr_comment_replaces_previous_managed_comment(monkeypatch):
-    deleted = []
+def test_upsert_pr_comment_updates_existing_episode_comment(monkeypatch):
+    edited = []
 
     class FakeComment:
         def __init__(self, comment_id, body):
             self.id = comment_id
             self.body = body
 
-        def delete(self):
-            deleted.append(self.id)
+        def edit(self, body):
+            edited.append((self.id, body))
+            self.body = body
 
     class FakePullRequest:
         def __init__(self):
@@ -205,22 +206,25 @@ def test_upsert_pr_comment_replaces_previous_managed_comment(monkeypatch):
         existing_comment_id=101,
     )
 
-    assert comment_id == 303
-    assert deleted == [101]
+    assert comment_id == 101
+    assert edited == [(101, "<!-- promptdrift:managed-comment -->\nNew audit")]
 
 
-def test_upsert_pr_comment_creates_first_managed_comment_when_none_exists(monkeypatch):
+def test_upsert_pr_comment_creates_new_episode_comment_without_touching_older_ones(monkeypatch):
     class FakeComment:
         def __init__(self, comment_id, body):
             self.id = comment_id
             self.body = body
 
-        def delete(self):
-            raise AssertionError("delete should not be called")
+        def edit(self, body):
+            raise AssertionError("edit should not be called")
 
     class FakePullRequest:
         def __init__(self):
-            self.comments = [FakeComment(202, "A regular reviewer comment")]
+            self.comments = [
+                FakeComment(101, "<!-- promptdrift:managed-comment -->\nOld audit"),
+                FakeComment(202, "A regular reviewer comment"),
+            ]
 
         def get_issue_comments(self):
             return self.comments

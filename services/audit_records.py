@@ -89,6 +89,19 @@ class AuditCommentRecord:
 
 
 @dataclass(frozen=True)
+class PrCommentEpisodeRecord:
+    audit_comment: AuditCommentRecord
+    repo_full: str
+    pr_number: int
+    head_sha: str
+    audit_status: str
+    audit_completion_mode: str
+    audit_output_mode: str
+    audit_created_at: float
+    audit_updated_at: float
+
+
+@dataclass(frozen=True)
 class ArtifactHistoryRecord:
     audit_id: int
     job_id: int
@@ -744,6 +757,58 @@ def get_audit_comment_for_audit(db_path: str, audit_id: int) -> Optional[AuditCo
     return _row_to_audit_comment(row) if row is not None else None
 
 
+def get_audit_comment_episode_for_pr_head_sha(
+    db_path: str,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+) -> Optional[PrCommentEpisodeRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*, pra.repo_full, pra.pr_number, pra.head_sha,
+                   pra.status AS audit_status,
+                   pra.completion_mode AS audit_completion_mode,
+                   pra.output_mode AS audit_output_mode,
+                   pra.created_at AS audit_created_at,
+                   pra.updated_at AS audit_updated_at
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ? AND pra.head_sha = ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+    return _row_to_pr_comment_episode(row) if row is not None else None
+
+
+def get_previous_audit_comment_episode_for_pr(
+    db_path: str,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+) -> Optional[PrCommentEpisodeRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*, pra.repo_full, pra.pr_number, pra.head_sha,
+                   pra.status AS audit_status,
+                   pra.completion_mode AS audit_completion_mode,
+                   pra.output_mode AS audit_output_mode,
+                   pra.created_at AS audit_created_at,
+                   pra.updated_at AS audit_updated_at
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ? AND pra.head_sha <> ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+    return _row_to_pr_comment_episode(row) if row is not None else None
+
+
 def get_latest_audit_comment_for_pr(db_path: str, repo_full: str, pr_number: int) -> Optional[AuditCommentRecord]:
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1261,6 +1326,20 @@ def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
         posted_at=row["posted_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_pr_comment_episode(row: sqlite3.Row) -> PrCommentEpisodeRecord:
+    return PrCommentEpisodeRecord(
+        audit_comment=_row_to_audit_comment(row),
+        repo_full=row["repo_full"],
+        pr_number=row["pr_number"],
+        head_sha=row["head_sha"],
+        audit_status=row["audit_status"],
+        audit_completion_mode=row["audit_completion_mode"],
+        audit_output_mode=row["audit_output_mode"],
+        audit_created_at=row["audit_created_at"],
+        audit_updated_at=row["audit_updated_at"],
     )
 
 

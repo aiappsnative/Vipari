@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
@@ -20,7 +21,12 @@ from .audit_jobs import (
     mark_job_fallback_posted,
     mark_job_retry,
 )
-from .audit_records import get_latest_audit_comment_for_pr, record_audit_result
+from .audit_records import (
+    PrCommentEpisodeRecord,
+    get_audit_comment_episode_for_pr_head_sha,
+    get_previous_audit_comment_episode_for_pr,
+    record_audit_result,
+)
 from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 
@@ -80,6 +86,26 @@ class SignalFusionAssessment:
     escalation_recommendation: EscalationRecommendation
 
 
+@dataclass(frozen=True)
+class PrCommentEpisodeContext:
+    head_sha: str
+    analyzed_at: float
+    previous_episode: PrCommentEpisodeRecord | None = None
+
+
+@dataclass(frozen=True)
+class PrCommentReview:
+    decision: str
+    risk_level: str
+    context_line: str
+    what_changed: tuple[str, ...]
+    key_deltas: tuple[str, ...]
+    evidence: tuple[str, ...]
+    governance_signals: tuple[str, ...]
+    recommended_next_step: str
+    episode_context: PrCommentEpisodeContext
+
+
 def build_llm_comment(
     diff_text: str,
     deterministic_analysis: DiffAnalysis,
@@ -89,6 +115,7 @@ def build_llm_comment(
     timeout_seconds: float,
     escalation_recommendation: EscalationRecommendation | None = None,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    episode_context: PrCommentEpisodeContext | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
@@ -120,27 +147,26 @@ def build_llm_comment(
         timeout=timeout_seconds,
     )
     raw_comment = response.choices[0].message.content or "Audit failed: empty response from AI model."
-    risk_level = _fuse_risk_levels(
-        deterministic_analysis.suggested_risk_level.value,
-        _extract_risk_level(raw_comment, default=deterministic_analysis.suggested_risk_level.value),
-    )
     summary = _extract_summary(
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
+    fusion_assessment = _build_signal_fusion_assessment(raw_comment, deterministic_analysis)
     canonical_details = _build_semantic_comment_details(
         raw_comment,
         deterministic_analysis,
-        risk_level=risk_level,
+        risk_level=fusion_assessment.risk_level,
     )
-    return _format_comment_body(
-        _render_canonical_detail_markdown(canonical_details),
-        risk_level=risk_level,
-        review_mode="Full semantic review",
+    review = _build_pr_comment_review(
+        deterministic_analysis,
+        risk_level=fusion_assessment.risk_level,
         summary=summary,
-        escalation_recommendation=recommendation,
+        semantic_recommendation=canonical_details.recommendation,
+        escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
         attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
     )
+    return _render_pr_comment_review(review)
 
 
 def build_fallback_comment(
@@ -149,76 +175,324 @@ def build_fallback_comment(
     error_message: str,
     escalation_recommendation: EscalationRecommendation | None = None,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    episode_context: PrCommentEpisodeContext | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     summary = _build_fallback_summary(deterministic_analysis)
     canonical_details = _build_fallback_comment_details(deterministic_analysis)
-    return _format_comment_body(
-        _render_canonical_detail_markdown(canonical_details),
+    review = _build_pr_comment_review(
+        deterministic_analysis,
         risk_level=deterministic_analysis.suggested_risk_level.value,
-        review_mode="Deterministic fallback review",
         summary=summary,
+        semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=recommendation,
         attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+    )
+    return _render_pr_comment_review(review)
+
+
+def _build_pr_comment_review(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    risk_level: str,
+    summary: str,
+    semantic_recommendation: str,
+    escalation_recommendation: EscalationRecommendation,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    episode_context: PrCommentEpisodeContext | None = None,
+) -> PrCommentReview:
+    profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
+    primary_profile = _select_primary_attribute_profile(profiles)
+    normalized_risk = _normalize_risk_level(risk_level)
+    decision = _build_comment_decision(primary_profile, escalation_recommendation)
+    return PrCommentReview(
+        decision=decision,
+        risk_level=normalized_risk,
+        context_line=_build_context_line(normalized_risk, primary_profile),
+        what_changed=_build_what_changed_lines(summary, decision, primary_profile),
+        key_deltas=_build_key_delta_bullets(profiles, deterministic_analysis),
+        evidence=_build_evidence_bullets(profiles, deterministic_analysis),
+        governance_signals=_build_governance_signals(profiles, decision),
+        recommended_next_step=_build_recommended_next_step(
+            decision,
+            semantic_recommendation,
+            profiles,
+        ),
+        episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
     )
 
 
-def _format_comment_body(
-    detail_markdown: str,
-    *,
-    risk_level: str,
-    review_mode: str,
-    summary: str,
-    escalation_recommendation: EscalationRecommendation,
-    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
-) -> str:
-    normalized_risk = _normalize_risk_level(risk_level)
-    badge = RISK_BADGES[normalized_risk]
-    cleaned_details = detail_markdown.strip()
+def _render_pr_comment_review(review: PrCommentReview) -> str:
     lines = [
-        f"{badge} — {summary}",
-        _format_escalation_line(escalation_recommendation),
+        f"## PromptDrift: {_decision_header(review.decision)}",
+        "",
+        review.context_line,
+        "",
+        "### What changed",
     ]
-    attribute_markdown = _render_attribute_profile_markdown(attribute_profiles)
-    if attribute_markdown:
-        lines.extend(["", attribute_markdown])
+    lines.extend(review.what_changed)
     lines.extend(
         [
             "",
             "<details>",
-            f"<summary>{review_mode} details</summary>",
+            "<summary>PromptDrift review details</summary>",
             "",
-            cleaned_details,
+            "### Key deltas",
+        ]
+    )
+    lines.extend(f"- {bullet}" for bullet in review.key_deltas)
+    lines.extend(["", "### Evidence"])
+    lines.extend(f"- {bullet}" for bullet in review.evidence)
+    if review.governance_signals:
+        lines.extend(["", "### Governance signals"])
+        lines.extend(f"- {bullet}" for bullet in review.governance_signals)
+    lines.extend(
+        [
+            "",
+            "### Recommended next step",
+            review.recommended_next_step,
             "",
             "</details>",
+            "",
+            _episode_metadata_line(review.episode_context),
         ]
     )
     return "\n".join(lines)
 
 
-def _render_attribute_profile_markdown(attribute_profiles: list[ArtifactAttributeProfile] | None) -> str:
-    profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
-    if not profiles:
-        return ""
-    lines = ["Attribute profile:"]
-    for profile in profiles[:3]:
-        lines.append(f"- `{profile.artifact_path}` [{profile.artifact_type}]")
-        lines.append("")
-        lines.append("| Attribute | Baseline | Current | Direction | Confidence |")
-        lines.append("| --- | --- | --- | --- | --- |")
+def _build_comment_decision(
+    primary_profile: ArtifactAttributeProfile | None,
+    escalation_recommendation: EscalationRecommendation,
+) -> str:
+    if escalation_recommendation.decision == "escalate_before_merge":
+        return "escalate_before_merge"
+    if primary_profile is None or not primary_profile.has_authoritative_baseline:
+        return "rebaseline_follow_up_after_merge"
+    return "normal_review"
+
+
+def _decision_header(decision: str) -> str:
+    if decision == "escalate_before_merge":
+        return "Escalate before merge"
+    if decision == "rebaseline_follow_up_after_merge":
+        return "Re-baseline follow-up after merge"
+    return "Keep in normal review lane"
+
+
+def _build_context_line(risk_level: str, primary_profile: ArtifactAttributeProfile | None) -> str:
+    control_surface = (primary_profile.control_surface_label if primary_profile is not None else "Unknown control surface").lower()
+    baseline_reference = primary_profile.baseline_reference if primary_profile is not None else "none-yet"
+    return f"{risk_level} risk · {control_surface} · vs approved baseline `{baseline_reference}`"
+
+
+def _build_what_changed_lines(
+    summary: str,
+    decision: str,
+    primary_profile: ArtifactAttributeProfile | None,
+) -> tuple[str, ...]:
+    lines = [_normalize_summary(summary, default=summary)]
+    if primary_profile is None or not primary_profile.has_authoritative_baseline:
+        lines.append("No approved baseline exists yet for this control surface, so treat the accepted version as a baseline candidate after review.")
+    elif decision == "escalate_before_merge":
+        lines.append("It moves the control surface farther from the approved baseline rather than tightening it.")
+    return tuple(lines[:2])
+
+
+def _build_key_delta_bullets(
+    attribute_profiles: list[ArtifactAttributeProfile],
+    deterministic_analysis: DiffAnalysis,
+) -> tuple[str, ...]:
+    priority = ["guardrail_robustness", "capability_risk", "autonomy_level", "governance_strength"]
+    bullets: list[str] = []
+    seen: set[tuple[str, str]] = set()
+
+    for profile in attribute_profiles:
+        for attribute_key in priority:
+            dimension = next((item for item in profile.dimensions if item.attribute_key == attribute_key and item.state != "no_change"), None)
+            if dimension is None:
+                continue
+            signature = (profile.artifact_path, dimension.attribute_key)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            bullets.append(_format_key_delta_bullet(dimension))
+            if len(bullets) >= 3:
+                return tuple(bullets)
+
+    for finding in deterministic_analysis.findings[:3]:
+        bullets.append(f"{finding.title}: {_normalize_sentence(finding.rationale, default=finding.rationale)}")
+        if len(bullets) >= 3:
+            break
+
+    if not bullets:
+        bullets.append("No material attribute shift was detected beyond the files touched in this PR.")
+    return tuple(bullets[:3])
+
+
+def _format_key_delta_bullet(dimension) -> str:
+    prefix = _key_delta_prefix(dimension)
+
+    if (
+        dimension.direction == "unknown"
+        or dimension.baseline_value == "unknown"
+        or dimension.current_value == "unknown"
+        or dimension.baseline_value == dimension.current_value
+    ):
+        return f"{prefix}: {_attribute_reason_fragment(dimension.reason)}"
+
+    transition = f"{dimension.baseline_value} → {dimension.current_value}"
+    return f"{prefix}: {transition}."
+
+
+def _key_delta_prefix(dimension) -> str:
+    reason_text = (dimension.reason or "").lower()
+    if dimension.attribute_key == "guardrail_robustness":
+        weakened = dimension.direction == "weakened" or any(token in reason_text for token in ("weaker", "weaken", "removed", "dropped", "no longer"))
+        return "Guardrails weakened" if weakened else "Guardrails strengthened"
+    if dimension.attribute_key == "capability_risk":
+        expanded = dimension.direction == "expanded" or any(token in reason_text for token in ("broader", "expanded", "rose", "added", "write", "sensitive-tool"))
+        return "Capability expanded" if expanded else "Capability reduced"
+    if dimension.attribute_key == "autonomy_level":
+        increased = dimension.direction == "increased" or any(token in reason_text for token in ("higher autonomy", "increased", "reduced review", "automatic", "skip review"))
+        return "Autonomy increased" if increased else "Autonomy decreased"
+    weakened = dimension.direction == "weakened" or any(token in reason_text for token in ("weaker", "missing", "stale", "reduced governance", "no approved baseline"))
+    return "Governance weakened" if weakened else "Governance strengthened"
+
+
+def _attribute_reason_fragment(reason: str) -> str:
+    cleaned = _normalize_sentence(reason, default=reason).rstrip(".")
+    cleaned = re.sub(r"^PromptDrift detected\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^PromptDrift classifies.+?because\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^this artifact\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned[:1].lower() + cleaned[1:] if cleaned else cleaned
+    return f"{cleaned}." if cleaned else "meaningful drift relative to the approved baseline."
+
+
+def _build_evidence_bullets(
+    attribute_profiles: list[ArtifactAttributeProfile],
+    deterministic_analysis: DiffAnalysis,
+) -> tuple[str, ...]:
+    bullets: list[str] = []
+    seen: set[str] = set()
+    for profile in attribute_profiles:
         for dimension in profile.dimensions:
-            lines.append(
-                f"| {dimension.label} | {dimension.baseline_value} | {dimension.current_value} | {dimension.direction} | {dimension.confidence_label} |"
+            if dimension.attribute_key == "control_surface_type" or dimension.state == "no_change":
+                continue
+            for evidence in dimension.evidence[:2]:
+                if _append_unique_evidence(bullets, seen, evidence):
+                    if len(bullets) >= 4:
+                        return tuple(bullets)
+
+    for finding in deterministic_analysis.findings:
+        for evidence in finding.evidence[:2]:
+            if _append_unique_evidence(bullets, seen, evidence):
+                if len(bullets) >= 4:
+                    return tuple(bullets)
+
+    for artifact in deterministic_analysis.artifacts[:2]:
+        detail = (
+            f"Touched `{artifact.relevance.path}` [{artifact.relevance.artifact_type}] with "
+            f"{artifact.change.added_count} additions and {artifact.change.removed_count} removals."
+        )
+        if _append_unique_evidence(bullets, seen, detail) and len(bullets) >= 2:
+            break
+
+    if not bullets:
+        bullets.append("Concrete supporting evidence was unavailable from the changed AI artifacts.")
+    return tuple(bullets[:4])
+
+
+def _append_unique_evidence(bullets: list[str], seen: set[str], raw_evidence: str) -> bool:
+    normalized = _normalize_sentence(raw_evidence, default=raw_evidence)
+    normalized_key = re.sub(r"\s+", " ", normalized).strip().lower()
+    if not normalized_key:
+        return False
+    if normalized_key in seen:
+        return False
+    if any(normalized_key in existing or existing in normalized_key for existing in seen):
+        return False
+    seen.add(normalized_key)
+    bullets.append(normalized)
+    return True
+
+
+def _build_governance_signals(
+    attribute_profiles: list[ArtifactAttributeProfile],
+    decision: str,
+) -> tuple[str, ...]:
+    signals: list[str] = []
+    for profile in attribute_profiles:
+        governance_dimension = next((item for item in profile.dimensions if item.attribute_key == "governance_strength"), None)
+        if governance_dimension is not None and governance_dimension.state != "no_change" and governance_dimension.evidence:
+            signals.append(_normalize_sentence(governance_dimension.reason, default=governance_dimension.reason))
+            break
+
+    if not signals and decision == "rebaseline_follow_up_after_merge":
+        for profile in attribute_profiles:
+            if profile.has_authoritative_baseline:
+                continue
+            signals.append(
+                f"No approved baseline exists yet for `{profile.artifact_path}`, so reviewers should explicitly promote the intended version after merge."
             )
-        interesting_dimensions = [
-            dimension for dimension in profile.dimensions if dimension.state != "no_change" or dimension.attribute_key == "control_surface_type"
-        ]
-        if interesting_dimensions:
-            lines.append("")
-            for dimension in interesting_dimensions[:4]:
-                lines.append(f"  - {dimension.label}: {dimension.reason}")
-        lines.append("")
-    return "\n".join(lines).rstrip()
+            break
+    return tuple(signals[:3])
+
+
+def _build_recommended_next_step(
+    decision: str,
+    semantic_recommendation: str,
+    attribute_profiles: list[ArtifactAttributeProfile],
+) -> str:
+    if decision == "escalate_before_merge":
+        for profile in attribute_profiles:
+            guardrails = next((item for item in profile.dimensions if item.attribute_key == "guardrail_robustness" and item.state != "no_change"), None)
+            if guardrails is not None and guardrails.direction == "weakened":
+                return "Restore explicit safety or approval guardrails before merge."
+        return "Add AI platform review before merge."
+    if decision == "rebaseline_follow_up_after_merge":
+        return "Promote the updated artifact to approved baseline after merge."
+
+    normalized = _normalize_sentence(semantic_recommendation, default="Safe to merge after normal review")
+    if normalized.lower().startswith("safe to merge"):
+        return normalized
+    return "Safe to merge after normal review."
+
+
+def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttributeProfile]) -> ArtifactAttributeProfile | None:
+    if not attribute_profiles:
+        return None
+    ranked = sorted(
+        attribute_profiles,
+        key=lambda profile: sum(1 for item in profile.dimensions if item.state != "no_change"),
+        reverse=True,
+    )
+    return ranked[0]
+
+
+def _episode_metadata_line(context: PrCommentEpisodeContext) -> str:
+    timestamp = datetime.fromtimestamp(context.analyzed_at, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    base = f"_PromptDrift analysis for head `{_short_sha(context.head_sha)}` at {timestamp}._"
+    previous_episode = context.previous_episode
+    if previous_episode is None:
+        return base
+
+    previous_recommendation = _extract_previous_episode_recommendation(previous_episode.audit_comment.comment_body)
+    return (
+        f"{base[:-2]} Previous PromptDrift analysis for `{_short_sha(previous_episode.head_sha)}` "
+        f"recommended {previous_recommendation.lower()}._"
+    )
+
+
+def _extract_previous_episode_recommendation(comment_body: str) -> str:
+    recommendation = _extract_recommendation(comment_body, default="normal review")
+    recommendation = recommendation.strip().rstrip(".")
+    return recommendation or "normal review"
+
+
+def _short_sha(value: str) -> str:
+    cleaned = (value or "unknown").strip()
+    return cleaned[:7] if len(cleaned) > 7 else cleaned
 
 
 def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
@@ -345,10 +619,17 @@ def _extract_recommendation(comment_body: str, *, default: str) -> str:
         r"^(\*\*)?recommendation(\*\*)?\s*[:\-]\s*(.+)$",
         r"^\*\*recommendation\s*[:\-]\*\*\s*(.+)$",
     )
-    for raw_line in comment_body.splitlines():
+    lines = comment_body.splitlines()
+    in_next_step_section = False
+    for raw_line in lines:
         stripped = raw_line.strip()
         if not stripped:
             continue
+        if re.match(r"^#{1,6}\s*recommended next step\s*$", stripped, re.IGNORECASE):
+            in_next_step_section = True
+            continue
+        if in_next_step_section:
+            return _normalize_sentence(stripped, default=default)
         for pattern in patterns:
             match = re.match(pattern, stripped, re.IGNORECASE)
             if match:
@@ -544,9 +825,13 @@ def _build_fallback_summary(deterministic_analysis: DiffAnalysis) -> str:
 
 def _extract_risk_level(comment_body: str, *, default: str) -> str:
     match = re.search(r"risk level\s*[:\-]\s*\**(low|medium|high)\**", comment_body, re.IGNORECASE)
-    if not match:
-        return _normalize_risk_level(default)
-    return _normalize_risk_level(match.group(1))
+    if match:
+        return _normalize_risk_level(match.group(1))
+
+    context_match = re.search(r"^(low|medium|high) risk\b", comment_body, re.IGNORECASE | re.MULTILINE)
+    if context_match:
+        return _normalize_risk_level(context_match.group(1))
+    return _normalize_risk_level(default)
 
 
 def _normalize_risk_level(risk_level: str) -> str:
@@ -608,15 +893,38 @@ def _get_installation_token_for_job(job: AuditJob, settings: WorkerSettings) -> 
     return get_installation_token(jwt_token, job.installation_id)
 
 
+def _build_episode_context(job: AuditJob, settings: WorkerSettings) -> PrCommentEpisodeContext:
+    previous_episode = get_previous_audit_comment_episode_for_pr(
+        settings.db_path,
+        job.repo_full,
+        job.pr_number,
+        job.head_sha,
+    )
+    return PrCommentEpisodeContext(
+        head_sha=job.head_sha,
+        analyzed_at=time.time(),
+        previous_episode=previous_episode,
+    )
+
+
 def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> int:
     token = installation_token or _get_installation_token_for_job(job, settings)
-    existing_comment = get_latest_audit_comment_for_pr(settings.db_path, job.repo_full, job.pr_number)
+    existing_comment = get_audit_comment_episode_for_pr_head_sha(
+        settings.db_path,
+        job.repo_full,
+        job.pr_number,
+        job.head_sha,
+    )
     return upsert_pr_comment(
         job.repo_full,
         job.pr_number,
         token,
         body,
-        existing_comment_id=existing_comment.github_comment_id if existing_comment is not None else None,
+        existing_comment_id=(
+            existing_comment.audit_comment.github_comment_id
+            if existing_comment is not None
+            else None
+        ),
     )
 
 
@@ -715,6 +1023,7 @@ def _handle_fallback(
     escalation_recommendation: EscalationRecommendation | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    episode_context = _build_episode_context(job, settings)
     comment_attribute_profiles = _build_comment_attribute_profiles(
         job,
         deterministic_analysis,
@@ -726,8 +1035,8 @@ def _handle_fallback(
         error_message=error_message,
         escalation_recommendation=recommendation,
         attribute_profiles=comment_attribute_profiles,
+        episode_context=episode_context,
     )
-    fallback_comment = _ensure_escalation_guidance(fallback_comment, recommendation)
     try:
         installation_token = _get_installation_token_for_job(job, settings)
         github_comment_id = _post_comment_for_job(job, fallback_comment, settings, installation_token=installation_token)
@@ -801,6 +1110,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
+    episode_context = _build_episode_context(job, settings)
     try:
         comment_body = build_llm_comment(
             job.diff_text,
@@ -810,9 +1120,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             timeout_seconds=settings.llm_timeout_seconds,
             escalation_recommendation=escalation_recommendation,
             attribute_profiles=attribute_profiles,
+            episode_context=episode_context,
         )
         fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
-        comment_body = _ensure_escalation_guidance(comment_body, fusion_assessment.escalation_recommendation)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -919,6 +1229,8 @@ def _build_comment_attribute_profiles(
                     current_signal_terms=current_signal_terms,
                     baseline_content=baseline.content_text,
                     current_content=snapshot_text,
+                    baseline_reference=_baseline_reference_for_comment(artifact.relevance.path, baseline.created_at),
+                    has_authoritative_baseline=True,
                 )
             )
         else:
@@ -933,9 +1245,19 @@ def _build_comment_attribute_profiles(
                     current_signal_terms=current_signal_terms,
                     baseline_content=None,
                     current_content=snapshot_text,
+                    baseline_reference=_baseline_reference_for_comment(artifact.relevance.path, None),
+                    has_authoritative_baseline=False,
                 )
             )
     return profiles
+
+
+def _baseline_reference_for_comment(artifact_path: str, created_at: float | None) -> str:
+    artifact_name = artifact_path.split("/")[-1] if artifact_path else "artifact"
+    if created_at is None:
+        return f"{artifact_name}@none-yet"
+    baseline_date = datetime.fromtimestamp(created_at, timezone.utc).strftime("%Y-%m-%d")
+    return f"{artifact_name}@{baseline_date}"
 
 
 class AuditWorker:

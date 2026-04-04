@@ -189,25 +189,20 @@ def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, 
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
     managed_body = _build_managed_comment_body(body)
-    previous_comment = None
+    existing_comment = None
 
     if existing_comment_id is not None:
         for comment in pr.get_issue_comments():
             if comment.id != existing_comment_id:
                 continue
-            previous_comment = comment
+            existing_comment = comment
             break
 
-    if previous_comment is None:
-        for comment in reversed(list(pr.get_issue_comments())):
-            if PROMPTDRIFT_MANAGED_MARKER not in comment.body:
-                continue
-            previous_comment = comment
-            break
+    if existing_comment is not None:
+        existing_comment.edit(managed_body)
+        return existing_comment.id
 
     created_comment = pr.create_issue_comment(managed_body)
-    if previous_comment is not None and previous_comment.id != created_comment.id:
-        previous_comment.delete()
     return created_comment.id
 
 

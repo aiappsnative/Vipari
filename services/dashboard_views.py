@@ -286,6 +286,8 @@ class ArtifactAttributeProfile:
     artifact_type: str
     control_surface_label: str
     dimensions: list[AttributeProfileDimension]
+    baseline_reference: str = "none-yet"
+    has_authoritative_baseline: bool = False
 
 
 @dataclass(frozen=True)
@@ -1290,6 +1292,8 @@ def build_artifact_attribute_profile(
     current_signal_terms: list[str] | None = None,
     baseline_content: str | None = None,
     current_content: str | None = None,
+    baseline_reference: str = "none-yet",
+    has_authoritative_baseline: bool = False,
 ) -> ArtifactAttributeProfile:
     attribute_deltas = attribute_deltas or {}
     baseline_signal_terms = baseline_signal_terms or []
@@ -1367,6 +1371,8 @@ def build_artifact_attribute_profile(
         artifact_type=artifact_type,
         control_surface_label=_control_surface_label(_artifact_group_key_from_type(artifact_type)),
         dimensions=dimensions,
+        baseline_reference=baseline_reference,
+        has_authoritative_baseline=has_authoritative_baseline,
     )
 
 
