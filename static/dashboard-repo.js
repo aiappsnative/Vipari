@@ -441,7 +441,7 @@ const DESIGN_PROFILE_FIELDS = [
     { key: "guardrail_robustness", label: "Guardrails" },
     { key: "capability_risk", label: "Capability" },
     { key: "autonomy_level", label: "Autonomy" },
-    { key: "stability_vs_creativity", label: "Stability" },
+    { key: "stability_vs_creativity", label: "Model config" },
     { key: "governance_strength", label: "Governance" },
 ];
 
@@ -459,8 +459,8 @@ const ATTRIBUTE_SUMMARY = {
         weaker: "Autonomy decreased, implying more control or supervision than the current baseline.",
     },
     stability_vs_creativity: {
-        stronger: "The current posture is more stable and deterministic than the baseline.",
-        weaker: "The current posture is more creative or variable than the baseline.",
+        stronger: "The current model configuration is more stable and deterministic than the baseline.",
+        weaker: "The current model configuration is more creative or variable than the baseline.",
     },
     governance_strength: {
         stronger: "Governance strengthened, suggesting clearer review, ownership, or approval expectations.",
@@ -595,9 +595,28 @@ function renderBaselineControls(item) {
 
 function renderAttributeSummary(item) {
     const sourceLink = sourceHref(item.provenance);
-    const changes = attributeChangeSummary(item);
+    const normalizedProfile = asArray(item.attribute_profile || []);
+    const changes = normalizedProfile.length
+        ? normalizedProfile.map((dimension) => ({
+            label: dimension.label,
+            baselineValue: dimension.baseline_value,
+            currentValue: dimension.current_value,
+            direction: dimension.direction,
+            impact: dimension.confidence_score >= 0.8 ? "high" : dimension.confidence_score >= 0.6 ? "medium" : "low",
+            state: dimension.state,
+            summary: dimension.reason,
+            evidence: asArray(dimension.evidence || []),
+            remediation: dimension.remediation || "",
+            confidenceLabel: dimension.confidence_label,
+        }))
+        : attributeChangeSummary(item);
     return `
         <div class="stack compact-stack">
+            ${normalizedProfile.length ? `
+                <div class="tag-row">${normalizedProfile
+                    .map((dimension) => `<span class="tag tag-muted">${dimension.label}: ${dimension.current_value}</span>`)
+                    .join("")}</div>
+            ` : ""}
             <div class="glance-strip">
                 <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_provenance?.label || "No baseline"}</strong></div>
                 <div class="glance-chip"><span class="glance-chip-label">Current source</span><strong>${renderProvenance(item.provenance, "Baseline only")}</strong></div>
@@ -615,11 +634,24 @@ function renderAttributeSummary(item) {
                         <div class="attribute-summary-card">
                             <div class="attribute-summary-header">
                                 <strong>${change.label}</strong>
-                                <span class="pill ${change.state === "no_change" ? "pill-no-change" : `pill-drift pill-${change.impact}`}">${change.state === "no_change" ? "no change" : "drift detected"}</span>
+                                <span class="pill ${change.state === "no_change" ? "pill-no-change" : change.state === "unknown" ? "pill-medium" : `pill-drift pill-${change.impact}`}">${change.state === "no_change" ? "no change" : change.state === "unknown" ? "unknown" : "drift detected"}</span>
                             </div>
+                            <div class="meta-tight muted"><strong>${change.baselineValue}</strong> → <strong>${change.currentValue}</strong> · ${change.direction} · ${change.confidenceLabel}</div>
                             <div class="meta-tight muted">${change.summary}</div>
                         ${(() => {
                             const finding = attributeFindingForLabel(item, change.label);
+                            if (normalizedProfile.length) {
+                                const evidence = asArray(change.evidence || []);
+                                return `
+                            ${evidence.length ? `
+                            <div class="meta-tight"><strong>What in the code changed:</strong></div>
+                            <ul class="evidence-list">
+                                ${evidence.map((entry) => `<li>${entry}</li>`).join("")}
+                            </ul>
+                            ` : ""}
+                            <div class="meta-tight">${change.remediation || ""}</div>
+                        `;
+                            }
                             if (change.state === "no_change" || !finding) {
                                 return "";
                             }
@@ -632,7 +664,7 @@ function renderAttributeSummary(item) {
                             <div class="meta-tight">${finding.remediation || ""}</div>
                         `;
                         })()}
-                        ${change.state !== "no_change" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
+                        ${change.state !== "no_change" && change.state !== "unknown" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
                         </div>
                     `).join("")}
                 </div>

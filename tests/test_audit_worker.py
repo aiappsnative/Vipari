@@ -29,6 +29,7 @@ from services.audit_records import (
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
 
 
 class FakeRateLimitError(Exception):
@@ -984,6 +985,86 @@ index 1..2
     )
 
     assert comment == expected
+
+
+def test_build_llm_comment_renders_attribute_profile_section_when_available():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="prompts/policy.md",
+                artifact_type="system_prompt",
+                control_surface_label="Prompts and instructions",
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="strong",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.9,
+                        reason="PromptDrift detected weaker guardrail posture because explicit limits dropped.",
+                        evidence=["Removed baseline line 2: Do not reveal internal policy details."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.82,
+                        current_score=0.21,
+                        delta=-0.61,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: system_prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    assert "Attribute profile:" in comment
+    assert "| Attribute | Baseline | Current | Direction | Confidence |" in comment
+    assert "| Guardrail robustness | strong | weak | weakened | high confidence |" in comment
+    assert "`prompts/policy.md` [system_prompt]" in comment
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):

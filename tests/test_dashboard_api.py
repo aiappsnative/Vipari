@@ -112,6 +112,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["highest_risk_items"][0]["review_target"] == "commit sha-2"
     assert overview_payload["highest_risk_items"][0]["review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert len(overview_payload["highest_risk_items"][0]["attribute_profile"]) == 6
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -156,6 +157,15 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["design_profiles"][0]["drift_label"] in ["small drift", "medium drift", "large drift"]
     assert payload["design_profiles"][0]["drift_tone"] in ["low", "medium", "high"]
     assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is True
+    assert len(payload["design_profiles"][0]["attribute_profile"]) == 6
+    assert any(
+        dimension["attribute_key"] == "model_config_posture"
+        for dimension in payload["design_profiles"][0]["attribute_profile"]
+    )
+    assert any(
+        dimension["attribute_key"] == "control_surface_type"
+        for dimension in payload["design_profiles"][0]["attribute_profile"]
+    )
     assert isinstance(payload["design_profiles"][0]["attribute_findings"], list)
     if payload["design_profiles"][0]["attribute_findings"]:
         assert payload["design_profiles"][0]["attribute_findings"][0]["reason"]
@@ -279,5 +289,6 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     payload = repo_response.json()
     assert payload["design_profiles"][0]["provenance"] is None
     assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is False
+    assert len(payload["design_profiles"][0]["attribute_profile"]) == 6
     assert payload["insights"][0]["evidence_label"] == "baseline only"
     assert payload["insights"][0]["evidence_summary"] == "No merged-history evidence yet."

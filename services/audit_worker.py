@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from engine.analysis import DiffAnalysis, analyze_diff
+from engine.diff_parser import extract_signal_terms_from_text
+from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
+from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
@@ -19,6 +22,7 @@ from .audit_jobs import (
 )
 from .audit_records import get_latest_audit_comment_for_pr, record_audit_result
 from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
+from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ def build_llm_comment(
     model: str,
     timeout_seconds: float,
     escalation_recommendation: EscalationRecommendation | None = None,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
@@ -134,6 +139,7 @@ def build_llm_comment(
         review_mode="Full semantic review",
         summary=summary,
         escalation_recommendation=recommendation,
+        attribute_profiles=attribute_profiles,
     )
 
 
@@ -142,6 +148,7 @@ def build_fallback_comment(
     *,
     error_message: str,
     escalation_recommendation: EscalationRecommendation | None = None,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     summary = _build_fallback_summary(deterministic_analysis)
@@ -152,6 +159,7 @@ def build_fallback_comment(
         review_mode="Deterministic fallback review",
         summary=summary,
         escalation_recommendation=recommendation,
+        attribute_profiles=attribute_profiles,
     )
 
 
@@ -162,14 +170,20 @@ def _format_comment_body(
     review_mode: str,
     summary: str,
     escalation_recommendation: EscalationRecommendation,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
 ) -> str:
     normalized_risk = _normalize_risk_level(risk_level)
     badge = RISK_BADGES[normalized_risk]
     cleaned_details = detail_markdown.strip()
-    return "\n".join(
+    lines = [
+        f"{badge} — {summary}",
+        _format_escalation_line(escalation_recommendation),
+    ]
+    attribute_markdown = _render_attribute_profile_markdown(attribute_profiles)
+    if attribute_markdown:
+        lines.extend(["", attribute_markdown])
+    lines.extend(
         [
-            f"{badge} — {summary}",
-            _format_escalation_line(escalation_recommendation),
             "",
             "<details>",
             f"<summary>{review_mode} details</summary>",
@@ -179,6 +193,32 @@ def _format_comment_body(
             "</details>",
         ]
     )
+    return "\n".join(lines)
+
+
+def _render_attribute_profile_markdown(attribute_profiles: list[ArtifactAttributeProfile] | None) -> str:
+    profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
+    if not profiles:
+        return ""
+    lines = ["Attribute profile:"]
+    for profile in profiles[:3]:
+        lines.append(f"- `{profile.artifact_path}` [{profile.artifact_type}]")
+        lines.append("")
+        lines.append("| Attribute | Baseline | Current | Direction | Confidence |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for dimension in profile.dimensions:
+            lines.append(
+                f"| {dimension.label} | {dimension.baseline_value} | {dimension.current_value} | {dimension.direction} | {dimension.confidence_label} |"
+            )
+        interesting_dimensions = [
+            dimension for dimension in profile.dimensions if dimension.state != "no_change" or dimension.attribute_key == "control_surface_type"
+        ]
+        if interesting_dimensions:
+            lines.append("")
+            for dimension in interesting_dimensions[:4]:
+                lines.append(f"  - {dimension.label}: {dimension.reason}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
@@ -675,10 +715,17 @@ def _handle_fallback(
     escalation_recommendation: EscalationRecommendation | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    comment_attribute_profiles = _build_comment_attribute_profiles(
+        job,
+        deterministic_analysis,
+        artifact_snapshots or {},
+        settings,
+    )
     fallback_comment = build_fallback_comment(
         deterministic_analysis,
         error_message=error_message,
         escalation_recommendation=recommendation,
+        attribute_profiles=comment_attribute_profiles,
     )
     fallback_comment = _ensure_escalation_guidance(fallback_comment, recommendation)
     try:
@@ -752,6 +799,7 @@ def _handle_fallback(
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
     artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+    attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     try:
         comment_body = build_llm_comment(
@@ -761,6 +809,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             model=settings.model,
             timeout_seconds=settings.llm_timeout_seconds,
             escalation_recommendation=escalation_recommendation,
+            attribute_profiles=attribute_profiles,
         )
         fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
         comment_body = _ensure_escalation_guidance(comment_body, fusion_assessment.escalation_recommendation)
@@ -837,6 +886,56 @@ def process_next_job_once(settings: WorkerSettings) -> bool:
         return False
     process_job(job, settings)
     return True
+
+
+def _build_comment_attribute_profiles(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    artifact_snapshots: dict[str, str],
+    settings: WorkerSettings,
+) -> list[ArtifactAttributeProfile]:
+    profiles: list[ArtifactAttributeProfile] = []
+    for artifact in deterministic_analysis.artifacts[:3]:
+        snapshot_text = artifact_snapshots.get(artifact.relevance.path)
+        if not snapshot_text:
+            continue
+        current_profile = build_attribute_profile(snapshot_text)
+        current_signal_terms = extract_signal_terms_from_text(snapshot_text)
+        baseline = get_latest_onboarding_baseline_for_repo_artifact(settings.db_path, job.repo_full, artifact.relevance.path)
+        if baseline is not None:
+            drift_delta = compare_attribute_profiles(
+                baseline.profile,
+                current_profile,
+                semantic_similarity=1.0,
+            )
+            profiles.append(
+                build_artifact_attribute_profile(
+                    artifact_path=artifact.relevance.path,
+                    artifact_type=artifact.relevance.artifact_type,
+                    baseline_profile=baseline.profile,
+                    current_profile=current_profile,
+                    attribute_deltas=drift_delta.attribute_deltas,
+                    baseline_signal_terms=baseline.signal_terms,
+                    current_signal_terms=current_signal_terms,
+                    baseline_content=baseline.content_text,
+                    current_content=snapshot_text,
+                )
+            )
+        else:
+            profiles.append(
+                build_artifact_attribute_profile(
+                    artifact_path=artifact.relevance.path,
+                    artifact_type=artifact.relevance.artifact_type,
+                    baseline_profile=None,
+                    current_profile=current_profile,
+                    attribute_deltas={},
+                    baseline_signal_terms=[],
+                    current_signal_terms=current_signal_terms,
+                    baseline_content=None,
+                    current_content=snapshot_text,
+                )
+            )
+    return profiles
 
 
 class AuditWorker:

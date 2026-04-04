@@ -451,6 +451,7 @@ function renderHighestRiskItems(items = []) {
                         <div><strong>${item.repo_full}</strong> · ${item.title}</div>
                         <div class="meta-tight muted">${item.artifact_path}</div>
                         ${item.evidence_label ? `<div class="meta-tight"><strong>${item.evidence_label}</strong></div>` : ""}
+                        ${renderAttributeProfileChips(item.attribute_profile || [])}
                         ${renderBriefRows({
                             changeSummary: item.change_summary,
                             flagSummary: item.flag_summary,
@@ -463,6 +464,22 @@ function renderHighestRiskItems(items = []) {
             `
         )
         .join("")}</div>`;
+}
+
+function renderAttributeProfileChips(dimensions = []) {
+    const items = asArray(dimensions);
+    if (!items.length) {
+        return "";
+    }
+    const controlSurface = items.find((dimension) => dimension.attribute_key === "control_surface_type");
+    const changed = items.filter((dimension) => dimension.attribute_key !== "control_surface_type" && dimension.state !== "no_change");
+    const primary = (changed.length ? changed : items.filter((dimension) => dimension.attribute_key !== "control_surface_type")).slice(0, 3);
+    return `
+        <div class="tag-row">
+            ${controlSurface ? `<span class="tag tag-muted">${controlSurface.current_value}</span>` : ""}
+            ${primary.map((dimension) => `<span class="tag tag-muted">${dimension.label}: ${dimension.baseline_value} → ${dimension.current_value}</span>`).join("")}
+        </div>
+    `;
 }
 
 function renderRegressionPatterns(items = []) {
