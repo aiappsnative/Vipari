@@ -939,6 +939,7 @@ index 1..2
 
     assert "Guardrails strengthened:" not in comment
     assert "Guardrails weakened: weaker guardrail posture because explicit refusal language no longer matches the approved baseline." in comment
+    assert "Restore explicit safety or approval guardrails before merge." in comment
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):

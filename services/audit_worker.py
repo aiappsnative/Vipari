@@ -447,7 +447,7 @@ def _build_recommended_next_step(
     if decision == "escalate_before_merge":
         for profile in attribute_profiles:
             guardrails = next((item for item in profile.dimensions if item.attribute_key == "guardrail_robustness" and item.state != "no_change"), None)
-            if guardrails is not None and guardrails.direction == "weakened":
+            if guardrails is not None and _key_delta_prefix(guardrails) == "Guardrails weakened":
                 return "Restore explicit safety or approval guardrails before merge."
         return "Add AI platform review before merge."
     if decision == "rebaseline_follow_up_after_merge":
