@@ -80,7 +80,8 @@ Implemented today:
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - approved-baseline-aware drift comparisons shared across PR review, onboarding history, and dashboard read models
-- first-pass PR comment integration for static drift summaries when artifact snapshots are available
+- normalized attribute-profile rendering shared across repo insights, overview hotspot entries, repo case files, and managed PR comments
+- PR comments now include a reviewer-facing attribute-profile section with baseline/current buckets, direction, and confidence when snapshots are available
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
 - a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models
@@ -105,7 +106,7 @@ Implemented today:
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
-- richer PR comment integration for attribute-delta summaries beyond the current compact summary block
+- richer PR comment synthesis beyond the current attribute-profile table plus short supporting rationale bullets
 - clearer reviewer-queue synthesis between proposal-only PR audits and landed merged-history evidence on real OSS repos
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
@@ -150,6 +151,12 @@ The overview page should now also be treated as the landing risk surface, with a
 It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
 
 Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
+
+That explanation layer now uses a shared normalized attribute-profile contract so the same surfaced dimensions appear in:
+- overview hotspot chips,
+- repo insight/read-model payloads,
+- repo case-file posture cards,
+- and managed PR comment summaries.
 
 Recent live validation, including `doria90/dummyAI`, also showed the current architectural boundary clearly: dashboard posture should remain landed-only and history-backed, while proposal-only PR audits need their own reviewer-facing synthesis rather than being mixed into landed drift evidence.
 

@@ -40,12 +40,14 @@ In practical terms, PromptDrift currently provides:
 - escalation-aware PR review with managed comments plus GitHub labels for high-confidence before-merge escalation cases
 - persisted pull-request lifecycle state across audit jobs and durable audit records, including close/reopen and merge metadata
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
+- a shared normalized attribute-profile contract surfaced across repo case files, overview hotspots, and managed PR comments
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
 - repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
 - baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
+- reviewer-facing attribute-profile dimensions for guardrails, capability, autonomy, governance, model configuration posture, and control-surface type
 - a lightweight baseline-promotion action that lets operators promote the latest stored source version as the approved baseline for an artifact
 - real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
 - bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
@@ -70,7 +72,7 @@ The dashboard should now be read as two linked product surfaces:
 - performs deterministic analysis of AI-relevant changes
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
 - stores static artifact profiles in audit history with explicit baseline provenance so later versions can compare against an approved baseline when available
-- keeps PR comments reviewer-focused on risk, escalation, and recommendation rather than internal drift metrics
+- keeps PR comments reviewer-focused on risk, escalation, recommendation, and normalized attribute-profile evidence rather than internal-only drift metrics
 - applies a GitHub escalation label for high-confidence before-merge escalation cases
 - exposes read-side trend helpers for repo summaries and artifact drift leaderboards
 - supports baseline-first repository onboarding that persists discovered AI artifacts and baseline versions
@@ -88,6 +90,7 @@ The dashboard should now be read as two linked product surfaces:
 - persists audit, finding, artifact, and comment history for later analysis
 - updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
+- renders the same normalized attribute-profile dimensions in overview hotspots, repo case files, and managed PR comments
 
 ## High-level architecture
 
@@ -109,6 +112,15 @@ The current profile dimensions are:
 - `governance_strength`
 - `change_frequency`
 - `semantic_density`
+
+The current reviewer-facing normalized attribute-profile contract surfaces:
+
+- `guardrail_robustness`
+- `capability_risk`
+- `autonomy_level`
+- `governance_strength`
+- `model_config_posture`
+- `control_surface_type`
 
 These are computed from static signals such as:
 

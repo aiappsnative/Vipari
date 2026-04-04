@@ -53,6 +53,15 @@ This framing should shape roadmap decisions:
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
+### `feature/attribute-profile-ui-v1`
+- Purpose: approved follow-on slice that normalizes how attribute posture is shown across review and dashboard surfaces
+- Current status:
+	- adds a shared normalized attribute-profile contract for repo insights, repo case files, and overview hotspot cards
+	- extends managed PR comments so reviewers see the same attribute dimensions and confidence labels that appear in dashboard read models
+	- refines repo/detail UI copy so `model_config_posture` is surfaced explicitly rather than through the older `stability` wording
+	- validated with targeted branch coverage (`35 passed`) plus live dummyAI risky/benign PR exercises
+	- approved in PromptDrift PR `#18` and ready to become the next post-merge `main` state
+
 ### `feature/drift-engine-v1`
 - Purpose: completed milestone branch retained as the merge lineage for the first static-first drift engine release
 - Current status at merge time:
@@ -223,6 +232,13 @@ Current validation status:
 - `feature/repo-provenance-v1`
 - `feature/dashboard-ux-v1`
 - cloud deployment scaffolding split with secured webhook/worker/api service boundaries
+
+#### Approved and next to merge
+
+- `feature/attribute-profile-ui-v1`
+	- shared normalized attribute-profile contract across review and dashboard surfaces
+	- managed PR comment rendering for the attribute-profile table and supporting rationale bullets
+	- overview hotspot chips and repo case-file posture cards aligned to the same surfaced dimensions
 
 #### 1. `feature/repo-evidence-v1`
 
