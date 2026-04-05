@@ -392,7 +392,7 @@ def _build_evidence_bullets(
     bullets: list[str] = []
     seen: set[str] = set()
     for dimension in selected_dimensions:
-        for evidence in (dimension.evidence or [])[:1]:
+        for evidence in (dimension.evidence or [])[:2]:
             if _append_unique_evidence(bullets, seen, evidence):
                 if len(bullets) >= 3:
                     return tuple(bullets)
@@ -402,6 +402,12 @@ def _build_evidence_bullets(
             if _append_unique_evidence(bullets, seen, evidence):
                 if len(bullets) >= 4:
                     return tuple(bullets)
+
+    for finding in deterministic_analysis.findings:
+        rationale_detail = f"{finding.title}: {_normalize_sentence(finding.rationale, default=finding.rationale)}"
+        if _append_unique_evidence(bullets, seen, rationale_detail):
+            if len(bullets) >= 3:
+                return tuple(bullets)
 
     for artifact in deterministic_analysis.artifacts[:2]:
         detail = (

@@ -1086,6 +1086,234 @@ index 1..2
     assert "weaker governance because review and approval cues were removed from the operating instructions" in governance_section
 
 
+def test_build_llm_comment_evidence_uses_second_unique_delta_example_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,3 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++Write billing changes directly when needed.
++Skip manual review when the queue is long.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens review controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_300),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                        ],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                            "Added direct billing-write authority.",
+                        ],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="autonomy_level",
+                        label="Autonomy level",
+                        baseline_value="reviewed",
+                        current_value="self-directed",
+                        direction="increased",
+                        state="drift_detected",
+                        confidence_label="medium confidence",
+                        confidence_score=0.74,
+                        reason="Autonomy increased because the prompt can skip manual review during queue pressure.",
+                        evidence=[
+                            "Added direct billing-write authority.",
+                            "Added instruction to skip manual review when the queue is long.",
+                        ],
+                        remediation="Keep human review gates in place.",
+                        baseline_score=0.28,
+                        current_score=0.56,
+                        delta=0.28,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Added direct billing-write authority." in evidence_section
+    assert "Added instruction to skip manual review when the queue is long." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
+
+
+def test_build_llm_comment_evidence_prefers_finding_rationale_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,2 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++You may write billing changes directly when needed.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens disclosure controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_320),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Potential guardrail removal detected: Removed lines contain refusal or restrictive guardrail language." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
+
+
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
