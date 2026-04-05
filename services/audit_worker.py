@@ -204,6 +204,7 @@ def _build_pr_comment_review(
 ) -> PrCommentReview:
     profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
     primary_profile = _select_primary_attribute_profile(profiles)
+    selected_key_deltas = _select_key_delta_dimensions(profiles)
     normalized_risk = _normalize_risk_level(risk_level)
     decision = _build_comment_decision(primary_profile, escalation_recommendation)
     return PrCommentReview(
@@ -211,8 +212,8 @@ def _build_pr_comment_review(
         risk_level=normalized_risk,
         context_line=_build_context_line(normalized_risk, primary_profile),
         what_changed=_build_what_changed_lines(summary, decision, primary_profile),
-        key_deltas=_build_key_delta_bullets(profiles, deterministic_analysis),
-        evidence=_build_evidence_bullets(profiles, deterministic_analysis),
+        key_deltas=_build_key_delta_bullets(selected_key_deltas, deterministic_analysis),
+        evidence=_build_evidence_bullets(selected_key_deltas, deterministic_analysis),
         governance_signals=_build_governance_signals(profiles, decision),
         recommended_next_step=_build_recommended_next_step(
             decision,
@@ -300,25 +301,15 @@ def _build_what_changed_lines(
 
 
 def _build_key_delta_bullets(
-    attribute_profiles: list[ArtifactAttributeProfile],
+    selected_dimensions: list[object],
     deterministic_analysis: DiffAnalysis,
 ) -> tuple[str, ...]:
-    priority = ["guardrail_robustness", "capability_risk", "autonomy_level", "governance_strength"]
     bullets: list[str] = []
-    seen: set[tuple[str, str]] = set()
 
-    for profile in attribute_profiles:
-        for attribute_key in priority:
-            dimension = next((item for item in profile.dimensions if item.attribute_key == attribute_key and item.state != "no_change"), None)
-            if dimension is None:
-                continue
-            signature = (profile.artifact_path, dimension.attribute_key)
-            if signature in seen:
-                continue
-            seen.add(signature)
-            bullets.append(_format_key_delta_bullet(dimension))
-            if len(bullets) >= 3:
-                return tuple(bullets)
+    for dimension in selected_dimensions:
+        bullets.append(_format_key_delta_bullet(dimension))
+        if len(bullets) >= 3:
+            return tuple(bullets)
 
     for finding in deterministic_analysis.findings[:3]:
         bullets.append(f"{finding.title}: {_normalize_sentence(finding.rationale, default=finding.rationale)}")
@@ -343,6 +334,31 @@ def _format_key_delta_bullet(dimension) -> str:
 
     transition = f"{dimension.baseline_value} → {dimension.current_value}"
     return f"{prefix}: {transition}."
+
+
+def _select_key_delta_dimensions(attribute_profiles: list[ArtifactAttributeProfile]) -> list[object]:
+    priority = {"guardrail_robustness": 0, "capability_risk": 1, "autonomy_level": 2}
+    ranked: list[tuple[tuple[float, float, float, str], object]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for profile in attribute_profiles:
+        for dimension in profile.dimensions:
+            if dimension.attribute_key not in priority or dimension.state == "no_change":
+                continue
+            signature = (profile.artifact_path, dimension.attribute_key)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            sort_key = (
+                float(priority[dimension.attribute_key]),
+                -(dimension.confidence_score or 0.0),
+                -(abs(dimension.delta) if dimension.delta is not None else 0.0),
+                profile.artifact_path,
+            )
+            ranked.append((sort_key, dimension))
+
+    ranked.sort(key=lambda item: item[0])
+    return [dimension for _, dimension in ranked[:3]]
 
 
 def _key_delta_prefix(dimension) -> str:
@@ -370,19 +386,16 @@ def _attribute_reason_fragment(reason: str) -> str:
 
 
 def _build_evidence_bullets(
-    attribute_profiles: list[ArtifactAttributeProfile],
+    selected_dimensions: list[object],
     deterministic_analysis: DiffAnalysis,
 ) -> tuple[str, ...]:
     bullets: list[str] = []
     seen: set[str] = set()
-    for profile in attribute_profiles:
-        for dimension in profile.dimensions:
-            if dimension.attribute_key == "control_surface_type" or dimension.state == "no_change":
-                continue
-            for evidence in dimension.evidence[:2]:
-                if _append_unique_evidence(bullets, seen, evidence):
-                    if len(bullets) >= 4:
-                        return tuple(bullets)
+    for dimension in selected_dimensions:
+        for evidence in (dimension.evidence or [])[:1]:
+            if _append_unique_evidence(bullets, seen, evidence):
+                if len(bullets) >= 3:
+                    return tuple(bullets)
 
     for finding in deterministic_analysis.findings:
         for evidence in finding.evidence[:2]:
@@ -424,7 +437,12 @@ def _build_governance_signals(
     signals: list[str] = []
     for profile in attribute_profiles:
         governance_dimension = next((item for item in profile.dimensions if item.attribute_key == "governance_strength"), None)
-        if governance_dimension is not None and governance_dimension.state != "no_change" and governance_dimension.evidence:
+        if (
+            governance_dimension is not None
+            and governance_dimension.state != "no_change"
+            and governance_dimension.evidence
+            and _key_delta_prefix(governance_dimension) == "Governance weakened"
+        ):
             signals.append(_normalize_sentence(governance_dimension.reason, default=governance_dimension.reason))
             break
 
@@ -495,14 +513,6 @@ def _short_sha(value: str) -> str:
     return cleaned[:7] if len(cleaned) > 7 else cleaned
 
 
-def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
-    if recommendation.decision == "escalate_before_merge":
-        if recommendation.reasons:
-            return f"Escalation: **Recommended before merge** — {'; '.join(recommendation.reasons)}"
-        return "Escalation: **Recommended before merge**"
-    return "Escalation: **Not recommended** — stays in the normal review lane"
-
-
 def _build_semantic_comment_details(
     raw_comment: str,
     deterministic_analysis: DiffAnalysis,
@@ -542,13 +552,6 @@ def _build_fallback_comment_details(deterministic_analysis: DiffAnalysis) -> Can
         analysis_bullets=tuple(bullets),
         recommendation="Review the changed AI artifacts directly. Further semantic review may refine this assessment when model capacity is available.",
     )
-
-
-def _render_canonical_detail_markdown(details: CanonicalCommentDetails) -> str:
-    lines = [f"Risk Level: {details.risk_level}", "Detailed Analysis:"]
-    lines.extend(f"- {bullet}" for bullet in details.analysis_bullets)
-    lines.append(f"Recommendation: {details.recommendation}")
-    return "\n".join(lines)
 
 
 def _extract_analysis_bullets(comment_body: str) -> list[str]:
@@ -729,30 +732,6 @@ def _build_signal_fusion_assessment(
         risk_level=fused_risk,
         escalation_recommendation=escalation_recommendation,
     )
-
-
-def _ensure_escalation_guidance(comment_body: str, recommendation: EscalationRecommendation) -> str:
-    escalation_line = _format_escalation_line(recommendation)
-    if "Escalation:" in comment_body:
-        lines = comment_body.splitlines()
-        updated_lines: list[str] = []
-        replaced = False
-        for line in lines:
-            if line.startswith("Escalation:"):
-                if not replaced:
-                    updated_lines.append(escalation_line)
-                    replaced = True
-                continue
-            updated_lines.append(line)
-        if replaced:
-            return "\n".join(updated_lines)
-
-    details_marker = "<details>"
-    if details_marker not in comment_body:
-        return f"{comment_body.rstrip()}\n{escalation_line}"
-
-    summary_prefix, detail_suffix = comment_body.split(details_marker, 1)
-    return f"{summary_prefix.rstrip()}\n{escalation_line}\n\n{details_marker}{detail_suffix}"
 
 
 def _extract_summary(comment_body: str, *, default: str) -> str:
