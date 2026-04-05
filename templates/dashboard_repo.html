@@ -24,18 +24,18 @@
 
             <div class="sidebar-nav-group">
                 <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="shield-check"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Pull Requests" data-tooltip="Pull Requests"><i data-lucide="git-pull-request"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Surfaces" data-tooltip="Surfaces"><i data-lucide="box"></i></a>
-                <a href="#" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Repositories" data-tooltip="Repositories"><i data-lucide="building-2"></i></a>
+                 <a href="#repo-triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue"><i data-lucide="git-pull-request"></i></a>
+                 <a href="#repo-surfaces-section" class="sidebar-nav-item" aria-label="Control Surfaces" data-tooltip="Control Surfaces"><i data-lucide="box"></i></a>
+                 <a href="#repo-artifacts-section" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Artifacts" data-tooltip="Artifacts"><i data-lucide="building-2"></i></a>
             </div>
 
             <div class="sidebar-divider"></div>
 
             <div class="sidebar-nav-group sidebar-nav-group-secondary">
-                <a href="#" class="sidebar-nav-item" aria-label="Drift History" data-tooltip="Drift History"><i data-lucide="history"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry"><i data-lucide="layers"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Baselines" data-tooltip="Baselines"><i data-lucide="flag"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Settings" data-tooltip="Settings"><i data-lucide="settings"></i></a>
+                 <a href="#repo-storyline-section" class="sidebar-nav-item" aria-label="Drift Storyline" data-tooltip="Drift Storyline"><i data-lucide="history"></i></a>
+                 <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry"><i data-lucide="layers"></i></a>
+                 <a href="#repo-history-section" class="sidebar-nav-item" aria-label="History Cues" data-tooltip="History Cues"><i data-lucide="flag"></i></a>
+                 <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page"><i data-lucide="settings"></i></a>
             </div>
 
             <div class="sidebar-avatar">
@@ -49,7 +49,7 @@
                     <span class="posture-title">{{REPO_FULL}}</span>
                     <div class="filter-pills">
                         <span class="filter-pill">repository</span>
-                        <a class="filter-add" href="/dashboard">← All repositories</a>
+                        <a class="filter-pill" href="/dashboard">all repositories</a>
                     </div>
                 </div>
                 <div class="posture-strip-center">
@@ -63,8 +63,8 @@
                 </div>
             </div>
 
-            <main class="page-scroll">
-                <section class="main-columns">
+            <main class="page-scroll" id="top">
+                <section class="main-columns" id="repo-triage-section">
                     <section class="triage-column">
                         <div class="triage-header card-shell">
                             <span class="triage-title">Needs attention now</span>
@@ -75,7 +75,7 @@
                                 <button type="button" class="triage-filter-btn" data-filter="medium">Medium</button>
                             </div>
                         </div>
-                        <div id="triage-list" class="card-shell muted" role="list">Loading prioritized insights...</div>
+                        <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading prioritized insights...</div>
                     </section>
 
                     <aside class="detail-panel" id="detail-panel">
@@ -100,7 +100,7 @@
                         </div>
                         <div class="card-shell">
                             <div class="detail-section-label">Attribute drift</div>
-                            <div id="detail-attributes" class="detail-attributes muted">Select a repo insight to inspect its baseline comparison.</div>
+                            <div id="detail-attributes" class="detail-attributes loading-shell muted">Select a repo insight to inspect its baseline comparison.</div>
                         </div>
                         <div class="card-shell">
                             <div class="detail-section-label">Key changes</div>
@@ -117,28 +117,28 @@
                 </section>
 
                 <section class="secondary-row">
-                    <div class="secondary-panel">
+                    <div class="secondary-panel" id="repo-storyline-section">
                         <div class="secondary-panel-title">Drift storyline</div>
-                        <div id="featured-storyline" class="muted">Loading selected artifact storyline...</div>
+                        <div id="featured-storyline" class="loading-shell muted">Loading selected artifact storyline...</div>
                     </div>
-                    <div class="secondary-panel">
+                    <div class="secondary-panel" id="repo-surfaces-section">
                         <div class="secondary-panel-title">Control surface coverage</div>
-                        <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
+                        <div id="control-surfaces" class="loading-shell muted">Loading grouped control surfaces...</div>
                     </div>
                 </section>
 
                 <section class="secondary-grid">
-                    <div class="secondary-panel">
+                    <div class="secondary-panel" id="repo-history-section">
                         <div class="secondary-panel-title">History cues</div>
-                        <div id="history-cues" class="muted">Loading repo-level history cues...</div>
+                        <div id="history-cues" class="loading-shell muted">Loading repo-level history cues...</div>
                     </div>
                     <div class="secondary-panel">
                         <div class="secondary-panel-title">Lower-confidence findings</div>
-                        <div id="lower-confidence-insights" class="muted">Loading lower-confidence findings...</div>
+                        <div id="lower-confidence-insights" class="loading-shell muted">Loading lower-confidence findings...</div>
                     </div>
                 </section>
 
-                <section class="repos-section">
+                <section class="repos-section" id="repo-artifacts-section">
                     <div class="repos-header">
                         <span class="repos-title">Artifacts</span>
                     </div>

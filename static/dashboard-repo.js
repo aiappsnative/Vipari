@@ -15,7 +15,30 @@ function setSectionHtml(elementId, html) {
     const element = document.getElementById(elementId);
     if (element) {
         element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
     }
+}
+
+function bindSidebarNavigation() {
+    document.querySelectorAll('.sidebar-nav-item[href^="#"]').forEach((link) => {
+        if (link.dataset.boundNav === "true") {
+            return;
+        }
+        link.dataset.boundNav = "true";
+        link.addEventListener("click", (event) => {
+            const href = link.getAttribute("href") || "";
+            const targetId = href.slice(1);
+            const scrollRoot = document.querySelector(".page-scroll");
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!scrollRoot || !target) {
+                return;
+            }
+            event.preventDefault();
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+            window.history.replaceState(null, "", `#${targetId}`);
+        });
+    });
 }
 
 function setText(elementId, value) {
@@ -152,6 +175,11 @@ function sourceUrlForInsight(item, profile) {
     return item.review_url || profile?.provenance?.source_url || profile?.baseline_provenance?.source_url || "";
 }
 
+function requestedArtifactPath() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("artifact") || "";
+}
+
 function applyRepoDetail(item) {
     const profile = findDesignProfile(item.artifact_path);
     const severity = severityForPriority(item.priority);
@@ -219,11 +247,19 @@ function bindRepoRows(items) {
     });
 }
 
-function autoSelectFirstRepoRow() {
-    const first = document.querySelector(".triage-row");
-    if (first) {
-        first.click();
+function autoSelectRepoRow(items, preferredArtifactPath = "") {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    if (!rows.length) {
+        return;
     }
+    if (preferredArtifactPath) {
+        const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
+        if (preferredIndex >= 0 && rows[preferredIndex]) {
+            rows[preferredIndex].click();
+            return;
+        }
+    }
+    rows[0].click();
 }
 
 function filteredRepoItems(items, filter) {
@@ -236,20 +272,20 @@ function filteredRepoItems(items, filter) {
     return items;
 }
 
-function renderRepoQueue(items, filter = "all") {
+function renderRepoQueue(items, filter = "all", preferredArtifactPath = "") {
     const filtered = filteredRepoItems(items, filter);
     setText("repo-triage-count", `${filtered.length} item${filtered.length === 1 ? "" : "s"}`);
     setSectionHtml("triage-list", filtered.length ? filtered.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No repo insights match this filter.</div>');
     bindRepoRows(filtered);
-    autoSelectFirstRepoRow();
+    autoSelectRepoRow(filtered, preferredArtifactPath);
 }
 
-function bindRepoFilters(items) {
+function bindRepoFilters(items, preferredArtifactPath = "") {
     document.querySelectorAll("[data-filter]").forEach((button) => {
         button.addEventListener("click", () => {
             document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.classList.remove("active"));
             button.classList.add("active");
-            renderRepoQueue(items, button.getAttribute("data-filter") || "all");
+            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath);
         });
     });
 }
@@ -420,6 +456,7 @@ async function loadDashboard() {
         const historyCues = asArray(payload.history_cues);
         const artifacts = asArray(payload.artifacts);
         const historyTimelines = asArray(payload.history_timelines);
+        const preferredArtifactPath = requestedArtifactPath();
         window.__designProfiles = asArray(payload.design_profiles);
 
         setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
@@ -429,8 +466,8 @@ async function loadDashboard() {
 
         setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
         bindRepoRows(insights);
-        bindRepoFilters(insights);
-        autoSelectFirstRepoRow();
+        bindRepoFilters(insights, preferredArtifactPath);
+        autoSelectRepoRow(insights, preferredArtifactPath);
 
         setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
         setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
@@ -467,4 +504,5 @@ async function loadDashboard() {
     }
 }
 
+bindSidebarNavigation();
 loadDashboard();

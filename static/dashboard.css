@@ -886,16 +886,12 @@ strong {
     background: rgba(255,255,255,0.02);
 }
 
-.card-shell.muted,
-.secondary-panel .muted,
-.repos-section .muted {
+.loading-shell {
     position: relative;
     overflow: hidden;
 }
 
-.card-shell.muted::after,
-.secondary-panel .muted::after,
-.repos-section .muted::after {
+.loading-shell::after {
     content: "";
     position: absolute;
     inset: 0;

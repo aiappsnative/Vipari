@@ -6,7 +6,30 @@ function setSectionHtml(elementId, html) {
     const element = document.getElementById(elementId);
     if (element) {
         element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
     }
+}
+
+function bindSidebarNavigation() {
+    document.querySelectorAll('.sidebar-nav-item[href^="#"]').forEach((link) => {
+        if (link.dataset.boundNav === "true") {
+            return;
+        }
+        link.dataset.boundNav = "true";
+        link.addEventListener("click", (event) => {
+            const href = link.getAttribute("href") || "";
+            const targetId = href.slice(1);
+            const scrollRoot = document.querySelector(".page-scroll");
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!scrollRoot || !target) {
+                return;
+            }
+            event.preventDefault();
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+            window.history.replaceState(null, "", `#${targetId}`);
+        });
+    });
 }
 
 function setText(elementId, value) {
@@ -170,10 +193,23 @@ function renderEvidenceList(repo) {
     return entries.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("");
 }
 
+function artifactPathForRepo(repo) {
+    return repo.highest_insight_artifact_path || repo._matchedRiskItem?.artifact_path || "";
+}
+
+function repoDetailUrl(repo) {
+    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
+    const artifactPath = artifactPathForRepo(repo);
+    if (artifactPath) {
+        url.searchParams.set("artifact", artifactPath);
+    }
+    return `${url.pathname}${url.search}`;
+}
+
 function applyOverviewDetail(repo) {
     const severity = severityForPriority(repo.highest_priority);
     const riskItem = repo._matchedRiskItem || null;
-    const detailName = `${repo.repo_full} / ${repo.highest_insight_artifact_path || riskItem?.artifact_path || "repo focus"}`;
+    const detailName = `${repo.repo_full} / ${artifactPathForRepo(repo) || "repo focus"}`;
     const subtitle = [repo.highest_insight_title, repo.highest_review_target, repo.highest_evidence_label].filter(Boolean).join(" · ") || "Selected repo posture";
 
     setText("detail-artifact-name", detailName);
@@ -192,7 +228,7 @@ function applyOverviewDetail(repo) {
     if (button) {
         button.disabled = false;
         button.onclick = () => {
-            window.location.href = `/dashboard/${encodeURIComponent(repo.repo_full)}`;
+            window.location.href = repoDetailUrl(repo);
         };
     }
 }
@@ -201,30 +237,46 @@ function selectedOverviewRows() {
     return document.querySelectorAll(".triage-row");
 }
 
+function selectOverviewRow(row, items) {
+    selectedOverviewRows().forEach((candidate) => candidate.classList.remove("selected"));
+    row.classList.add("selected");
+    const index = Number(row.getAttribute("data-row-index"));
+    if (Number.isFinite(index) && items[index]) {
+        applyOverviewDetail(items[index]);
+    }
+}
+
 function bindOverviewRows(items) {
     selectedOverviewRows().forEach((row) => {
-        const activate = () => {
-            selectedOverviewRows().forEach((candidate) => candidate.classList.remove("selected"));
-            row.classList.add("selected");
+        const select = () => {
+            selectOverviewRow(row, items);
+        };
+        const navigate = () => {
             const index = Number(row.getAttribute("data-row-index"));
             if (Number.isFinite(index) && items[index]) {
-                applyOverviewDetail(items[index]);
+                window.location.href = repoDetailUrl(items[index]);
             }
         };
-        row.addEventListener("click", activate);
+        row.addEventListener("mouseenter", select);
+        row.addEventListener("focus", select);
+        row.addEventListener("click", navigate);
         row.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
+            if (event.key === "Enter") {
                 event.preventDefault();
-                activate();
+                navigate();
+            }
+            if (event.key === " ") {
+                event.preventDefault();
+                select();
             }
         });
     });
 }
 
-function autoSelectFirstTriageItem() {
+function autoSelectFirstTriageItem(items) {
     const firstRow = document.querySelector(".triage-row");
     if (firstRow) {
-        firstRow.click();
+        selectOverviewRow(firstRow, items);
     }
 }
 
@@ -260,7 +312,7 @@ function renderOverviewQueue(items, filter = "all") {
     setText("triage-count", `${filtered.length} item${filtered.length === 1 ? "" : "s"}`);
     setSectionHtml("triage-list", filtered.length ? filtered.map((item, index) => renderOverviewTriageRow(item, index)).join("") : '<div class="muted">No triage items match this filter.</div>');
     bindOverviewRows(filtered);
-    autoSelectFirstTriageItem();
+    autoSelectFirstTriageItem(filtered);
 }
 
 function renderDriftTypeBars(items = []) {
@@ -422,4 +474,5 @@ async function loadOverview() {
     }
 }
 
+bindSidebarNavigation();
 loadOverview();

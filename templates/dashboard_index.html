@@ -23,18 +23,18 @@
 
             <div class="sidebar-nav-group">
                 <a href="/dashboard" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="shield-check"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Pull Requests" data-tooltip="Pull Requests"><i data-lucide="git-pull-request"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Surfaces" data-tooltip="Surfaces"><i data-lucide="box"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Repositories" data-tooltip="Repositories"><i data-lucide="building-2"></i></a>
+                 <a href="#triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue"><i data-lucide="git-pull-request"></i></a>
+                 <a href="#drift-section" class="sidebar-nav-item" aria-label="Drift Types" data-tooltip="Drift Types"><i data-lucide="box"></i></a>
+                 <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repositories" data-tooltip="Repositories"><i data-lucide="building-2"></i></a>
             </div>
 
             <div class="sidebar-divider"></div>
 
             <div class="sidebar-nav-group sidebar-nav-group-secondary">
-                <a href="#" class="sidebar-nav-item" aria-label="Drift History" data-tooltip="Drift History"><i data-lucide="history"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry"><i data-lucide="layers"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Baselines" data-tooltip="Baselines"><i data-lucide="flag"></i></a>
-                <a href="#" class="sidebar-nav-item" aria-label="Settings" data-tooltip="Settings"><i data-lucide="settings"></i></a>
+                 <a href="#coverage-section" class="sidebar-nav-item" aria-label="Baseline Coverage" data-tooltip="Baseline Coverage"><i data-lucide="history"></i></a>
+                 <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repository Inventory" data-tooltip="Repository Inventory"><i data-lucide="layers"></i></a>
+                 <a href="#coverage-section" class="sidebar-nav-item" aria-label="Baselines" data-tooltip="Baselines"><i data-lucide="flag"></i></a>
+                 <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page"><i data-lucide="settings"></i></a>
             </div>
 
             <div class="sidebar-avatar">
@@ -48,7 +48,7 @@
                     <span class="posture-title">PromptDrift</span>
                     <div class="filter-pills">
                         <span class="filter-pill">portfolio</span>
-                        <button type="button" class="filter-add">+ Add filter</button>
+                        <span class="filter-pill">triage shell</span>
                     </div>
                 </div>
                 <div class="posture-strip-center">
@@ -62,8 +62,8 @@
                 </div>
             </div>
 
-            <main class="page-scroll">
-                <section class="main-columns">
+            <main class="page-scroll" id="top">
+                <section class="main-columns" id="triage-section">
                     <section class="triage-column">
                         <div class="triage-header card-shell">
                             <span class="triage-title">Needs attention now</span>
@@ -74,7 +74,7 @@
                                 <button type="button" class="triage-filter-btn" data-filter="medium">Medium</button>
                             </div>
                         </div>
-                        <div id="triage-list" class="card-shell muted" role="list">Loading ranked queue...</div>
+                        <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading ranked queue...</div>
                     </section>
 
                     <aside class="detail-panel" id="detail-panel">
@@ -98,14 +98,16 @@
                             <div class="score-delta" id="detail-score-delta">—</div>
                         </div>
                         <div class="card-shell">
-                            <div class="detail-section-label">Attribute drift</div>
-                            <div id="detail-attributes" class="detail-attributes muted">Select a triage row to inspect its attribute posture.</div>
+                            <div class="detail-section-label">Drift by type</div>
+                            <div id="drift-type-bars" class="loading-shell muted">Loading drift-by-type bars...</div>
                         </div>
                         <div class="card-shell">
-                            <div class="detail-section-label">Key changes</div>
-                            <ul class="evidence-list" id="detail-evidence-list">
-                                <li>Awaiting selected repo evidence.</li>
-                            </ul>
+                            <div class="detail-section-label">Baseline surfaces</div>
+                            <div class="coverage-donut-wrap">
+                                <canvas id="coverage-donut" width="100" height="100"></canvas>
+                                <div class="coverage-donut-legend" id="coverage-legend"></div>
+                            </div>
+                            <div class="coverage-note" id="coverage-note">Baseline surfaces covered: — of —</div>
                         </div>
                         <div class="detail-recommendation" id="detail-recommendation">
                             <div class="detail-recommendation-label">Recommendation</div>
@@ -115,22 +117,7 @@
                     </aside>
                 </section>
 
-                <section class="secondary-row">
-                    <div class="secondary-panel">
-                        <div class="secondary-panel-title">Drift by type</div>
-                        <div id="drift-type-bars" class="muted">Loading drift-by-type bars...</div>
-                    </div>
-                    <div class="secondary-panel">
-                        <div class="secondary-panel-title">Baseline coverage</div>
-                        <div class="coverage-donut-wrap">
-                            <canvas id="coverage-donut" width="100" height="100"></canvas>
-                            <div class="coverage-donut-legend" id="coverage-legend"></div>
-                        </div>
-                        <div class="coverage-note" id="coverage-note">Critical surfaces covered: — of —</div>
-                    </div>
-                </section>
-
-                <section class="repos-section">
+                <section class="repos-section" id="repositories-section">
                     <div class="repos-header">
                         <span class="repos-title">Repositories</span>
                         <span class="repos-count" id="repos-count">Loading...</span>
