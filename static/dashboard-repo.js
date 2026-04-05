@@ -1,4 +1,9 @@
 const repoFull = document.querySelector('meta[name="promptdrift-repo-full"]')?.getAttribute("content") || "";
+window.__defaultFeaturedStoryline = null;
+window.__featuredStoryline = null;
+window.__expandedStoryline = null;
+window.__storylineLoading = false;
+window.__storylineError = "";
 
 function asArray(value) {
     return Array.isArray(value) ? value : [];
@@ -21,6 +26,35 @@ function renderRiskTags(tags = []) {
 
 function renderMutedTags(tags = []) {
     return tags.map((tag) => `<span class="tag tag-muted">${tag}</span>`).join("");
+}
+
+function cueTone(cueKey) {
+    if (cueKey === "latest_high_severity") {
+        return "danger";
+    }
+    if (cueKey === "stale_baseline" || cueKey === "provenance_gaps") {
+        return "warning";
+    }
+    if (cueKey === "mixed_direction") {
+        return "accent";
+    }
+    return "neutral";
+}
+
+function cueGlyph(cueKey) {
+    if (cueKey === "latest_high_severity") {
+        return "High severity";
+    }
+    if (cueKey === "stale_baseline") {
+        return "Aging baseline";
+    }
+    if (cueKey === "provenance_gaps") {
+        return "Missing provenance";
+    }
+    if (cueKey === "mixed_direction") {
+        return "Mixed signals";
+    }
+    return "Repeated pattern";
 }
 
 function priorityGlyph(priority) {
@@ -136,6 +170,10 @@ function renderOpenChangeLink(label, url, className = "cta-link") {
     return `<a class="${className}" href="${url}" data-open-source-change="${url}" target="_blank" rel="noreferrer noopener">${label}</a>`;
 }
 
+function renderStorylineAction(label, artifactPath, className = "link") {
+    return `<button type="button" class="${className}" data-open-storyline="${encodeURIComponent(artifactPath)}">${label}</button>`;
+}
+
 function renderInsightCard(item, designProfile, tone = "primary") {
     const combinedReasons = [...new Set([...(item.risk_reasons || []), ...((designProfile && designProfile.risk_tags) || [])])];
     const updatedAt = formatTimestamp(item.updated_at);
@@ -195,7 +233,10 @@ function renderInsightCard(item, designProfile, tone = "primary") {
             </div>
             <div class="triage-card-footer triage-card-footer-split">
                 <span class="muted">Target: ${targetLabel}</span>
-                ${ctaMarkup}
+                <div class="triage-card-footer-actions">
+                    ${renderStorylineAction("Open storyline", item.artifact_path, "cta-link cta-button")}
+                    ${ctaMarkup}
+                </div>
             </div>
         </div>
     `;
@@ -435,6 +476,170 @@ function renderHistoryTimelines(items = []) {
             `
         )
         .join("")}</div>`;
+}
+
+function formatDateLabel(timestamp) {
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return "Unknown date";
+    }
+    try {
+        return new Date(timestamp * 1000).toLocaleDateString();
+    } catch {
+        return "Unknown date";
+    }
+}
+
+function renderStorylineEpisodeCard(episode) {
+    const provenanceLabel = episode.source_url ? (episode.source_ref || "Open provenance") : (episode.source_ref || "No provenance link");
+    return `
+        <div class="artifact-card storyline-episode-card">
+            <div class="artifact-card-head">
+                <div>
+                    <strong>${episode.source_label}</strong>
+                    <div class="artifact-card-type">${formatDateLabel(episode.episode_timestamp)} · ${episode.episode_type.replace(/_/g, " ")}</div>
+                </div>
+                <span class="tag tag-muted">${episode.severity}</span>
+            </div>
+            ${asArray(episode.top_attributes).length ? `<div class="tag-row">${renderMutedTags(episode.top_attributes)}</div>` : ""}
+            <div class="artifact-card-reason">${episode.episode_summary}</div>
+            <div class="storyline-episode-meta muted">
+                <span>${episode.confidence || ""}</span>
+                <span>${episode.source_url ? `<a class="link" href="${episode.source_url}" data-open-source-change="${episode.source_url}" target="_blank" rel="noreferrer noopener">${provenanceLabel}</a>` : provenanceLabel}</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderFeaturedStoryline(storyline, expandedStoryline = null, isLoading = false, errorMessage = "") {
+    if (!storyline) {
+        return '<div class="muted">No storyline yet. Once baseline-relative history accumulates, PromptDrift will summarize the path here.</div>';
+    }
+    const compactEpisodes = asArray(storyline.episodes).slice(0, 3);
+    const fullStoryline = expandedStoryline || null;
+    const showingAlternate = window.__defaultFeaturedStoryline && window.__defaultFeaturedStoryline.artifact_path !== storyline.artifact_path;
+    return `
+        <div class="stack compact-stack">
+            <div class="brief-panel">
+                <div class="brief-row"><span class="brief-label">Artifact</span><span class="brief-copy"><strong>${storyline.artifact_path}</strong> <span class="muted">(${storyline.artifact_type})</span></span></div>
+                <div class="brief-row"><span class="brief-label">Story</span><span class="brief-copy">${storyline.summary}</span></div>
+                <div class="brief-row"><span class="brief-label">Current posture</span><span class="brief-copy">${storyline.current_posture_label}</span></div>
+            </div>
+            ${showingAlternate ? `<div class="meta-tight muted">Showing storyline for a non-featured artifact. ${renderStorylineAction("Return to featured artifact", window.__defaultFeaturedStoryline.artifact_path, "link")}</div>` : ""}
+            ${storyline.limited_history_note ? `<div class="info-strip">${storyline.limited_history_note}</div>` : ""}
+            <div class="stack compact-stack">
+                ${compactEpisodes.map((episode) => renderStorylineEpisodeCard(episode)).join("")}
+            </div>
+            ${asArray(storyline.episodes).length > compactEpisodes.length || fullStoryline ? `
+                <div class="stack compact-stack">
+                    <button type="button" class="baseline-action-button" data-load-storyline="${encodeURIComponent(storyline.artifact_path)}" ${isLoading ? "disabled" : ""}>
+                        ${isLoading ? "Loading full episode history..." : fullStoryline ? "Refresh full episode history" : "Load full episode history"}
+                    </button>
+                    ${errorMessage ? `<div class="muted">${errorMessage}</div>` : ""}
+                    ${fullStoryline ? `
+                        <details class="micro-detail" open>
+                            <summary>Full episode history</summary>
+                            <div class="micro-detail-body attribute-summary-list">
+                                <div class="meta-tight muted">Showing ${asArray(fullStoryline.episodes).length} episode markers for ${fullStoryline.artifact_path}.</div>
+                                ${fullStoryline.limited_history_note ? `<div class="meta-tight muted">${fullStoryline.limited_history_note}</div>` : ""}
+                                ${asArray(fullStoryline.episodes).map((episode) => renderStorylineEpisodeCard(episode)).join("")}
+                            </div>
+                        </details>
+                    ` : ""}
+                </div>
+            ` : ""}
+        </div>
+    `;
+}
+
+async function loadFullStoryline(artifactPath) {
+    const decodedArtifactPath = decodeURIComponent(artifactPath);
+    window.__storylineLoading = true;
+    window.__storylineError = "";
+    setSectionHtml(
+        "featured-storyline",
+        renderFeaturedStoryline(window.__featuredStoryline, window.__expandedStoryline, true, "")
+    );
+    bindFeaturedStoryline();
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${encodeURIComponent(decodedArtifactPath)}/episodes`);
+        if (!response.ok) {
+            throw new Error(`Artifact storyline request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        window.__featuredStoryline = payload.storyline || null;
+        window.__expandedStoryline = payload.storyline || null;
+    } catch (error) {
+        window.__storylineError = error instanceof Error ? error.message : "Unable to load full episode history.";
+    } finally {
+        window.__storylineLoading = false;
+        setSectionHtml(
+            "featured-storyline",
+            renderFeaturedStoryline(window.__featuredStoryline, window.__expandedStoryline, false, window.__storylineError)
+        );
+        bindFeaturedStoryline();
+        bindOpenSourceChangeLinks(document.getElementById("featured-storyline") || document);
+    }
+}
+
+function bindFeaturedStoryline() {
+    const container = document.getElementById("featured-storyline");
+    if (!container) {
+        return;
+    }
+    container.querySelectorAll("[data-load-storyline]").forEach((button) => {
+        if (button.dataset.boundLoadStoryline === "true") {
+            return;
+        }
+        button.dataset.boundLoadStoryline = "true";
+        button.addEventListener("click", async () => {
+            const artifactPath = button.getAttribute("data-load-storyline");
+            if (!artifactPath) {
+                return;
+            }
+            await loadFullStoryline(artifactPath);
+        });
+    });
+}
+
+function bindStorylineActions(scope = document) {
+    scope.querySelectorAll("[data-open-storyline]").forEach((button) => {
+        if (button.dataset.boundOpenStoryline === "true") {
+            return;
+        }
+        button.dataset.boundOpenStoryline = "true";
+        button.addEventListener("click", async () => {
+            const artifactPath = button.getAttribute("data-open-storyline");
+            if (!artifactPath) {
+                return;
+            }
+            await loadFullStoryline(artifactPath);
+            const storylineCard = document.getElementById("featured-storyline");
+            if (storylineCard) {
+                storylineCard.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+        });
+    });
+}
+
+function renderHistoryCues(items = []) {
+    if (!items.length) {
+        return '<div class="muted">No repo-level history cues yet.</div>';
+    }
+    return `<div class="stack compact-stack">${items.map((item) => `
+        <div class="artifact-card cue-card cue-card-${cueTone(item.cue_key)}">
+            <div class="artifact-card-head">
+                <div>
+                    <div class="cue-kicker">${cueGlyph(item.cue_key)}</div>
+                    <strong>${item.label}</strong>
+                </div>
+                <span class="tag tag-muted">${asArray(item.artifact_paths).length} artifact(s)</span>
+            </div>
+            <div class="artifact-card-reason">${item.summary}</div>
+            <div class="cue-actions">${asArray(item.artifact_paths)
+                .map((artifactPath) => renderStorylineAction(artifactPath, artifactPath, "cue-action-button"))
+                .join("")}</div>
+        </div>
+    `).join("")}</div>`;
 }
 
 const DESIGN_PROFILE_FIELDS = [
@@ -850,6 +1055,7 @@ function renderArtifacts(items = []) {
                     </div>
                     <div class="artifact-card-meta">latest drift ${latestDrift.toFixed(3)}</div>
                     <div class="artifact-card-reason">${item.discovery_reason}</div>
+                    <div class="meta-tight">${renderStorylineAction("Open storyline", item.artifact_path, "link")}</div>
                 </div>
             `;
         })
@@ -872,8 +1078,15 @@ async function loadDashboard() {
         const controlSurfaces = asArray(payload.control_surface_groups);
         const leaderboard = asArray(payload.top_drifting_artifacts);
         const historyTimelines = asArray(payload.history_timelines);
+        const featuredStoryline = payload.featured_storyline || null;
+        const historyCues = asArray(payload.history_cues);
         const artifacts = asArray(payload.artifacts);
         window.__designProfiles = designProfiles;
+        window.__defaultFeaturedStoryline = featuredStoryline;
+        window.__featuredStoryline = featuredStoryline;
+        window.__expandedStoryline = null;
+        window.__storylineLoading = false;
+        window.__storylineError = "";
         const featuredInsight = insights[0] || null;
         const remainingInsights = featuredInsight ? insights.slice(1) : insights;
 
@@ -916,9 +1129,13 @@ async function loadDashboard() {
         setSectionHtml("insights", renderInsights(remainingInsights));
         setSectionHtml("lower-confidence-insights", renderLowerConfidenceInsights(lowerConfidenceInsights));
         setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
+        setSectionHtml("featured-storyline", renderFeaturedStoryline(featuredStoryline, null, false, ""));
+        setSectionHtml("history-cues", renderHistoryCues(historyCues));
         setSectionHtml("leaderboard", renderLeaderboard(leaderboard));
         setSectionHtml("history-timelines", renderHistoryTimelines(historyTimelines));
         setSectionHtml("artifacts", renderArtifacts(artifacts));
+        bindFeaturedStoryline();
+        bindStorylineActions(document);
         bindOpenSourceChangeLinks(document);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
@@ -930,6 +1147,8 @@ async function loadDashboard() {
         setSectionHtml("insights", fallback);
         setSectionHtml("lower-confidence-insights", fallback);
         setSectionHtml("control-surfaces", fallback);
+        setSectionHtml("featured-storyline", fallback);
+        setSectionHtml("history-cues", fallback);
         setSectionHtml("leaderboard", fallback);
         setSectionHtml("history-timelines", fallback);
         setSectionHtml("artifacts", fallback);

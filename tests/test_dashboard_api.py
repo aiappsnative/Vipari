@@ -147,6 +147,11 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["control_surface_groups"][0]["group_key"] == "prompts"
     assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["history_timelines"][0]["point_count"] == 2
+    assert payload["featured_storyline"]["artifact_path"] == "prompts/refund.txt"
+    assert payload["featured_storyline"]["summary"]
+    assert payload["featured_storyline"]["episodes"][0]["episode_type"] == "baseline_milestone"
+    assert payload["featured_storyline"]["episodes"][-1]["episode_type"] == "current_posture"
+    assert payload["history_cues"][0]["label"]
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["design_profiles"][0]["provenance"]["label"] == "Historical backfill"
@@ -292,3 +297,72 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     assert len(payload["design_profiles"][0]["attribute_profile"]) == 6
     assert payload["insights"][0]["evidence_label"] == "baseline only"
     assert payload["insights"][0]["evidence_summary"] == "No merged-history evidence yet."
+
+
+def test_dashboard_api_returns_artifact_storyline_endpoint(tmp_path):
+    db_path = str(tmp_path / "api-dashboard.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/episodes")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["artifact_path"] == "prompts/refund.txt"
+    assert payload["storyline"]["artifact_path"] == "prompts/refund.txt"
+    assert payload["storyline"]["summary"]
+    assert payload["storyline"]["episodes"][0]["episode_type"] == "baseline_milestone"
+    assert payload["storyline"]["episodes"][-1]["episode_type"] == "current_posture"
+    assert len(payload["storyline"]["episodes"]) >= 4
+
+
+def test_dashboard_api_returns_404_for_missing_artifact_storyline(tmp_path):
+    db_path = str(tmp_path / "api-dashboard.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/repos/doria90/dummyAI/artifacts/prompts/missing.txt/episodes")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No artifact storyline is available for this repo artifact."

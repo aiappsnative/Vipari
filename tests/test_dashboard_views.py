@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
-from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import DriftEpisode, RepoDashboardArtifactEntry, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -133,6 +133,14 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert len(dashboard.history_timelines) == 1
     assert dashboard.history_timelines[0].artifact_path == "prompts/refund.txt"
     assert dashboard.history_timelines[0].point_count == 3
+    assert dashboard.featured_storyline is not None
+    assert dashboard.featured_storyline.artifact_path == "prompts/refund.txt"
+    assert dashboard.featured_storyline.summary
+    assert dashboard.featured_storyline.current_posture_label.startswith("Current posture:")
+    assert dashboard.featured_storyline.episodes[0].episode_type == "baseline_milestone"
+    assert dashboard.featured_storyline.episodes[-1].episode_type == "current_posture"
+    assert len(dashboard.history_cues) >= 1
+    assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
@@ -280,6 +288,170 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
 
 
+def test_collapse_storyline_episodes_groups_adjacent_low_signal_history_events():
+    episodes = [
+        DriftEpisode(
+            episode_timestamp=1.0,
+            source_type="baseline_promotion",
+            source_label="Approved baseline",
+            source_ref="baseline 1",
+            episode_type="baseline_milestone",
+            top_attributes=[],
+            episode_summary="Baseline set.",
+            severity="low",
+            confidence="authoritative baseline",
+            is_milestone=True,
+        ),
+        DriftEpisode(
+            episode_timestamp=2.0,
+            source_type="historical_backfill",
+            source_label="Historical backfill",
+            source_ref="commit aaa1111",
+            source_url="https://github.com/doria90/dummyAI/commit/aaa1111",
+            episode_type="capability_expansion",
+            top_attributes=["Capability"],
+            episode_summary="Capability expanded relative to baseline.",
+            severity="medium",
+            confidence="high confidence",
+        ),
+        DriftEpisode(
+            episode_timestamp=3.0,
+            source_type="historical_backfill",
+            source_label="Historical backfill",
+            source_ref="commit bbb2222",
+            source_url="https://github.com/doria90/dummyAI/commit/bbb2222",
+            episode_type="capability_expansion",
+            top_attributes=["Capability"],
+            episode_summary="Capability expanded again.",
+            severity="medium",
+            confidence="high confidence",
+        ),
+        DriftEpisode(
+            episode_timestamp=4.0,
+            source_type="historical",
+            source_label="Current posture",
+            source_ref="commit ccc3333",
+            source_url="https://github.com/doria90/dummyAI/commit/ccc3333",
+            episode_type="current_posture",
+            top_attributes=["Capability"],
+            episode_summary="Latest posture.",
+            severity="high",
+            confidence="high confidence",
+            is_milestone=True,
+        ),
+    ]
+
+    collapsed = _collapse_storyline_episodes(episodes)
+
+    assert len(collapsed) == 3
+    assert collapsed[0].episode_type == "baseline_milestone"
+    assert collapsed[1].source_label == "Grouped historical drift"
+    assert collapsed[1].episode_type == "capability_expansion"
+    assert collapsed[1].source_ref == "commit aaa1111 -> commit bbb2222"
+    assert "Review this as one continuing capability expansion pattern" in collapsed[1].episode_summary
+    assert collapsed[-1].episode_type == "current_posture"
+
+
+def test_build_repo_history_cues_uses_baseline_age_and_provenance_gaps():
+    artifacts = [
+        RepoDashboardArtifactEntry(
+            artifact_path="prompts/a.txt",
+            artifact_type="prompt",
+            discovery_reason="prompt",
+            discovery_confidence=0.9,
+            baseline_line_count=10,
+            historical_version_count=3,
+            historical_profile_count=3,
+            latest_historical_semantic_distance=0.2,
+            latest_historical_drift_magnitude=0.6,
+            latest_historical_capability_shift=0.1,
+            latest_historical_guardrail_shift=-0.06,
+            latest_historical_governance_shift=0.0,
+            latest_historical_autonomy_shift=0.0,
+            pr_profile_count=0,
+            latest_pr_semantic_distance=0.0,
+            latest_pr_capability_shift=0.0,
+            latest_pr_guardrail_shift=0.0,
+            latest_pr_governance_shift=0.0,
+            latest_pr_autonomy_shift=0.0,
+            leaderboard_drift_magnitude=0.6,
+            latest_activity_at=4_000.0,
+        ),
+        RepoDashboardArtifactEntry(
+            artifact_path="prompts/b.txt",
+            artifact_type="prompt",
+            discovery_reason="prompt",
+            discovery_confidence=0.82,
+            baseline_line_count=12,
+            historical_version_count=1,
+            historical_profile_count=1,
+            latest_historical_semantic_distance=0.1,
+            latest_historical_drift_magnitude=0.2,
+            latest_historical_capability_shift=0.0,
+            latest_historical_guardrail_shift=0.0,
+            latest_historical_governance_shift=0.0,
+            latest_historical_autonomy_shift=0.0,
+            pr_profile_count=0,
+            latest_pr_semantic_distance=0.0,
+            latest_pr_capability_shift=0.0,
+            latest_pr_guardrail_shift=0.0,
+            latest_pr_governance_shift=0.0,
+            latest_pr_autonomy_shift=0.0,
+            leaderboard_drift_magnitude=0.2,
+            latest_activity_at=2_000.0,
+        ),
+    ]
+    baseline_by_path = {
+        "prompts/a.txt": type("Baseline", (), {"created_at": 100.0})(),
+        "prompts/b.txt": type("Baseline", (), {"created_at": 1_900.0})(),
+    }
+    profile_context_by_path = {
+        "prompts/a.txt": _RepoArtifactEvidenceBundle(
+            latest_historical=_RepoArtifactProfileContext(
+                profile=None,
+                source_type="historical",
+                label="Historical backfill",
+                source_ref="commit aaa1111",
+                source_url=None,
+                review_context="Historical snapshot from backfill",
+                created_at=4_000.0,
+                baseline_provenance=None,
+                semantic_distance=0.2,
+                attribute_deltas={"capability_risk": 0.1, "guardrail_robustness": -0.06},
+                narrative=["Historical drift persisted."],
+                signal_terms=[],
+                content_text=None,
+            )
+        ),
+        "prompts/b.txt": _RepoArtifactEvidenceBundle(
+            latest_historical=_RepoArtifactProfileContext(
+                profile=None,
+                source_type="historical",
+                label="Historical backfill",
+                source_ref="commit bbb2222",
+                source_url="https://github.com/doria90/dummyAI/commit/bbb2222",
+                review_context="Historical snapshot from backfill",
+                created_at=2_000.0,
+                baseline_provenance=None,
+                semantic_distance=0.05,
+                attribute_deltas={"capability_risk": 0.0},
+                narrative=["Minor change."],
+                signal_terms=[],
+                content_text=None,
+            )
+        ),
+    }
+
+    cues = _build_repo_history_cues(artifacts, baseline_by_path, profile_context_by_path)
+
+    assert any(cue.label == "Baseline aging" for cue in cues)
+    assert any(cue.label == "Provenance gaps" for cue in cues)
+    baseline_aging = next(cue for cue in cues if cue.label == "Baseline aging")
+    assert baseline_aging.artifact_paths[0] == "prompts/a.txt"
+    provenance_gaps = next(cue for cue in cues if cue.label == "Provenance gaps")
+    assert provenance_gaps.artifact_paths == ["prompts/a.txt"]
+
+
 def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable(tmp_path):
     db_path = str(tmp_path / "dashboard.db")
     init_db(db_path)
@@ -297,6 +469,8 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
 
     assert len(dashboard.design_profiles) == 1
+    assert dashboard.featured_storyline is not None
+    assert dashboard.featured_storyline.limited_history_note is not None
     assert dashboard.design_profiles[0].provenance is None
     assert dashboard.design_profiles[0].can_promote_source_to_baseline is False
     assert len(dashboard.design_profiles[0].attribute_profile) == 6
@@ -342,3 +516,5 @@ def test_build_repo_dashboard_view_uses_history_target_when_pr_evidence_is_missi
     assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert dashboard.insights[0].supporting_review_target is None
     assert "history-only evidence" in dashboard.insights[0].risk_reasons
+    assert dashboard.featured_storyline is not None
+    assert dashboard.featured_storyline.episodes[1].source_ref == "commit sha-1"

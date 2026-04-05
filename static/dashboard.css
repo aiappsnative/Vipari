@@ -1593,6 +1593,80 @@ p {
     font-size: 0.84rem;
 }
 
+.storyline-episode-card {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.025));
+}
+
+.storyline-episode-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+}
+
+.cue-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.cue-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    border-radius: 16px 0 0 16px;
+    background: rgba(157, 176, 208, 0.3);
+}
+
+.cue-card-neutral::before {
+    background: rgba(157, 176, 208, 0.4);
+}
+
+.cue-card-accent::before {
+    background: linear-gradient(180deg, rgba(61, 211, 255, 0.95), rgba(61, 211, 255, 0.55));
+}
+
+.cue-card-warning::before {
+    background: linear-gradient(180deg, rgba(255, 184, 77, 0.95), rgba(255, 184, 77, 0.55));
+}
+
+.cue-card-danger::before {
+    background: linear-gradient(180deg, rgba(255, 107, 138, 0.95), rgba(255, 107, 138, 0.55));
+}
+
+.cue-kicker {
+    margin-bottom: 4px;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.cue-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.cue-action-button {
+    border: 1px solid rgba(157, 176, 208, 0.16);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    padding: 7px 10px;
+}
+
+.cue-action-button:hover {
+    border-color: rgba(61, 211, 255, 0.28);
+    background: rgba(61, 211, 255, 0.08);
+}
+
 .artifact-card-meter {
     height: 8px;
     border-radius: 999px;
@@ -1794,6 +1868,13 @@ p {
 .tag-muted {
     background: rgba(157, 176, 208, 0.12);
     color: var(--muted);
+}
+
+@media (max-width: 720px) {
+    .storyline-episode-meta {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 }
 
 .risk-surface-card {
