@@ -398,7 +398,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -428,7 +428,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "## PromptDrift: Escalate before merge" in posted[0][0]
+    assert "## ❌ PromptDrift: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
@@ -468,7 +468,7 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 303,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -564,7 +564,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
     assert "### What changed" in comment
     assert "<details>" in comment
     assert "<summary>PromptDrift review details</summary>" in comment
@@ -613,7 +613,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
     assert "High risk · unknown control surface · vs approved baseline `none-yet`" in comment
     assert "The prompt now allows disclosure of internal policy details" in comment
     assert "<details>" in comment
@@ -660,7 +660,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="def987654", analyzed_at=1_700_000_100),
     )
 
-    assert comment.startswith("## PromptDrift: Re-baseline follow-up after merge")
+    assert comment.startswith("## ✅ PromptDrift: Re-baseline follow-up after merge")
     assert "This change adds a clarifying-question instruction" in comment
     assert "Promote the updated artifact to approved baseline after merge." in comment
 
@@ -768,7 +768,7 @@ index 1..2
         ],
     )
 
-    assert comment.startswith("## PromptDrift: Keep in normal review lane")
+    assert comment.startswith("## ✅ PromptDrift: Keep in normal review lane")
     assert "Low risk · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment
@@ -942,6 +942,378 @@ index 1..2
     assert "Restore explicit safety or approval guardrails before merge." in comment
 
 
+def test_build_llm_comment_keeps_governance_in_its_own_section_and_prioritizes_delta_evidence():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,3 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++Write billing changes directly when needed.
++Skip manual review when the queue is long.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens review controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_275),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=["Added direct billing-write authority."],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="autonomy_level",
+                        label="Autonomy level",
+                        baseline_value="reviewed",
+                        current_value="self-directed",
+                        direction="increased",
+                        state="drift_detected",
+                        confidence_label="medium confidence",
+                        confidence_score=0.74,
+                        reason="Autonomy increased because the prompt can skip manual review during queue pressure.",
+                        evidence=["Added instruction to skip manual review when the queue is long."],
+                        remediation="Keep human review gates in place.",
+                        baseline_score=0.28,
+                        current_score=0.56,
+                        delta=0.28,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="governance_strength",
+                        label="Governance strength",
+                        baseline_value="strong",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.88,
+                        reason="PromptDrift detected weaker governance because review and approval cues were removed from the operating instructions.",
+                        evidence=["Removed the manual approval checkpoint from the workflow."],
+                        remediation="Restore approval checkpoints.",
+                        baseline_score=0.72,
+                        current_score=0.31,
+                        delta=-0.41,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    key_delta_section = comment.split("### Key deltas", 1)[1].split("### Evidence", 1)[0]
+    assert "Guardrails weakened: moderate → weak." in key_delta_section
+    assert "Capability expanded: moderate → high." in key_delta_section
+    assert "Autonomy increased: reviewed → self-directed." in key_delta_section
+    assert "Governance weakened" not in key_delta_section
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Governance signals", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Added direct billing-write authority." in evidence_section
+    assert "Added instruction to skip manual review when the queue is long." in evidence_section
+    assert "Removed the manual approval checkpoint from the workflow." not in evidence_section
+
+    governance_section = comment.split("### Governance signals", 1)[1].split("### Recommended next step", 1)[0]
+    assert "weaker governance because review and approval cues were removed from the operating instructions" in governance_section
+
+
+def test_build_llm_comment_evidence_uses_second_unique_delta_example_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,3 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++Write billing changes directly when needed.
++Skip manual review when the queue is long.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens review controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_300),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                        ],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                            "Added direct billing-write authority.",
+                        ],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="autonomy_level",
+                        label="Autonomy level",
+                        baseline_value="reviewed",
+                        current_value="self-directed",
+                        direction="increased",
+                        state="drift_detected",
+                        confidence_label="medium confidence",
+                        confidence_score=0.74,
+                        reason="Autonomy increased because the prompt can skip manual review during queue pressure.",
+                        evidence=[
+                            "Added direct billing-write authority.",
+                            "Added instruction to skip manual review when the queue is long.",
+                        ],
+                        remediation="Keep human review gates in place.",
+                        baseline_score=0.28,
+                        current_score=0.56,
+                        delta=0.28,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Added direct billing-write authority." in evidence_section
+    assert "Added instruction to skip manual review when the queue is long." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
+
+
+def test_build_llm_comment_evidence_prefers_finding_rationale_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,2 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++You may write billing changes directly when needed.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens disclosure controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_320),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Potential guardrail removal detected: Removed lines contain refusal or restrictive guardrail language." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
+
+
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
@@ -1037,7 +1409,7 @@ def test_worker_marks_job_failed_when_persistence_fails_after_fallback_comment_p
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5252)
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
     monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
@@ -1219,7 +1591,10 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1233,7 +1608,7 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 11, "token", "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 11, "token", True, "promptdrift: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1280,7 +1655,10 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 2111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1294,7 +1672,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert "Recommendation: Revert before merge." in posted[0][0]
-    assert labels == [("doria90/dummyAI", 111, "token", "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 111, "token", True, "promptdrift: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1302,7 +1680,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert audit.suggested_risk_level == "High"
 
 
-def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
+def test_worker_removes_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
     create_audit_job(
@@ -1323,7 +1701,10 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1212,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1337,7 +1718,7 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == []
+    assert labels == [("doria90/dummyAI", 12, "token", False, "promptdrift: escalate-before-merge")]
 
 
 def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):
@@ -1361,7 +1742,7 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     def fail_label(*args, **kwargs):
         raise RuntimeError("labels unavailable")
 
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", fail_label)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", fail_label)
 
     settings = WorkerSettings(
         db_path=db_path,

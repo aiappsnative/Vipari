@@ -48,10 +48,21 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/approved-baseline-v1` slice
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
-	- is green at the full-suite level (`98 passed` on the latest local verification)
-	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
+	- includes the merged `feature/pr-comment-v2-tuning` slice
+	- is green at the full-suite level (`111 passed` on the latest local verification)
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
+
+### `feature/pr-comment-v2-tuning`
+- Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
+- Current status at merge time:
+	- reviewer-facing PR comments tuned around the most decision-useful deltas (`guardrail_robustness`, `capability_risk`, `autonomy_level`)
+	- governance drift separated into its own conditional section instead of crowding the main `Key deltas` summary
+	- evidence selection tuned to prefer concrete delta-linked examples before generic artifact metadata
+	- decision-first headers now include risk emojis for high, medium, and low recommendations
+	- escalation labels now sync bidirectionally with the latest review outcome, including de-escalation cleanup on later low-risk passes
+	- live validation completed against dummyAI PR `#46`, including stale-worker debugging and final GitHub-side confirmation of the tuned comment format
 
 ### `feature/drift-engine-v1`
 - Purpose: completed milestone branch retained as the merge lineage for the first static-first drift engine release
@@ -73,7 +84,7 @@ This framing should shape roadmap decisions:
 	- repo-detail baseline-vs-current design posture cards, static-only messaging, and risk-tag/provenance-lite surfacing implemented
 	- overview regression-pattern summaries and compatibility hardening implemented so stale or sparse payloads degrade safely in the browser
 	- artifact lineage and baseline-aware suppression implemented
-	- PR comment replace-on-update behavior implemented
+	- initial managed PR comment lifecycle implemented
 	- compact TLDR + collapsible reviewer comment format implemented
 	- GitHub App auth hardening, opened-PR diff retry, and exact-SHA synchronize diff reconstruction implemented
 	- atomic job claiming, failed-job requeue on same-SHA redelivery, and honest persistence-failure handling implemented
@@ -97,7 +108,7 @@ This framing should shape roadmap decisions:
 5. Retry handling, provider retry hints, and deterministic preliminary fallback
 6. Structured semantic review packages for LLM review framing
 7. Durable audit history and artifact lineage
-8. Managed comment replacement behavior on PR updates
+8. Managed PR comment lifecycle on PR updates
 9. Reviewer-facing comment formatting polish
 10. GitHub App auth hardening, transient PR diff retry, and synchronize diff freshness hardening
 11. Queue correctness hardening for atomic claim, failed-job revival, and truthful terminal states
@@ -112,6 +123,7 @@ This framing should shape roadmap decisions:
 20. Large-repo dashboard aggregation optimization for real OSS repo responsiveness
 21. Overview regression-pattern summaries plus payload-compatibility hardening for stale or sparse dashboard responses
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
+23. Reviewer-facing PR comment tuning, risk-emoji headers, and escalation-label lifecycle sync
 
 ### Next prioritized slices after the merge
 1. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos

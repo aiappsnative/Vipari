@@ -231,6 +231,52 @@ def ensure_pr_label(
     return True
 
 
+def remove_pr_label(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
+) -> bool:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    issue = repo.get_issue(number=pr_number)
+
+    issue_labels = {label.name for label in issue.get_labels()}
+    if label_name not in issue_labels:
+        return False
+
+    issue.remove_from_labels(label_name)
+    return True
+
+
+def sync_pr_label(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    should_have_label: bool,
+    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
+    label_color: str = PROMPTDRIFT_ESCALATION_LABEL_COLOR,
+    label_description: str = PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+) -> bool:
+    if should_have_label:
+        return ensure_pr_label(
+            repo_full,
+            pr_number,
+            token,
+            label_name=label_name,
+            label_color=label_color,
+            label_description=label_description,
+        )
+    return remove_pr_label(
+        repo_full,
+        pr_number,
+        token,
+        label_name=label_name,
+    )
+
+
 def _build_managed_comment_body(body: str) -> str:
     if body.startswith(PROMPTDRIFT_MANAGED_MARKER):
         return body

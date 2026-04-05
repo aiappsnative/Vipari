@@ -36,8 +36,8 @@ The current `main` branch now includes the merged static-first drift engine mile
 
 In practical terms, PromptDrift currently provides:
 
-- queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and managed PR comments
-- escalation-aware PR review with managed comments plus GitHub labels for high-confidence before-merge escalation cases
+- queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and episode-aware managed PR comments
+- escalation-aware PR review with decision-first comments, risk-emoji headers, concrete evidence panels, and GitHub label sync for before-merge escalation cases
 - persisted pull-request lifecycle state across audit jobs and durable audit records, including close/reopen and merge metadata
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
@@ -71,7 +71,7 @@ The dashboard should now be read as two linked product surfaces:
 - extracts a static agent attribute profile from prompt/config text so future audits can compare design-level drift against baselines
 - stores static artifact profiles in audit history with explicit baseline provenance so later versions can compare against an approved baseline when available
 - keeps PR comments reviewer-focused on risk, escalation, and recommendation rather than internal drift metrics
-- applies a GitHub escalation label for high-confidence before-merge escalation cases
+- applies or removes the GitHub escalation label so the PR reflects the latest high-confidence before-merge recommendation
 - exposes read-side trend helpers for repo summaries and artifact drift leaderboards
 - supports baseline-first repository onboarding that persists discovered AI artifacts and baseline versions
 - supports selective historical backfill planning and execution for onboarded artifacts
@@ -84,7 +84,7 @@ The dashboard should now be read as two linked product surfaces:
 - includes `scripts/repo_ops.py` for local operator workflows and read-side inspection
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
-- posts a managed PR comment and replaces the previous managed comment on later PR updates
+- upserts the managed PR comment for the current PR head SHA while preserving prior-episode comments for earlier commits
 - persists audit, finding, artifact, and comment history for later analysis
 - updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
@@ -92,7 +92,7 @@ The dashboard should now be read as two linked product surfaces:
 ## High-level architecture
 
 - **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
-- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, replace-on-update comment publishing, durable persistence
+- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
 
@@ -197,10 +197,11 @@ The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py)
 Recent live validation on the active branch covered:
 
 - risky opened PR flow with durable audit persistence and bot comment posting
-- synchronize re-audit flow with exact-SHA diff reconstruction and managed comment replacement
+- synchronize re-audit flow with exact-SHA diff reconstruction, same-head comment updates, and prior-episode comment preservation across new commits
 - PR close and reopen lifecycle validation with durable state updates and stale timestamp clearing
 - non-AI PR flow returning `no relevant changes` without queueing an audit
 - invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
+- escalation-label lifecycle validation covering add, remove, and re-add behavior as PR risk changes across review passes
 
 ## Local operator and dashboard testing
 
