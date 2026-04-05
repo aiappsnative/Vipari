@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from .dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from .github_integration import generate_jwt, get_installation_token
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -95,6 +95,20 @@ def create_api_app() -> FastAPI:
     async def repo_dashboard(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
+
+    @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
+    async def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
+        _require_admin_token(request, settings)
+        storyline = build_repo_artifact_storyline(db_path, repo_full, artifact_path)
+        if storyline is None:
+            raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
+        return JSONResponse(
+            {
+                "repo_full": repo_full,
+                "artifact_path": artifact_path,
+                "storyline": asdict(storyline),
+            }
+        )
 
     @app.post("/api/repos/{repo_full:path}/onboard")
     async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):

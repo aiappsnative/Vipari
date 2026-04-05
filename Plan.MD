@@ -54,6 +54,20 @@ This framing should shape roadmap decisions:
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
+### `feature/drift-storyline-v1`
+- Purpose: active planning branch for turning artifact history into a first-class case-file storyline surface
+- Planned scope on this branch:
+	- define a normalized `DriftEpisode` read model spanning approved-baseline promotions, historical backfill points, and PR-side drift episodes
+	- upgrade repo case files from lightweight history timelines to a decision-useful `Drift storyline` with baseline milestone, major episodes, latest posture, and safe sparse-history fallback
+	- add artifact-level episode inspection APIs and dashboard rendering hooks without redesigning PR comments
+	- surface small repo-level history cues for repeated drift, stale baselines, mixed-direction changes, and latest high-severity episodes
+	- preserve current dashboard split boundaries by keeping storyline product logic in read models plus versioned frontend assets instead of inline route code
+- Exit criteria for the first implementation slice:
+	- repo case files show a visible storyline for the featured artifact
+	- storyline items expose date, episode type, top attribute deltas, and provenance
+	- sparse-history repos degrade honestly without fabricating continuity
+	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
+
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
 - Current status at merge time:
@@ -126,13 +140,15 @@ This framing should shape roadmap decisions:
 23. Reviewer-facing PR comment tuning, risk-emoji headers, and escalation-label lifecycle sync
 
 ### Next prioritized slices after the merge
-1. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos
-2. Signal fusion improvements between deterministic and semantic findings
-3. Discovery precision improvements for large OSS onboarding and backfill
-4. Expanded OSS evaluation harness coverage for seeded and real-repo scenarios
-5. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
+1. Drift storyline and episode-history surface for repo case files and artifact detail flows
+2. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos
+3. Signal fusion improvements between deterministic and semantic findings
+4. Discovery precision improvements for large OSS onboarding and backfill
+5. Expanded OSS evaluation harness coverage for seeded and real-repo scenarios
+6. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
 
 Suggested next branch sequence:
+- `feature/drift-storyline-v1`
 - `feature/repo-evidence-v1`
 - `feature/signal-fusion-v1`
 - `feature/discovery-precision-v1`
@@ -246,6 +262,23 @@ Planned scope:
 - improve merged-commit and PR linkage so repo case files route to better review targets
 - enrich history-backed insights with stronger source attribution and reviewer-facing context
 - keep the read-model focused on actionable evidence rather than new top-level dashboard chrome
+
+#### 0. `feature/drift-storyline-v1`
+
+Purpose:
+- turn the existing artifact history and lightweight timeline groundwork into a first-class case-file storyline for important control surfaces
+
+Planned scope:
+- introduce a normalized `DriftEpisode` concept that groups meaningful history points from PR audits, historical backfill, and baseline-promotion milestones
+- add a repo case-file `Drift storyline` section for the featured artifact with baseline milestone, major episodes, latest posture, and sparse-history disclosure
+- add artifact-level episode inspection APIs so the frontend can expand beyond the compact repo timeline without overloading the initial dashboard payload
+- surface small repo-level prioritization cues for repeated drift, stale baselines, mixed-direction changes, and latest severe episodes
+- preserve the dashboard split by implementing storyline logic in `services/dashboard_views.py`, JSON APIs, and `static/dashboard-repo.js`
+
+Implementation notes:
+- current groundwork already exists in persisted profile history, provenance fields, and the lightweight repo history timeline in `services/dashboard_views.py`
+- the first slice should keep timeline displays compact on the main repo page and reserve full episode history for artifact-level expansion or a dedicated API
+- performance should be treated as a read-model concern from the start because larger OSS repos can accumulate many profile-history rows quickly
 
 #### 2. `feature/signal-fusion-v1`
 

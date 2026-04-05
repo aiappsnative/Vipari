@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from config import get_settings
 from engine.relevance import needs_audit as engine_needs_audit
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
-from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
@@ -124,6 +124,20 @@ async def persistence_status():
 @app.get("/api/repos/{repo_full:path}/dashboard")
 async def repo_dashboard(repo_full: str):
     return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
+
+
+@app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
+async def artifact_storyline(repo_full: str, artifact_path: str):
+    storyline = build_repo_artifact_storyline(AUDIT_DB_PATH, repo_full, artifact_path)
+    if storyline is None:
+        raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "artifact_path": artifact_path,
+            "storyline": asdict(storyline),
+        }
+    )
 
 
 @app.post("/api/repos/{repo_full:path}/onboard")

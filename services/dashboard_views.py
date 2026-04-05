@@ -254,6 +254,40 @@ class RepoArtifactHistoryTimeline:
 
 
 @dataclass(frozen=True)
+class DriftEpisode:
+    episode_timestamp: float
+    source_type: str
+    source_label: str
+    source_ref: str | None = None
+    source_url: str | None = None
+    episode_type: str = "mixed"
+    top_attributes: list[str] = None
+    episode_summary: str = ""
+    severity: str = "low"
+    confidence: str = "medium confidence"
+    is_milestone: bool = False
+
+
+@dataclass(frozen=True)
+class RepoArtifactStoryline:
+    artifact_path: str
+    artifact_type: str
+    summary: str
+    baseline_label: str
+    current_posture_label: str
+    limited_history_note: str | None = None
+    episodes: list[DriftEpisode] = None
+
+
+@dataclass(frozen=True)
+class RepoHistoryCue:
+    cue_key: str
+    label: str
+    summary: str
+    artifact_paths: list[str]
+
+
+@dataclass(frozen=True)
 class DashboardProfileVector:
     guardrail_robustness: float
     capability_risk: float
@@ -343,6 +377,8 @@ class RepoDashboardView:
     lower_confidence_insights: list[RepoDashboardInsightEntry] = None
     control_surface_groups: list[RepoDashboardControlSurfaceGroup] = None
     history_timelines: list[RepoArtifactHistoryTimeline] = None
+    featured_storyline: RepoArtifactStoryline | None = None
+    history_cues: list[RepoHistoryCue] = None
     design_profiles: list[RepoArtifactDesignProfile] = None
     artifacts: list[RepoDashboardArtifactEntry] = None
 
@@ -449,6 +485,8 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
             lower_confidence_insights=[],
             control_surface_groups=[],
             history_timelines=[],
+            featured_storyline=None,
+            history_cues=[],
             design_profiles=[],
             artifacts=[],
         )
@@ -507,6 +545,15 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
     insights, lower_confidence_insights = _build_repo_insights(artifact_entries, baseline_by_path, profile_context_by_path)
     control_surface_groups = _build_control_surface_groups(artifact_entries)
     history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
+    featured_storyline = _build_featured_storyline(
+        db_path,
+        repo_full,
+        artifact_entries,
+        insights,
+        baseline_by_path,
+        profile_context_by_path,
+    )
+    history_cues = _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path)
     design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
 
     return RepoDashboardView(
@@ -529,6 +576,8 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
         lower_confidence_insights=lower_confidence_insights,
         control_surface_groups=control_surface_groups,
         history_timelines=history_timelines,
+        featured_storyline=featured_storyline,
+        history_cues=history_cues,
         design_profiles=design_profiles,
         artifacts=artifact_entries,
     )
@@ -1911,6 +1960,471 @@ def _build_repo_history_timelines(
 
     timelines.sort(key=lambda item: (-item.max_drift_magnitude, item.artifact_path))
     return timelines[:6]
+
+
+def _build_featured_storyline(
+    db_path: str,
+    repo_full: str,
+    artifacts: list[RepoDashboardArtifactEntry],
+    insights: list[RepoDashboardInsightEntry],
+    baseline_by_path,
+    profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
+) -> RepoArtifactStoryline | None:
+    if not artifacts:
+        return None
+
+    featured_path = insights[0].artifact_path if insights else artifacts[0].artifact_path
+    return build_repo_artifact_storyline(
+        db_path,
+        repo_full,
+        featured_path,
+        artifacts=artifacts,
+        baseline_by_path=baseline_by_path,
+        profile_context_by_path=profile_context_by_path,
+    )
+
+
+def build_repo_artifact_storyline(
+    db_path: str,
+    repo_full: str,
+    artifact_path: str,
+    *,
+    artifacts: list[RepoDashboardArtifactEntry] | None = None,
+    baseline_by_path=None,
+    profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle] | None = None,
+) -> RepoArtifactStoryline | None:
+    artifact_entries = artifacts
+    local_baseline_by_path = baseline_by_path
+    local_profile_context_by_path = profile_context_by_path
+
+    if artifact_entries is None or local_baseline_by_path is None or local_profile_context_by_path is None:
+        artifact_entries, local_baseline_by_path, local_profile_context_by_path = _load_storyline_context(
+            db_path,
+            repo_full,
+        )
+
+    artifact = next((item for item in artifact_entries if item.artifact_path == artifact_path), None)
+    baseline = local_baseline_by_path.get(artifact_path)
+    if artifact is None or baseline is None:
+        return None
+
+    episodes: list[DriftEpisode] = [
+        DriftEpisode(
+            episode_timestamp=float(baseline.created_at),
+            source_type="baseline_promotion",
+            source_label="Approved baseline",
+            source_ref=f"baseline {baseline.id}",
+            episode_type="baseline_milestone",
+            top_attributes=[],
+            episode_summary="This artifact has an approved baseline, which anchors later drift interpretation.",
+            severity="low",
+            confidence="authoritative baseline",
+            is_milestone=True,
+        )
+    ]
+
+    historical_count = 0
+    with _connect(db_path) as conn:
+        historical_rows = conn.execute(
+            """
+            SELECT commit_sha, created_at, semantic_distance, attribute_deltas_json
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ? AND artifact_path = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (_normalized_id_prefix(repo_full), artifact_path),
+        ).fetchall()
+        for row in historical_rows:
+            historical_count += 1
+            attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
+            semantic_distance = float(row["semantic_distance"])
+            drift_magnitude = _drift_magnitude(semantic_distance, attribute_deltas)
+            episodes.append(
+                DriftEpisode(
+                    episode_timestamp=float(row["created_at"]),
+                    source_type="historical_backfill",
+                    source_label="Historical backfill",
+                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
+                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
+                    episode_type=_episode_type(attribute_deltas),
+                    top_attributes=_top_attribute_labels(attribute_deltas),
+                    episode_summary=_episode_summary(attribute_deltas, drift_magnitude),
+                    severity=_severity_label(drift_magnitude),
+                    confidence=_confidence_label(artifact.discovery_confidence),
+                )
+            )
+
+    context = _preferred_profile_context(local_profile_context_by_path.get(artifact_path))
+    current_posture_label = "Baseline only"
+    if context is not None:
+        current_drift = _drift_magnitude(context.semantic_distance, context.attribute_deltas)
+        current_posture_label = _current_posture_label(current_drift)
+        episodes.append(
+            DriftEpisode(
+                episode_timestamp=float(context.created_at),
+                source_type=context.source_type,
+                source_label="Current posture",
+                source_ref=context.source_ref,
+                source_url=context.source_url,
+                episode_type="current_posture",
+                top_attributes=_top_attribute_labels(context.attribute_deltas),
+                episode_summary=(context.narrative[0] if context.narrative else "Current posture reflects the latest stored baseline-relative evidence for this artifact."),
+                severity=_severity_label(current_drift),
+                confidence=_confidence_label(artifact.discovery_confidence),
+                is_milestone=True,
+            )
+        )
+
+    episodes.sort(key=lambda item: (item.episode_timestamp, _storyline_episode_sort_rank(item), item.source_label))
+    episodes = _collapse_storyline_episodes(episodes)
+    limited_history_note = None
+    if historical_count < 2:
+        limited_history_note = "Limited history available. Showing the approved baseline and latest known drift evidence only."
+
+    return RepoArtifactStoryline(
+        artifact_path=artifact_path,
+        artifact_type=artifact.artifact_type,
+        summary=_storyline_summary(episodes),
+        baseline_label=f"Approved baseline recorded for {artifact_path}.",
+        current_posture_label=current_posture_label,
+        limited_history_note=limited_history_note,
+        episodes=episodes,
+    )
+
+
+def _load_storyline_context(db_path: str, repo_full: str):
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        return [], {}, {}
+    artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
+    baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+    top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
+    leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
+    metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
+    profile_context_by_path = _load_repo_artifact_profile_contexts(db_path, repo_full)
+
+    artifact_entries: list[RepoDashboardArtifactEntry] = []
+    for artifact in artifacts:
+        baseline = baseline_by_path.get(artifact.artifact_path)
+        metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
+        leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
+        artifact_entries.append(
+            RepoDashboardArtifactEntry(
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                discovery_reason=artifact.discovery_reason,
+                discovery_confidence=artifact.confidence,
+                baseline_line_count=baseline.line_count if baseline is not None else 0,
+                historical_version_count=metrics["historical_version_count"],
+                historical_profile_count=metrics["historical_profile_count"],
+                latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
+                latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
+                latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
+                latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
+                latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
+                latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
+                pr_profile_count=metrics["pr_profile_count"],
+                latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
+                latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
+                latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
+                latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
+                latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
+                leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
+                latest_activity_at=metrics["latest_activity_at"],
+            )
+        )
+    return artifact_entries, baseline_by_path, profile_context_by_path
+
+
+def _build_repo_history_cues(
+    artifacts: list[RepoDashboardArtifactEntry],
+    baseline_by_path,
+    profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
+) -> list[RepoHistoryCue]:
+    if not artifacts:
+        return []
+
+    repeated_candidates = sorted(
+        [artifact for artifact in artifacts if artifact.historical_profile_count >= 2],
+        key=lambda artifact: (-artifact.historical_profile_count, -artifact.latest_historical_drift_magnitude, artifact.artifact_path),
+    )
+    stale_candidates: list[tuple[float, RepoDashboardArtifactEntry]] = []
+    mixed: list[tuple[float, str]] = []
+    severe: list[tuple[float, str]] = []
+    provenance_gap_candidates: list[tuple[float, str]] = []
+    for artifact in artifacts:
+        baseline = baseline_by_path.get(artifact.artifact_path)
+        context = _preferred_profile_context(profile_context_by_path.get(artifact.artifact_path))
+        baseline_age_seconds = _baseline_age_seconds(artifact, baseline)
+        if baseline_age_seconds > 0:
+            stale_candidates.append((baseline_age_seconds, artifact))
+        if context is None:
+            if artifact.latest_activity_at > 0:
+                provenance_gap_candidates.append((artifact.latest_activity_at, artifact.artifact_path))
+            continue
+        deltas = context.attribute_deltas
+        positives = any(value > 0.05 for value in deltas.values())
+        negatives = any(value < -0.05 for value in deltas.values())
+        if positives and negatives:
+            mixed.append((_drift_magnitude(context.semantic_distance, deltas), artifact.artifact_path))
+        current_drift = _drift_magnitude(context.semantic_distance, deltas)
+        if _severity_label(current_drift) == "high":
+            severe.append((current_drift, artifact.artifact_path))
+        if not context.source_url:
+            provenance_gap_candidates.append((current_drift or artifact.latest_activity_at, artifact.artifact_path))
+
+    cues: list[RepoHistoryCue] = []
+    repeated = [artifact.artifact_path for artifact in repeated_candidates[:3]]
+    if repeated:
+        cues.append(
+            RepoHistoryCue(
+                cue_key="repeated_drift",
+                label="Repeated drift",
+                summary="These artifacts have more than one stored drift episode and should be reviewed for accumulation, not just the latest change.",
+                artifact_paths=repeated,
+            )
+        )
+    stale_candidates.sort(key=lambda item: (-item[0], item[1].artifact_path))
+    stale = [artifact.artifact_path for _, artifact in stale_candidates[:3]]
+    if stale:
+        oldest_age = _age_label(stale_candidates[0][0])
+        cues.append(
+            RepoHistoryCue(
+                cue_key="stale_baseline",
+                label="Baseline aging",
+                summary=f"These artifacts have moved since their approved baseline. The oldest visible gap is about {oldest_age}, so baseline freshness should be reviewed explicitly.",
+                artifact_paths=stale,
+            )
+        )
+    mixed.sort(key=lambda item: (-item[0], item[1]))
+    if mixed:
+        cues.append(
+            RepoHistoryCue(
+                cue_key="mixed_direction",
+                label="Mixed-direction drift",
+                summary="These artifacts show both strengthening and weakening moves across dimensions, so the reviewer should inspect the full storyline rather than a single score.",
+                artifact_paths=[artifact_path for _, artifact_path in mixed[:3]],
+            )
+        )
+    severe.sort(key=lambda item: (-item[0], item[1]))
+    if severe:
+        cues.append(
+            RepoHistoryCue(
+                cue_key="latest_high_severity",
+                label="Latest severe episodes",
+                summary="These artifacts currently end in a high-severity posture relative to their approved baseline.",
+                artifact_paths=[artifact_path for _, artifact_path in severe[:3]],
+            )
+        )
+    provenance_gap_candidates.sort(key=lambda item: (-item[0], item[1]))
+    provenance_gaps = [artifact_path for _, artifact_path in provenance_gap_candidates[:3]]
+    if provenance_gaps:
+        cues.append(
+            RepoHistoryCue(
+                cue_key="provenance_gaps",
+                label="Provenance gaps",
+                summary="These artifacts have stored movement but incomplete direct source links, so reviewers may need to confirm the backing change manually.",
+                artifact_paths=provenance_gaps,
+            )
+        )
+    return cues
+
+
+def _baseline_age_seconds(artifact: RepoDashboardArtifactEntry, baseline) -> float:
+    if baseline is None:
+        return 0.0
+    if artifact.latest_activity_at <= 0:
+        return 0.0
+    return max(0.0, float(artifact.latest_activity_at) - float(baseline.created_at))
+
+
+def _age_label(seconds: float) -> str:
+    if seconds >= 86400:
+        return f"{max(1, round(seconds / 86400))} day(s)"
+    if seconds >= 3600:
+        return f"{max(1, round(seconds / 3600))} hour(s)"
+    if seconds >= 60:
+        return f"{max(1, round(seconds / 60))} minute(s)"
+    return "moments"
+
+
+def _episode_type(attribute_deltas: dict[str, float]) -> str:
+    capability = attribute_deltas.get("capability_risk", 0.0)
+    guardrail = attribute_deltas.get("guardrail_robustness", 0.0)
+    autonomy = attribute_deltas.get("autonomy_level", 0.0)
+    governance = attribute_deltas.get("governance_strength", 0.0)
+    ranked = sorted(
+        [
+            ("capability", capability),
+            ("guardrail", guardrail),
+            ("autonomy", autonomy),
+            ("governance", governance),
+        ],
+        key=lambda item: abs(item[1]),
+        reverse=True,
+    )
+    if len([item for item in ranked if abs(item[1]) >= 0.05]) > 1:
+        return "mixed"
+    dominant_key, dominant_value = ranked[0]
+    if abs(dominant_value) < 0.05:
+        return "mixed"
+    if dominant_key == "guardrail":
+        return "guardrail_improvement" if dominant_value > 0 else "guardrail_regression"
+    if dominant_key == "capability":
+        return "capability_expansion" if dominant_value > 0 else "capability_reduction"
+    if dominant_key == "autonomy":
+        return "autonomy_increase" if dominant_value > 0 else "mixed"
+    if dominant_key == "governance":
+        return "governance_shift"
+    return "mixed"
+
+
+def _top_attribute_labels(attribute_deltas: dict[str, float]) -> list[str]:
+    label_by_key = {
+        "guardrail_robustness": "Guardrails",
+        "capability_risk": "Capability",
+        "autonomy_level": "Autonomy",
+        "governance_strength": "Governance",
+    }
+    ranked = sorted(attribute_deltas.items(), key=lambda item: abs(item[1]), reverse=True)
+    return [label_by_key[key] for key, value in ranked if key in label_by_key and abs(value) >= 0.03][:3]
+
+
+def _episode_summary(attribute_deltas: dict[str, float], drift_magnitude: float) -> str:
+    parts: list[str] = []
+    if attribute_deltas.get("guardrail_robustness", 0.0) < -0.05:
+        parts.append("guardrails weakened")
+    elif attribute_deltas.get("guardrail_robustness", 0.0) > 0.05:
+        parts.append("guardrails strengthened")
+    if attribute_deltas.get("capability_risk", 0.0) > 0.05:
+        parts.append("capability expanded")
+    elif attribute_deltas.get("capability_risk", 0.0) < -0.05:
+        parts.append("capability narrowed")
+    if attribute_deltas.get("autonomy_level", 0.0) > 0.05:
+        parts.append("autonomy increased")
+    if attribute_deltas.get("governance_strength", 0.0) < -0.05:
+        parts.append("governance weakened")
+    if parts:
+        return f"This episode {', '.join(parts[:2])} relative to the approved baseline."
+    return f"This episode registered {_severity_label(drift_magnitude)} baseline-relative drift without a single dominant dimension."
+
+
+def _storyline_summary(episodes: list[DriftEpisode]) -> str:
+    drift_episodes = [episode for episode in episodes if episode.episode_type not in {"baseline_milestone", "current_posture"}]
+    if not drift_episodes:
+        return "This control surface currently has an approved baseline but no meaningful post-baseline storyline yet."
+    capability_expansions = sum(1 for episode in drift_episodes if episode.episode_type == "capability_expansion")
+    guardrail_regressions = sum(1 for episode in drift_episodes if episode.episode_type == "guardrail_regression")
+    latest = drift_episodes[-1]
+    return (
+        f"Since the approved baseline, this control surface recorded {capability_expansions} capability expansion episode(s) "
+        f"and {guardrail_regressions} guardrail regression episode(s). The latest non-baseline episode is {latest.severity} severity."
+    )
+
+
+def _severity_label(drift_magnitude: float) -> str:
+    if drift_magnitude >= 0.75:
+        return "high"
+    if drift_magnitude >= 0.25:
+        return "medium"
+    return "low"
+
+
+def _current_posture_label(drift_magnitude: float) -> str:
+    label, _ = _classify_drift_magnitude(drift_magnitude)
+    return f"Current posture: {label}."
+
+
+def _collapse_storyline_episodes(episodes: list[DriftEpisode]) -> list[DriftEpisode]:
+    collapsed: list[DriftEpisode] = []
+    buffer: list[DriftEpisode] = []
+
+    def flush_buffer() -> None:
+        nonlocal buffer
+        if not buffer:
+            return
+        if len(buffer) == 1:
+            collapsed.extend(buffer)
+            buffer = []
+            return
+        collapsed.append(_group_storyline_episode_cluster(buffer))
+        buffer = []
+
+    for episode in episodes:
+        if episode.is_milestone:
+            flush_buffer()
+            collapsed.append(episode)
+            continue
+
+        if not buffer:
+            buffer = [episode]
+            continue
+
+        current_key = _storyline_grouping_key(buffer[-1])
+        next_key = _storyline_grouping_key(episode)
+        if current_key is not None and current_key == next_key:
+            buffer.append(episode)
+            continue
+
+        flush_buffer()
+        buffer = [episode]
+
+    flush_buffer()
+    return collapsed
+
+
+def _storyline_grouping_key(episode: DriftEpisode) -> tuple[str, str, str] | None:
+    if episode.is_milestone:
+        return None
+    if episode.source_type != "historical_backfill":
+        return None
+    if episode.episode_type in {"mixed", "baseline_milestone", "current_posture"}:
+        return None
+    if episode.severity == "high":
+        return None
+    top_attributes = episode.top_attributes or []
+    if not top_attributes:
+        return None
+    return (episode.source_type, episode.episode_type, top_attributes[0])
+
+
+def _group_storyline_episode_cluster(episodes: list[DriftEpisode]) -> DriftEpisode:
+    first = episodes[0]
+    last = episodes[-1]
+    unique_attributes: list[str] = []
+    for episode in episodes:
+        for attribute in episode.top_attributes or []:
+            if attribute not in unique_attributes:
+                unique_attributes.append(attribute)
+
+    severity_rank = {"low": 0, "medium": 1, "high": 2}
+    severity = max((episode.severity for episode in episodes), key=lambda value: severity_rank.get(value, 0))
+    attribute_phrase = unique_attributes[0].lower() if unique_attributes else "the same dimension"
+    episode_type_label = first.episode_type.replace("_", " ")
+    return DriftEpisode(
+        episode_timestamp=last.episode_timestamp,
+        source_type="historical_backfill_cluster",
+        source_label="Grouped historical drift",
+        source_ref=f"{first.source_ref} -> {last.source_ref}",
+        source_url=last.source_url,
+        episode_type=first.episode_type,
+        top_attributes=unique_attributes[:3],
+        episode_summary=(
+            f"Review this as one continuing {episode_type_label} pattern: {len(episodes)} nearby historical episodes touched "
+            f"{attribute_phrase} between {first.source_ref} and {last.source_ref}."
+        ),
+        severity=severity,
+        confidence=last.confidence,
+    )
+
+
+def _storyline_episode_sort_rank(episode: DriftEpisode) -> int:
+    if episode.episode_type == "baseline_milestone":
+        return 0
+    if episode.episode_type == "current_posture":
+        return 2
+    return 1
 
 
 def _build_repo_design_profiles(
