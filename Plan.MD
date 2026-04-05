@@ -140,7 +140,7 @@ This framing should shape roadmap decisions:
 23. Reviewer-facing PR comment tuning, risk-emoji headers, and escalation-label lifecycle sync
 
 ### Next prioritized slices after the merge
-1. Drift storyline and episode-history surface for repo case files and artifact detail flows
+1. Dashboard redesign v2 for triage-first shell, split-pane detail, and reduced scroll depth
 2. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos
 3. Signal fusion improvements between deterministic and semantic findings
 4. Discovery precision improvements for large OSS onboarding and backfill
@@ -148,6 +148,7 @@ This framing should shape roadmap decisions:
 6. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
 
 Suggested next branch sequence:
+- `feature/dashboard-redesign-v2`
 - `feature/drift-storyline-v1`
 - `feature/repo-evidence-v1`
 - `feature/signal-fusion-v1`
@@ -252,6 +253,24 @@ Current validation status:
 - `feature/dashboard-ux-v1`
 - cloud deployment scaffolding split with secured webhook/worker/api service boundaries
 
+#### 0. `feature/dashboard-redesign-v2`
+
+Purpose:
+- turn the current dashboard from a card-heavy document layout into a triage-first operator shell with a fixed left rail, sticky posture strip, split-pane review flow, and de-emphasized secondary context
+
+Planned scope:
+- replace the current index and repo page wrappers with a shared `app-shell` layout, icon-only sidebar, sticky posture strip, and fixed-height main columns
+- adapt `static/dashboard-index.js` and `static/dashboard-repo.js` to render into the new triage list, detail panel, secondary-row panels, and compact repo table without changing API shapes
+- replace the current CSS language with the issue-defined token system while deleting obsolete mode-switch, hero, wrap, and collapsible-layout classes that belong to the previous document-style UI
+- preserve the existing data-fetching logic and read models while introducing keyboard selection, auto-select-first-item behavior, and skeleton loading states for the new shell
+- remove repo-detail deep-history and artifact inventory from the primary view so the default surface answers what needs attention now with one obvious next action
+
+Implementation notes:
+- issue `#20` is explicitly frontend-only, so this slice should avoid Python, service, route, and payload changes unless a blocker is discovered and re-scoped intentionally
+- the work should be phased by shared shell first, then dashboard index migration, then repo-detail migration, then CSS deletion/cleanup so regressions stay understandable
+- the existing JS files contain useful data and rendering helpers, but many are coupled to the old `Triage` / `Coverage` mode split and should be adapted rather than transplanted mechanically
+- the current roadmap numbering above uses `20` for a different optimization item; when discussing next work with GitHub issue numbers, refer to this slice explicitly as GitHub issue `#20` to avoid ambiguity
+
 #### 1. `feature/repo-evidence-v1`
 
 Purpose:
@@ -263,7 +282,7 @@ Planned scope:
 - enrich history-backed insights with stronger source attribution and reviewer-facing context
 - keep the read-model focused on actionable evidence rather than new top-level dashboard chrome
 
-#### 0. `feature/drift-storyline-v1`
+#### Completed: `feature/drift-storyline-v1`
 
 Purpose:
 - turn the existing artifact history and lightweight timeline groundwork into a first-class case-file storyline for important control surfaces
