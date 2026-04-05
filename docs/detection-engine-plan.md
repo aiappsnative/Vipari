@@ -76,7 +76,7 @@ Implemented today:
 - background worker execution with deterministic analysis, semantic review, retry handling, and fallback behavior
 - split-service execution scaffolding with dedicated webhook ingress, worker, and dashboard/API entrypoints
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
-- escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels for high-confidence cases
+- escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels synced to the latest high-confidence recommendation
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - approved-baseline-aware drift comparisons shared across PR review, onboarding history, and dashboard read models
@@ -194,7 +194,7 @@ The expensive path should run in a background worker:
 - LLM review
 - retry and backoff handling
 - deterministic fallback generation if the LLM remains unavailable
-- create a fresh managed PR comment and delete the previous managed one after successful posting
+- upsert the managed PR comment for the current head SHA, preserve earlier commit episodes, and sync the escalation label to the current recommendation
 - durable audit persistence
 - mark the job failed if durable persistence cannot be completed after comment publication
 
