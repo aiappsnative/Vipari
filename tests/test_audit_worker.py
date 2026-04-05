@@ -398,7 +398,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -468,7 +468,7 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 303,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -1409,7 +1409,7 @@ def test_worker_marks_job_failed_when_persistence_fails_after_fallback_comment_p
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5252)
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
     monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
@@ -1591,7 +1591,10 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1605,7 +1608,7 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 11, "token", "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 11, "token", True, "promptdrift: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1652,7 +1655,10 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 2111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1666,7 +1672,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert "Recommendation: Revert before merge." in posted[0][0]
-    assert labels == [("doria90/dummyAI", 111, "token", "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 111, "token", True, "promptdrift: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1674,7 +1680,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert audit.suggested_risk_level == "High"
 
 
-def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
+def test_worker_removes_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
     create_audit_job(
@@ -1695,7 +1701,10 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1212,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1709,7 +1718,7 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == []
+    assert labels == [("doria90/dummyAI", 12, "token", False, "promptdrift: escalate-before-merge")]
 
 
 def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):
@@ -1733,7 +1742,7 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     def fail_label(*args, **kwargs):
         raise RuntimeError("labels unavailable")
 
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", fail_label)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", fail_label)
 
     settings = WorkerSettings(
         db_path=db_path,

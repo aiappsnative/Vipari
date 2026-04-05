@@ -27,7 +27,7 @@ from .audit_records import (
     get_previous_audit_comment_episode_for_pr,
     record_audit_result,
 )
-from .github_integration import ensure_pr_label, fetch_file_content, generate_jwt, get_installation_token, upsert_pr_comment
+from .github_integration import fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 
 
@@ -929,15 +929,13 @@ def _apply_escalation_label_for_job(
     *,
     installation_token: str | None = None,
 ) -> None:
-    if not recommendation.requires_label:
-        return
-
     token = installation_token or _get_installation_token_for_job(job, settings)
-    ensure_pr_label(
+    sync_pr_label(
         job.repo_full,
         job.pr_number,
         token,
-        label_name=recommendation.label_name,
+        should_have_label=recommendation.requires_label,
+        label_name=recommendation.label_name or "promptdrift: escalate-before-merge",
     )
 
 

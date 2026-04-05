@@ -8,7 +8,7 @@ from urllib.request import Request
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services import github_integration
-from services.github_integration import _resolve_private_key_path, ensure_pr_label, generate_jwt
+from services.github_integration import _resolve_private_key_path, ensure_pr_label, generate_jwt, remove_pr_label, sync_pr_label
 
 
 def test_resolve_private_key_path_prefers_cwd_when_relative_file_exists(tmp_path, monkeypatch):
@@ -363,3 +363,102 @@ def test_ensure_pr_label_is_idempotent_when_label_already_exists(monkeypatch):
     assert applied is False
     assert created_labels == []
     assert issue_added_labels == []
+
+
+def test_remove_pr_label_removes_existing_issue_label(monkeypatch):
+    removed_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL), FakeLabel("bug")]
+
+        def get_labels(self):
+            return self.labels
+
+        def remove_from_labels(self, label_name):
+            removed_labels.append(label_name)
+            self.labels = [label for label in self.labels if label.name != label_name]
+
+    class FakeRepo:
+        def __init__(self):
+            self.issue = FakeIssue()
+
+        def get_issue(self, number):
+            assert number == 11
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    removed = remove_pr_label("doria90/dummyAI", 11, "installation-token")
+
+    assert removed is True
+    assert removed_labels == [github_integration.PROMPTDRIFT_ESCALATION_LABEL]
+
+
+def test_remove_pr_label_is_noop_when_label_absent(monkeypatch):
+    removed_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = [FakeLabel("bug")]
+
+        def get_labels(self):
+            return self.labels
+
+        def remove_from_labels(self, label_name):
+            removed_labels.append(label_name)
+
+    class FakeRepo:
+        def __init__(self):
+            self.issue = FakeIssue()
+
+        def get_issue(self, number):
+            assert number == 12
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    removed = remove_pr_label("doria90/dummyAI", 12, "installation-token")
+
+    assert removed is False
+    assert removed_labels == []
+
+
+def test_sync_pr_label_removes_label_when_not_required(monkeypatch):
+    captured = []
+
+    monkeypatch.setattr(github_integration, "remove_pr_label", lambda repo, pr, token, label_name=None: captured.append((repo, pr, token, label_name)) or True)
+
+    changed = sync_pr_label(
+        "doria90/dummyAI",
+        13,
+        "installation-token",
+        should_have_label=False,
+    )
+
+    assert changed is True
+    assert captured == [("doria90/dummyAI", 13, "installation-token", github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
