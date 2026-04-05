@@ -428,7 +428,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "## PromptDrift: Escalate before merge" in posted[0][0]
+    assert "## ❌ PromptDrift: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
@@ -564,7 +564,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
     assert "### What changed" in comment
     assert "<details>" in comment
     assert "<summary>PromptDrift review details</summary>" in comment
@@ -613,7 +613,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
     assert "High risk · unknown control surface · vs approved baseline `none-yet`" in comment
     assert "The prompt now allows disclosure of internal policy details" in comment
     assert "<details>" in comment
@@ -660,7 +660,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="def987654", analyzed_at=1_700_000_100),
     )
 
-    assert comment.startswith("## PromptDrift: Re-baseline follow-up after merge")
+    assert comment.startswith("## ✅ PromptDrift: Re-baseline follow-up after merge")
     assert "This change adds a clarifying-question instruction" in comment
     assert "Promote the updated artifact to approved baseline after merge." in comment
 
@@ -768,7 +768,7 @@ index 1..2
         ],
     )
 
-    assert comment.startswith("## PromptDrift: Keep in normal review lane")
+    assert comment.startswith("## ✅ PromptDrift: Keep in normal review lane")
     assert "Low risk · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment

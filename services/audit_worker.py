@@ -226,7 +226,7 @@ def _build_pr_comment_review(
 
 def _render_pr_comment_review(review: PrCommentReview) -> str:
     lines = [
-        f"## PromptDrift: {_decision_header(review.decision)}",
+        f"## {_risk_indicator_emoji(review.risk_level)} PromptDrift: {_decision_header(review.decision)}",
         "",
         review.context_line,
         "",
@@ -260,6 +260,15 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _risk_indicator_emoji(risk_level: str) -> str:
+    normalized = _normalize_risk_level(risk_level)
+    if normalized == "High":
+        return "❌"
+    if normalized == "Medium":
+        return "⚠️"
+    return "✅"
 
 
 def _build_comment_decision(
