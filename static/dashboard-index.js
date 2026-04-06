@@ -66,6 +66,16 @@ function detailButton() {
     return document.getElementById("detail-escalate-btn");
 }
 
+const repoDashboardCache = new Map();
+let overviewRepoPreviewState = {
+    repoFull: null,
+    activeRepoFull: null,
+    lockedRepoFull: null,
+    hoveredRepoFull: null,
+    requestToken: 0,
+    itemsByRepo: new Map(),
+};
+
 function detailAttributeProfile(item) {
     const riskItem = item._matchedRiskItem || null;
     return asArray(riskItem?.attribute_profile).filter((entry) => entry.attribute_key !== "control_surface_type");
@@ -161,6 +171,419 @@ function renderAttributeBars(entries) {
     }).join("");
 }
 
+function normalizeScore(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return 0;
+    }
+    return clamp(numeric, 0, 1);
+}
+
+function averageNumeric(values) {
+    const numeric = values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    if (!numeric.length) {
+        return 0;
+    }
+    return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+}
+
+function averageAbsolute(values) {
+    return averageNumeric(values.map((value) => Math.abs(Number(value) || 0)));
+}
+
+function repoCurrentProfile(payload) {
+    const profiles = asArray(payload?.design_profiles);
+    if (!profiles.length) {
+        return null;
+    }
+    return {
+        guardrails: normalizeScore(averageNumeric(profiles.map((profile) => profile?.current_profile?.guardrail_robustness))),
+        capability: normalizeScore(averageNumeric(profiles.map((profile) => profile?.current_profile?.capability_risk))),
+        autonomy: normalizeScore(averageNumeric(profiles.map((profile) => profile?.current_profile?.autonomy_level))),
+        governance: normalizeScore(averageNumeric(profiles.map((profile) => profile?.current_profile?.governance_strength))),
+        changeVelocity: normalizeScore(Math.min(1, Number(payload?.backfill?.total_historical_versions || 0) / 12)),
+        criticality: normalizeScore(Math.min(1, averageAbsolute(asArray(payload?.artifacts).map((artifact) => artifact?.leaderboard_drift_magnitude || artifact?.latest_historical_drift_magnitude || 0)) * 1.6)),
+    };
+}
+
+function repoBaselineProfile(payload) {
+    const profiles = asArray(payload?.design_profiles);
+    if (!profiles.length) {
+        return null;
+    }
+    const current = repoCurrentProfile(payload);
+    return {
+        guardrails: normalizeScore(averageNumeric(profiles.map((profile) => profile?.baseline_profile?.guardrail_robustness))),
+        capability: normalizeScore(averageNumeric(profiles.map((profile) => profile?.baseline_profile?.capability_risk))),
+        autonomy: normalizeScore(averageNumeric(profiles.map((profile) => profile?.baseline_profile?.autonomy_level))),
+        governance: normalizeScore(averageNumeric(profiles.map((profile) => profile?.baseline_profile?.governance_strength))),
+        changeVelocity: normalizeScore(Math.max(0.08, (current?.changeVelocity || 0) * 0.35)),
+        criticality: normalizeScore(Math.max(0.18, (current?.criticality || 0.25) * 0.82)),
+    };
+}
+
+function repoPreviousProfile(payload) {
+    const timeline = asArray(payload?.history_timelines)[0];
+    if (!timeline || !asArray(timeline.points).length) {
+        return null;
+    }
+    const latestPoint = asArray(timeline.points).slice(-1)[0];
+    const current = repoCurrentProfile(payload);
+    if (!latestPoint || !current) {
+        return null;
+    }
+    return {
+        guardrails: normalizeScore(current.guardrails + (Number(latestPoint.guardrail_shift || 0) * 0.5)),
+        capability: normalizeScore(current.capability - (Number(latestPoint.capability_shift || 0) * 0.5)),
+        autonomy: normalizeScore(current.autonomy - (Number(latestPoint.autonomy_shift || 0) * 0.5)),
+        governance: normalizeScore(current.governance + (Number(latestPoint.guardrail_shift || 0) * 0.15)),
+        changeVelocity: normalizeScore(Math.max(0.06, (current.changeVelocity || 0) * 0.7)),
+        criticality: normalizeScore(Math.max(0.12, (current.criticality || 0) * 0.92)),
+    };
+}
+
+function repoRadarVectors(payload) {
+    const current = repoCurrentProfile(payload);
+    const baseline = repoBaselineProfile(payload);
+    if (!current || !baseline) {
+        return null;
+    }
+    const previous = repoPreviousProfile(payload);
+    const labels = ["Guardrails", "Capability", "Autonomy", "Governance", "Change velocity", "Criticality"];
+    return {
+        labels,
+        series: [
+            {
+                label: "Approved baseline",
+                color: "#4f98a3",
+                fill: "rgba(79, 152, 163, 0.12)",
+                values: [baseline.guardrails, baseline.capability, baseline.autonomy, baseline.governance, baseline.changeVelocity, baseline.criticality],
+            },
+            previous
+                ? {
+                    label: "Recent version",
+                    color: "#5591c7",
+                    fill: "rgba(85, 145, 199, 0.10)",
+                    values: [previous.guardrails, previous.capability, previous.autonomy, previous.governance, previous.changeVelocity, previous.criticality],
+                }
+                : null,
+            {
+                label: "Current head",
+                color: "#e0914a",
+                fill: "rgba(224, 145, 74, 0.12)",
+                values: [current.guardrails, current.capability, current.autonomy, current.governance, current.changeVelocity, current.criticality],
+            },
+        ].filter(Boolean),
+    };
+}
+
+function drawRepoRadar(vectors) {
+    const canvas = document.getElementById("repo-posture-radar");
+    if (!canvas) {
+        return;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) {
+        return;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!vectors) {
+        return;
+    }
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = Math.min(canvas.width, canvas.height) * 0.34;
+    const count = vectors.labels.length;
+    const angleStep = (Math.PI * 2) / count;
+
+    context.strokeStyle = "rgba(255,255,255,0.08)";
+    context.lineWidth = 1;
+    for (let level = 1; level <= 4; level += 1) {
+        const scale = level / 4;
+        context.beginPath();
+        vectors.labels.forEach((_, index) => {
+            const angle = -Math.PI / 2 + (index * angleStep);
+            const x = centerX + Math.cos(angle) * radius * scale;
+            const y = centerY + Math.sin(angle) * radius * scale;
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.stroke();
+    }
+
+    vectors.labels.forEach((label, index) => {
+        const angle = -Math.PI / 2 + (index * angleStep);
+        const axisX = centerX + Math.cos(angle) * radius;
+        const axisY = centerY + Math.sin(angle) * radius;
+        context.beginPath();
+        context.moveTo(centerX, centerY);
+        context.lineTo(axisX, axisY);
+        context.strokeStyle = "rgba(255,255,255,0.08)";
+        context.stroke();
+
+        const labelX = centerX + Math.cos(angle) * (radius + 20);
+        const labelY = centerY + Math.sin(angle) * (radius + 20);
+        context.fillStyle = "#797876";
+        context.font = "500 11px Inter";
+        context.textAlign = labelX >= centerX + 8 ? "left" : labelX <= centerX - 8 ? "right" : "center";
+        context.textBaseline = labelY >= centerY + 8 ? "top" : labelY <= centerY - 8 ? "bottom" : "middle";
+        context.fillText(label, labelX, labelY);
+    });
+
+    vectors.series.forEach((series) => {
+        context.beginPath();
+        series.values.forEach((value, index) => {
+            const angle = -Math.PI / 2 + (index * angleStep);
+            const x = centerX + Math.cos(angle) * radius * value;
+            const y = centerY + Math.sin(angle) * radius * value;
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.fillStyle = series.fill;
+        context.strokeStyle = series.color;
+        context.lineWidth = 2;
+        context.fill();
+        context.stroke();
+    });
+}
+
+function renderRepoRadarLegend(vectors) {
+    if (!vectors) {
+        return '<div class="muted">No repo posture vectors are available for this repo yet.</div>';
+    }
+    return vectors.series.map((series) => `
+        <div class="radar-legend-item">
+            <span class="coverage-legend-dot" style="background:${series.color}"></span>
+            <span>${escapeHtml(series.label)}</span>
+        </div>
+    `).join("");
+}
+
+function latestActivityLabel(payload) {
+    const timestamps = asArray(payload?.artifacts).map((artifact) => Number(artifact.latest_activity_at)).filter((value) => Number.isFinite(value) && value > 0);
+    if (!timestamps.length) {
+        return "Recent activity unavailable";
+    }
+    const latest = Math.max(...timestamps);
+    const deltaHours = Math.max(Math.round((Date.now() / 1000 - latest) / 3600), 0);
+    if (deltaHours < 1) {
+        return "Updated within the last hour";
+    }
+    if (deltaHours < 24) {
+        return `Updated ${deltaHours}h ago`;
+    }
+    const days = Math.round(deltaHours / 24);
+    return `Updated ${days}d ago`;
+}
+
+function summarizeBaselineStatus(repo, payload = null) {
+    if ((repo?.highest_baseline_label || "").includes("Approved") || Number(payload?.baseline_version_count || 0) > 0) {
+        return "Approved";
+    }
+    if (Number(payload?.backfill?.total_historical_versions || 0) > 0) {
+        return "Historical fallback";
+    }
+    return "No baseline";
+}
+
+function summarizeMonitoredSurfaces(payload) {
+    const groups = asArray(payload?.control_surface_groups);
+    if (!groups.length) {
+        return "—";
+    }
+    return groups.slice(0, 2).map((group) => group.label).join(" · ");
+}
+
+function summarizeVersionCount(payload) {
+    const versions = Number(payload?.backfill?.total_historical_versions || 0);
+    return String(versions);
+}
+
+function summarizeDriftMagnitude(repo) {
+    const drift = Number(repo?.top_drift_magnitude || 0);
+    return drift.toFixed(2);
+}
+
+function renderJourneyPreview(payload) {
+    const timelines = asArray(payload?.history_timelines);
+    const topTimeline = timelines[0] || null;
+    const points = asArray(topTimeline?.points);
+    const latestPoint = points.slice(-1)[0] || null;
+    const earliestPoint = points[0] || null;
+    const milestones = [
+        { label: "Baseline", value: `${Number(payload?.baseline_version_count || 0)}`, caption: "approved", tone: "primary" },
+        earliestPoint ? { label: "First change", value: escapeHtml(earliestPoint.source_ref || earliestPoint.label || "history"), caption: "history", tone: "medium" } : null,
+        latestPoint ? { label: "Recent change", value: escapeHtml(latestPoint.source_ref || latestPoint.label || "recent"), caption: `${Number(latestPoint.drift_magnitude || 0).toFixed(2)} drift`, tone: "gap" } : null,
+        { label: "Current", value: `${Number(asArray(payload?.artifacts).length || 0)} surfaces`, caption: latestActivityLabel(payload), tone: "low" },
+    ].filter(Boolean);
+    return milestones.map((milestone, index) => `
+        <div class="journey-node journey-tone-${escapeHtml(milestone.tone)}">
+            <div class="journey-node-value journey-node-text">${milestone.value}</div>
+            <div class="journey-node-label">${escapeHtml(milestone.label)}</div>
+            <div class="journey-node-caption">${escapeHtml(milestone.caption || "")}</div>
+            ${index < milestones.length - 1 ? '<div class="journey-node-link" aria-hidden="true"></div>' : ""}
+        </div>
+    `).join("");
+}
+
+function journeyPreviewNote(payload) {
+    const historicalVersions = Number(payload?.backfill?.total_historical_versions || 0);
+    const timelines = asArray(payload?.history_timelines);
+    const topTimeline = timelines[0] || null;
+    const timelineCount = timelines.length;
+    if (!historicalVersions && !timelineCount) {
+        return "Full repo version journey needs snapshot backend support; this preview shows what PromptDrift already tracks today.";
+    }
+    if (topTimeline) {
+        return `${topTimeline.artifact_path} shows ${topTimeline.point_count} stored checkpoints; full repo journey still needs snapshot backend support.`;
+    }
+    return `${historicalVersions} historical artifact versions and ${timelineCount} tracked storyline timelines are currently available for preview.`;
+}
+
+function renderRepoRecentChanges(payload, repo) {
+    const profile = asArray(payload?.design_profiles).find((item) => item.artifact_path === artifactPathForRepo(repo)) || asArray(payload?.design_profiles)[0];
+    const groups = asArray(payload?.control_surface_groups).slice(0, 3).map((group) => group.label.toLowerCase());
+    const findings = asArray(profile?.attribute_findings);
+    const changes = [];
+    if (profile?.headline_summary) {
+        changes.push(profile.headline_summary.replace(/drift/gi, "change"));
+    }
+    findings.slice(0, 3).forEach((finding) => {
+        changes.push(`${finding.label} ${finding.direction} (${Math.abs(Number(finding.delta || 0)).toFixed(2)}).`);
+    });
+    if (groups.length) {
+        changes.push(`Most active control surfaces: ${groups.join(", ")}.`);
+    }
+    if (!changes.length) {
+        changes.push("Recent repository changes are available, but no dominant neutral change summary has been isolated yet.");
+    }
+    return changes.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+}
+
+function renderRepoChangeBreakdown(payload, repo) {
+    const profile = asArray(payload?.design_profiles).find((item) => item.artifact_path === artifactPathForRepo(repo)) || asArray(payload?.design_profiles)[0];
+    const attributeProfile = asArray(profile?.attribute_profile);
+    if (attributeProfile.length) {
+        return renderAttributeBars(attributeProfile.filter((entry) => entry.attribute_key !== "control_surface_type"));
+    }
+    return renderAttributeBars(detailAttributeProfile(repo));
+}
+
+async function fetchRepoDashboard(repoFull) {
+    if (!repoFull) {
+        return null;
+    }
+    if (repoDashboardCache.has(repoFull)) {
+        return repoDashboardCache.get(repoFull);
+    }
+    const request = fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`)
+        .then(async (response) => {
+            if (!response.ok) {
+                throw new Error(`Repo dashboard request failed with ${response.status}`);
+            }
+            return response.json();
+        })
+        .catch((error) => {
+            repoDashboardCache.delete(repoFull);
+            throw error;
+        });
+    repoDashboardCache.set(repoFull, request);
+    return request;
+}
+
+function selectRepoTableRow(repoFull) {
+    document.querySelectorAll("[data-repo-row]").forEach((row) => {
+        row.classList.toggle("selected", row.getAttribute("data-repo-row") === repoFull);
+    });
+}
+
+function updateRepoPreviewHeader(repo, payload) {
+    setText("repo-radar-title", `${repo.repo_full} posture`);
+    setText("repo-radar-subtitle", `${summarizeBaselineStatus(repo, payload)} baseline · ${Number(payload?.baseline_version_count || 0)} approved checkpoints · ${asArray(payload?.artifacts).length} tracked surfaces`);
+    setText("repo-radar-meta", latestActivityLabel(payload));
+}
+
+function hydrateRepoTableRow(repo, payload) {
+    const row = document.querySelector(`[data-repo-row="${CSS.escape(repo.repo_full)}"]`);
+    if (!row) {
+        return;
+    }
+    const cells = row.querySelectorAll("td");
+    if (cells.length < 7) {
+        return;
+    }
+    cells[3].textContent = summarizeVersionCount(payload);
+    cells[4].textContent = summarizeBaselineStatus(repo, payload);
+    cells[5].textContent = latestActivityLabel(payload);
+    cells[6].textContent = summarizeMonitoredSurfaces(payload);
+}
+
+async function enrichOverviewRepoDetail(repo, mode = "full") {
+    const shell = document.getElementById("repo-radar-shell");
+    if (shell) {
+        shell.classList.add("loading-shell", "muted");
+    }
+    const requestToken = ++overviewRepoPreviewState.requestToken;
+    overviewRepoPreviewState.repoFull = repo.repo_full;
+    if (mode === "full") {
+        overviewRepoPreviewState.activeRepoFull = repo.repo_full;
+        overviewRepoPreviewState.lockedRepoFull = repo.repo_full;
+        selectRepoTableRow(repo.repo_full);
+    }
+    if (mode === "preview") {
+        overviewRepoPreviewState.hoveredRepoFull = repo.repo_full;
+    }
+    try {
+        const payload = await fetchRepoDashboard(repo.repo_full);
+        if (requestToken !== overviewRepoPreviewState.requestToken || overviewRepoPreviewState.repoFull !== repo.repo_full) {
+            return;
+        }
+        const vectors = repoRadarVectors(payload);
+        drawRepoRadar(vectors);
+        setSectionHtml("repo-posture-legend", renderRepoRadarLegend(vectors));
+        updateRepoPreviewHeader(repo, payload);
+        setSectionHtml("repo-journey-strip", renderJourneyPreview(payload));
+        setText("repo-journey-note", journeyPreviewNote(payload));
+        hydrateRepoTableRow(repo, payload);
+        if (mode === "full") {
+            setSectionHtml("detail-attributes", renderRepoChangeBreakdown(payload, repo));
+            setSectionHtml("detail-evidence-list", renderRepoRecentChanges(payload, repo));
+        }
+    } catch (error) {
+        if (requestToken !== overviewRepoPreviewState.requestToken) {
+            return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to load repo posture preview.";
+        setSectionHtml("repo-posture-legend", `<div class="muted">${escapeHtml(message)}</div>`);
+        setSectionHtml("repo-journey-strip", `<div class="muted">${escapeHtml(message)}</div>`);
+        setText("repo-journey-note", message);
+        setText("repo-radar-meta", message);
+        drawRepoRadar(null);
+    } finally {
+        if (requestToken === overviewRepoPreviewState.requestToken && shell) {
+            shell.classList.remove("loading-shell", "muted");
+        }
+    }
+}
+
+function restoreRepoPreview() {
+    const repoFull = overviewRepoPreviewState.lockedRepoFull || overviewRepoPreviewState.activeRepoFull;
+    const item = repoFull ? overviewRepoPreviewState.itemsByRepo.get(repoFull) : null;
+    if (!item) {
+        return;
+    }
+    enrichOverviewRepoDetail(item, "preview");
+}
+
 function setDetailScore(repo) {
     const profile = detailAttributeProfile(repo);
     const baselineScore = averageProfileValue(profile, "baseline");
@@ -223,6 +646,16 @@ function applyOverviewDetail(repo) {
     setSectionHtml("detail-attributes", renderAttributeBars(detailAttributeProfile(repo)));
     setSectionHtml("detail-evidence-list", renderEvidenceList(repo));
     setText("detail-recommendation-body", repo.highest_recommended_action || repo.highest_flag_summary || "Inspect the selected repository case file before merge and confirm the changed control surface is still acceptable.");
+    overviewRepoPreviewState.activeRepoFull = repo.repo_full;
+    overviewRepoPreviewState.lockedRepoFull = repo.repo_full;
+    selectRepoTableRow(repo.repo_full);
+    setText("repo-radar-title", `${repo.repo_full} posture`);
+    setText("repo-radar-subtitle", subtitle);
+    setText("repo-radar-meta", "Loading repo posture preview...");
+    setSectionHtml("repo-posture-legend", '<div class="muted">Loading posture comparison...</div>');
+    setSectionHtml("repo-journey-strip", '<div class="muted">Loading repo journey preview...</div>');
+    setText("repo-journey-note", "Loading current repo history preview...");
+    enrichOverviewRepoDetail(repo, "full");
 
     const button = detailButton();
     if (button) {
@@ -393,27 +826,71 @@ function populateCoverageSummary(attentionRepos = [], repos = []) {
 
 function renderReposTable(repos = [], attentionRepos = []) {
     if (!repos.length) {
-        return '<tr><td colspan="5" class="muted">No onboarded repositories yet.</td></tr>';
+        return '<tr><td colspan="7" class="muted">No onboarded repositories yet.</td></tr>';
     }
     const attentionByRepo = new Map(attentionRepos.map((item) => [item.repo_full, item]));
     return repos.map((repo) => {
         const attention = attentionByRepo.get(repo.repo_full);
         const openItems = Number(attention?.review_now_count || 0) + Number(attention?.watch_count || 0);
-        const status = attention?.highest_priority === "review_now"
-            ? { label: "Urgent", className: "severity-high" }
-            : attention?.highest_priority === "watch"
-                ? { label: "Review needed", className: "severity-medium" }
-                : { label: "Stable", className: "severity-low" };
         return `
-            <tr>
+            <tr class="repos-table-row" data-repo-row="${escapeHtml(repo.repo_full)}" tabindex="0">
                 <td><a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${escapeHtml(repo.repo_full)}</a></td>
-                <td>${Number(repo.discovered_artifact_count || 0)}</td>
                 <td>${openItems}</td>
-                <td>${escapeHtml(repo.default_branch || "n/a")}</td>
-                <td><span class="severity-badge ${status.className}">${status.label}</span></td>
+                <td>${summarizeDriftMagnitude(attention)}</td>
+                <td>—</td>
+                <td>${escapeHtml(summarizeBaselineStatus(attention || repo))}</td>
+                <td>Loading…</td>
+                <td>Loading…</td>
             </tr>
         `;
     }).join("");
+}
+
+function bindRepoTablePreview(items) {
+    const itemsByRepo = new Map(items.map((item) => [item.repo_full, item]));
+    document.querySelectorAll("[data-repo-row]").forEach((row) => {
+        const repoFull = row.getAttribute("data-repo-row") || "";
+        const item = itemsByRepo.get(repoFull);
+        if (!item || row.dataset.boundPreview === "true") {
+            return;
+        }
+        row.dataset.boundPreview = "true";
+        const preview = () => {
+            overviewRepoPreviewState.hoveredRepoFull = repoFull;
+            setText("repo-radar-title", `${repoFull} posture`);
+            setText("repo-radar-subtitle", "Previewing repo posture from the repository table.");
+            setText("repo-radar-meta", "Loading repo posture preview...");
+            enrichOverviewRepoDetail(item, "preview");
+        };
+        row.addEventListener("mouseenter", preview);
+        row.addEventListener("focus", preview);
+        row.addEventListener("mouseleave", restoreRepoPreview);
+        row.addEventListener("blur", restoreRepoPreview);
+        row.addEventListener("click", (event) => {
+            if (event.target instanceof Element && event.target.closest("a")) {
+                return;
+            }
+            applyOverviewDetail(item);
+        });
+        row.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                applyOverviewDetail(item);
+            }
+        });
+    });
+}
+
+function warmRepoSummaries(items) {
+    items.forEach((item) => {
+        fetchRepoDashboard(item.repo_full)
+            .then((payload) => {
+                hydrateRepoTableRow(item, payload);
+            })
+            .catch(() => {
+                // Keep placeholder cells if this repo summary cannot be enriched.
+            });
+    });
 }
 
 function populateOverviewStats(payload, attentionRepos, highestRiskItems, controlSurfaceRisk, repos) {
@@ -441,6 +918,7 @@ async function loadOverview() {
         const controlSurfaceCoverage = asArray(payload.control_surface_coverage);
         const repos = asArray(payload.repos);
         const selectionItems = buildOverviewSelectionItems(attentionRepos, highestRiskItems);
+        overviewRepoPreviewState.itemsByRepo = new Map(selectionItems.map((item) => [item.repo_full, item]));
 
         populateOverviewStats(payload, attentionRepos, highestRiskItems, controlSurfaceRisk, repos);
         setSectionHtml("drift-type-bars", renderDriftTypeBars(controlSurfaceRisk));
@@ -448,6 +926,8 @@ async function loadOverview() {
         setSectionHtml("repos-tbody", renderReposTable(repos, attentionRepos));
         renderOverviewQueue(selectionItems, "all");
         bindOverviewFilters(selectionItems);
+        bindRepoTablePreview(selectionItems);
+        warmRepoSummaries(selectionItems);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown overview error";
         const fallback = `<div class="muted">Unable to load dashboard overview. ${escapeHtml(message)}</div>`;
@@ -458,11 +938,13 @@ async function loadOverview() {
         setText("triage-count", "Unavailable");
         setText("repos-count", "Unavailable");
         setSectionHtml("triage-list", fallback);
+        setSectionHtml("repo-posture-legend", fallback);
+        setSectionHtml("repo-journey-strip", fallback);
         setSectionHtml("detail-attributes", fallback);
         setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
         setSectionHtml("drift-type-bars", fallback);
         setSectionHtml("coverage-legend", fallback);
-        setSectionHtml("repos-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);
+        setSectionHtml("repos-tbody", `<tr><td colspan="7" class="muted">${escapeHtml(message)}</td></tr>`);
         setText("coverage-note", "Critical surfaces covered: unavailable");
         setText("detail-artifact-name", "Overview unavailable");
         setText("detail-subtitle", message);

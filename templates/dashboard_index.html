@@ -24,14 +24,14 @@
             <div class="sidebar-nav-group">
                 <a href="/dashboard" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="shield-check"></i></a>
                  <a href="#triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue"><i data-lucide="git-pull-request"></i></a>
-                 <a href="#drift-section" class="sidebar-nav-item" aria-label="Drift Types" data-tooltip="Drift Types"><i data-lucide="box"></i></a>
+                  <a href="#radar-section" class="sidebar-nav-item" aria-label="Repo Posture" data-tooltip="Repo Posture"><i data-lucide="box"></i></a>
                  <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repositories" data-tooltip="Repositories"><i data-lucide="building-2"></i></a>
             </div>
 
             <div class="sidebar-divider"></div>
 
             <div class="sidebar-nav-group sidebar-nav-group-secondary">
-                 <a href="#coverage-section" class="sidebar-nav-item" aria-label="Baseline Coverage" data-tooltip="Baseline Coverage"><i data-lucide="history"></i></a>
+                 <a href="#journey-section" class="sidebar-nav-item" aria-label="Version Journey" data-tooltip="Version Journey"><i data-lucide="history"></i></a>
                  <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repository Inventory" data-tooltip="Repository Inventory"><i data-lucide="layers"></i></a>
                  <a href="#coverage-section" class="sidebar-nav-item" aria-label="Baselines" data-tooltip="Baselines"><i data-lucide="flag"></i></a>
                  <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page"><i data-lucide="settings"></i></a>
@@ -75,67 +75,81 @@
                             </div>
                         </div>
                         <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading ranked queue...</div>
-                    </section>
-
-                    <aside class="detail-panel" id="detail-panel">
-                        <div class="detail-panel-header card-shell">
-                            <div class="detail-panel-title-row">
-                                <span class="detail-artifact-name" id="detail-artifact-name">—</span>
-                                <span class="severity-badge severity-medium" id="detail-severity-badge">—</span>
-                            </div>
-                            <div class="detail-panel-subtitle" id="detail-subtitle">—</div>
-                        </div>
-                        <div class="detail-score-row card-shell">
-                            <div class="score-card score-card-baseline">
-                                <div class="score-number" id="detail-baseline-score" aria-live="polite">—</div>
-                                <div class="score-label" id="detail-baseline-label">Baseline</div>
-                            </div>
-                            <div class="score-arrow">→</div>
-                            <div class="score-card score-card-current">
-                                <div class="score-number" id="detail-current-score" aria-live="polite">—</div>
-                                <div class="score-label" id="detail-current-label">Current</div>
-                            </div>
-                            <div class="score-delta" id="detail-score-delta">—</div>
-                        </div>
                         <div class="card-shell">
-                            <div class="detail-section-label">Drift by type</div>
-                            <div id="drift-type-bars" class="loading-shell muted">Loading drift-by-type bars...</div>
-                        </div>
-                        <div class="card-shell">
-                            <div class="detail-section-label">Baseline surfaces</div>
-                            <div class="coverage-donut-wrap">
-                                <canvas id="coverage-donut" width="100" height="100"></canvas>
-                                <div class="coverage-donut-legend" id="coverage-legend"></div>
-                            </div>
-                            <div class="coverage-note" id="coverage-note">Baseline surfaces covered: — of —</div>
+                            <div class="detail-section-label">Recent changes</div>
+                            <ul class="evidence-list" id="detail-evidence-list">
+                                <li>Select the first repo in the queue to inspect recent change context.</li>
+                            </ul>
                         </div>
                         <div class="detail-recommendation" id="detail-recommendation">
                             <div class="detail-recommendation-label">Recommendation</div>
                             <div class="detail-recommendation-body" id="detail-recommendation-body">Select the first repo in the queue to see PromptDrift's recommended action.</div>
                             <button type="button" class="escalate-btn" id="detail-escalate-btn">Escalate before merge</button>
                         </div>
+                        <div class="secondary-panel" id="drift-section">
+                            <div class="secondary-panel-title">Drift by type</div>
+                            <div id="drift-type-bars" class="loading-shell muted">Loading drift-by-type bars...</div>
+                        </div>
+                    </section>
+
+                    <aside class="detail-panel" id="detail-panel">
+                        <div class="card-shell repo-selector-panel" id="repositories-section">
+                            <div class="repos-header">
+                                <span class="repos-title">Repositories</span>
+                                <span class="repos-count" id="repos-count">Loading...</span>
+                            </div>
+                            <table class="repos-table" id="repos-table">
+                                <thead>
+                                    <tr>
+                                        <th>Repository</th>
+                                        <th>Needs review</th>
+                                        <th>Drift from baseline</th>
+                                        <th>Versions since approval</th>
+                                        <th>Baseline status</th>
+                                        <th>Last changed</th>
+                                        <th>Monitored surfaces</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="repos-tbody">
+                                    <tr><td colspan="7" class="muted">Loading repositories...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-shell" id="radar-section">
+                            <div class="detail-section-label">Repo posture radar</div>
+                            <div class="radar-header">
+                                <div>
+                                    <div class="radar-title" id="repo-radar-title">Selected repo posture</div>
+                                    <div class="radar-subtitle" id="repo-radar-subtitle">Hover a repo or focus the urgent queue to preview posture.</div>
+                                </div>
+                                <div class="radar-meta" id="repo-radar-meta">Static-analysis profile only</div>
+                            </div>
+                            <div class="radar-wrap loading-shell muted" id="repo-radar-shell">
+                                <canvas id="repo-posture-radar" width="320" height="220"></canvas>
+                                <div class="radar-legend" id="repo-posture-legend"></div>
+                            </div>
+                        </div>
+                        <div class="card-shell" id="journey-section">
+                            <div class="detail-section-label">Version journey preview</div>
+                            <div class="journey-strip loading-shell muted" id="repo-journey-strip">Loading repo journey preview...</div>
+                            <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Change breakdown</div>
+                            <div id="detail-attributes" class="detail-attributes loading-shell muted">Select a repo to inspect current vs baseline attribute posture.</div>
+                        </div>
                     </aside>
                 </section>
 
-                <section class="repos-section" id="repositories-section">
-                    <div class="repos-header">
-                        <span class="repos-title">Repositories</span>
-                        <span class="repos-count" id="repos-count">Loading...</span>
-                    </div>
-                    <table class="repos-table" id="repos-table">
-                        <thead>
-                            <tr>
-                                <th>Repository</th>
-                                <th>Critical surfaces</th>
-                                <th>Open drift items</th>
-                                <th>Last scan</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="repos-tbody">
-                            <tr><td colspan="5" class="muted">Loading repositories...</td></tr>
-                        </tbody>
-                    </table>
+                <section class="secondary-row single-panel-row" id="coverage-section">
+                    <div class="secondary-panel">
+                        <div class="secondary-panel-title">Baseline surfaces</div>
+                        <div class="coverage-donut-wrap">
+                            <canvas id="coverage-donut" width="100" height="100"></canvas>
+                            <div class="coverage-donut-legend" id="coverage-legend"></div>
+                            </div>
+                            <div class="coverage-note" id="coverage-note">Baseline surfaces covered: — of —</div>
+                        </div>
                 </section>
             </main>
         </div>

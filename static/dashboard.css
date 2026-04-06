@@ -315,6 +315,119 @@ strong {
     gap: var(--space-3);
 }
 
+.radar-header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: start;
+    margin-bottom: var(--space-3);
+}
+
+.radar-title {
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.radar-subtitle,
+.radar-meta,
+.journey-note {
+    font-size: var(--text-sm);
+    color: var(--color-text-faint);
+}
+
+.radar-meta {
+    text-align: right;
+    max-width: 160px;
+}
+
+.radar-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 140px;
+    gap: var(--space-3);
+    align-items: center;
+}
+
+.radar-legend {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.radar-legend-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+}
+
+.journey-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.journey-node {
+    position: relative;
+    display: grid;
+    gap: var(--space-1);
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+}
+
+.journey-node-link {
+    position: absolute;
+    top: 50%;
+    right: -14px;
+    width: 12px;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.journey-node-value {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text);
+}
+
+.journey-node-value.journey-node-text {
+    font-size: var(--text-md);
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.journey-node-label {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.journey-node-caption {
+    font-size: var(--text-sm);
+    color: var(--color-text-faint);
+}
+
+.journey-tone-primary .journey-node-value {
+    color: var(--color-primary);
+}
+
+.journey-tone-medium .journey-node-value {
+    color: var(--color-medium);
+}
+
+.journey-tone-gap .journey-node-value {
+    color: var(--color-gap);
+}
+
+.journey-tone-low .journey-node-value {
+    color: var(--color-low);
+}
+
 .card-shell,
 .secondary-panel,
 .repos-section,
@@ -615,7 +728,7 @@ strong {
 
 .attr-bar-track,
 .drift-type-track {
-    height: 4px;
+    height: 8px;
     background: rgba(255,255,255,0.07);
     border-radius: var(--radius-full);
     overflow: hidden;
@@ -719,6 +832,10 @@ strong {
     padding: var(--space-3) var(--space-4) 0;
 }
 
+.single-panel-row {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .secondary-row,
 .secondary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -733,6 +850,20 @@ strong {
     align-items: center;
     gap: var(--space-2);
     margin-bottom: var(--space-2);
+}
+
+.drift-type-track {
+    flex: 1;
+    min-width: 0;
+    height: 8px;
+    background: rgba(255,255,255,0.07);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+}
+
+.drift-type-fill {
+    min-width: 8px;
+    background: linear-gradient(90deg, rgba(79, 152, 163, 0.72), var(--color-primary));
 }
 
 .coverage-donut-wrap {
@@ -763,6 +894,18 @@ strong {
 
 .repos-section {
     margin: var(--space-3) var(--space-4) 0;
+}
+
+.repo-selector-panel {
+    overflow: hidden;
+}
+
+.repo-selector-panel .repos-header {
+    margin-bottom: var(--space-2);
+}
+
+.repo-selector-panel .repos-table {
+    margin-top: 0;
 }
 
 .repos-header {
@@ -796,6 +939,21 @@ strong {
 .repos-table td:first-child {
     color: var(--color-text);
     font-weight: 500;
+}
+
+.repos-table-row {
+    cursor: pointer;
+    transition: background var(--transition);
+}
+
+.repos-table-row:hover,
+.repos-table-row.selected {
+    background: rgba(79, 152, 163, 0.06);
+}
+
+.repos-table-row:focus-visible {
+    outline: 1px solid var(--color-primary);
+    outline-offset: -1px;
 }
 
 .brief-panel {
@@ -927,6 +1085,11 @@ strong {
     .main-columns,
     .secondary-row,
     .secondary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .radar-wrap,
+    .journey-strip {
         grid-template-columns: 1fr;
     }
 }
