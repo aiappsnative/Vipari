@@ -4,111 +4,157 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PromptDrift Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/dashboard-index.js"></script>
 </head>
 <body>
-    <div class="wrap wrap-wide">
-        <h1>PromptDrift Dashboard</h1>
-        <p class="hero-copy hero-copy-tight">AI change review inbox. Triage decides what to open now. Coverage explains how much of the portfolio is actually being watched.</p>
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="PromptDrift home">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+                    <rect x="4" y="6" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5"/>
+                    <rect x="10" y="10" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5" opacity="0.5"/>
+                    <circle cx="8" cy="10" r="1.5" fill="#4f98a3"/>
+                </svg>
+            </a>
 
-        <div id="portfolio-risk-state" class="hero-panel section">
-            <div class="muted">Loading portfolio risk state...</div>
-        </div>
-
-        <div id="portfolio-pulse" class="section">
-            <div class="card muted">Loading portfolio pulse...</div>
-        </div>
-
-        <div class="info-strip section">
-            All metrics are derived from repository code, prompts, and config only. No production traffic or user data is analyzed.
-        </div>
-
-        <div class="section mode-switch" aria-label="Dashboard mode switch">
-            <button type="button" class="mode-button mode-button-active" data-dashboard-mode="triage" aria-pressed="true">Triage</button>
-            <button type="button" class="mode-button" data-dashboard-mode="coverage" aria-pressed="false">Coverage</button>
-        </div>
-
-        <section class="mode-panel section" data-mode-panel="triage">
-            <div class="inbox-layout">
-                <div class="inbox-main stack">
-                    <div class="card">
-                        <div class="section-kicker">Open next</div>
-                        <h2>Primary review target</h2>
-                        <div class="section-hint">One clear next move.</div>
-                        <div id="top-review-focus" class="muted">Loading primary review target...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Review inbox</div>
-                        <h2>Ranked queue</h2>
-                        <div class="section-hint">Short, operational, ordered.</div>
-                        <div id="review-queue" class="muted">Loading ranked queue...</div>
-                    </div>
-                </div>
-
-                <aside class="inbox-side stack">
-                    <div class="card">
-                        <div class="section-kicker">Trust check</div>
-                        <h2>Coverage trust</h2>
-                        <div class="section-hint">How reliable the map is.</div>
-                        <div id="coverage-trust" class="muted">Loading coverage trust...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Escalation context</div>
-                        <h2>Why these are rising</h2>
-                        <div class="section-hint">Cross-repo pressure points.</div>
-                        <div id="highest-risk-items" class="muted">Loading highest-risk drift...</div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section class="mode-panel section" data-mode-panel="coverage" hidden>
-            <div id="overview-metrics" class="grid grid-summary"></div>
-
-            <div class="card section">
-                <div class="section-kicker">Coverage scan</div>
-                <h2>Coverage atlas</h2>
-                <div class="section-hint">Density and confidence at a glance.</div>
-                <div id="coverage-atlas" class="muted">Loading coverage atlas...</div>
+            <div class="sidebar-nav-group">
+                <a href="/dashboard" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="shield-check"></i></a>
+                 <a href="#triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue"><i data-lucide="git-pull-request"></i></a>
+                  <a href="#radar-section" class="sidebar-nav-item" aria-label="Repo Posture" data-tooltip="Repo Posture"><i data-lucide="box"></i></a>
+                 <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repositories" data-tooltip="Repositories"><i data-lucide="building-2"></i></a>
             </div>
 
-            <div class="triage-layout section">
-                <div class="triage-primary stack">
-                    <div class="card">
-                        <div class="section-kicker">Monitoring map</div>
-                        <h2>Control surface coverage</h2>
-                        <div class="section-hint">Where evidence is dense.</div>
-                        <div id="control-surface-coverage" class="muted">Loading control surface map...</div>
-                    </div>
+            <div class="sidebar-divider"></div>
 
-                    <div class="card">
-                        <div class="section-kicker">Portfolio inventory</div>
-                        <h2>All onboarded repositories</h2>
-                        <div class="section-hint">Repo capsules, not a spreadsheet.</div>
-                        <div id="repos" class="muted">Loading repositories...</div>
+            <div class="sidebar-nav-group sidebar-nav-group-secondary">
+                 <a href="#journey-section" class="sidebar-nav-item" aria-label="Version Journey" data-tooltip="Version Journey"><i data-lucide="history"></i></a>
+                 <a href="#repositories-section" class="sidebar-nav-item" aria-label="Repository Inventory" data-tooltip="Repository Inventory"><i data-lucide="layers"></i></a>
+                 <a href="#coverage-section" class="sidebar-nav-item" aria-label="Baselines" data-tooltip="Baselines"><i data-lucide="flag"></i></a>
+                 <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page"><i data-lucide="settings"></i></a>
+            </div>
+
+            <div class="sidebar-avatar">
+                <div class="avatar-circle" aria-label="User account">D</div>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            <div class="posture-strip">
+                <div class="posture-strip-left">
+                    <span class="posture-title">PromptDrift</span>
+                    <div class="filter-pills">
+                        <span class="filter-pill">portfolio</span>
+                        <span class="filter-pill">triage shell</span>
                     </div>
                 </div>
-
-                <div class="triage-secondary stack">
-                    <div class="card">
-                        <div class="section-kicker">Risk distribution</div>
-                        <h2>Risk by control surface</h2>
-                        <div class="section-hint">Where attention clusters.</div>
-                        <div id="control-surface-risk" class="muted">Loading control-surface risk...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Pattern context</div>
-                        <h2>Recurring change patterns</h2>
-                        <div class="section-hint">The repeat offenders.</div>
-                        <div id="regression-patterns" class="muted">Loading regression patterns...</div>
-                    </div>
+                <div class="posture-strip-center">
+                    <span class="posture-disclaimer">Static analysis only — derived from code, prompts, and config. Not runtime telemetry.</span>
+                </div>
+                <div class="posture-strip-right">
+                    <div class="posture-stat posture-stat-urgent"><span id="stat-needs-review">-</span> need review now</div>
+                    <div class="posture-stat posture-stat-warning"><span id="stat-high-risk">-</span> high-risk surfaces</div>
+                    <div class="posture-stat posture-stat-ok"><span id="stat-approved">-</span> approved baselines</div>
+                    <div class="posture-stat posture-stat-gap"><span id="stat-gaps">-</span> coverage gaps</div>
                 </div>
             </div>
-        </section>
+
+            <main class="page-scroll" id="top">
+                <section class="main-columns" id="triage-section">
+                    <section class="triage-column">
+                        <div class="triage-header card-shell">
+                            <span class="triage-title">Needs attention now</span>
+                            <span class="triage-count" id="triage-count">Loading...</span>
+                            <div class="triage-filters">
+                                <button type="button" class="triage-filter-btn active" data-filter="all">All</button>
+                                <button type="button" class="triage-filter-btn" data-filter="high">High</button>
+                                <button type="button" class="triage-filter-btn" data-filter="medium">Medium</button>
+                            </div>
+                        </div>
+                        <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading ranked queue...</div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Recent changes</div>
+                            <ul class="evidence-list" id="detail-evidence-list">
+                                <li>Select the first repo in the queue to inspect recent change context.</li>
+                            </ul>
+                        </div>
+                        <div class="detail-recommendation" id="detail-recommendation">
+                            <div class="detail-recommendation-label">Recommendation</div>
+                            <div class="detail-recommendation-body" id="detail-recommendation-body">Select the first repo in the queue to see PromptDrift's recommended action.</div>
+                            <button type="button" class="escalate-btn" id="detail-escalate-btn">Escalate before merge</button>
+                        </div>
+                        <div class="secondary-panel" id="drift-section">
+                            <div class="secondary-panel-title">Drift by type</div>
+                            <div id="drift-type-bars" class="loading-shell muted">Loading drift-by-type bars...</div>
+                        </div>
+                    </section>
+
+                    <aside class="detail-panel" id="detail-panel">
+                        <div class="card-shell repo-selector-panel" id="repositories-section">
+                            <div class="repos-header">
+                                <span class="repos-title">Repositories</span>
+                                <span class="repos-count" id="repos-count">Loading...</span>
+                            </div>
+                            <table class="repos-table" id="repos-table">
+                                <thead>
+                                    <tr>
+                                        <th>Repository</th>
+                                        <th>Needs review</th>
+                                        <th>Drift from baseline</th>
+                                        <th>Versions since approval</th>
+                                        <th>Baseline status</th>
+                                        <th>Last changed</th>
+                                        <th>Monitored surfaces</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="repos-tbody">
+                                    <tr><td colspan="7" class="muted">Loading repositories...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-shell" id="radar-section">
+                            <div class="detail-section-label">Repo posture radar</div>
+                            <div class="radar-header">
+                                <div>
+                                    <div class="radar-title" id="repo-radar-title">Selected repo posture</div>
+                                    <div class="radar-subtitle" id="repo-radar-subtitle">Hover a repo or focus the urgent queue to preview posture.</div>
+                                </div>
+                                <div class="radar-meta" id="repo-radar-meta">Static-analysis profile only</div>
+                            </div>
+                            <div class="radar-wrap loading-shell muted" id="repo-radar-shell">
+                                <canvas id="repo-posture-radar" width="320" height="220"></canvas>
+                                <div class="radar-legend" id="repo-posture-legend"></div>
+                            </div>
+                        </div>
+                        <div class="card-shell" id="journey-section">
+                            <div class="detail-section-label">Version journey preview</div>
+                            <div class="journey-strip loading-shell muted" id="repo-journey-strip">Loading repo journey preview...</div>
+                            <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Change breakdown</div>
+                            <div id="detail-attributes" class="detail-attributes loading-shell muted">Select a repo to inspect current vs baseline attribute posture.</div>
+                        </div>
+                    </aside>
+                </section>
+
+                <section class="secondary-row single-panel-row" id="coverage-section">
+                    <div class="secondary-panel">
+                        <div class="secondary-panel-title">Baseline surfaces</div>
+                        <div class="coverage-donut-wrap">
+                            <canvas id="coverage-donut" width="100" height="100"></canvas>
+                            <div class="coverage-donut-legend" id="coverage-legend"></div>
+                            </div>
+                            <div class="coverage-note" id="coverage-note">Baseline surfaces covered: — of —</div>
+                        </div>
+                </section>
+            </main>
+        </div>
     </div>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>window.lucide && window.lucide.createIcons();</script>
 </body>
 </html>

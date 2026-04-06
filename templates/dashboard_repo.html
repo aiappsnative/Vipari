@@ -5,120 +5,162 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{REPO_FULL}} · PromptDrift</title>
     <meta name="promptdrift-repo-full" content="{{REPO_FULL}}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/dashboard-repo.js"></script>
 </head>
 <body>
-    <div class="wrap wrap-dashboard">
-        <div class="topbar">
-            <div>
-                <a class="link" href="/dashboard">← All repositories</a>
-                <h1>{{REPO_FULL}}</h1>
-                <p class="muted hero-copy-tight">Review case file: strongest item first, then the ranked queue, then supporting evidence.</p>
-            </div>
-            <div class="callout">Live from the local PromptDrift SQLite store</div>
-        </div>
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="PromptDrift home">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+                    <rect x="4" y="6" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5"/>
+                    <rect x="10" y="10" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5" opacity="0.5"/>
+                    <circle cx="8" cy="10" r="1.5" fill="#4f98a3"/>
+                </svg>
+            </a>
 
-        <div class="info-strip section">
-            Static-only analysis: PromptDrift derives these signals from repository code, prompts, and config only. No production traffic or user data is analyzed.
-        </div>
-
-        <div id="repo-command-deck" class="section">
-            <div class="card muted">Loading repo command deck...</div>
-        </div>
-
-        <div id="summary" class="grid grid-summary"></div>
-
-        <div class="casefile-layout section">
-            <div class="casefile-main stack">
-                <div class="card">
-                    <div class="section-kicker">Open next</div>
-                    <h2>Open this first</h2>
-                    <div class="section-hint">Best next source change.</div>
-                    <div id="featured-insight" class="muted">Loading primary review target...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">Continue reviewing</div>
-                    <h2>Needs review queue</h2>
-                    <div class="section-hint">Next best leads after the first one.</div>
-                    <div id="insights" class="muted">Loading prioritized insights...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">How it got here</div>
-                    <h2>Drift storyline</h2>
-                    <div class="section-hint">Baseline milestone, major episodes, and current posture for the featured artifact.</div>
-                    <div id="featured-storyline" class="muted">Loading drift storyline...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">Merged or active drift</div>
-                    <h2>Top drifting artifacts</h2>
-                    <div id="leaderboard" class="muted">Loading drift leaderboard...</div>
-                </div>
+            <div class="sidebar-nav-group">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="shield-check"></i></a>
+                 <a href="#repo-triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue"><i data-lucide="git-pull-request"></i></a>
+                 <a href="#repo-surfaces-section" class="sidebar-nav-item" aria-label="Control Surfaces" data-tooltip="Control Surfaces"><i data-lucide="box"></i></a>
+                 <a href="#repo-artifacts-section" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Artifacts" data-tooltip="Artifacts"><i data-lucide="building-2"></i></a>
             </div>
 
-            <aside class="casefile-side stack">
-                <div class="card">
-                    <div class="section-kicker">Why PromptDrift flagged this repo</div>
-                    <h2>Posture and provenance</h2>
-                    <div class="section-hint">Baseline vs current posture.</div>
-                    <div id="design-profiles" class="muted">Loading baseline comparison...</div>
-                </div>
+            <div class="sidebar-divider"></div>
 
-                <div class="card">
-                    <div class="section-kicker">Repo surface map</div>
-                    <h2>Control surface coverage</h2>
-                    <div class="section-hint">Where evidence is concentrated.</div>
-                    <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
-                </div>
+            <div class="sidebar-nav-group sidebar-nav-group-secondary">
+                 <a href="#repo-storyline-section" class="sidebar-nav-item" aria-label="Drift Storyline" data-tooltip="Drift Storyline"><i data-lucide="history"></i></a>
+                 <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry"><i data-lucide="layers"></i></a>
+                 <a href="#repo-history-section" class="sidebar-nav-item" aria-label="History Cues" data-tooltip="History Cues"><i data-lucide="flag"></i></a>
+                 <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page"><i data-lucide="settings"></i></a>
+            </div>
 
-                <div class="card">
-                    <div class="section-kicker">History cues</div>
-                    <h2>What deserves attention now</h2>
-                    <div class="section-hint">Repeated drift, stale baselines, and mixed-direction artifacts.</div>
-                    <div id="history-cues" class="muted">Loading repo-level history cues...</div>
-                </div>
+            <div class="sidebar-avatar">
+                <div class="avatar-circle" aria-label="User account">D</div>
+            </div>
+        </nav>
 
-                <details class="card collapsible-card">
-                    <summary class="details-summary">
-                        <div>
-                            <div class="section-kicker">Signal hunting</div>
-                            <h2>Lower-confidence findings</h2>
-                            <div class="section-hint">Optional leads only.</div>
-                        </div>
-                        <span class="details-toggle">Show more</span>
-                    </summary>
-                    <div class="section-inner-gap">
-                        <div id="lower-confidence-insights" class="muted">Loading lower-confidence findings...</div>
+        <div class="main-content">
+            <div class="posture-strip">
+                <div class="posture-strip-left">
+                    <span class="posture-title">{{REPO_FULL}}</span>
+                    <div class="filter-pills">
+                        <span class="filter-pill">repository</span>
+                        <a class="filter-pill" href="/dashboard">all repositories</a>
                     </div>
-                </details>
-            </aside>
-        </div>
-
-        <details class="section card collapsible-card">
-            <summary class="details-summary">
-                <div>
-                    <div class="section-kicker">Secondary context</div>
-                    <h2>History and full inventory</h2>
-                    <div class="section-hint">Open only when you need the deep trail.</div>
                 </div>
-                <span class="details-toggle">Show more</span>
-            </summary>
-
-            <div class="stack section-inner-gap">
-                <div>
-                    <h3 class="subsection-title">History and drift timeline</h3>
-                    <div id="history-timelines" class="muted">Loading artifact history...</div>
+                <div class="posture-strip-center">
+                    <span class="posture-disclaimer">Static analysis only — derived from code, prompts, and config. Not runtime telemetry.</span>
                 </div>
-
-                <div>
-                    <h3 class="subsection-title">Artifact inventory</h3>
-                    <div id="artifacts" class="muted">Loading artifact table...</div>
+                <div class="posture-strip-right">
+                    <div class="posture-stat posture-stat-ok"><span id="repo-stat-artifacts">-</span> tracked artifacts</div>
+                    <div class="posture-stat posture-stat-urgent"><span id="repo-stat-review">-</span> open items</div>
+                    <div class="posture-stat posture-stat-warning"><span id="repo-stat-baselines">-</span> approved baselines</div>
+                    <div class="posture-stat posture-stat-gap"><span id="repo-stat-history">-</span> history markers</div>
                 </div>
             </div>
-        </details>
+
+            <main class="page-scroll" id="top">
+                <section class="main-columns" id="repo-triage-section">
+                    <section class="triage-column">
+                        <div class="triage-header card-shell">
+                            <span class="triage-title">Needs attention now</span>
+                            <span class="triage-count" id="repo-triage-count">Loading...</span>
+                            <div class="triage-filters">
+                                <button type="button" class="triage-filter-btn active" data-filter="all">All</button>
+                                <button type="button" class="triage-filter-btn" data-filter="high">High</button>
+                                <button type="button" class="triage-filter-btn" data-filter="medium">Medium</button>
+                            </div>
+                        </div>
+                        <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading prioritized insights...</div>
+                    </section>
+
+                    <aside class="detail-panel" id="detail-panel">
+                        <div class="detail-panel-header card-shell">
+                            <div class="detail-panel-title-row">
+                                <span class="detail-artifact-name" id="detail-artifact-name">—</span>
+                                <span class="severity-badge severity-medium" id="detail-severity-badge">—</span>
+                            </div>
+                            <div class="detail-panel-subtitle" id="detail-subtitle">—</div>
+                        </div>
+                        <div class="detail-score-row card-shell">
+                            <div class="score-card score-card-baseline">
+                                <div class="score-number" id="detail-baseline-score" aria-live="polite">—</div>
+                                <div class="score-label" id="detail-baseline-label">Baseline</div>
+                            </div>
+                            <div class="score-arrow">→</div>
+                            <div class="score-card score-card-current">
+                                <div class="score-number" id="detail-current-score" aria-live="polite">—</div>
+                                <div class="score-label" id="detail-current-label">Current</div>
+                            </div>
+                            <div class="score-delta" id="detail-score-delta">—</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Attribute drift</div>
+                            <div id="detail-attributes" class="detail-attributes loading-shell muted">Select a repo insight to inspect its baseline comparison.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Key changes</div>
+                            <ul class="evidence-list" id="detail-evidence-list">
+                                <li>Awaiting selected artifact evidence.</li>
+                            </ul>
+                        </div>
+                        <div class="detail-recommendation" id="detail-recommendation">
+                            <div class="detail-recommendation-label">Recommendation</div>
+                            <div class="detail-recommendation-body" id="detail-recommendation-body">Select the first artifact in the queue to see PromptDrift's recommended action.</div>
+                            <button type="button" class="escalate-btn" id="detail-escalate-btn">Escalate before merge</button>
+                        </div>
+                    </aside>
+                </section>
+
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-storyline-section">
+                        <div class="secondary-panel-title">Drift storyline</div>
+                        <div id="featured-storyline" class="loading-shell muted">Loading selected artifact storyline...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-surfaces-section">
+                        <div class="secondary-panel-title">Control surface coverage</div>
+                        <div id="control-surfaces" class="loading-shell muted">Loading grouped control surfaces...</div>
+                    </div>
+                </section>
+
+                <section class="secondary-grid">
+                    <div class="secondary-panel" id="repo-history-section">
+                        <div class="secondary-panel-title">History cues</div>
+                        <div id="history-cues" class="loading-shell muted">Loading repo-level history cues...</div>
+                    </div>
+                    <div class="secondary-panel">
+                        <div class="secondary-panel-title">Lower-confidence findings</div>
+                        <div id="lower-confidence-insights" class="loading-shell muted">Loading lower-confidence findings...</div>
+                    </div>
+                </section>
+
+                <section class="repos-section" id="repo-artifacts-section">
+                    <div class="repos-header">
+                        <span class="repos-title">Artifacts</span>
+                    </div>
+                    <table class="repos-table">
+                        <thead>
+                            <tr>
+                                <th>Artifact</th>
+                                <th>Type</th>
+                                <th>Profiles</th>
+                                <th>Latest drift</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="artifacts-tbody">
+                            <tr><td colspan="5" class="muted">Loading artifact table...</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+            </main>
+        </div>
     </div>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>window.lucide && window.lucide.createIcons();</script>
 </body>
 </html>
