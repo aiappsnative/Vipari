@@ -20,10 +20,10 @@ from .token_cache import get_installation_token, set_installation_token
 from .webhook_deliveries import cleanup_webhook_deliveries
 
 
-JOBS_PROCESSED = Counter("promptdrift_jobs_processed_total", "Processed worker jobs", ["status"])
-JOB_DURATION = Histogram("promptdrift_job_duration_seconds", "Worker phase duration", ["phase"])
-QUEUE_DEPTH = Gauge("promptdrift_queue_depth", "Current queue depth")
-OPENAI_TOKENS = Counter("promptdrift_openai_tokens_used_total", "Estimated OpenAI tokens used")
+JOBS_PROCESSED = Counter("driftguard_jobs_processed_total", "Processed worker jobs", ["status"])
+JOB_DURATION = Histogram("driftguard_job_duration_seconds", "Worker phase duration", ["phase"])
+QUEUE_DEPTH = Gauge("driftguard_queue_depth", "Current queue depth")
+OPENAI_TOKENS = Counter("driftguard_openai_tokens_used_total", "Estimated OpenAI tokens used")
 BASE_RETRY_DELAY_SECONDS = 5
 MAX_RETRY_DELAY_SECONDS = 300
 CHARS_PER_TOKEN_ESTIMATE = 4
@@ -54,7 +54,7 @@ def _retry_delay_seconds(attempt_count: int) -> int:
 
 
 def _estimate_token_count(text: str) -> int:
-    # Intentional coarse heuristic for metrics only; PromptDrift does not currently ship a tokenizer dependency here.
+    # Intentional coarse heuristic for metrics only; DriftGuard does not currently ship a tokenizer dependency here.
     return max(1, len(text) // CHARS_PER_TOKEN_ESTIMATE)
 
 

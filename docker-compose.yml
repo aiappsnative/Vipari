@@ -9,12 +9,12 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
-      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/driftguard.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/driftguard.db}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -35,14 +35,14 @@ services:
       AI_MODEL: ${AI_MODEL:-gpt-4o}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
-      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/driftguard.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/driftguard.db}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8003}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -60,11 +60,11 @@ services:
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
-      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/driftguard.db}
+      AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/driftguard.db}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -82,14 +82,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: promptdrift
+      POSTGRES_DB: driftguard
       POSTGRES_USER: pd
       POSTGRES_PASSWORD: pd
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pd -d promptdrift"]
+      test: ["CMD-SHELL", "pg_isready -U pd -d driftguard"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  promptdrift-data:
+  driftguard-data:

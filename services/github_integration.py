@@ -12,10 +12,10 @@ import jwt
 from github import Auth, Github
 
 
-PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
-PROMPTDRIFT_ESCALATION_LABEL = "promptdrift: escalate-before-merge"
-PROMPTDRIFT_ESCALATION_LABEL_COLOR = "B60205"
-PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION = "PromptDrift recommends escalation before merge"
+DRIFTGUARD_MANAGED_MARKER = "<!-- driftguard:managed-comment -->"
+DRIFTGUARD_ESCALATION_LABEL = "driftguard: escalate-before-merge"
+DRIFTGUARD_ESCALATION_LABEL_COLOR = "B60205"
+DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "DriftGuard recommends escalation before merge"
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
 
@@ -211,9 +211,9 @@ def ensure_pr_label(
     pr_number: int,
     token: str,
     *,
-    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
-    label_color: str = PROMPTDRIFT_ESCALATION_LABEL_COLOR,
-    label_description: str = PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
+    label_color: str = DRIFTGUARD_ESCALATION_LABEL_COLOR,
+    label_description: str = DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
 ) -> bool:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
@@ -236,7 +236,7 @@ def remove_pr_label(
     pr_number: int,
     token: str,
     *,
-    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
 ) -> bool:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
@@ -256,9 +256,9 @@ def sync_pr_label(
     token: str,
     *,
     should_have_label: bool,
-    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
-    label_color: str = PROMPTDRIFT_ESCALATION_LABEL_COLOR,
-    label_description: str = PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
+    label_color: str = DRIFTGUARD_ESCALATION_LABEL_COLOR,
+    label_description: str = DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
 ) -> bool:
     if should_have_label:
         return ensure_pr_label(
@@ -278,6 +278,6 @@ def sync_pr_label(
 
 
 def _build_managed_comment_body(body: str) -> str:
-    if body.startswith(PROMPTDRIFT_MANAGED_MARKER):
+    if body.startswith(DRIFTGUARD_MANAGED_MARKER):
         return body
-    return f"{PROMPTDRIFT_MANAGED_MARKER}\n{body}"
+    return f"{DRIFTGUARD_MANAGED_MARKER}\n{body}"

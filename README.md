@@ -1,8 +1,8 @@
-# PromptDrift
+# DriftGuard
 
-PromptDrift is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
+DriftGuard is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
 
-The product direction is now explicitly GitHub-native and static-first: PromptDrift treats risk and drift as properties of prompts, policies, model settings, tool definitions, and agent wiring visible in code review, rather than as a runtime observability problem.
+The product direction is now explicitly GitHub-native and static-first: DriftGuard treats risk and drift as properties of prompts, policies, model settings, tool definitions, and agent wiring visible in code review, rather than as a runtime observability problem.
 
 Its job is not just to say that “an AI file changed”, but to help reviewers answer the customer-critical question:
 
@@ -14,7 +14,7 @@ Near-term, the product is being shaped around one especially important follow-up
 
 ## Customer value
 
-PromptDrift provides value by reducing the gap between ordinary code review and safe AI change review.
+DriftGuard provides value by reducing the gap between ordinary code review and safe AI change review.
 
 For customers, that means:
 
@@ -24,7 +24,7 @@ For customers, that means:
 - making AI review operationally practical inside the existing GitHub PR workflow
 - providing a defensible review trail for security, compliance, and platform teams
 
-In product terms, PromptDrift is moving toward becoming a **change intelligence layer for AI behavior**.
+In product terms, DriftGuard is moving toward becoming a **change intelligence layer for AI behavior**.
 
 The product wedge is the PR review workflow. Dashboard and history views remain important, but they should reinforce PR-level decisions rather than replace them.
 
@@ -34,7 +34,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, and dashboard UX hardening slices.
 
-In practical terms, PromptDrift currently provides:
+In practical terms, DriftGuard currently provides:
 
 - queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and episode-aware managed PR comments
 - escalation-aware PR review with decision-first comments, risk-emoji headers, concrete evidence panels, and GitHub label sync for before-merge escalation cases
@@ -58,7 +58,7 @@ The dashboard should now be read as two linked product surfaces:
 - `/dashboard` is the portfolio decision surface for triage, hotspots, and coverage trust, with a secondary coverage mode for inventory and pattern scans
 - `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, artifact-level evidence, and approved-baseline promotion
 
-## What PromptDrift does today
+## What DriftGuard does today
 
 - receives GitHub `pull_request` webhooks at `/webhook`
 - verifies webhook signatures
@@ -119,7 +119,7 @@ These are computed from static signals such as:
 - model settings such as `temperature` and `top_p`
 - governance inputs such as CODEOWNERS requirements, review strength, and recent churn
 
-This gives PromptDrift a concrete foundation for future baseline comparison, trend analysis, and PR-facing drift summaries without relying on runtime telemetry.
+This gives DriftGuard a concrete foundation for future baseline comparison, trend analysis, and PR-facing drift summaries without relying on runtime telemetry.
 
 ## Requirements
 
@@ -190,7 +190,7 @@ You can start the split services locally with Docker Compose after providing the
 2. Start ngrok and expose port `8000`.
 3. Point the GitHub App webhook URL to `https://<your-ngrok-host>/webhook`.
 4. Open or update a pull request containing AI-relevant changes.
-5. Confirm PromptDrift posts a PR comment.
+5. Confirm DriftGuard posts a PR comment.
 
 The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py) can be used to validate the local credential setup before testing.
 
@@ -249,7 +249,7 @@ When using the split API service, these dashboard and JSON routes require the co
 
 Operational note:
 
-- local SQLite may create `promptdrift.db-wal` and `promptdrift.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
+- local SQLite may create `driftguard.db-wal` and `driftguard.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
 
 ## Known limitations
 

@@ -1,6 +1,6 @@
-# PromptDrift Development Plan
+# DriftGuard Development Plan
 
-This document outlines the phased roadmap for building the PromptDrift backend. It is intended as a living guide and will evolve as the project grows.
+This document outlines the phased roadmap for building the DriftGuard backend. It is intended as a living guide and will evolve as the project grows.
 
 This is the canonical roadmap document. Product/usage guidance belongs in [README.md](README.md), while deeper architecture belongs in [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -10,7 +10,7 @@ For the enduring product thesis, guardrails, and design principles that should o
 
 ## Product value north star
 
-PromptDrift exists to help customers safely ship AI changes.
+DriftGuard exists to help customers safely ship AI changes.
 
 The core value is not generic PR summarization. The core value is:
 
@@ -359,7 +359,7 @@ Purpose:
 
 Likely scope:
 - passive PR outcome capture tied to audited head SHA
-- lightweight feedback collection on managed PromptDrift comments
+- lightweight feedback collection on managed DriftGuard comments
 - derived learning signals for reporting and later evaluation work
 
 Guardrails:

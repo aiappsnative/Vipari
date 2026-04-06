@@ -421,7 +421,7 @@ That mixture makes the page feel busy even when each individual component is imp
 
 ### Working conclusion
 
-PromptDrift should treat the dashboard primarily as an **AI change review inbox**.
+DriftGuard should treat the dashboard primarily as an **AI change review inbox**.
 
 The core mental model should be:
 
@@ -509,7 +509,7 @@ Above the fold:
   - 3–7 items max
   - explicit ranking reasons
 
-3. **Why PromptDrift flagged this repo**
+3. **Why DriftGuard flagged this repo**
   - compact baseline/current posture summary
   - provenance + baseline authority
 

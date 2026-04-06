@@ -428,7 +428,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "## ❌ PromptDrift: Escalate before merge" in posted[0][0]
+    assert "## ❌ DriftGuard: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
@@ -564,10 +564,10 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
     assert "### What changed" in comment
     assert "<details>" in comment
-    assert "<summary>PromptDrift review details</summary>" in comment
+    assert "<summary>DriftGuard review details</summary>" in comment
     assert "### Key deltas" in comment
     assert "### Evidence" in comment
     assert "### Recommended next step" in comment
@@ -613,7 +613,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("## ❌ PromptDrift: Escalate before merge")
+    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
     assert "High risk · unknown control surface · vs approved baseline `none-yet`" in comment
     assert "The prompt now allows disclosure of internal policy details" in comment
     assert "<details>" in comment
@@ -660,7 +660,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="def987654", analyzed_at=1_700_000_100),
     )
 
-    assert comment.startswith("## ✅ PromptDrift: Re-baseline follow-up after merge")
+    assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
     assert "This change adds a clarifying-question instruction" in comment
     assert "Promote the updated artifact to approved baseline after merge." in comment
 
@@ -759,7 +759,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: system_prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -768,13 +768,13 @@ index 1..2
         ],
     )
 
-    assert comment.startswith("## ✅ PromptDrift: Keep in normal review lane")
+    assert comment.startswith("## ✅ DriftGuard: Keep in normal review lane")
     assert "Low risk · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment
     assert "- Added automatic refund issuance for requests under 500." in comment
     assert "Safe to merge after normal review." in comment
-    assert "Previous PromptDrift analysis for `1234567` recommended restore explicit safety wording before merge" in comment
+    assert "Previous DriftGuard analysis for `1234567` recommended restore explicit safety wording before merge" in comment
 
 
 def test_build_llm_comment_uses_reason_when_attribute_bucket_is_unchanged():
@@ -830,7 +830,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.9,
-                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
                         evidence=["Removed explicit refusal language for internal policy disclosure."],
                         remediation="Restore explicit refusal language.",
                         baseline_score=0.31,
@@ -846,7 +846,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -912,7 +912,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.9,
-                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
                         evidence=["Removed explicit refusal language for internal policy disclosure."],
                         remediation="Restore explicit refusal language.",
                         baseline_score=0.33,
@@ -928,7 +928,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -997,7 +997,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.94,
-                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
                         evidence=["Removed explicit refusal language for internal policy disclosure."],
                         remediation="Restore explicit refusal language.",
                         baseline_score=0.61,
@@ -1045,7 +1045,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.88,
-                        reason="PromptDrift detected weaker governance because review and approval cues were removed from the operating instructions.",
+                        reason="DriftGuard detected weaker governance because review and approval cues were removed from the operating instructions.",
                         evidence=["Removed the manual approval checkpoint from the workflow."],
                         remediation="Restore approval checkpoints.",
                         baseline_score=0.72,
@@ -1061,7 +1061,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -1141,7 +1141,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.94,
-                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
                         evidence=[
                             "Removed explicit refusal language for internal policy disclosure.",
                         ],
@@ -1197,7 +1197,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -1267,7 +1267,7 @@ index 1..2
                         state="drift_detected",
                         confidence_label="high confidence",
                         confidence_score=0.94,
-                        reason="PromptDrift detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
                         evidence=["Removed explicit refusal language for internal policy disclosure."],
                         remediation="Restore explicit refusal language.",
                         baseline_score=0.61,
@@ -1299,7 +1299,7 @@ index 1..2
                         state="no_change",
                         confidence_label="high confidence",
                         confidence_score=0.95,
-                        reason="PromptDrift classifies this artifact as prompt and instructions.",
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
                         evidence=["Artifact type: prompt"],
                         remediation="No remediation needed.",
                     ),
@@ -1608,7 +1608,7 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 11, "token", True, "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 11, "token", True, "driftguard: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1672,7 +1672,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert "Recommendation: Revert before merge." in posted[0][0]
-    assert labels == [("doria90/dummyAI", 111, "token", True, "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 111, "token", True, "driftguard: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1718,7 +1718,7 @@ def test_worker_removes_escalation_label_for_normal_review_changes(tmp_path, mon
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 12, "token", False, "promptdrift: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 12, "token", False, "driftguard: escalate-before-merge")]
 
 
 def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):

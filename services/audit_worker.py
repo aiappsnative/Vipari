@@ -226,7 +226,7 @@ def _build_pr_comment_review(
 
 def _render_pr_comment_review(review: PrCommentReview) -> str:
     lines = [
-        f"## {_risk_indicator_emoji(review.risk_level)} PromptDrift: {_decision_header(review.decision)}",
+        f"## {_risk_indicator_emoji(review.risk_level)} DriftGuard: {_decision_header(review.decision)}",
         "",
         review.context_line,
         "",
@@ -237,7 +237,7 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         [
             "",
             "<details>",
-            "<summary>PromptDrift review details</summary>",
+            "<summary>DriftGuard review details</summary>",
             "",
             "### Key deltas",
         ]
@@ -387,8 +387,8 @@ def _key_delta_prefix(dimension) -> str:
 
 def _attribute_reason_fragment(reason: str) -> str:
     cleaned = _normalize_sentence(reason, default=reason).rstrip(".")
-    cleaned = re.sub(r"^PromptDrift detected\s+", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"^PromptDrift classifies.+?because\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^DriftGuard detected\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^DriftGuard classifies.+?because\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^this artifact\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned[:1].lower() + cleaned[1:] if cleaned else cleaned
     return f"{cleaned}." if cleaned else "meaningful drift relative to the approved baseline."
@@ -505,14 +505,14 @@ def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttribute
 
 def _episode_metadata_line(context: PrCommentEpisodeContext) -> str:
     timestamp = datetime.fromtimestamp(context.analyzed_at, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-    base = f"_PromptDrift analysis for head `{_short_sha(context.head_sha)}` at {timestamp}._"
+    base = f"_DriftGuard analysis for head `{_short_sha(context.head_sha)}` at {timestamp}._"
     previous_episode = context.previous_episode
     if previous_episode is None:
         return base
 
     previous_recommendation = _extract_previous_episode_recommendation(previous_episode.audit_comment.comment_body)
     return (
-        f"{base[:-2]} Previous PromptDrift analysis for `{_short_sha(previous_episode.head_sha)}` "
+        f"{base[:-2]} Previous DriftGuard analysis for `{_short_sha(previous_episode.head_sha)}` "
         f"recommended {previous_recommendation.lower()}._"
     )
 
@@ -688,7 +688,7 @@ def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> Es
         return EscalationRecommendation(
             decision="escalate_before_merge",
             reasons=tuple(reasons),
-            label_name="promptdrift: escalate-before-merge",
+            label_name="driftguard: escalate-before-merge",
         )
 
     return EscalationRecommendation(decision="normal_review")
@@ -738,7 +738,7 @@ def _build_signal_fusion_assessment(
         escalation_recommendation = EscalationRecommendation(
             decision="escalate_before_merge",
             reasons=tuple(reasons),
-            label_name="promptdrift: escalate-before-merge",
+            label_name="driftguard: escalate-before-merge",
         )
     else:
         escalation_recommendation = EscalationRecommendation(decision="normal_review")
@@ -935,7 +935,7 @@ def _apply_escalation_label_for_job(
         job.pr_number,
         token,
         should_have_label=recommendation.requires_label,
-        label_name=recommendation.label_name or "promptdrift: escalate-before-merge",
+        label_name=recommendation.label_name or "driftguard: escalate-before-merge",
     )
 
 
@@ -1262,7 +1262,7 @@ class AuditWorker:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run_loop, name="promptdrift-audit-worker", daemon=True)
+        self._thread = threading.Thread(target=self._run_loop, name="driftguard-audit-worker", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

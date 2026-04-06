@@ -32,7 +32,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 def _resolve_db_path(value: str | None) -> str:
     if value:
         return value
-    return os.getenv("AUDIT_DB_PATH", str(PROJECT_ROOT / "promptdrift.db"))
+    return os.getenv("AUDIT_DB_PATH", str(PROJECT_ROOT / "driftguard.db"))
 
 
 def _require_installation_token(installation_id: int) -> str:
@@ -209,26 +209,26 @@ def cmd_eval_compare(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="PromptDrift repo operator CLI")
+    parser = argparse.ArgumentParser(description="DriftGuard repo operator CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list-repos", help="List repos with onboarding data")
-    list_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    list_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     list_parser.set_defaults(func=cmd_list_repos)
 
     persistence_parser = subparsers.add_parser("persistence-status", help="Print the current persistence backend and logical table layout")
-    persistence_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    persistence_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     persistence_parser.set_defaults(func=cmd_persistence_status)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Print the unified dashboard payload for a repo")
     dashboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
-    dashboard_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    dashboard_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     dashboard_parser.set_defaults(func=cmd_dashboard)
 
     onboard_parser = subparsers.add_parser("onboard", help="Run onboarding and optional backfill planning/execution")
     onboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
     onboard_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
-    onboard_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    onboard_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     onboard_parser.add_argument("--commit-limit", type=int, default=10, help="Max historical commits per artifact when planning backfill")
     onboard_parser.add_argument("--plan-backfill", action="store_true", help="Plan selective historical backfill jobs after onboarding")
     onboard_parser.add_argument("--execute-backfill", action="store_true", help="Execute planned historical backfill jobs after onboarding")
@@ -237,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_parser = subparsers.add_parser("backfill", help="Execute planned historical backfill jobs for a repo")
     backfill_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
     backfill_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
-    backfill_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    backfill_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     backfill_parser.set_defaults(func=cmd_backfill)
 
     eval_candidates_parser = subparsers.add_parser("list-eval-candidates", help="List curated OSS evaluation candidates")
@@ -246,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run_parser = subparsers.add_parser("eval-run", help="Run the repeatable OSS evaluation harness for a curated candidate or owner/repo")
     eval_run_parser.add_argument("target", help="Candidate key or owner/repo name to evaluate")
     eval_run_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
-    eval_run_parser.add_argument("--db", help="Path to the PromptDrift SQLite database")
+    eval_run_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     eval_run_parser.add_argument("--output-dir", help="Directory where evaluation artifacts should be written")
     eval_run_parser.add_argument("--commit-limit", type=int, help="Max historical commits per artifact when planning backfill")
     eval_run_parser.add_argument(

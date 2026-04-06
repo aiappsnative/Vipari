@@ -168,7 +168,7 @@ def test_upsert_pr_comment_updates_existing_episode_comment(monkeypatch):
     class FakePullRequest:
         def __init__(self):
             self.comments = [
-                FakeComment(101, "<!-- promptdrift:managed-comment -->\nOld audit"),
+                FakeComment(101, "<!-- driftguard:managed-comment -->\nOld audit"),
                 FakeComment(202, "A regular reviewer comment"),
             ]
 
@@ -207,7 +207,7 @@ def test_upsert_pr_comment_updates_existing_episode_comment(monkeypatch):
     )
 
     assert comment_id == 101
-    assert edited == [(101, "<!-- promptdrift:managed-comment -->\nNew audit")]
+    assert edited == [(101, "<!-- driftguard:managed-comment -->\nNew audit")]
 
 
 def test_upsert_pr_comment_creates_new_episode_comment_without_touching_older_ones(monkeypatch):
@@ -222,7 +222,7 @@ def test_upsert_pr_comment_creates_new_episode_comment_without_touching_older_on
     class FakePullRequest:
         def __init__(self):
             self.comments = [
-                FakeComment(101, "<!-- promptdrift:managed-comment -->\nOld audit"),
+                FakeComment(101, "<!-- driftguard:managed-comment -->\nOld audit"),
                 FakeComment(202, "A regular reviewer comment"),
             ]
 
@@ -307,12 +307,12 @@ def test_ensure_pr_label_creates_missing_repo_label_and_applies_it(monkeypatch):
     assert applied is True
     assert created_labels == [
         (
-            github_integration.PROMPTDRIFT_ESCALATION_LABEL,
-            github_integration.PROMPTDRIFT_ESCALATION_LABEL_COLOR,
-            github_integration.PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+            github_integration.DRIFTGUARD_ESCALATION_LABEL,
+            github_integration.DRIFTGUARD_ESCALATION_LABEL_COLOR,
+            github_integration.DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
         )
     ]
-    assert issue_added_labels == [github_integration.PROMPTDRIFT_ESCALATION_LABEL]
+    assert issue_added_labels == [github_integration.DRIFTGUARD_ESCALATION_LABEL]
 
 
 def test_ensure_pr_label_is_idempotent_when_label_already_exists(monkeypatch):
@@ -325,7 +325,7 @@ def test_ensure_pr_label_is_idempotent_when_label_already_exists(monkeypatch):
 
     class FakeIssue:
         def __init__(self):
-            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
+            self.labels = [FakeLabel(github_integration.DRIFTGUARD_ESCALATION_LABEL)]
 
         def get_labels(self):
             return self.labels
@@ -335,7 +335,7 @@ def test_ensure_pr_label_is_idempotent_when_label_already_exists(monkeypatch):
 
     class FakeRepo:
         def __init__(self):
-            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
+            self.labels = [FakeLabel(github_integration.DRIFTGUARD_ESCALATION_LABEL)]
             self.issue = FakeIssue()
 
         def get_labels(self):
@@ -374,7 +374,7 @@ def test_remove_pr_label_removes_existing_issue_label(monkeypatch):
 
     class FakeIssue:
         def __init__(self):
-            self.labels = [FakeLabel(github_integration.PROMPTDRIFT_ESCALATION_LABEL), FakeLabel("bug")]
+            self.labels = [FakeLabel(github_integration.DRIFTGUARD_ESCALATION_LABEL), FakeLabel("bug")]
 
         def get_labels(self):
             return self.labels
@@ -404,7 +404,7 @@ def test_remove_pr_label_removes_existing_issue_label(monkeypatch):
     removed = remove_pr_label("doria90/dummyAI", 11, "installation-token")
 
     assert removed is True
-    assert removed_labels == [github_integration.PROMPTDRIFT_ESCALATION_LABEL]
+    assert removed_labels == [github_integration.DRIFTGUARD_ESCALATION_LABEL]
 
 
 def test_remove_pr_label_is_noop_when_label_absent(monkeypatch):
@@ -461,4 +461,4 @@ def test_sync_pr_label_removes_label_when_not_required(monkeypatch):
     )
 
     assert changed is True
-    assert captured == [("doria90/dummyAI", 13, "installation-token", github_integration.PROMPTDRIFT_ESCALATION_LABEL)]
+    assert captured == [("doria90/dummyAI", 13, "installation-token", github_integration.DRIFTGUARD_ESCALATION_LABEL)]

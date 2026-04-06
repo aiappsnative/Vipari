@@ -1,4 +1,4 @@
-const repoFull = document.querySelector('meta[name="promptdrift-repo-full"]')?.getAttribute("content") || "";
+const repoFull = document.querySelector('meta[name="driftguard-repo-full"]')?.getAttribute("content") || "";
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];

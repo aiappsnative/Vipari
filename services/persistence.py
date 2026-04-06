@@ -46,7 +46,7 @@ class PersistenceStatus:
 def resolve_db_path(explicit_path: str | None = None) -> str:
     if explicit_path:
         return explicit_path
-    return os.getenv("AUDIT_DB_PATH", str(Path(__file__).resolve().parent.parent / "promptdrift.db"))
+    return os.getenv("AUDIT_DB_PATH", str(Path(__file__).resolve().parent.parent / "driftguard.db"))
 
 
 def connect_sqlite(db_path: str, *, foreign_keys: bool = False) -> sqlite3.Connection:

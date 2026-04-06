@@ -224,8 +224,8 @@ def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch
 
 
 def test_explicit_audit_db_path_wins_for_shared_sqlite_volume(monkeypatch, tmp_path):
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
-    shared_path = str(tmp_path / "shared" / "promptdrift.db")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./driftguard.db")
+    shared_path = str(tmp_path / "shared" / "driftguard.db")
     monkeypatch.setenv("AUDIT_DB_PATH", shared_path)
     _reset_settings_cache()
 

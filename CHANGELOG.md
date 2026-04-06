@@ -21,7 +21,7 @@
 - strict review pass completed against PR #13, including reliability, security, and attacker-surface checks before merge
 
 ### Product impact
-- PromptDrift now has a credible cloud-oriented execution shape without regressing local monolith workflows
+- DriftGuard now has a credible cloud-oriented execution shape without regressing local monolith workflows
 - the next deployment work should focus on production-grade persistence and operating posture rather than inventing service boundaries from scratch
 
 ## 2026-04-01 — PR lifecycle persistence and landed-history-only evidence hardening
@@ -40,7 +40,7 @@
 - full automated suite passed locally (`98 passed`)
 
 ### Product impact
-- PromptDrift now preserves PR lifecycle truth without leaking stale state into audit history
+- DriftGuard now preserves PR lifecycle truth without leaking stale state into audit history
 - landed drift posture is now consistently derived from approved baselines plus merged-history evidence, reducing the risk of proposal-only PRs contaminating landed drift views
 
 ## 2026-03-30 — Production persistence groundwork
@@ -91,7 +91,7 @@
 - live OSS onboarding and dashboard validation remained successful for `doria90/openfang` and `doria90/hermes-agent`
 
 ### Product impact
-- PromptDrift now presents a more credible reviewer workflow on real repositories by pairing drift posture with concrete provenance and baseline authority
+- DriftGuard now presents a more credible reviewer workflow on real repositories by pairing drift posture with concrete provenance and baseline authority
 - the next product gap is clearer: stronger reviewer-queue synthesis and reviewer-target quality are now more valuable than additional dashboard chrome
 
 ## 2026-03-24 — Dashboard UX hardened for portfolio triage
@@ -112,7 +112,7 @@
 - clean local dashboard verification succeeded on a non-reload server instance
 
 ### Product impact
-- PromptDrift now has a structurally coherent portfolio surface for triage and repo-level investigation
+- DriftGuard now has a structurally coherent portfolio surface for triage and repo-level investigation
 - the dashboard is now worth hardening as a product surface, but trust still depends on denser evidence and better reviewer targeting
 
 ## 2026-03-15 — Detection engine and GitHub App flow hardened
@@ -151,7 +151,7 @@
 - live invalid-model fallback path with recorded `fallback_posted` state and preliminary deterministic comment on `dummyAI`
 
 ### Product impact
-- PromptDrift now behaves more like a durable AI change-audit system than a one-shot comment bot
+- DriftGuard now behaves more like a durable AI change-audit system than a one-shot comment bot
 - the system preserves history needed for future trend, baseline, and governance use cases
 
 ## 2026-03-13 — MVP end-to-end verified

@@ -1,12 +1,12 @@
-# PromptDrift Detection Engine Plan
+# DriftGuard Detection Engine Plan
 
 ## Purpose
 
-This document defines the target architecture for the next-generation PromptDrift detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [detection-engine-diagram.mmd](detection-engine-diagram.mmd).
+This document defines the target architecture for the next-generation DriftGuard detection engine. It now serves as the post-merge architecture reference for the implementation living on `main`, and should be used alongside the Mermaid diagram in [detection-engine-diagram.mmd](detection-engine-diagram.mmd).
 
 This document is intentionally architecture-focused. Roadmap sequencing lives in [Plan.MD](../Plan.MD), while product and local-usage guidance lives in [README.md](../README.md).
 
-It should be read together with [SOUL.md](../SOUL.md), which captures the stable product thesis: PromptDrift is a GitHub-native design drift engine for AI systems, not a runtime observability product.
+It should be read together with [SOUL.md](../SOUL.md), which captures the stable product thesis: DriftGuard is a GitHub-native design drift engine for AI systems, not a runtime observability product.
 
 The core design principle is a **hybrid engine**:
 
@@ -22,7 +22,7 @@ The core design principle is a **hybrid engine**:
 
 ## Customer value frame
 
-PromptDrift should be understood as an AI change-review system, not merely a webhook bot.
+DriftGuard should be understood as an AI change-review system, not merely a webhook bot.
 
 The value to customers is:
 
@@ -101,7 +101,7 @@ Implemented today:
 - queue abstractions for local SQLite and SQS-style split execution, plus Redis-backed installation-token caching with in-process fallback
 - retry-safe webhook delivery deduplication so ingress failures do not permanently drop redelivered GitHub events
 - split API/dashboard route protection via admin token, with metrics exposure disabled by default unless explicitly enabled
-- Docker and compose scaffolding for running PromptDrift as separately deployable webhook, worker, and API services
+- Docker and compose scaffolding for running DriftGuard as separately deployable webhook, worker, and API services
 
 Still intentionally incomplete:
 - richer signal fusion between deterministic and semantic channels
@@ -115,7 +115,7 @@ Still intentionally incomplete:
 
 The current dashboard layer should be understood as an early customer-facing decision surface built on read-model APIs, not yet the final customer product.
 
-It already proves that PromptDrift can:
+It already proves that DriftGuard can:
 - onboard repositories,
 - expose discovered AI control surfaces,
 - persist baseline and history information,
@@ -149,7 +149,7 @@ The overview page should now also be treated as the landing risk surface, with a
 
 It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
 
-Repo detail pages should now be understood as the place where PromptDrift explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
+Repo detail pages should now be understood as the place where DriftGuard explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
 
 Recent live validation, including `doria90/dummyAI`, also showed the current architectural boundary clearly: dashboard posture should remain landed-only and history-backed, while proposal-only PR audits need their own reviewer-facing synthesis rather than being mixed into landed drift evidence.
 
@@ -166,7 +166,7 @@ The next architectural improvements for this layer are:
 
 ### Product decision model
 
-The primary product decision PromptDrift should improve is not raw allow/deny.
+The primary product decision DriftGuard should improve is not raw allow/deny.
 
 It is:
 - whether an AI-related PR can remain in the normal review lane,
@@ -177,7 +177,7 @@ The architecture should therefore optimize for:
 - low visible noise in PRs
 - clearer provenance and baseline context for why a change deserves escalation
 
-PromptDrift should separate **event ingestion** from **audit execution**.
+DriftGuard should separate **event ingestion** from **audit execution**.
 
 The webhook endpoint should do only the minimum amount of work required to decide whether a PR deserves audit processing:
 - verify signature and event shape
@@ -198,7 +198,7 @@ The expensive path should run in a background worker:
 - durable audit persistence
 - mark the job failed if durable persistence cannot be completed after comment publication
 
-This is the right fit for PromptDrift because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.
+This is the right fit for DriftGuard because the model call is variable-latency, subject to rate limits, and not required for webhook acknowledgement.
 
 ### Why queue relevant audits by default
 
@@ -215,7 +215,7 @@ This keeps the online path thin while allowing controlled concurrency, retries, 
 
 ### Lean-first persistence principle
 
-PromptDrift should remain lean in implementation, but storage must be accounted for in the design now.
+DriftGuard should remain lean in implementation, but storage must be accounted for in the design now.
 
 This means:
 - do **not** overbuild a large analytics platform yet
@@ -226,7 +226,7 @@ Storage is therefore a **planned architectural capability**, even if its first i
 
 ### Persistence architecture principle
 
-PromptDrift should avoid premature database sprawl.
+DriftGuard should avoid premature database sprawl.
 
 The recommended architecture is:
 - one relational database for the near-to-mid term
@@ -235,7 +235,7 @@ The recommended architecture is:
 - logical separation between operational queue data and durable audit/history data
 - future decomposition only when workload or tenant isolation actually justifies it
 
-This means PromptDrift should **design for separation without deploying multiple databases yet**.
+This means DriftGuard should **design for separation without deploying multiple databases yet**.
 
 ---
 
@@ -304,7 +304,7 @@ This stage is shared by both deterministic and LLM-driven analysis.
 
 This stage turns GitHub-visible prompt/config content into a stable attribute profile that can be compared over time.
 
-It exists because PromptDrift's product direction is explicitly static-first and GitHub-native: customers want to understand how agent design changes, even when PromptDrift never sees runtime traffic.
+It exists because DriftGuard's product direction is explicitly static-first and GitHub-native: customers want to understand how agent design changes, even when DriftGuard never sees runtime traffic.
 
 ### Responsibilities
 - extract durable static signals from prompt/config text and related metadata
@@ -375,7 +375,7 @@ It answers questions such as:
 - persist enough data for future trend and history views
 
 ### Current implementation note
-The active baseline-selection path is now stronger than the first durable implementation: PromptDrift prefers approved baseline provenance when available, falls back through onboarding or historical references when needed, and only uses weaker lineage paths as explicit fallback behavior.
+The active baseline-selection path is now stronger than the first durable implementation: DriftGuard prefers approved baseline provenance when available, falls back through onboarding or historical references when needed, and only uses weaker lineage paths as explicit fallback behavior.
 
 That means the system is no longer simply comparing against the latest persisted profile for a repo/path pair, even though older persisted history is still part of the fallback chain.
 
@@ -450,7 +450,7 @@ This stage governs how relevant audits move from webhook ingestion into durable 
 ### Why this matters
 The issue seen in live testing was a `429 RateLimitReached` failure, which indicates quota pressure or request bursts rather than a fundamentally oversized diff.
 
-That means PromptDrift should solve the operational problem with queueing and retry discipline, not only by shrinking prompts.
+That means DriftGuard should solve the operational problem with queueing and retry discipline, not only by shrinking prompts.
 
 ### Retry policy guidance
 Retryable failures should be treated differently from permanent failures.
@@ -465,7 +465,7 @@ These should remain in the queue and be retried over a longer wall-clock window.
 
 The worker should prefer provider retry hints such as `retry-after` or `retry-after-ms` when available.
 
-If no provider hint is present, PromptDrift should apply a bounded escalating retry schedule.
+If no provider hint is present, DriftGuard should apply a bounded escalating retry schedule.
 
 #### Non-retryable failures
 - invalid model identifiers
@@ -717,7 +717,7 @@ This stage prepares the reviewer-facing output.
 
 ## Deterministic fallback output
 
-PromptDrift should still post useful reviewer output when the LLM path fails after bounded retries.
+DriftGuard should still post useful reviewer output when the LLM path fails after bounded retries.
 
 ### Purpose
 - prevent silent audit drops
@@ -753,7 +753,7 @@ Persistence should be treated as a separate architectural concern, not embedded 
 
 ### Current implementation status
 
-At the current branch stage, PromptDrift now persists both operational queue state and a durable audit/history layer.
+At the current branch stage, DriftGuard now persists both operational queue state and a durable audit/history layer.
 
 That means the database currently stores enough to support:
 - async execution
@@ -769,7 +769,7 @@ This is no longer only a queue store. It is now the beginning of a customer-memo
 
 ### Storage strategy going forward
 
-PromptDrift should distinguish between two kinds of persisted data:
+DriftGuard should distinguish between two kinds of persisted data:
 
 #### 1. Operational storage
 Used for:
@@ -798,7 +798,7 @@ Current examples:
 This separation should exist even if both logical groups live in the same physical database at first.
 
 ### Why it matters
-PromptDrift becomes significantly more valuable when it can show:
+DriftGuard becomes significantly more valuable when it can show:
 - artifact history
 - risk trend over time
 - recurring risk patterns
@@ -806,7 +806,7 @@ PromptDrift becomes significantly more valuable when it can show:
 
 ### Customer value model
 
-The next phase of persistence should be reverse-engineered from the customer value PromptDrift is expected to provide.
+The next phase of persistence should be reverse-engineered from the customer value DriftGuard is expected to provide.
 
 #### 1. PR-level review value
 Customers should be able to answer:
@@ -1023,7 +1023,7 @@ Should store:
 
 ## Performance and scale planning
 
-PromptDrift should plan for growth before the database becomes sluggish.
+DriftGuard should plan for growth before the database becomes sluggish.
 
 ### Likely causes of future sluggishness
 - storing large raw text blobs in primary query tables
@@ -1190,7 +1190,7 @@ Build a fixture set of representative diffs:
 - consistency across similar diffs
 
 ### Mature engine characteristics
-A mature PromptDrift engine should provide:
+A mature DriftGuard engine should provide:
 - low false-positive rate
 - explainable risk findings
 - stable scoring
@@ -1261,7 +1261,7 @@ This keeps the webhook layer thin and makes the engine easier to test independen
 
 ## Summary
 
-PromptDrift should evolve into a **rule-guided semantic drift engine**.
+DriftGuard should evolve into a **rule-guided semantic drift engine**.
 
 The deterministic layer should provide control and policy grounding.
 The early LLM layer should contribute semantic interpretation.

@@ -305,7 +305,7 @@ def test_dashboard_html_pages_render(tmp_path):
         repo_js_response = client.get("/static/dashboard-repo.js")
 
     assert index_response.status_code == 200
-    assert "PromptDrift Dashboard" in index_response.text
+    assert "DriftGuard Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     assert "portfolio-risk-state" in index_response.text
     assert "Recurring change patterns" in index_response.text
@@ -322,7 +322,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Needs review queue" in repo_response.text
     assert "Control surface coverage" in repo_response.text
     assert "History and drift timeline" in repo_response.text
-    assert "promptdrift-repo-full" in repo_response.text
+    assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
 
     assert css_response.status_code == 200
