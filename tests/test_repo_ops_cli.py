@@ -94,6 +94,14 @@ def test_repo_ops_persistence_status_cli_outputs_backend_metadata(tmp_path):
     assert "audit_jobs" in payload["operational_tables"]
 
 
+def test_repo_ops_default_db_path_stays_runtime_compatible(monkeypatch):
+    monkeypatch.delenv("AUDIT_DB_PATH", raising=False)
+
+    resolved = repo_ops._resolve_db_path(None)
+
+    assert resolved.endswith("promptdrift.db")
+
+
 def test_repo_ops_dashboard_cli_outputs_unified_repo_payload(tmp_path):
     db_path = str(tmp_path / "cli.db")
     init_db(db_path)

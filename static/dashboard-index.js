@@ -127,7 +127,7 @@ function renderDriftChips(repo) {
 function renderOverviewTriageRow(repo, index) {
     const severity = severityForPriority(repo.highest_priority);
     const chips = renderDriftChips(repo);
-    const reason = repo.highest_change_summary || repo.highest_flag_summary || repo.highest_rationale || "PromptDrift found enough evidence here to make this repo the next review target.";
+    const reason = repo.highest_change_summary || repo.highest_flag_summary || repo.highest_rationale || "DriftGuard found enough evidence here to make this repo the next review target.";
     const metaParts = [repo.highest_baseline_label, repo.highest_review_target, repo.highest_evidence_label].filter(Boolean);
     return `
         <div class="triage-row" data-severity="${severity.label.toLowerCase()}" data-row-index="${index}" role="button" tabindex="0">
@@ -441,7 +441,7 @@ function journeyPreviewNote(payload) {
     const topTimeline = timelines[0] || null;
     const timelineCount = timelines.length;
     if (!historicalVersions && !timelineCount) {
-        return "Full repo version journey needs snapshot backend support; this preview shows what PromptDrift already tracks today.";
+        return "Full repo version journey needs snapshot backend support; this preview shows what DriftGuard already tracks today.";
     }
     if (topTimeline) {
         return `${topTimeline.artifact_path} shows ${topTimeline.point_count} stored checkpoints; full repo journey still needs snapshot backend support.`;

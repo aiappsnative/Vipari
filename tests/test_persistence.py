@@ -9,7 +9,7 @@ from services.persistence import get_persistence_status
 
 
 def test_init_db_persists_backend_metadata_and_table_groups(tmp_path):
-    db_path = str(tmp_path / "promptdrift.db")
+    db_path = str(tmp_path / "driftguard.db")
 
     init_db(db_path)
     status = get_persistence_status(db_path)

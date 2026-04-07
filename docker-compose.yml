@@ -14,7 +14,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -42,7 +42,7 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8003}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -64,7 +64,7 @@ services:
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -82,14 +82,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: promptdrift
+      POSTGRES_DB: driftguard
       POSTGRES_USER: pd
       POSTGRES_PASSWORD: pd
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pd -d promptdrift"]
+      test: ["CMD-SHELL", "pg_isready -U pd -d driftguard"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  promptdrift-data:
+  driftguard-data:

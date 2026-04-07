@@ -102,7 +102,7 @@ def _build_evaluator_rubric(*, expected_control_surfaces: list[str], manual_note
         {
             "dimension": "discovery",
             "status": "pending_human_review",
-            "question": "Did PromptDrift discover the major AI control surfaces without letting false positives dominate?",
+            "question": "Did DriftGuard discover the major AI control surfaces without letting false positives dominate?",
             "notes": expected_text,
         },
         {
