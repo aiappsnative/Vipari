@@ -2,7 +2,7 @@
 .pytest_cache
 __pycache__
 *.pyc
-driftguard.db
+promptdrift.db
 *.db-shm
 *.db-wal
 tests
