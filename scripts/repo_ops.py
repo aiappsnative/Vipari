@@ -32,7 +32,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 def _resolve_db_path(value: str | None) -> str:
     if value:
         return value
-    return os.getenv("AUDIT_DB_PATH", str(PROJECT_ROOT / "driftguard.db"))
+    return os.getenv("AUDIT_DB_PATH", str(PROJECT_ROOT / "promptdrift.db"))
 
 
 def _require_installation_token(installation_id: int) -> str:

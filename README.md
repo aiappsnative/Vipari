@@ -249,7 +249,7 @@ When using the split API service, these dashboard and JSON routes require the co
 
 Operational note:
 
-- local SQLite may create `driftguard.db-wal` and `driftguard.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
+- local SQLite may create `promptdrift.db-wal` and `promptdrift.db-shm` sidecar files while the server is running; these are ignored and can be removed once local uvicorn processes are stopped
 
 ## Known limitations
 
