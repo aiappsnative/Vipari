@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "driftguard.db")
+DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
 
 
 class Settings(BaseSettings):

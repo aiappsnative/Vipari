@@ -12,7 +12,9 @@ import jwt
 from github import Auth, Github
 
 
+PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
 DRIFTGUARD_MANAGED_MARKER = "<!-- driftguard:managed-comment -->"
+PROMPTDRIFT_ESCALATION_LABEL = "promptdrift: escalate-before-merge"
 DRIFTGUARD_ESCALATION_LABEL = "driftguard: escalate-before-merge"
 DRIFTGUARD_ESCALATION_LABEL_COLOR = "B60205"
 DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "DriftGuard recommends escalation before merge"
@@ -227,6 +229,9 @@ def ensure_pr_label(
     if label_name in issue_labels:
         return False
 
+    if PROMPTDRIFT_ESCALATION_LABEL in issue_labels:
+        issue.remove_from_labels(PROMPTDRIFT_ESCALATION_LABEL)
+
     issue.add_to_labels(label_name)
     return True
 
@@ -243,10 +248,11 @@ def remove_pr_label(
     issue = repo.get_issue(number=pr_number)
 
     issue_labels = {label.name for label in issue.get_labels()}
-    if label_name not in issue_labels:
+    matching_labels = [candidate for candidate in {label_name, PROMPTDRIFT_ESCALATION_LABEL} if candidate in issue_labels]
+    if not matching_labels:
         return False
 
-    issue.remove_from_labels(label_name)
+    issue.remove_from_labels(*matching_labels)
     return True
 
 
@@ -278,6 +284,7 @@ def sync_pr_label(
 
 
 def _build_managed_comment_body(body: str) -> str:
-    if body.startswith(DRIFTGUARD_MANAGED_MARKER):
-        return body
+    for marker in (DRIFTGUARD_MANAGED_MARKER, PROMPTDRIFT_MANAGED_MARKER):
+        if body.startswith(marker):
+            return body.replace(marker, DRIFTGUARD_MANAGED_MARKER, 1)
     return f"{DRIFTGUARD_MANAGED_MARKER}\n{body}"
