@@ -11,10 +11,19 @@ DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
 
 
 class Settings(BaseSettings):
+    app_base_url: str = "http://127.0.0.1:8000"
+    session_cookie_name: str = "promptdrift_session"
+    session_cookie_secure: bool = False
+    session_ttl_seconds: int = 604800
+    app_encryption_key: str = ""
+
     github_app_id: str = ""
     github_private_key_path: str = ""
     github_app_private_key: str = ""
     github_webhook_secret: str = ""
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_callback_url: str = ""
 
     queue_backend: Literal["sqlite", "sqs"] = "sqlite"
     sqs_queue_url: str = ""
@@ -25,6 +34,14 @@ class Settings(BaseSettings):
 
     redis_url: str = ""
     api_admin_token: str = ""
+
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_portal_configuration_id: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_team: str = ""
+    stripe_price_enterprise: str = ""
+    stripe_price_business: str = ""
 
     worker_concurrency: int = 4
     worker_max_retries: int = 3
@@ -59,6 +76,18 @@ class Settings(BaseSettings):
     @property
     def has_github_app_credentials(self) -> bool:
         return bool(self.github_app_id and (self.github_private_key_path or self.resolved_github_private_key))
+
+    @property
+    def has_github_oauth_credentials(self) -> bool:
+        return bool(self.github_oauth_client_id and self.github_oauth_client_secret)
+
+    @property
+    def has_stripe_billing_config(self) -> bool:
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
+
+    @property
+    def has_encryption_key(self) -> bool:
+        return bool(self.app_encryption_key)
 
     @property
     def resolved_db_path(self) -> str:

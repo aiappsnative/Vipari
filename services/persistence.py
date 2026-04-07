@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-CURRENT_PERSISTENCE_SCHEMA_VERSION = 1
+CURRENT_PERSISTENCE_SCHEMA_VERSION = 2
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000
 DEFAULT_PRODUCTION_TARGET = "postgresql"
 OPERATIONAL_TABLES = (
     "audit_jobs",
+    "user_sessions",
 )
 DURABLE_TABLES = (
     "pull_request_audits",
@@ -27,6 +28,19 @@ DURABLE_TABLES = (
     "historical_backfill_jobs",
     "historical_artifact_versions",
     "historical_static_profiles",
+    "users",
+    "github_identities",
+    "user_sessions",
+    "workspaces",
+    "workspace_memberships",
+    "billing_customers",
+    "subscriptions",
+    "entitlements",
+    "github_installations",
+    "repo_connections",
+    "repo_allocations",
+    "control_plane_audit_logs",
+    "webhook_event_receipts",
 )
 
 

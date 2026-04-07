@@ -24,4 +24,4 @@ def test_init_db_persists_backend_metadata_and_table_groups(tmp_path):
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT backend, schema_version FROM persistence_metadata WHERE id = 1").fetchone()
 
-    assert row == ("sqlite", 1)
+    assert row == ("sqlite", 2)

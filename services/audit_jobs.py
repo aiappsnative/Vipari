@@ -77,10 +77,12 @@ def init_db(db_path: str) -> None:
         if "pr_updated_at" not in audit_job_columns:
             conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_updated_at REAL")
     from .audit_records import init_audit_record_db
+    from .control_plane_records import init_control_plane_db
     from .onboarding_records import init_onboarding_record_db
 
     init_audit_record_db(db_path)
     init_onboarding_record_db(db_path)
+    init_control_plane_db(db_path)
     init_persistence_metadata(db_path)
 
 

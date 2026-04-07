@@ -1,0 +1,250 @@
+:root {
+    --bg: #f5f1e8;
+    --panel: rgba(255, 251, 244, 0.92);
+    --panel-strong: #1f3a37;
+    --ink: #1e2321;
+    --muted: #5f6a67;
+    --line: rgba(31, 58, 55, 0.14);
+    --accent: #a04d2a;
+    --accent-soft: #e8b79d;
+    --success: #2b6b54;
+    --warning: #9f5b22;
+    --danger: #9a3431;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "IBM Plex Sans", sans-serif;
+    color: var(--ink);
+    background:
+        radial-gradient(circle at top left, rgba(160, 77, 42, 0.14), transparent 30%),
+        radial-gradient(circle at right, rgba(31, 58, 55, 0.12), transparent 24%),
+        linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.hero-shell,
+.simple-shell,
+.page-shell {
+    width: min(1120px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 48px 0 72px;
+}
+
+.hero-panel,
+.simple-panel,
+.action-card,
+.metric-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow: 0 16px 48px rgba(31, 58, 55, 0.08);
+}
+
+.hero-panel,
+.simple-panel {
+    padding: 40px;
+}
+
+.hero-panel h1,
+.simple-panel h1,
+.page-header h1,
+.action-card h2 {
+    margin: 0;
+    font-family: "Fraunces", serif;
+    font-weight: 700;
+    line-height: 1.04;
+}
+
+.hero-panel h1,
+.page-header h1 {
+    font-size: clamp(2.2rem, 5vw, 4.4rem);
+    max-width: 11ch;
+}
+
+.simple-panel h1 {
+    font-size: clamp(1.8rem, 4vw, 3rem);
+}
+
+.hero-copy,
+.page-header p,
+.simple-panel p,
+.action-card p,
+.page-note,
+.checklist-detail {
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+.hero-actions,
+.state-links {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+}
+
+.button,
+.subtle-link,
+.state-pill,
+button.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 18px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.button,
+button.button {
+    border: 0;
+    background: var(--panel-strong);
+    color: #fff9f1;
+    cursor: pointer;
+}
+
+.subtle-link,
+.state-pill {
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.66);
+}
+
+.state-pill-active {
+    background: var(--accent-soft);
+    border-color: rgba(160, 77, 42, 0.35);
+}
+
+.eyebrow {
+    margin: 0 0 10px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.page-header {
+    margin-bottom: 28px;
+}
+
+.card-grid,
+.state-band {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+}
+
+.action-card,
+.metric-card {
+    padding: 24px;
+}
+
+.action-card-strong {
+    background: linear-gradient(180deg, rgba(31, 58, 55, 0.95), rgba(48, 90, 85, 0.92));
+    color: #fff9f1;
+}
+
+.action-card-strong p,
+.action-card-strong .eyebrow {
+    color: rgba(255, 249, 241, 0.82);
+}
+
+.metric-card span {
+    display: block;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
+.metric-card strong {
+    font-size: 1.1rem;
+}
+
+.checklist {
+    display: grid;
+    gap: 14px;
+    padding: 0;
+    margin: 24px 0 0;
+    list-style: none;
+}
+
+.checklist-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.6);
+}
+
+.checklist-item-complete {
+    border-color: rgba(43, 107, 84, 0.25);
+}
+
+.checklist-item-current {
+    border-color: rgba(159, 91, 34, 0.25);
+}
+
+.checklist-item-blocked {
+    border-color: rgba(154, 52, 49, 0.2);
+}
+
+.checklist-label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.checklist-meta {
+    display: grid;
+    gap: 6px;
+    text-align: right;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.field-label {
+    display: block;
+    margin: 0 0 8px;
+    font-weight: 600;
+}
+
+.field-input {
+    width: 100%;
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    font: inherit;
+    background: rgba(255, 255, 255, 0.8);
+}
+
+@media (max-width: 720px) {
+    .hero-panel,
+    .simple-panel,
+    .action-card,
+    .metric-card,
+    .checklist-item {
+        padding: 20px;
+    }
+
+    .checklist-item {
+        flex-direction: column;
+    }
+
+    .checklist-meta {
+        text-align: left;
+    }
+}

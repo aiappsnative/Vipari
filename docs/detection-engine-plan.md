@@ -111,6 +111,29 @@ Still intentionally incomplete:
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
 - production-grade persistence/deployment posture beyond the current SQLite-first split-service scaffolding
 
+### Active branch architecture extension (2026-04-07)
+
+The active branch `feature/driftguard-base44-stripe-handoff-v1` adds a parallel customer-control-plane layer on top of the existing drift engine rather than replacing the audit architecture above.
+
+That branch currently adds:
+
+- GitHub OAuth-backed customer identity and session persistence
+- workspace, subscription, entitlement, installation, and repo-allocation records in the same SQLite-first relational store
+- a central workspace access-state resolver used by app pages, app APIs, and dashboard gating
+- Stripe webhook projection as the authority for paid access state
+- GitHub App installation linkage and repo allocation as the bridge into the existing onboarding engine
+
+Architecturally, this means DriftGuard now has two linked surfaces on the branch:
+
+- the audit engine for PR review, history, and dashboard evidence
+- the control plane for customer identity, billing, install setup, and access gating into that engine
+
+Important constraint preserved on the branch:
+
+- the control plane reuses the existing onboarding and dashboard machinery instead of creating a parallel onboarding system
+- billing redirects do not activate access without webhook-confirmed subscription state
+- incomplete setup states terminate in guided app shells rather than leaking into half-initialized dashboard routes
+
 ### Dashboard evolution note
 
 The current dashboard layer should be understood as an early customer-facing decision surface built on read-model APIs, not yet the final customer product.

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Install | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+</head>
+<body>
+    <main class="page-shell">
+        <section class="page-header">
+            <p class="eyebrow">GitHub install</p>
+            <h1>{{WORKSPACE_NAME}}</h1>
+            <p>{{INSTALL_HINT}}</p>
+            <p class="page-note">{{INSTALLATION_SUMMARY}}</p>
+        </section>
+        <section class="card-grid">
+            <article class="action-card">
+                <div class="eyebrow">Install flow</div>
+                <h2>Grant repository visibility</h2>
+                <p>DriftGuard needs GitHub App installation authority before repositories can be allocated to the paid workspace.</p>
+                {{INSTALL_ACTION}}
+            </article>
+        </section>
+    </main>
+</body>
+</html>

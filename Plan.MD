@@ -68,6 +68,26 @@ This framing should shape roadmap decisions:
 	- sparse-history repos degrade honestly without fabricating continuity
 	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
 
+### `feature/driftguard-base44-stripe-handoff-v1`
+- Purpose: active integration branch for issue `#25`, connecting Base44 acquisition flows to DriftGuard auth, billing, GitHub App install, repo onboarding, and setup-aware dashboard access
+- Current status:
+	- canonical architecture, state-model, and issue-analysis docs are checked in
+	- DB-backed control-plane records are implemented for users, sessions, workspaces, subscriptions, entitlements, installations, repo connections, allocations, and webhook receipts
+	- GitHub OAuth login, session issuance, workspace bootstrap, billing entry, Stripe webhook projection, installation linkage, and repo allocation are implemented in the monolith
+	- setup-aware control-plane templates and styling are implemented for landing, login, pricing, workspace creation, billing, install, repo setup, and app-state shells
+	- dashboard routes are now gated through the access-state resolver when control-plane workspaces exist
+	- billing and provisioning mutations are restricted to workspace owner/admin roles in v1
+	- branch docs now include local automated E2E, local smoke, and tunnel-backed provider E2E guidance
+- Verified today:
+	- focused control-plane UI suite: `11 passed`
+	- full automated suite: `148 passed`
+	- local route smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app` behavior on a live uvicorn instance
+- Remaining follow-up after today's checkpoint:
+	- run one real provider-backed E2E pass with a public tunnel, GitHub OAuth callback registration, GitHub App webhook wiring, and Stripe test-mode forwarding
+	- review UX copy and plan-preselection/Base44 query passthrough polish once provider-backed validation is complete
+- End-of-day restart point:
+	- use [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as the first checkpoint tomorrow, then run the tunnel-backed provider validation flow from [README.md](README.md)
+
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
 - Current status at merge time:

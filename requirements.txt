@@ -10,6 +10,7 @@ prometheus-client
 prometheus-fastapi-instrumentator
 pydantic-settings
 redis
+python-multipart
 
 # test dependencies
 pytest

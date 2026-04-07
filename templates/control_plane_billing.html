@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Billing | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+</head>
+<body>
+    <main class="page-shell">
+        <section class="page-header">
+            <p class="eyebrow">Billing</p>
+            <h1>{{WORKSPACE_NAME}}</h1>
+            <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
+        </section>
+        <section class="card-grid">
+            <article class="action-card">
+                <div class="eyebrow">Checkout</div>
+                <h2>Refresh or continue</h2>
+                <p>Use Stripe as the billing source of truth and wait for webhook-confirmed activation.</p>
+                {{CHECKOUT_ACTION}}
+            </article>
+            <article class="action-card">
+                <div class="eyebrow">Portal</div>
+                <h2>Manage billing</h2>
+                <p>Open the customer portal to update payment details or resume service.</p>
+                {{PORTAL_ACTION}}
+            </article>
+        </section>
+    </main>
+</body>
+</html>

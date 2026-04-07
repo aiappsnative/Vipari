@@ -34,6 +34,8 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, and dashboard UX hardening slices.
 
+The active integration branch `feature/driftguard-base44-stripe-handoff-v1` extends that baseline with a first customer-facing control plane for the Base44 -> DriftGuard -> Stripe -> GitHub App handoff.
+
 In practical terms, DriftGuard currently provides:
 
 - queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and episode-aware managed PR comments
@@ -50,6 +52,21 @@ In practical terms, DriftGuard currently provides:
 - real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
 - bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
 - a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
+
+On the active integration branch, DriftGuard additionally provides:
+
+- GitHub OAuth login and encrypted session-backed identity state for the customer control plane
+- workspace bootstrap, membership-aware access resolution, and setup-aware app surfaces
+- Stripe checkout, billing portal support, and authoritative webhook-driven subscription projection
+- GitHub App install linkage, synced repository connection inventory, and repo allocation into the existing onboarding engine
+- dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes
+- owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
+
+Latest branch validation before end-of-day handoff:
+
+- focused control-plane route suite passed locally: `11 passed`
+- full automated suite passed locally: `148 passed`
+- local runtime smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app` behavior
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -147,6 +164,12 @@ Optional variables:
 - `GITHUB_PAT`
 - `NGROK_AUTHTOKEN`
 - `AUDIT_DB_PATH`
+- `APP_BASE_URL`
+- `APP_ENCRYPTION_KEY`
+- `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, and `SESSION_TTL_SECONDS`
+- `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_CALLBACK_URL`
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`
+- `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_TEAM`, `STRIPE_PRICE_ENTERPRISE`, and `STRIPE_PRICE_BUSINESS`
 - `REDIS_URL`
 - `QUEUE_BACKEND`, `SQS_QUEUE_URL`, and `SQS_DLQ_URL`
 - `API_ADMIN_TOKEN` for the split API service
@@ -202,6 +225,72 @@ Recent live validation on the active branch covered:
 - non-AI PR flow returning `no relevant changes` without queueing an audit
 - invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
 - escalation-label lifecycle validation covering add, remove, and re-add behavior as PR risk changes across review passes
+
+## Control-plane end-to-end testing
+
+The Base44 -> DriftGuard handoff work adds a second end-to-end path on top of the existing PR-audit flow.
+
+### Automated local E2E
+
+The fastest proof is the focused route-flow suite in [tests/test_control_plane_ui.py](tests/test_control_plane_ui.py). It covers:
+
+- GitHub OAuth start and callback
+- session creation
+- workspace bootstrap
+- Stripe checkout initiation
+- Stripe webhook activation
+- GitHub installation linkage
+- repo allocation
+- dashboard unlock
+
+Run it with:
+
+```bash
+python -m pytest tests/test_control_plane_ui.py -q
+```
+
+### Local runtime smoke test
+
+Run the app locally from the repo root:
+
+```bash
+uvicorn main:app --host 127.0.0.1 --port 8010 --app-dir PromptDrift
+```
+
+Then confirm:
+
+1. `/` renders the DriftGuard control-plane landing page
+2. `/login` renders the GitHub auth entry
+3. `/pricing` renders Starter, Team, and Enterprise plans
+4. `/app` redirects to `/login` when no session exists
+
+### Real provider-backed E2E
+
+For a true end-to-end pass with GitHub OAuth, GitHub App install, and Stripe test mode, the local server must be reachable from GitHub and Stripe.
+
+Recommended flow:
+
+1. Run DriftGuard locally.
+2. Expose it with `ngrok http 8010` or an equivalent tunnel.
+3. Set `APP_BASE_URL=https://<tunnel-host>`.
+4. Set `GITHUB_OAUTH_CALLBACK_URL=https://<tunnel-host>/auth/github/callback`.
+5. Register the same callback URL in the GitHub OAuth app settings.
+6. Point the GitHub App webhook URL to `https://<tunnel-host>/webhook`.
+7. Forward Stripe events to `https://<tunnel-host>/webhooks/stripe` using `stripe listen --forward-to ...` or the Stripe test dashboard.
+8. Start from `/auth/github/start?source=base44&plan=team` and walk through login, workspace creation, checkout, install, repo allocation, and dashboard access.
+
+### What is authoritative in E2E
+
+- GitHub OAuth success creates identity and session state
+- Stripe success redirect is not authoritative for access
+- `POST /webhooks/stripe` is authoritative for subscription activation
+- dashboard access is granted only after webhook-confirmed billing plus install and repo onboarding
+
+### End-of-day branch note
+
+Today's control-plane work is implemented and validated locally on `feature/driftguard-base44-stripe-handoff-v1`.
+
+The main unfinished validation item is external-provider confirmation with a real public tunnel, real GitHub OAuth callback registration, and Stripe test-mode event forwarding. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the branch handoff summary and tomorrow-start checklist.
 
 ## Local operator and dashboard testing
 

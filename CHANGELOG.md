@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-07 — Base44 handoff control plane implemented on active branch
+
+### Added
+- GitHub OAuth-backed control-plane services for customer identity, session issuance, encrypted token storage, and workspace bootstrap
+- SQLite-first control-plane persistence for users, sessions, workspaces, memberships, subscriptions, entitlements, GitHub installations, repo connections, repo allocations, and webhook receipts
+- setup-aware customer pages for landing, login, pricing, billing, install flow, repo setup, and access-state shells
+- Stripe checkout, billing portal, webhook verification, and entitlement projection support
+- GitHub App install linkage and repository allocation flow that hands selected repos into the existing onboarding engine
+- focused regression coverage for control-plane records, auth, billing, GitHub provisioning, access-state resolution, and route/UI flows
+- architecture, state-model, issue-analysis, and handoff docs for the Base44 -> DriftGuard -> Stripe -> GitHub App integration slice
+
+### Changed
+- dashboard access is now gated through a central workspace access-state resolver when control-plane workspaces exist
+- persistence metadata schema version advanced to `2` to reflect the new control-plane table set
+- billing and provisioning mutation routes now fail closed for viewer roles and require workspace owner/admin permissions in v1
+- README and roadmap documentation now describe the control-plane validation path and restart context for the active branch
+
+### Verified
+- focused control-plane UI suite passed locally (`11 passed`)
+- full automated suite passed locally (`148 passed`)
+- live local smoke validation confirmed control-plane landing/login/pricing routes and unauthenticated app redirect behavior
+
+### Product impact
+- DriftGuard can now own the customer handoff from Base44 through auth, billing, install setup, and dashboard access gating without replacing the existing audit/onboarding engine
+- the next step is no longer core implementation; it is a provider-backed tunnel run to confirm real GitHub OAuth and Stripe test-mode wiring before merge preparation
+
 ## 2026-04-03 — Cloud deployment scaffolding and deployment-surface hardening
 
 ### Added

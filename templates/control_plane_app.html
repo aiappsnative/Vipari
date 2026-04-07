@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workspace | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+</head>
+<body>
+    <main class="page-shell">
+        <section class="page-header">
+            <p class="eyebrow">Access state: {{STATE_NAME}}</p>
+            <h1>{{UI_TITLE}}</h1>
+            <p>{{UI_BODY}}</p>
+        </section>
+        <section class="state-band">
+            <div class="metric-card"><span>Primary action</span><strong>{{PRIMARY_CTA}}</strong></div>
+            <div class="metric-card"><span>Secondary action</span><strong>{{SECONDARY_CTA}}</strong></div>
+            <div class="metric-card"><span>Next action</span><strong>{{NEXT_ACTION}}</strong></div>
+            <div class="metric-card"><span>Dashboard access</span><strong>{{DASHBOARD_ACCESS}}</strong></div>
+            <div class="metric-card"><span>Mode</span><strong>{{ACCESS_MODE}}</strong></div>
+        </section>
+        <section class="state-links">{{STATE_LINKS}}</section>
+        <section>
+            <ul class="checklist">{{CHECKLIST_ITEMS}}</ul>
+        </section>
+    </main>
+</body>
+</html>
