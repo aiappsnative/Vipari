@@ -118,6 +118,7 @@ def _resolution_for_preview_state(state: str | None) -> WorkspaceAccessResolutio
 
 
 def _render_checklist(resolution: WorkspaceAccessResolution) -> str:
+    cta_links = _checklist_cta_links(resolution)
     return "".join(
         f"""
         <li class=\"checklist-item checklist-item-{html_escape(item.status)}\">
@@ -127,12 +128,63 @@ def _render_checklist(resolution: WorkspaceAccessResolution) -> str:
             </div>
             <div class=\"checklist-meta\">
                 <span>{html_escape(item.status.replace('_', ' '))}</span>
-                {f'<span>{html_escape(item.cta)}</span>' if item.cta else ''}
+                {f'<a class="subtle-link" href="{html_escape(cta_links.get(item.key) or "#")}">{html_escape(item.cta)}</a>' if item.cta and cta_links.get(item.key) else (f'<span>{html_escape(item.cta)}</span>' if item.cta else '')}
             </div>
         </li>
         """
         for item in resolution.checklist
     )
+
+
+def _state_primary_action_url(resolution: WorkspaceAccessResolution) -> str | None:
+    mapping = {
+        "unauthenticated": "/login",
+        "authenticated_no_workspace": "/app/workspaces/new",
+        "invited_pending_acceptance": "/app",
+        "forbidden": "/app",
+        "workspace_no_subscription": "/app/billing",
+        "billing_pending_confirmation": "/app/billing",
+        "payment_failed": "/app/billing",
+        "awaiting_github_install": "/app/setup/install",
+        "awaiting_repo_onboarding": "/app/setup/repos",
+        "active": "/dashboard",
+        "canceled_active_until_period_end": "/app/billing",
+        "expired_read_only": "/app/billing",
+    }
+    return mapping.get(resolution.state)
+
+
+def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | None:
+    mapping = {
+        "billing_pending_confirmation": "/app/billing",
+        "payment_failed": "/app/billing/portal",
+        "awaiting_github_install": "/app/setup/install",
+        "canceled_active_until_period_end": "/app/billing",
+        "expired_read_only": "/app/billing",
+    }
+    return mapping.get(resolution.state)
+
+
+def _checklist_cta_links(resolution: WorkspaceAccessResolution) -> dict[str, str]:
+    links = {
+        "billing": "/app/billing",
+        "workspace": "/app/workspaces/new",
+        "github_login": "/login",
+        "installation": "/app/setup/install",
+        "repo_allocation": "/app/setup/repos",
+        "first_scan": "/app/setup/repos",
+    }
+    if resolution.state == "active":
+        links["repo_allocation"] = "/dashboard"
+        links["first_scan"] = "/dashboard"
+    return links
+
+
+def _render_action_chip(label: str | None, href: str | None, *, fallback: str) -> str:
+    text = label or fallback
+    if href:
+        return f'<a class="button" href="{html_escape(href)}">{html_escape(text)}</a>'
+    return f'<span>{html_escape(text)}</span>'
 
 
 def _render_state_links(active_state: str) -> str:
@@ -305,12 +357,14 @@ def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
 def render_control_plane_app_page(state: str | None = None, resolution: WorkspaceAccessResolution | None = None) -> str:
     resolved = resolution or _resolution_for_preview_state(state)
     template = _load_template("control_plane_app.html")
+    primary_action = _render_action_chip(resolved.primary_cta, _state_primary_action_url(resolved), fallback="No action required")
+    secondary_action = _render_action_chip(resolved.secondary_cta, _state_secondary_action_url(resolved), fallback="Workspace shell preview")
     return (
         template.replace("{{STATE_NAME}}", html_escape(resolved.state.replace("_", " ")))
         .replace("{{UI_TITLE}}", html_escape(resolved.ui_title))
         .replace("{{UI_BODY}}", html_escape(resolved.ui_body))
-        .replace("{{PRIMARY_CTA}}", html_escape(resolved.primary_cta or "No action required"))
-        .replace("{{SECONDARY_CTA}}", html_escape(resolved.secondary_cta or "Workspace shell preview"))
+        .replace("{{PRIMARY_CTA}}", primary_action)
+        .replace("{{SECONDARY_CTA}}", secondary_action)
         .replace("{{NEXT_ACTION}}", html_escape(resolved.required_next_action or "Continue to dashboard"))
         .replace("{{DASHBOARD_ACCESS}}", "Enabled" if resolved.can_access_dashboard else "Blocked")
         .replace("{{ACCESS_MODE}}", "Read only" if resolved.is_read_only else "Interactive")

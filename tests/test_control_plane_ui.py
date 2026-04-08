@@ -65,6 +65,15 @@ def test_app_page_renders_preview_state():
     assert response.status_code == 200
     assert "Billing needs attention" in response.text
     assert "Fix billing" in response.text
+    assert 'href="/app/billing"' in response.text
+
+
+def test_app_page_awaiting_install_has_clickable_install_action():
+    response = client.get("/app?state=awaiting_github_install")
+
+    assert response.status_code == 200
+    assert "Install DriftGuard on GitHub" in response.text
+    assert 'href="/app/setup/install"' in response.text
 
 
 def test_app_page_redirects_to_login_when_unauthenticated():
