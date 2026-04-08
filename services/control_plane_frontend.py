@@ -165,6 +165,22 @@ def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | 
     return mapping.get(resolution.state)
 
 
+def _state_next_action_url(resolution: WorkspaceAccessResolution) -> str | None:
+    mapping = {
+        "unauthenticated": "/login",
+        "authenticated_no_workspace": "/app/workspaces/new",
+        "workspace_no_subscription": "/app/billing",
+        "billing_pending_confirmation": "/app/billing",
+        "payment_failed": "/app/billing/portal",
+        "awaiting_github_install": "/app/setup/install",
+        "awaiting_repo_onboarding": "/app/setup/repos",
+        "active": "/dashboard",
+        "canceled_active_until_period_end": "/dashboard",
+        "expired_read_only": "/app/billing",
+    }
+    return mapping.get(resolution.state)
+
+
 def _checklist_cta_links(resolution: WorkspaceAccessResolution) -> dict[str, str]:
     links = {
         "billing": "/app/billing",
@@ -359,13 +375,14 @@ def render_control_plane_app_page(state: str | None = None, resolution: Workspac
     template = _load_template("control_plane_app.html")
     primary_action = _render_action_chip(resolved.primary_cta, _state_primary_action_url(resolved), fallback="No action required")
     secondary_action = _render_action_chip(resolved.secondary_cta, _state_secondary_action_url(resolved), fallback="Workspace shell preview")
+    next_action = _render_action_chip(resolved.required_next_action, _state_next_action_url(resolved), fallback="Continue to dashboard")
     return (
         template.replace("{{STATE_NAME}}", html_escape(resolved.state.replace("_", " ")))
         .replace("{{UI_TITLE}}", html_escape(resolved.ui_title))
         .replace("{{UI_BODY}}", html_escape(resolved.ui_body))
         .replace("{{PRIMARY_CTA}}", primary_action)
         .replace("{{SECONDARY_CTA}}", secondary_action)
-        .replace("{{NEXT_ACTION}}", html_escape(resolved.required_next_action or "Continue to dashboard"))
+        .replace("{{NEXT_ACTION}}", next_action)
         .replace("{{DASHBOARD_ACCESS}}", "Enabled" if resolved.can_access_dashboard else "Blocked")
         .replace("{{ACCESS_MODE}}", "Read only" if resolved.is_read_only else "Interactive")
         .replace("{{STATE_LINKS}}", _render_state_links(resolved.state))

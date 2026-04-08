@@ -76,6 +76,14 @@ def test_app_page_awaiting_install_has_clickable_install_action():
     assert 'href="/app/setup/install"' in response.text
 
 
+def test_app_page_active_has_clickable_dashboard_action():
+    response = client.get("/app?state=active")
+
+    assert response.status_code == 200
+    assert "Continue to dashboard" in response.text
+    assert 'href="/dashboard"' in response.text
+
+
 def test_app_page_redirects_to_login_when_unauthenticated():
     response = client.get("/app", follow_redirects=False)
 
