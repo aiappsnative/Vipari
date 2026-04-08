@@ -354,6 +354,7 @@ def test_dashboard_api_rejects_free_tier_workspace(tmp_path):
         cancel_at_period_end=False,
         current_period_start_at=time.time(),
         current_period_end_at=None,
+        next_payment_at=None,
         trial_ends_at=None,
         last_webhook_event_id=None,
     )
@@ -415,6 +416,343 @@ def test_dashboard_api_rejects_free_tier_workspace(tmp_path):
     assert response.status_code == 403
     assert response.json()["detail"] == "Dashboard access is not available for this workspace."
 
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_profile_page_requires_dashboard_access(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "profile-free.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity, upsert_entitlement, upsert_subscription
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="930",
+        github_login="free-profile-user",
+        display_name="Free Profile User",
+        primary_email="free-profile@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-profile-workspace",
+        display_name="Free Profile Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="free-profile-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:930",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "basic",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Profile page is available only for Starter tier and above."
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_profile_page_renders_and_updates_display_name(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "profile-paid.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, get_user_by_id, upsert_entitlement, upsert_github_identity, upsert_subscription
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="931",
+        github_login="starter-user",
+        display_name="Starter User",
+        primary_email="starter@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="starter-profile-workspace",
+        display_name="Starter Profile Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="starter-profile-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    next_payment = time.time() + 86400
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:starter-user",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=next_payment,
+        next_payment_at=next_payment,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    get_response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    assert get_response.status_code == 200
+    assert "Starter User" in get_response.text
+    assert "starter-user" in get_response.text
+    assert "Next payment date" in get_response.text
+
+    post_response = client.post(
+        "/app/profile",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"display_name": "Updated Starter User"},
+        follow_redirects=False,
+    )
+
+    assert post_response.status_code == 303
+    assert post_response.headers["location"] == "/app/profile?updated=1"
+    assert get_user_by_id(main.AUDIT_DB_PATH, user.id).display_name == "Updated Starter User"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_requires_explicit_allowlist(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_logins = main.settings.admin_github_logins
+    original_ids = main.settings.admin_github_user_ids
+    original_emails = main.settings.admin_emails
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-guard.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.admin_github_logins = ""
+    main.settings.admin_github_user_ids = ""
+    main.settings.admin_emails = ""
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="940",
+        github_login="not-admin",
+        display_name="Not Admin",
+        primary_email="not-admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="not-admin-session",
+        user_id=user.id,
+        workspace_id=None,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access is not enabled for this GitHub identity."
+
+    main.settings.admin_github_logins = original_logins
+    main.settings.admin_github_user_ids = original_ids
+    main.settings.admin_emails = original_emails
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_logins = main.settings.admin_github_logins
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-data.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.admin_github_logins = "admin-user"
+
+    from services.control_plane_records import (
+        create_billing_handoff_claim,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="950",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    admin_session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    free_user, _free_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="951",
+        github_login="free-installed-user",
+        display_name="Free Installed User",
+        primary_email="free-installed@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    free_workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-installed-workspace",
+        display_name="Free Installed Workspace",
+        billing_owner_user_id=free_user.id,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=free_workspace.id,
+        stripe_subscription_id="local:free:951",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=free_workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "basic",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=free_workspace.id,
+        installation_id=9510,
+        account_id="9510",
+        account_login="free-install-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=None,
+        installation_id=9520,
+        account_id="9520",
+        account_login="marketplace-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=None,
+        installation_id=9520,
+        repositories=[
+            {
+                "repo_github_id": "marketplace-org/repo-one",
+                "repo_full": "marketplace-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    create_billing_handoff_claim(
+        main.AUDIT_DB_PATH,
+        claim_token="claim-admin-1",
+        provider="base44",
+        external_purchase_id="purchase-admin-1",
+        plan_code="starter",
+        billing_status="active",
+        billing_email="buyer@example.com",
+        source="base44",
+        next_payment_at=time.time() + 604800,
+        expires_at=time.time() + 604800,
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: admin_session.session_id})
+
+    assert response.status_code == 200
+    assert "Control-plane oversight" in response.text
+    assert "Free Installed User" in response.text
+    assert "marketplace-org" in response.text
+    assert "purchase-admin-1" in response.text
+
+    main.settings.admin_github_logins = original_logins
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -491,6 +829,7 @@ def test_webhook_ignores_unallocated_repo(tmp_path):
         cancel_at_period_end=False,
         current_period_start_at=time.time(),
         current_period_end_at=None,
+        next_payment_at=None,
         trial_ends_at=None,
         last_webhook_event_id=None,
     )
@@ -859,6 +1198,44 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_public_install_callback_persists_unclaimed_installation(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "public-install-callback.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    with patch.object(main.settings, "github_app_id", "app-id"), patch.object(
+        main.settings, "github_app_private_key", "dummy-private-key"
+    ), patch(
+        "main.sync_installation_repositories",
+        return_value=(
+            {"target_type": "Organization", "account": {"login": "marketplace-org", "type": "Organization", "id": 88}},
+            [{"repo_github_id": "1", "repo_full": "marketplace-org/repo-one", "default_branch": "main", "is_private": True, "status": "available"}],
+        ),
+    ):
+        response = client.get(
+            "/app/setup/install/callback?installation_id=12345&setup_action=install",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/auth/github/start")
+
+    from services.control_plane_records import _connect
+
+    with _connect(main.AUDIT_DB_PATH) as conn:
+        installation = conn.execute("SELECT * FROM github_installations WHERE installation_id = 12345").fetchone()
+        repo_connection = conn.execute("SELECT * FROM repo_connections WHERE installation_id = 12345").fetchone()
+
+    assert installation is not None
+    assert installation["workspace_id"] is None
+    assert installation["account_login"] == "marketplace-org"
+    assert repo_connection is not None
+    assert repo_connection["workspace_id"] is None
+    assert repo_connection["repo_full"] == "marketplace-org/repo-one"
 
     main.AUDIT_DB_PATH = original_db_path
 

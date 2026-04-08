@@ -43,11 +43,13 @@ from services.billing_service import (
     verify_stripe_signature,
 )
 from services.control_plane_frontend import (
+    render_control_plane_admin_page,
     render_control_plane_app_page,
     render_control_plane_billing_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
+    render_control_plane_profile_page,
     render_control_plane_pricing_page,
     render_control_plane_repo_setup_page,
     render_control_plane_workspace_new_page,
@@ -76,14 +78,18 @@ from services.control_plane_records import (
     get_workspace_membership,
     get_workspace_subscription,
     has_processed_webhook_event,
+    list_admin_workspace_users,
+    list_billing_handoff_claims,
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
+    list_unclaimed_installations,
     list_workspace_memberships_for_user,
     record_webhook_event,
     replace_repo_connections,
     revoke_user_session,
     update_repo_allocation_status,
     update_session_workspace,
+    update_user_profile_display_name,
     upsert_billing_customer,
     upsert_entitlement,
     upsert_github_identity,
@@ -180,6 +186,7 @@ class BillingHandoffActivationRequest(BaseModel):
     billing_status: str = "active"
     billing_email: str | None = None
     source: str | None = None
+    next_payment_at: float | str | None = None
 
 
 def _control_plane_active() -> bool:
@@ -240,6 +247,25 @@ def _build_access_context(session) -> dict[str, object]:
         "installation": installation,
         "resolution": resolution,
     }
+
+
+def _parse_optional_timestamp(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return float(candidate)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(candidate.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+    return None
 
 
 def _dashboard_redirect_for_request(request: Request):
@@ -403,7 +429,7 @@ def _switch_session_workspace_if_allowed(session, workspace_id: int | None):
 
 def _link_installation_to_workspace(
     *,
-    workspace_id: int,
+    workspace_id: int | None,
     installation_id: int,
     account_login: str = "",
     account_type: str = "Organization",
@@ -491,6 +517,17 @@ def _current_workspace_context(request: Request) -> dict[str, object]:
     return access_context
 
 
+def _current_authenticated_identity_context(request: Request) -> dict[str, object]:
+    session = _get_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
+    identity = get_github_identity_for_user(AUDIT_DB_PATH, session.user_id)
+    if user is None or identity is None:
+        raise HTTPException(status_code=403, detail="Authenticated GitHub identity is required.")
+    return {"session": session, "user": user, "identity": identity}
+
+
 def _require_dashboard_access(request: Request) -> dict[str, object]:
     if not _control_plane_active():
         return {}
@@ -516,6 +553,30 @@ def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | N
         return False
     expected = hmac.new(settings.billing_handoff_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header.strip())
+
+
+def _is_admin_identity(user, identity) -> bool:
+    if not settings.has_admin_access_config:
+        return False
+    if identity.github_user_id in settings.admin_github_user_id_set:
+        return True
+    if identity.github_login.lower() in settings.admin_github_login_set:
+        return True
+    return bool(user.primary_email and user.primary_email.lower() in settings.admin_email_set)
+
+
+def _require_admin_access(request: Request) -> dict[str, object]:
+    context = _current_authenticated_identity_context(request)
+    if not _is_admin_identity(context["user"], context["identity"]):
+        raise HTTPException(status_code=403, detail="Admin access is not enabled for this GitHub identity.")
+    return context
+
+
+def _has_profile_access(access_context: dict[str, object]) -> bool:
+    entitlement = access_context.get("entitlement")
+    if entitlement is not None and entitlement.dashboard_enabled:
+        return True
+    return bool(access_context["resolution"].can_access_dashboard)
 
 
 def _require_workspace_role(access_context: dict[str, object], *allowed_roles: str) -> None:
@@ -670,7 +731,66 @@ async def control_plane_app_page_route(request: Request, state: str | None = Non
     if session is None:
         return RedirectResponse("/login", status_code=303)
     access_context = _build_access_context(session)
-    return HTMLResponse(render_control_plane_app_page(resolution=access_context["resolution"]))
+    return HTMLResponse(
+        render_control_plane_app_page(
+            resolution=access_context["resolution"],
+            profile_url="/app/profile" if _has_profile_access(access_context) else None,
+            admin_url="/app/admin" if access_context.get("identity") and _is_admin_identity(access_context["user"], access_context["identity"]) else None,
+        )
+    )
+
+
+@app.get("/app/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_profile_access(access_context):
+        raise HTTPException(status_code=403, detail="Profile page is available only for Starter tier and above.")
+
+    user = access_context["user"]
+    identity = access_context["identity"]
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_profile_page(
+            display_name=user.display_name if user else "",
+            github_login=identity.github_login if identity else "Unavailable",
+            github_user_id=identity.github_user_id if identity else "Unavailable",
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            next_payment_at=subscription.next_payment_at if subscription else None,
+            status_note="Profile updated." if request.query_params.get("updated") else None,
+            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+        )
+    )
+
+
+@app.post("/app/profile")
+async def profile_update(request: Request, display_name: str = Form(...)):
+    access_context = _current_workspace_context(request)
+    if not _has_profile_access(access_context):
+        raise HTTPException(status_code=403, detail="Profile page is available only for Starter tier and above.")
+    normalized_name = display_name.strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Display name cannot be empty.")
+    if len(normalized_name) > 120:
+        raise HTTPException(status_code=400, detail="Display name must be 120 characters or fewer.")
+    update_user_profile_display_name(AUDIT_DB_PATH, access_context["session"].user_id, normalized_name)
+    return RedirectResponse("/app/profile?updated=1", status_code=303)
+
+
+@app.get("/app/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    admin_context = _require_admin_access(request)
+    return HTMLResponse(
+        render_control_plane_admin_page(
+            actor_github_login=admin_context["identity"].github_login,
+            admin_rows=[asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)],
+            unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
+            billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
+        )
+    )
 
 
 @app.get("/app/workspaces/new", response_class=HTMLResponse)
@@ -795,6 +915,7 @@ async def billing_checkout(request: Request, plan: str | None = Form(default=Non
             cancel_at_period_end=False,
             current_period_start_at=time.time(),
             current_period_end_at=None,
+            next_payment_at=None,
             trial_ends_at=None,
             last_webhook_event_id=None,
         )
@@ -841,6 +962,7 @@ async def billing_checkout(request: Request, plan: str | None = Form(default=Non
         cancel_at_period_end=False,
         current_period_start_at=None,
         current_period_end_at=None,
+        next_payment_at=None,
         trial_ends_at=None,
         last_webhook_event_id=None,
     )
@@ -964,6 +1086,10 @@ async def install_callback(
     workspace_hint = _coerce_workspace_hint(state)
     session = _switch_session_workspace_if_allowed(_get_session(request), workspace_hint)
     if session is None:
+        try:
+            _link_installation_to_workspace(workspace_id=None, installation_id=installation_id_int)
+        except Exception:
+            pass
         return _redirect_with_pending_install(
             request,
             installation_id=installation_id_int,
@@ -972,6 +1098,10 @@ async def install_callback(
         )
     access_context = _build_access_context(session)
     if access_context.get("workspace") is None:
+        try:
+            _link_installation_to_workspace(workspace_id=None, installation_id=installation_id_int)
+        except Exception:
+            pass
         response = RedirectResponse(_workspace_new_url(_flow_context_from_request(request)), status_code=303)
         _set_context_cookie(
             response,
@@ -1132,6 +1262,7 @@ async def base44_billing_handoff(request: Request):
         billing_status=(payload.billing_status or "active").strip().lower(),
         billing_email=(payload.billing_email or "").strip() or None,
         source=_normalize_source_hint(payload.source) or "base44",
+        next_payment_at=_parse_optional_timestamp(payload.next_payment_at),
         expires_at=time.time() + settings.billing_handoff_ttl_seconds,
     )
     claim_url = f"{settings.app_base_url.rstrip('/')}/claim/{claim.claim_token}?plan={claim.plan_code}&source={claim.source or claim.provider}"
@@ -1378,6 +1509,7 @@ async def stripe_webhook(request: Request):
             cancel_at_period_end=bool(projection["cancel_at_period_end"]),
             current_period_start_at=projection["current_period_start_at"],
             current_period_end_at=projection["current_period_end_at"],
+            next_payment_at=projection["current_period_end_at"],
             trial_ends_at=projection["trial_ends_at"],
             last_webhook_event_id=event_id or None,
         )

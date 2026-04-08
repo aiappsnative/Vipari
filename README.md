@@ -69,11 +69,14 @@ On the active integration branch, DriftGuard additionally provides:
 - webhook gating that suppresses PR audits/comments for repos that are installed but not allocated or not entitled for comments
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
 - actionable setup-state, free-tier, and active-state app shells so `/app` always exposes a real continuation path
+- Starter-and-above profile pages with editable display name, read-only GitHub identity, and provider-sourced next payment date display
+- strictly allowlisted admin pages covering registered users, dashboard-entitled workspaces, billing handoff claims, and unclaimed/public GitHub App installations
+- public GitHub App install callback capture so direct marketplace/setup flows are visible before workspace claiming completes
 - a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
 
 Latest branch validation on 2026-04-08:
 
-- full automated suite passed locally: `162 passed`
+- full automated suite passed locally: `167 passed`
 - targeted control-plane/access-state regression coverage passed locally for free-tier activation, signed billing handoff claims, dashboard gating, and webhook allocation enforcement
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
@@ -178,6 +181,7 @@ Optional variables:
 - `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, and `SESSION_TTL_SECONDS`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_CALLBACK_URL`
 - `BILLING_HANDOFF_SECRET`, `BILLING_HANDOFF_TTL_SECONDS`, and `BASE44_CHECKOUT_URL`
+- `ADMIN_GITHUB_LOGINS`, `ADMIN_GITHUB_USER_IDS`, and `ADMIN_EMAILS` for explicit control-plane admin allowlisting
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`
 - `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_TEAM`, `STRIPE_PRICE_ENTERPRISE`, and `STRIPE_PRICE_BUSINESS`
 - `REDIS_URL`

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape as html_escape
 from pathlib import Path
 
@@ -220,6 +221,32 @@ def _render_action_chip(label: str | None, href: str | None, *, fallback: str) -
     return f'<span>{html_escape(text)}</span>'
 
 
+def _render_quick_links(*, profile_url: str | None = None, admin_url: str | None = None) -> str:
+    links = ['<a class="subtle-link" href="/app">Workspace</a>']
+    if profile_url:
+        links.append(f'<a class="subtle-link" href="{html_escape(profile_url)}">Profile</a>')
+    if admin_url:
+        links.append(f'<a class="subtle-link" href="{html_escape(admin_url)}">Admin</a>')
+    return "".join(links)
+
+
+def _format_timestamp(value: float | None) -> str:
+    if value is None:
+        return "Unavailable"
+    return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _render_table(headers: list[str], rows: list[list[str]]) -> str:
+    if not rows:
+        return '<div class="empty-state">No records yet.</div>'
+    head_html = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
+    row_html = "".join(
+        "<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>"
+        for row in rows
+    )
+    return f'<div class="table-shell"><table class="data-table"><thead><tr>{head_html}</tr></thead><tbody>{row_html}</tbody></table></div>'
+
+
 def _render_state_links(active_state: str) -> str:
     states = [
         "unauthenticated",
@@ -386,9 +413,13 @@ def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
             '''
         )
     return "".join(rendered)
-
-
-def render_control_plane_app_page(state: str | None = None, resolution: WorkspaceAccessResolution | None = None) -> str:
+def render_control_plane_app_page(
+    state: str | None = None,
+    resolution: WorkspaceAccessResolution | None = None,
+    *,
+    profile_url: str | None = None,
+    admin_url: str | None = None,
+) -> str:
     resolved = resolution or _resolution_for_preview_state(state)
     template = _load_template("control_plane_app.html")
     primary_action = _render_action_chip(resolved.primary_cta, _state_primary_action_url(resolved), fallback="No action required")
@@ -403,6 +434,113 @@ def render_control_plane_app_page(state: str | None = None, resolution: Workspac
         .replace("{{NEXT_ACTION}}", next_action)
         .replace("{{DASHBOARD_ACCESS}}", "Enabled" if resolved.can_access_dashboard else "Blocked")
         .replace("{{ACCESS_MODE}}", "Read only" if resolved.is_read_only else "Interactive")
+        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url=profile_url, admin_url=admin_url))
         .replace("{{STATE_LINKS}}", _render_state_links(resolved.state))
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolved))
+    )
+
+
+def render_control_plane_profile_page(
+    *,
+    display_name: str,
+    github_login: str,
+    github_user_id: str,
+    workspace_name: str,
+    plan_label: str,
+    next_payment_at: float | None,
+    status_note: str | None,
+    admin_url: str | None,
+) -> str:
+    template = _load_template("control_plane_profile.html")
+    return (
+        template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{GITHUB_LOGIN}}", html_escape(github_login))
+        .replace("{{GITHUB_USER_ID}}", html_escape(github_user_id))
+        .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
+        .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
+        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url=admin_url))
+    )
+
+
+def render_control_plane_admin_page(
+    *,
+    actor_github_login: str,
+    admin_rows: list[dict[str, object]],
+    unclaimed_installations: list[dict[str, object]],
+    billing_claims: list[dict[str, object]],
+) -> str:
+    template = _load_template("control_plane_admin.html")
+    user_rows = _render_table(
+        [
+            "Workspace",
+            "User",
+            "GitHub",
+            "Role",
+            "Plan",
+            "Dashboard",
+            "PR comments",
+            "Next payment",
+            "Installation",
+            "Repos",
+            "Setup",
+            "Last login",
+        ],
+        [
+            [
+                html_escape(str(row.get("workspace_display_name") or "Unassigned")),
+                html_escape(str(row.get("user_display_name") or "Unknown")),
+                html_escape(str(row.get("github_login") or "Unavailable")),
+                html_escape(str(row.get("membership_role") or "none")),
+                html_escape(str(row.get("plan_code") or "none")),
+                "yes" if bool(row.get("dashboard_enabled")) else "no",
+                "yes" if bool(row.get("pr_comments_enabled")) else "no",
+                html_escape(_format_timestamp(row.get("next_payment_at") if isinstance(row.get("next_payment_at"), (int, float)) else None)),
+                html_escape(str(row.get("installation_account_login") or row.get("installation_id") or "none")),
+                html_escape(f"{int(row.get('allocated_repo_count') or 0)}/{int(row.get('onboarded_repo_count') or 0)}"),
+                html_escape(str(row.get("setup_state") or "none")),
+                html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
+            ]
+            for row in admin_rows
+        ],
+    )
+    install_rows = _render_table(
+        ["Installation id", "Account", "Type", "Status", "Repos", "Last sync", "Updated"],
+        [
+            [
+                html_escape(str(row.get("installation_id") or "")),
+                html_escape(str(row.get("account_login") or "")),
+                html_escape(f"{row.get('account_type') or ''}/{row.get('target_type') or ''}"),
+                html_escape(str(row.get("status") or "")),
+                html_escape(str(row.get("repo_count") or 0)),
+                html_escape(_format_timestamp(row.get("last_synced_at") if isinstance(row.get("last_synced_at"), (int, float)) else None)),
+                html_escape(_format_timestamp(row.get("updated_at") if isinstance(row.get("updated_at"), (int, float)) else None)),
+            ]
+            for row in unclaimed_installations
+        ],
+    )
+    claim_rows = _render_table(
+        ["Provider", "Purchase", "Plan", "Status", "Email", "Next payment", "Claimed workspace", "Consumed", "Updated"],
+        [
+            [
+                html_escape(str(row.get("provider") or "")),
+                html_escape(str(row.get("external_purchase_id") or "")),
+                html_escape(str(row.get("plan_code") or "")),
+                html_escape(str(row.get("billing_status") or "")),
+                html_escape(str(row.get("billing_email") or "")),
+                html_escape(_format_timestamp(row.get("next_payment_at") if isinstance(row.get("next_payment_at"), (int, float)) else None)),
+                html_escape(str(row.get("claimed_workspace_id") or "pending")),
+                html_escape(_format_timestamp(row.get("consumed_at") if isinstance(row.get("consumed_at"), (int, float)) else None)),
+                html_escape(_format_timestamp(row.get("updated_at") if isinstance(row.get("updated_at"), (int, float)) else None)),
+            ]
+            for row in billing_claims
+        ],
+    )
+    return (
+        template.replace("{{ACTOR_GITHUB_LOGIN}}", html_escape(actor_github_login))
+        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url="/app/admin"))
+        .replace("{{USER_ROWS}}", user_rows)
+        .replace("{{UNCLAIMED_INSTALL_ROWS}}", install_rows)
+        .replace("{{CLAIM_ROWS}}", claim_rows)
     )

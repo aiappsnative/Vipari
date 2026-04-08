@@ -96,12 +96,18 @@ def test_init_db_adds_missing_control_plane_columns_for_existing_tables(tmp_path
     with sqlite3.connect(db_path) as conn:
         github_installation_columns = {row[1] for row in conn.execute("PRAGMA table_info(github_installations)").fetchall()}
         repo_connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(repo_connections)").fetchall()}
+        user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        subscription_columns = {row[1] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
+        claim_columns = {row[1] for row in conn.execute("PRAGMA table_info(billing_handoff_claims)").fetchall()}
 
     assert "workspace_id" in github_installation_columns
     assert "target_type" in github_installation_columns
     assert "status" in github_installation_columns
     assert "workspace_id" in repo_connection_columns
     assert "status" in repo_connection_columns
+    assert "profile_name_override" in user_columns
+    assert "next_payment_at" in subscription_columns
+    assert "next_payment_at" in claim_columns
 
 
 def test_init_db_rebuilds_legacy_repo_connections_foreign_key(tmp_path):

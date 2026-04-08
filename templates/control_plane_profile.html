@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Profile | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+</head>
+<body>
+    <main class="page-shell">
+        <section class="page-header">
+            <p class="eyebrow">Profile</p>
+            <h1>{{DISPLAY_NAME}}</h1>
+            <p>Workspace: {{WORKSPACE_NAME}}. Plan: {{PLAN_LABEL}}.</p>
+            <p class="page-note">{{STATUS_NOTE}}</p>
+            <div class="state-links">{{QUICK_LINKS}}</div>
+        </section>
+        <section class="card-grid profile-grid">
+            <article class="action-card">
+                <div class="eyebrow">Edit profile</div>
+                <h2>Name</h2>
+                <form method="post" action="/app/profile" class="action-form">
+                    <label class="field-label" for="display-name">Display name</label>
+                    <input class="field-input" id="display-name" name="display_name" value="{{DISPLAY_NAME}}" maxlength="120" />
+                    <button type="submit" class="button">Save profile</button>
+                </form>
+            </article>
+            <article class="action-card">
+                <div class="eyebrow">GitHub account</div>
+                <h2>{{GITHUB_LOGIN}}</h2>
+                <p>GitHub user id: {{GITHUB_USER_ID}}</p>
+                <p>This identity is read-only and comes from GitHub OAuth.</p>
+            </article>
+            <article class="action-card">
+                <div class="eyebrow">Billing</div>
+                <h2>Next payment date</h2>
+                <p>{{NEXT_PAYMENT_AT}}</p>
+                <p>This is the latest provider-reported renewal date currently stored by DriftGuard.</p>
+            </article>
+        </section>
+    </main>
+</body>
+</html>

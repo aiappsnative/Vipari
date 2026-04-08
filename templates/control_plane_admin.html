@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+</head>
+<body>
+    <main class="page-shell admin-shell">
+        <section class="page-header">
+            <p class="eyebrow">Admin</p>
+            <h1>Control-plane oversight</h1>
+            <p>Signed in as {{ACTOR_GITHUB_LOGIN}}. This page is allowlist-protected and should only be exposed to explicitly configured GitHub identities.</p>
+            <div class="state-links">{{QUICK_LINKS}}</div>
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Registered users and workspaces</p>
+                <h2>Workspace-linked accounts</h2>
+            </div>
+            {{USER_ROWS}}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">GitHub app installs</p>
+                <h2>Unclaimed public installations</h2>
+            </div>
+            {{UNCLAIMED_INSTALL_ROWS}}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Billing handoff</p>
+                <h2>Stored billing claims</h2>
+            </div>
+            {{CLAIM_ROWS}}
+        </section>
+    </main>
+</body>
+</html>

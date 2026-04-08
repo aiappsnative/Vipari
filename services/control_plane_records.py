@@ -30,6 +30,7 @@ CONTROL_PLANE_TABLES = (
 class UserRecord:
     id: int
     display_name: str
+    profile_name_override: str | None
     primary_email: str | None
     active: bool
     created_at: float
@@ -112,6 +113,7 @@ class SubscriptionRecord:
     cancel_at_period_end: bool
     current_period_start_at: float | None
     current_period_end_at: float | None
+    next_payment_at: float | None
     trial_ends_at: float | None
     last_webhook_event_id: str | None
     created_at: float
@@ -194,16 +196,73 @@ class BillingHandoffClaimRecord:
     source: str | None
     claimed_workspace_id: int | None
     claimed_user_id: int | None
+    next_payment_at: float | None
     expires_at: float
     consumed_at: float | None
     created_at: float
     updated_at: float
 
 
+@dataclass(frozen=True)
+class AdminWorkspaceUserRecord:
+    workspace_id: int | None
+    workspace_slug: str | None
+    workspace_display_name: str | None
+    setup_state: str | None
+    user_id: int
+    user_display_name: str
+    github_login: str | None
+    github_user_id: str | None
+    primary_email: str | None
+    membership_role: str | None
+    plan_code: str | None
+    subscription_status: str | None
+    dashboard_enabled: bool
+    pr_comments_enabled: bool
+    next_payment_at: float | None
+    installation_id: int | None
+    installation_account_login: str | None
+    allocated_repo_count: int
+    onboarded_repo_count: int
+    last_login_at: float | None
+
+
+@dataclass(frozen=True)
+class AdminInstallationRecord:
+    installation_id: int
+    workspace_id: int | None
+    account_login: str
+    account_type: str
+    target_type: str
+    status: str
+    repo_count: int
+    last_synced_at: float | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class AdminBillingClaimRecord:
+    claim_token: str
+    provider: str
+    external_purchase_id: str
+    plan_code: str
+    billing_status: str
+    billing_email: str | None
+    source: str | None
+    claimed_workspace_id: int | None
+    claimed_user_id: int | None
+    next_payment_at: float | None
+    expires_at: float
+    consumed_at: float | None
+    updated_at: float
+
+
 def _row_to_user(row: sqlite3.Row) -> UserRecord:
     return UserRecord(
         id=row["id"],
-        display_name=row["display_name"],
+        display_name=row["profile_name_override"] or row["display_name"],
+        profile_name_override=row["profile_name_override"],
         primary_email=row["primary_email"],
         active=bool(row["active"]),
         created_at=row["created_at"],
@@ -281,6 +340,7 @@ def _row_to_subscription(row: sqlite3.Row) -> SubscriptionRecord:
         cancel_at_period_end=bool(row["cancel_at_period_end"]),
         current_period_start_at=row["current_period_start_at"],
         current_period_end_at=row["current_period_end_at"],
+        next_payment_at=row["next_payment_at"],
         trial_ends_at=row["trial_ends_at"],
         last_webhook_event_id=row["last_webhook_event_id"],
         created_at=row["created_at"],
@@ -379,6 +439,7 @@ def _row_to_billing_handoff_claim(row: sqlite3.Row) -> BillingHandoffClaimRecord
         source=row["source"],
         claimed_workspace_id=row["claimed_workspace_id"],
         claimed_user_id=row["claimed_user_id"],
+        next_payment_at=row["next_payment_at"],
         expires_at=row["expires_at"],
         consumed_at=row["consumed_at"],
         created_at=row["created_at"],
@@ -540,6 +601,7 @@ def init_control_plane_db(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 display_name TEXT NOT NULL,
+                profile_name_override TEXT,
                 primary_email TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
@@ -643,6 +705,7 @@ def init_control_plane_db(db_path: str) -> None:
                 cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
                 current_period_start_at REAL,
                 current_period_end_at REAL,
+                next_payment_at REAL,
                 trial_ends_at REAL,
                 last_webhook_event_id TEXT,
                 created_at REAL NOT NULL,
@@ -685,6 +748,7 @@ def init_control_plane_db(db_path: str) -> None:
                 source TEXT,
                 claimed_workspace_id INTEGER,
                 claimed_user_id INTEGER,
+                next_payment_at REAL,
                 expires_at REAL NOT NULL,
                 consumed_at REAL,
                 created_at REAL NOT NULL,
@@ -787,6 +851,7 @@ def init_control_plane_db(db_path: str) -> None:
         )
 
         # Additive migrations for databases created before the latest control-plane schema.
+        _ensure_column(conn, "users", "profile_name_override", "TEXT")
         _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
@@ -794,10 +859,12 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "subscriptions", "cancel_at_period_end", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "subscriptions", "current_period_start_at", "REAL")
         _ensure_column(conn, "subscriptions", "current_period_end_at", "REAL")
+        _ensure_column(conn, "subscriptions", "next_payment_at", "REAL")
         _ensure_column(conn, "subscriptions", "trial_ends_at", "REAL")
         _ensure_column(conn, "subscriptions", "last_webhook_event_id", "TEXT")
         _ensure_column(conn, "entitlements", "feature_flags_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "entitlements", "pr_comments_enabled", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "billing_handoff_claims", "next_payment_at", "REAL")
         _ensure_column(conn, "github_installations", "workspace_id", "INTEGER")
         _ensure_column(conn, "github_installations", "target_type", "TEXT NOT NULL DEFAULT 'Organization'")
         _ensure_column(conn, "github_installations", "status", "TEXT NOT NULL DEFAULT 'active'")
@@ -929,6 +996,17 @@ def get_user_by_id(db_path: str, user_id: int) -> UserRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_to_user(row) if row else None
+
+
+def update_user_profile_display_name(db_path: str, user_id: int, display_name: str) -> UserRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE users SET profile_name_override = ?, updated_at = ? WHERE id = ?",
+            (display_name, now, user_id),
+        )
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return _row_to_user(row)
 
 
 def get_github_identity_for_user(db_path: str, user_id: int) -> GithubIdentityRecord | None:
@@ -1115,6 +1193,7 @@ def create_billing_handoff_claim(
     billing_status: str,
     billing_email: str | None,
     source: str | None,
+    next_payment_at: float | None,
     expires_at: float,
 ) -> BillingHandoffClaimRecord:
     now = time.time()
@@ -1123,8 +1202,8 @@ def create_billing_handoff_claim(
             """
             INSERT INTO billing_handoff_claims (
                 claim_token, provider, external_purchase_id, plan_code, billing_status, billing_email, source,
-                claimed_workspace_id, claimed_user_id, expires_at, consumed_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
+                claimed_workspace_id, claimed_user_id, next_payment_at, expires_at, consumed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?)
             ON CONFLICT(external_purchase_id) DO UPDATE SET
                 claim_token = excluded.claim_token,
                 provider = excluded.provider,
@@ -1132,10 +1211,11 @@ def create_billing_handoff_claim(
                 billing_status = excluded.billing_status,
                 billing_email = excluded.billing_email,
                 source = excluded.source,
+                next_payment_at = excluded.next_payment_at,
                 expires_at = excluded.expires_at,
                 updated_at = excluded.updated_at
             """,
-            (claim_token, provider, external_purchase_id, plan_code, billing_status, billing_email, source, expires_at, now, now),
+            (claim_token, provider, external_purchase_id, plan_code, billing_status, billing_email, source, next_payment_at, expires_at, now, now),
         )
         row = conn.execute("SELECT * FROM billing_handoff_claims WHERE external_purchase_id = ?", (external_purchase_id,)).fetchone()
     return _row_to_billing_handoff_claim(row)
@@ -1152,6 +1232,7 @@ def upsert_subscription(
     cancel_at_period_end: bool,
     current_period_start_at: float | None,
     current_period_end_at: float | None,
+    next_payment_at: float | None,
     trial_ends_at: float | None,
     last_webhook_event_id: str | None,
 ) -> SubscriptionRecord:
@@ -1161,9 +1242,9 @@ def upsert_subscription(
             """
             INSERT INTO subscriptions (
                 workspace_id, stripe_subscription_id, stripe_price_id, plan_code, status,
-                cancel_at_period_end, current_period_start_at, current_period_end_at, trial_ends_at,
+                cancel_at_period_end, current_period_start_at, current_period_end_at, next_payment_at, trial_ends_at,
                 last_webhook_event_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(stripe_subscription_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 stripe_price_id = excluded.stripe_price_id,
@@ -1172,6 +1253,7 @@ def upsert_subscription(
                 cancel_at_period_end = excluded.cancel_at_period_end,
                 current_period_start_at = excluded.current_period_start_at,
                 current_period_end_at = excluded.current_period_end_at,
+                next_payment_at = excluded.next_payment_at,
                 trial_ends_at = excluded.trial_ends_at,
                 last_webhook_event_id = excluded.last_webhook_event_id,
                 updated_at = excluded.updated_at
@@ -1185,6 +1267,7 @@ def upsert_subscription(
                 int(cancel_at_period_end),
                 current_period_start_at,
                 current_period_end_at,
+                next_payment_at if next_payment_at is not None else current_period_end_at,
                 trial_ends_at,
                 last_webhook_event_id,
                 now,
@@ -1281,18 +1364,31 @@ def activate_billing_handoff_claim(
             """
             INSERT INTO subscriptions (
                 workspace_id, stripe_subscription_id, stripe_price_id, plan_code, status,
-                cancel_at_period_end, current_period_start_at, current_period_end_at, trial_ends_at,
+                cancel_at_period_end, current_period_start_at, current_period_end_at, next_payment_at, trial_ends_at,
                 last_webhook_event_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, NULL, ?, ?, ?)
             ON CONFLICT(stripe_subscription_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 stripe_price_id = excluded.stripe_price_id,
                 plan_code = excluded.plan_code,
                 status = excluded.status,
+                current_period_end_at = excluded.current_period_end_at,
+                next_payment_at = excluded.next_payment_at,
                 last_webhook_event_id = excluded.last_webhook_event_id,
                 updated_at = excluded.updated_at
             """,
-            (workspace_id, synthetic_subscription_id, synthetic_price_id, claim.plan_code, claim.billing_status, claim.external_purchase_id, now, now),
+            (
+                workspace_id,
+                synthetic_subscription_id,
+                synthetic_price_id,
+                claim.plan_code,
+                claim.billing_status,
+                claim.next_payment_at,
+                claim.next_payment_at,
+                claim.external_purchase_id,
+                now,
+                now,
+            ),
         )
 
         payload = derive_entitlement_payload(claim.plan_code, claim.billing_status)
@@ -1377,7 +1473,7 @@ def record_webhook_event(
 def upsert_github_installation(
     db_path: str,
     *,
-    workspace_id: int,
+    workspace_id: int | None,
     installation_id: int,
     account_id: str,
     account_login: str,
@@ -1405,11 +1501,12 @@ def upsert_github_installation(
             (workspace_id, installation_id, account_id, account_login, account_type, target_type, status, now, now, now),
         )
         row = conn.execute("SELECT * FROM github_installations WHERE installation_id = ?", (installation_id,)).fetchone()
-        _refresh_workspace_setup_state(conn, workspace_id)
+        if workspace_id is not None:
+            _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_installation(row)
 
 
-def replace_repo_connections(db_path: str, *, workspace_id: int, installation_id: int, repositories: list[dict[str, object]]) -> None:
+def replace_repo_connections(db_path: str, *, workspace_id: int | None, installation_id: int, repositories: list[dict[str, object]]) -> None:
     now = time.time()
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM repo_connections WHERE installation_id = ?", (installation_id,))
@@ -1433,6 +1530,145 @@ def replace_repo_connections(db_path: str, *, workspace_id: int, installation_id
                     now,
                 ),
             )
+
+
+def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                w.id AS workspace_id,
+                w.slug AS workspace_slug,
+                w.display_name AS workspace_display_name,
+                w.setup_state AS setup_state,
+                u.id AS user_id,
+                COALESCE(u.profile_name_override, u.display_name) AS user_display_name,
+                gi.github_login AS github_login,
+                gi.github_user_id AS github_user_id,
+                u.primary_email AS primary_email,
+                wm.role AS membership_role,
+                e.plan_code AS plan_code,
+                e.subscription_status AS subscription_status,
+                COALESCE(e.dashboard_enabled, 0) AS dashboard_enabled,
+                COALESCE(e.pr_comments_enabled, 0) AS pr_comments_enabled,
+                s.next_payment_at AS next_payment_at,
+                inst.installation_id AS installation_id,
+                inst.account_login AS installation_account_login,
+                COALESCE(alloc.allocated_repo_count, 0) AS allocated_repo_count,
+                COALESCE(alloc.onboarded_repo_count, 0) AS onboarded_repo_count,
+                gi.last_login_at AS last_login_at
+            FROM users u
+            LEFT JOIN github_identities gi ON gi.user_id = u.id
+            LEFT JOIN workspace_memberships wm ON wm.user_id = u.id
+            LEFT JOIN workspaces w ON w.id = wm.workspace_id
+            LEFT JOIN entitlements e ON e.workspace_id = w.id
+            LEFT JOIN subscriptions s ON s.workspace_id = w.id
+            LEFT JOIN github_installations inst ON inst.workspace_id = w.id AND inst.status = 'active'
+            LEFT JOIN (
+                SELECT
+                    workspace_id,
+                    SUM(CASE WHEN allocation_status IN ('active', 'onboarded') THEN 1 ELSE 0 END) AS allocated_repo_count,
+                    SUM(CASE WHEN allocation_status = 'onboarded' THEN 1 ELSE 0 END) AS onboarded_repo_count
+                FROM repo_allocations
+                GROUP BY workspace_id
+            ) alloc ON alloc.workspace_id = w.id
+            ORDER BY COALESCE(w.updated_at, u.updated_at) DESC, u.id ASC
+            """
+        ).fetchall()
+    return [
+        AdminWorkspaceUserRecord(
+            workspace_id=row["workspace_id"],
+            workspace_slug=row["workspace_slug"],
+            workspace_display_name=row["workspace_display_name"],
+            setup_state=row["setup_state"],
+            user_id=row["user_id"],
+            user_display_name=row["user_display_name"],
+            github_login=row["github_login"],
+            github_user_id=row["github_user_id"],
+            primary_email=row["primary_email"],
+            membership_role=row["membership_role"],
+            plan_code=row["plan_code"],
+            subscription_status=row["subscription_status"],
+            dashboard_enabled=bool(row["dashboard_enabled"]),
+            pr_comments_enabled=bool(row["pr_comments_enabled"]),
+            next_payment_at=row["next_payment_at"],
+            installation_id=row["installation_id"],
+            installation_account_login=row["installation_account_login"],
+            allocated_repo_count=int(row["allocated_repo_count"] or 0),
+            onboarded_repo_count=int(row["onboarded_repo_count"] or 0),
+            last_login_at=row["last_login_at"],
+        )
+        for row in rows
+    ]
+
+
+def list_unclaimed_installations(db_path: str) -> list[AdminInstallationRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                inst.installation_id,
+                inst.workspace_id,
+                inst.account_login,
+                inst.account_type,
+                inst.target_type,
+                inst.status,
+                COALESCE(repo_counts.repo_count, 0) AS repo_count,
+                inst.last_synced_at,
+                inst.created_at,
+                inst.updated_at
+            FROM github_installations inst
+            LEFT JOIN (
+                SELECT installation_id, COUNT(*) AS repo_count
+                FROM repo_connections
+                GROUP BY installation_id
+            ) repo_counts ON repo_counts.installation_id = inst.installation_id
+            WHERE inst.workspace_id IS NULL
+            ORDER BY inst.updated_at DESC
+            """
+        ).fetchall()
+    return [
+        AdminInstallationRecord(
+            installation_id=row["installation_id"],
+            workspace_id=row["workspace_id"],
+            account_login=row["account_login"],
+            account_type=row["account_type"],
+            target_type=row["target_type"],
+            status=row["status"],
+            repo_count=int(row["repo_count"] or 0),
+            last_synced_at=row["last_synced_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+def list_billing_handoff_claims(db_path: str) -> list[AdminBillingClaimRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM billing_handoff_claims ORDER BY updated_at DESC
+            """
+        ).fetchall()
+    return [
+        AdminBillingClaimRecord(
+            claim_token=row["claim_token"],
+            provider=row["provider"],
+            external_purchase_id=row["external_purchase_id"],
+            plan_code=row["plan_code"],
+            billing_status=row["billing_status"],
+            billing_email=row["billing_email"],
+            source=row["source"],
+            claimed_workspace_id=row["claimed_workspace_id"],
+            claimed_user_id=row["claimed_user_id"],
+            next_payment_at=row["next_payment_at"],
+            expires_at=row["expires_at"],
+            consumed_at=row["consumed_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
 
 
 def list_repo_connections_for_workspace(db_path: str, workspace_id: int) -> list[RepoConnectionRecord]:

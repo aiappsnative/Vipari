@@ -240,6 +240,71 @@ button.button {
     display: block;
 }
 
+.profile-grid {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.admin-shell {
+    width: min(1400px, calc(100% - 32px));
+}
+
+.admin-section {
+    margin-top: 28px;
+}
+
+.section-heading {
+    margin-bottom: 14px;
+}
+
+.section-heading h2 {
+    margin: 0;
+    font-family: "Fraunces", serif;
+    font-size: 1.5rem;
+}
+
+.table-shell {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 12px 32px rgba(31, 58, 55, 0.06);
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 980px;
+}
+
+.data-table th,
+.data-table td {
+    padding: 14px 16px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.94rem;
+}
+
+.data-table th {
+    position: sticky;
+    top: 0;
+    background: rgba(245, 241, 232, 0.96);
+    color: var(--panel-strong);
+    font-weight: 600;
+}
+
+.data-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.empty-state {
+    padding: 24px;
+    border: 1px dashed var(--line);
+    border-radius: 18px;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.6);
+}
+
 @media (max-width: 720px) {
     .hero-panel,
     .simple-panel,

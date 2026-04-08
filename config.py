@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     billing_handoff_secret: str = ""
     billing_handoff_ttl_seconds: int = 86400
     base44_checkout_url: str = ""
+    admin_github_logins: str = ""
+    admin_github_user_ids: str = ""
+    admin_emails: str = ""
 
     worker_concurrency: int = 4
     worker_max_retries: int = 3
@@ -91,6 +94,22 @@ class Settings(BaseSettings):
     @property
     def has_encryption_key(self) -> bool:
         return bool(self.app_encryption_key)
+
+    @property
+    def admin_github_login_set(self) -> set[str]:
+        return {value.strip().lower() for value in self.admin_github_logins.split(",") if value.strip()}
+
+    @property
+    def admin_github_user_id_set(self) -> set[str]:
+        return {value.strip() for value in self.admin_github_user_ids.split(",") if value.strip()}
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        return {value.strip().lower() for value in self.admin_emails.split(",") if value.strip()}
+
+    @property
+    def has_admin_access_config(self) -> bool:
+        return bool(self.admin_github_login_set or self.admin_github_user_id_set or self.admin_email_set)
 
     @property
     def resolved_db_path(self) -> str:
