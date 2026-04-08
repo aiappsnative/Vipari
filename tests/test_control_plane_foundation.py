@@ -164,3 +164,70 @@ def test_init_db_rebuilds_legacy_repo_connections_foreign_key(tmp_path):
         foreign_keys = conn.execute("PRAGMA foreign_key_list(repo_connections)").fetchall()
 
     assert any(foreign_key[2] == 'github_installations' and foreign_key[3] == 'installation_id' and foreign_key[4] == 'installation_id' for foreign_key in foreign_keys)
+
+
+def test_init_db_rebuilds_legacy_repo_allocations_foreign_key(tmp_path):
+    db_path = str(tmp_path / "promptdrift-legacy-allocation-fk.db")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, github_user_id TEXT NOT NULL UNIQUE, github_login TEXT NOT NULL, display_name TEXT NOT NULL, primary_email TEXT, avatar_url TEXT, granted_scopes_json TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
+        conn.execute("CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE)")
+        conn.execute(
+            """
+            CREATE TABLE github_installations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER,
+                installation_id INTEGER NOT NULL UNIQUE,
+                account_id TEXT NOT NULL,
+                account_login TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_synced_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE repo_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                repo_github_id TEXT NOT NULL,
+                repo_full TEXT NOT NULL,
+                allocation_status TEXT NOT NULL,
+                baseline_mode TEXT NOT NULL,
+                activated_by_user_id INTEGER,
+                activated_at REAL,
+                deactivated_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(workspace_id, repo_github_id),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY(installation_id) REFERENCES github_installations(id) ON DELETE CASCADE,
+                FOREIGN KEY(activated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute("INSERT INTO users (id, github_user_id, github_login, display_name, primary_email, avatar_url, granted_scopes_json, created_at, updated_at) VALUES (1, 'user-1', 'doria90', 'Doria', NULL, NULL, '[]', 1.0, 1.0)")
+        conn.execute("INSERT INTO workspaces (id, slug) VALUES (1, 'workspace')")
+        conn.execute(
+            "INSERT INTO github_installations (id, workspace_id, installation_id, account_id, account_login, account_type, target_type, status, last_synced_at, created_at, updated_at) VALUES (1, 1, 12345, 'acct', 'login', 'User', 'User', 'active', 1.0, 1.0, 1.0)"
+        )
+
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "INSERT INTO repo_allocations (workspace_id, installation_id, repo_github_id, repo_full, allocation_status, baseline_mode, activated_by_user_id, activated_at, deactivated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, 12345, 'repo-id', 'owner/repo', 'active', 'onboarding', 1, 1.0, None, 1.0, 1.0),
+        )
+        conn.commit()
+
+        foreign_keys = conn.execute("PRAGMA foreign_key_list(repo_allocations)").fetchall()
+
+    assert any(foreign_key[2] == 'github_installations' and foreign_key[3] == 'installation_id' and foreign_key[4] == 'installation_id' for foreign_key in foreign_keys)
