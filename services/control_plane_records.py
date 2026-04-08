@@ -350,6 +350,16 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path, foreign_keys=True)
 
 
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name in _table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+
 def init_control_plane_db(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
@@ -579,6 +589,31 @@ def init_control_plane_db(db_path: str) -> None:
             )
             """
         )
+
+        # Additive migrations for databases created before the latest control-plane schema.
+        _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
+        _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
+        _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
+        _ensure_column(conn, "billing_customers", "billing_email", "TEXT")
+        _ensure_column(conn, "subscriptions", "cancel_at_period_end", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "subscriptions", "current_period_start_at", "REAL")
+        _ensure_column(conn, "subscriptions", "current_period_end_at", "REAL")
+        _ensure_column(conn, "subscriptions", "trial_ends_at", "REAL")
+        _ensure_column(conn, "subscriptions", "last_webhook_event_id", "TEXT")
+        _ensure_column(conn, "entitlements", "feature_flags_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "github_installations", "workspace_id", "INTEGER")
+        _ensure_column(conn, "github_installations", "target_type", "TEXT NOT NULL DEFAULT 'Organization'")
+        _ensure_column(conn, "github_installations", "status", "TEXT NOT NULL DEFAULT 'active'")
+        _ensure_column(conn, "github_installations", "last_synced_at", "REAL")
+        _ensure_column(conn, "repo_connections", "workspace_id", "INTEGER")
+        _ensure_column(conn, "repo_connections", "status", "TEXT NOT NULL DEFAULT 'available'")
+        _ensure_column(conn, "repo_connections", "last_synced_at", "REAL")
+        _ensure_column(conn, "repo_allocations", "baseline_mode", "TEXT NOT NULL DEFAULT 'default_branch'")
+        _ensure_column(conn, "repo_allocations", "activated_by_user_id", "INTEGER")
+        _ensure_column(conn, "repo_allocations", "activated_at", "REAL")
+        _ensure_column(conn, "repo_allocations", "deactivated_at", "REAL")
+        _ensure_column(conn, "webhook_event_receipts", "processed_at", "REAL")
+        _ensure_column(conn, "webhook_event_receipts", "error_summary", "TEXT")
 
 
 def upsert_github_identity(
