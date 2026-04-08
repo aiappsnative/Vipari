@@ -222,6 +222,8 @@ class AdminWorkspaceUserRecord:
     next_payment_at: float | None
     installation_id: int | None
     installation_account_login: str | None
+    installation_count: int
+    connected_repo_count: int
     allocated_repo_count: int
     onboarded_repo_count: int
     last_login_at: float | None
@@ -1554,6 +1556,8 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
                 s.next_payment_at AS next_payment_at,
                 inst.installation_id AS installation_id,
                 inst.account_login AS installation_account_login,
+                COALESCE(inst.installation_count, 0) AS installation_count,
+                COALESCE(conns.connected_repo_count, 0) AS connected_repo_count,
                 COALESCE(alloc.allocated_repo_count, 0) AS allocated_repo_count,
                 COALESCE(alloc.onboarded_repo_count, 0) AS onboarded_repo_count,
                 gi.last_login_at AS last_login_at
@@ -1563,7 +1567,24 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
             LEFT JOIN workspaces w ON w.id = wm.workspace_id
             LEFT JOIN entitlements e ON e.workspace_id = w.id
             LEFT JOIN subscriptions s ON s.workspace_id = w.id
-            LEFT JOIN github_installations inst ON inst.workspace_id = w.id AND inst.status = 'active'
+            LEFT JOIN (
+                SELECT
+                    workspace_id,
+                    MAX(installation_id) AS installation_id,
+                    MIN(account_login) AS account_login,
+                    COUNT(*) AS installation_count
+                FROM github_installations
+                WHERE workspace_id IS NOT NULL AND status = 'active'
+                GROUP BY workspace_id
+            ) inst ON inst.workspace_id = w.id
+            LEFT JOIN (
+                SELECT
+                    workspace_id,
+                    COUNT(DISTINCT repo_full) AS connected_repo_count
+                FROM repo_connections
+                WHERE workspace_id IS NOT NULL
+                GROUP BY workspace_id
+            ) conns ON conns.workspace_id = w.id
             LEFT JOIN (
                 SELECT
                     workspace_id,
@@ -1594,6 +1615,8 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
             next_payment_at=row["next_payment_at"],
             installation_id=row["installation_id"],
             installation_account_login=row["installation_account_login"],
+            installation_count=int(row["installation_count"] or 0),
+            connected_repo_count=int(row["connected_repo_count"] or 0),
             allocated_repo_count=int(row["allocated_repo_count"] or 0),
             onboarded_repo_count=int(row["onboarded_repo_count"] or 0),
             last_login_at=row["last_login_at"],

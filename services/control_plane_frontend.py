@@ -449,6 +449,7 @@ def render_control_plane_profile_page(
     plan_label: str,
     next_payment_at: float | None,
     status_note: str | None,
+    resolution: WorkspaceAccessResolution,
     admin_url: str | None,
 ) -> str:
     template = _load_template("control_plane_profile.html")
@@ -461,6 +462,7 @@ def render_control_plane_profile_page(
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
         .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url=admin_url))
+        .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
     )
 
 
@@ -472,6 +474,14 @@ def render_control_plane_admin_page(
     billing_claims: list[dict[str, object]],
 ) -> str:
     template = _load_template("control_plane_admin.html")
+
+    def _render_installation_summary(row: dict[str, object]) -> str:
+        installation_login = str(row.get("installation_account_login") or row.get("installation_id") or "none")
+        installation_count = int(row.get("installation_count") or 0)
+        if installation_count > 1:
+            return f"{installation_login} ({installation_count} installs)"
+        return installation_login
+
     user_rows = _render_table(
         [
             "Workspace",
@@ -483,7 +493,8 @@ def render_control_plane_admin_page(
             "PR comments",
             "Next payment",
             "Installation",
-            "Repos",
+            "Connected repos",
+            "Onboarded repos",
             "Setup",
             "Last login",
         ],
@@ -497,8 +508,9 @@ def render_control_plane_admin_page(
                 "yes" if bool(row.get("dashboard_enabled")) else "no",
                 "yes" if bool(row.get("pr_comments_enabled")) else "no",
                 html_escape(_format_timestamp(row.get("next_payment_at") if isinstance(row.get("next_payment_at"), (int, float)) else None)),
-                html_escape(str(row.get("installation_account_login") or row.get("installation_id") or "none")),
-                html_escape(f"{int(row.get('allocated_repo_count') or 0)}/{int(row.get('onboarded_repo_count') or 0)}"),
+                html_escape(_render_installation_summary(row)),
+                html_escape(str(int(row.get("connected_repo_count") or 0))),
+                html_escape(str(int(row.get("onboarded_repo_count") or 0))),
                 html_escape(str(row.get("setup_state") or "none")),
                 html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
             ]

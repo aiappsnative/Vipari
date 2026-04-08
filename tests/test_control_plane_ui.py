@@ -557,6 +557,12 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Starter User" in get_response.text
     assert "starter-user" in get_response.text
     assert "Next payment date" in get_response.text
+    assert "Setup checklist" in get_response.text
+    assert "Plan active" in get_response.text
+
+    workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id})
+    assert workspace_response.status_code == 200
+    assert "Plan active" not in workspace_response.text
 
     post_response = client.post(
         "/app/profile",
@@ -707,6 +713,36 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
         account_type="Organization",
         target_type="Organization",
     )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=free_workspace.id,
+        installation_id=9511,
+        account_id="9511",
+        account_login="free-install-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=free_workspace.id,
+        installation_id=9510,
+        repositories=[
+            {
+                "repo_github_id": "free-install-org/repo-one",
+                "repo_full": "free-install-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "free-install-org/repo-two",
+                "repo_full": "free-install-org/repo-two",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
 
     upsert_github_installation(
         main.AUDIT_DB_PATH,
@@ -749,6 +785,10 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     assert response.status_code == 200
     assert "Control-plane oversight" in response.text
     assert "Free Installed User" in response.text
+    assert response.text.count("Free Installed Workspace") == 1
+    assert "free-install-org (2 installs)" in response.text
+    assert ">2<" in response.text
+    assert ">0<" in response.text
     assert "marketplace-org" in response.text
     assert "purchase-admin-1" in response.text
 

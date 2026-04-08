@@ -244,6 +244,16 @@ button.button {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
+.profile-checklist-shell {
+    margin-top: 28px;
+}
+
+.profile-checklist-shell h2 {
+    margin: 0;
+    font-family: "Fraunces", serif;
+    font-weight: 700;
+}
+
 .admin-shell {
     width: min(1400px, calc(100% - 32px));
 }

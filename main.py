@@ -761,6 +761,7 @@ async def profile_page(request: Request):
             plan_label=get_plan_definition(plan_code).label,
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
+            resolution=access_context["resolution"],
             admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
         )
     )
