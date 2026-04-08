@@ -359,6 +359,72 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
         return
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
+def _repo_connections_needs_rebuild(conn: sqlite3.Connection) -> bool:
+    foreign_keys = conn.execute("PRAGMA foreign_key_list(repo_connections)").fetchall()
+    for foreign_key in foreign_keys:
+        # PRAGMA foreign_key_list columns: id, seq, table, from, to, on_update, on_delete, match
+        if foreign_key[2] == "github_installations" and foreign_key[3] == "installation_id":
+            return foreign_key[4] != "installation_id"
+    return False
+
+
+def _rebuild_repo_connections_table(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "repo_connections")
+    rows = conn.execute("SELECT * FROM repo_connections").fetchall()
+    normalized_rows: list[tuple[object, ...]] = []
+    for row in rows:
+        row_dict = dict(row)
+        normalized_rows.append(
+            (
+                row_dict.get("id"),
+                row_dict["installation_id"],
+                row_dict.get("workspace_id"),
+                row_dict["repo_github_id"],
+                row_dict["repo_full"],
+                row_dict.get("default_branch"),
+                int(bool(row_dict.get("is_private", 1))),
+                row_dict.get("status", "available"),
+                row_dict.get("last_synced_at"),
+                row_dict["created_at"],
+                row_dict["updated_at"],
+            )
+        )
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("ALTER TABLE repo_connections RENAME TO repo_connections_legacy")
+    conn.execute(
+        """
+        CREATE TABLE repo_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            installation_id INTEGER NOT NULL,
+            workspace_id INTEGER,
+            repo_github_id TEXT NOT NULL,
+            repo_full TEXT NOT NULL,
+            default_branch TEXT,
+            is_private INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'available',
+            last_synced_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(installation_id, repo_github_id),
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL,
+            FOREIGN KEY(installation_id) REFERENCES github_installations(installation_id) ON DELETE CASCADE
+        )
+        """
+    )
+    if normalized_rows:
+        conn.executemany(
+            """
+            INSERT INTO repo_connections (
+                id, installation_id, workspace_id, repo_github_id, repo_full, default_branch,
+                is_private, status, last_synced_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized_rows,
+        )
+    conn.execute("DROP TABLE repo_connections_legacy")
+    conn.execute("PRAGMA foreign_keys=ON")
+
 
 def init_control_plane_db(db_path: str) -> None:
     with _connect(db_path) as conn:
@@ -608,6 +674,8 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "repo_connections", "workspace_id", "INTEGER")
         _ensure_column(conn, "repo_connections", "status", "TEXT NOT NULL DEFAULT 'available'")
         _ensure_column(conn, "repo_connections", "last_synced_at", "REAL")
+        if _repo_connections_needs_rebuild(conn):
+            _rebuild_repo_connections_table(conn)
         _ensure_column(conn, "repo_allocations", "baseline_mode", "TEXT NOT NULL DEFAULT 'default_branch'")
         _ensure_column(conn, "repo_allocations", "activated_by_user_id", "INTEGER")
         _ensure_column(conn, "repo_allocations", "activated_at", "REAL")
