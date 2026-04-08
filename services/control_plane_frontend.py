@@ -23,7 +23,10 @@ def _asset_url(path: str) -> str:
 
 def _load_template(name: str) -> str:
     template = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
-    return template.replace("/static/control-plane.css", _asset_url("/static/control-plane.css"))
+    return (
+        template.replace("/static/control-plane.css", _asset_url("/static/control-plane.css"))
+        .replace("/static/dashboard.css", _asset_url("/static/dashboard.css"))
+    )
 
 
 def _resolution_for_preview_state(state: str | None) -> WorkspaceAccessResolution:
@@ -453,6 +456,9 @@ def render_control_plane_profile_page(
     admin_url: str | None,
 ) -> str:
     template = _load_template("control_plane_profile.html")
+    admin_nav_item = ""
+    if admin_url:
+        admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
     return (
         template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -461,7 +467,7 @@ def render_control_plane_profile_page(
         .replace("{{GITHUB_USER_ID}}", html_escape(github_user_id))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
-        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url=admin_url))
+        .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
     )
 

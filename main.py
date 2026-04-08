@@ -44,7 +44,6 @@ from services.billing_service import (
 )
 from services.control_plane_frontend import (
     render_control_plane_admin_page,
-    render_control_plane_app_page,
     render_control_plane_billing_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
@@ -726,18 +725,26 @@ async def logout(request: Request):
 @app.get("/app", response_class=HTMLResponse)
 async def control_plane_app_page_route(request: Request, state: str | None = None):
     session = _get_session(request)
-    if session is None and state:
-        return HTMLResponse(render_control_plane_app_page(state=state))
     if session is None:
         return RedirectResponse("/login", status_code=303)
     access_context = _build_access_context(session)
-    return HTMLResponse(
-        render_control_plane_app_page(
-            resolution=access_context["resolution"],
-            profile_url="/app/profile" if _has_profile_access(access_context) else None,
-            admin_url="/app/admin" if access_context.get("identity") and _is_admin_identity(access_context["user"], access_context["identity"]) else None,
-        )
-    )
+    resolution = access_context["resolution"]
+    if _has_profile_access(access_context):
+        return RedirectResponse("/app/profile", status_code=303)
+
+    destination_by_state = {
+        "authenticated_no_workspace": "/app/workspaces/new",
+        "workspace_no_subscription": "/app/billing",
+        "billing_pending_confirmation": "/app/billing",
+        "payment_failed": "/app/billing",
+        "awaiting_github_install": "/app/setup/install",
+        "awaiting_repo_onboarding": "/app/setup/repos",
+        "active_comments_only": "/app/setup/repos",
+        "canceled_active_until_period_end": "/app/billing",
+        "expired_read_only": "/app/billing",
+        "forbidden": "/dashboard",
+    }
+    return RedirectResponse(destination_by_state.get(resolution.state, "/login"), status_code=303)
 
 
 @app.get("/app/profile", response_class=HTMLResponse)

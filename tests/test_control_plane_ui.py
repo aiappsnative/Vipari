@@ -59,33 +59,15 @@ def test_login_page_preserves_handoff_context():
     assert "Resuming the Team plan handoff from base44." in response.text
 
 
-def test_app_page_renders_preview_state():
-    response = client.get("/app?state=payment_failed")
-
-    assert response.status_code == 200
-    assert "Billing needs attention" in response.text
-    assert "Fix billing" in response.text
-    assert 'href="/app/billing"' in response.text
-
-
-def test_app_page_awaiting_install_has_clickable_install_action():
-    response = client.get("/app?state=awaiting_github_install")
-
-    assert response.status_code == 200
-    assert "Install DriftGuard on GitHub" in response.text
-    assert 'href="/app/setup/install"' in response.text
-
-
-def test_app_page_active_has_clickable_dashboard_action():
-    response = client.get("/app?state=active")
-
-    assert response.status_code == 200
-    assert "Continue to dashboard" in response.text
-    assert 'href="/dashboard"' in response.text
-
-
 def test_app_page_redirects_to_login_when_unauthenticated():
     response = client.get("/app", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_app_page_ignores_preview_state_and_redirects_to_login_when_unauthenticated():
+    response = client.get("/app?state=payment_failed", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
@@ -559,10 +541,12 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Next payment date" in get_response.text
     assert "Setup checklist" in get_response.text
     assert "Plan active" in get_response.text
+    assert 'href="/dashboard"' in get_response.text
+    assert "sidebar" in get_response.text
 
-    workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id})
-    assert workspace_response.status_code == 200
-    assert "Plan active" not in workspace_response.text
+    workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
+    assert workspace_response.status_code == 303
+    assert workspace_response.headers["location"] == "/app/profile"
 
     post_response = client.post(
         "/app/profile",

@@ -15,6 +15,11 @@
     --color-medium: #e0914a;
     --color-low: #6daa45;
     --color-gap: #5591c7;
+    .avatar-circle-active {
+        color: var(--color-primary);
+        background: rgba(79, 152, 163, 0.12);
+        border: 1px solid rgba(79, 152, 163, 0.24);
+    }
     --color-missing: #c45050;
     --space-1: 4px;
     --space-2: 8px;
@@ -41,7 +46,8 @@
 
 html,
 body {
-    margin: 0;
+        .secondary-grid,
+        .profile-dashboard-grid {
     min-height: 100%;
 }
 
@@ -80,7 +86,8 @@ strong {
 .repo-link:hover {
     color: var(--color-primary-hover);
 }
-
+        .secondary-grid,
+        .profile-dashboard-shell {
 .app-shell {
     display: grid;
     grid-template-columns: 64px minmax(0, 1fr);
@@ -298,6 +305,137 @@ strong {
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4) 0;
     align-items: start;
+}
+
+.profile-dashboard-shell {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4) 0;
+}
+
+.profile-dashboard-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+    gap: var(--space-3);
+}
+
+.profile-panel {
+    min-width: 0;
+    display: grid;
+    gap: var(--space-3);
+}
+
+.profile-title,
+.profile-section-title {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-text);
+}
+
+.profile-copy,
+.profile-label,
+.profile-meta-label,
+.profile-checklist .checklist-detail,
+.profile-checklist .checklist-meta {
+    color: var(--color-text-muted);
+}
+
+.profile-form {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.profile-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+}
+
+.profile-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    color: var(--color-text);
+}
+
+.profile-input:focus {
+    outline: 1px solid var(--color-primary);
+    border-color: rgba(79, 152, 163, 0.28);
+}
+
+.profile-button {
+    justify-self: start;
+    padding: 8px 14px;
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+    color: #101716;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.profile-button:hover {
+    background: var(--color-primary-hover);
+}
+
+.profile-meta-grid {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.profile-meta-block {
+    display: grid;
+    gap: var(--space-1);
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+}
+
+.profile-meta-block strong {
+    font-size: var(--text-md);
+    color: var(--color-text);
+}
+
+.profile-checklist {
+    display: grid;
+    gap: var(--space-2);
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.profile-checklist .checklist-item {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+}
+
+.profile-checklist .checklist-item-complete {
+    border-color: rgba(79, 152, 163, 0.18);
+}
+
+.profile-checklist .checklist-item-current {
+    border-color: rgba(224, 145, 74, 0.22);
+}
+
+.profile-checklist .checklist-item-blocked {
+    border-color: rgba(224, 92, 92, 0.2);
+}
+
+.profile-checklist .checklist-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--color-text);
+    font-size: var(--text-md);
+    font-weight: 600;
 }
 
 .triage-column,
