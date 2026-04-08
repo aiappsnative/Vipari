@@ -1,10 +1,10 @@
-# Base44 + Stripe Handoff V1 End-of-Day Handoff
+# Base44 + Stripe Handoff V1 Handoff
 
-This note is the end-of-day restart point for `feature/driftguard-base44-stripe-handoff-v1`.
+This note is the current restart point for `feature/driftguard-base44-stripe-handoff-v1`.
 
 ## Branch status
 
-The first implementation slice for issue `#25` is in place and locally validated.
+The first implementation slice for issue `#25` is in place, locally validated, and partially provider-validated through a live tunnel-backed GitHub flow.
 
 Implemented today and preserved on the branch:
 
@@ -13,6 +13,8 @@ Implemented today and preserved on the branch:
 - workspace bootstrap and access-state-driven app shell
 - Stripe checkout, portal support, and webhook-driven subscription projection
 - GitHub App installation linkage, setup-URL callback handling, and repository allocation into the existing onboarding engine
+- actionable `/app` state cards for both blocked setup states and the fully active workspace state
+- additive SQLite migrations for older local databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys
 - dashboard gating for incomplete setup states
 - owner/admin protection for billing and provisioning mutations
 - provider-setup preflight tooling via `python scripts/control_plane_preflight.py`
@@ -20,29 +22,28 @@ Implemented today and preserved on the branch:
 
 ## Validation status
 
-Validated locally before shutdown:
+Validated at the current checkpoint:
 
-- `python -m pytest tests/test_control_plane_ui.py -q` -> `15 passed`
-- `python -m pytest` -> `152 passed`
-- live smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app`
+- `python -m pytest tests/test_control_plane_ui.py -q` -> `17 passed`
+- `python -m pytest tests/test_control_plane_foundation.py -q` -> `7 passed`
+- `python -m pytest -q` -> `157 passed`
+- live tunnel-backed flow confirmed GitHub OAuth callback, workspace creation, GitHub App install linking, repo sync, repo allocation/onboarding for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 Known non-blocking signal:
 
 - Starlette emits existing `TestClient` cookie deprecation warnings in tests; behavior is otherwise green
+- the persisted `workspaces.setup_state` row can remain at `awaiting_repo_onboarding` even when the derived resolver/UI correctly report `active`
 
 ## What is still open
 
-The main remaining work item is real provider-backed validation.
+The main remaining work item is real Stripe-backed validation.
 
 Specifically:
 
-- run `python scripts/control_plane_preflight.py`
-- expose the local server with `ngrok` or equivalent
-- register the public callback URL in the GitHub OAuth app
-- set the GitHub App setup URL to `/app/setup/install/callback` when supported
-- point the GitHub App webhook to the public URL
+- keep using `python scripts/control_plane_preflight.py` before the live billing pass
 - forward Stripe test-mode events to `/webhooks/stripe`
-- walk the full login -> workspace -> checkout -> install -> repo allocation -> dashboard flow with real providers
+- complete one checkout -> webhook -> install -> repo allocation -> dashboard run without local billing simulation
+- optionally clean up the persisted `setup_state` sync gap once the billing path is verified
 
 ## Files to re-open first tomorrow
 
@@ -53,10 +54,10 @@ Specifically:
 - [main.py](../main.py)
 - [tests/test_control_plane_ui.py](../tests/test_control_plane_ui.py)
 
-## Suggested first command tomorrow
+## Suggested first command next
 
 ```bash
-python -m pytest tests/test_control_plane_ui.py -q
+python -m pytest -q
 ```
 
-Then follow the provider-backed E2E runbook in [README.md](../README.md).
+Then either run the real Stripe-backed E2E flow from [README.md](../README.md) or fix the smaller `setup_state` persistence gap.

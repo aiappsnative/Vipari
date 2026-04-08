@@ -162,7 +162,7 @@ Each checklist item should expose:
 
 No route should independently decide that checkout success means active access. Only webhook-confirmed subscription projection may move a workspace into an active paid state.
 
-## Implementation status on 2026-04-07
+## Implementation status on 2026-04-08
 
 The v1 branch now applies this state model in the main runtime.
 
@@ -184,5 +184,6 @@ Validated transitions covered by focused tests:
 - install linked but no onboarded allocation -> repo onboarding required
 - onboarded allocation -> active dashboard access
 - viewer role denied for billing/install mutation paths
+- active workspace shell exposes a clickable dashboard continuation path instead of a dead-end status card
 
-Provider-backed live validation is still pending for the same state machine with real GitHub OAuth and Stripe test mode, but the local resolver contract and guarded route behavior are implemented.
+Live tunnel-backed validation has now confirmed the GitHub OAuth, install-link, repo-sync, allocation, and dashboard-unlock path for the same state machine. The remaining external-provider gap is real Stripe webhook confirmation without local billing simulation.

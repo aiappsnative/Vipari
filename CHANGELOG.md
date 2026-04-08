@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-08 — Control-plane live validation and legacy SQLite repairs
+
+### Added
+- rebuild migrations for legacy `repo_connections` and `repo_allocations` tables so existing local SQLite databases upgrade to foreign keys that reference `github_installations.installation_id`
+- focused regression coverage for both legacy foreign-key repair paths
+- active-state app-shell action rendering so the final `/app` surface exposes a real dashboard continuation link
+
+### Changed
+- control-plane docs now reflect live tunnel-backed GitHub validation, simulated Team billing for the current local workspace, and the remaining real-Stripe follow-up
+- setup-state shells now remain actionable even after the workspace reaches the derived `active` state
+
+### Verified
+- focused control-plane UI suite passed locally (`17 passed`)
+- focused control-plane foundation suite passed locally (`7 passed`)
+- full automated suite passed locally (`157 passed`)
+- live local/tunnel validation confirmed GitHub OAuth handoff, workspace bootstrap, install linking, repo sync, allocation/onboarding for `doria90/dummyAI`, and dashboard unlock
+
+### Product impact
+- older local control-plane databases no longer block install linking or repo allocation because legacy foreign-key mismatches are repaired automatically
+- the Base44 -> DriftGuard handoff is now proven through the GitHub-side live path, leaving real Stripe confirmation as the last major pre-merge validation gap
+
 ## 2026-04-07 — Base44 handoff control plane implemented on active branch
 
 ### Added

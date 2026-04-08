@@ -86,9 +86,9 @@ It should not be merged wholesale. Port modules in slices onto current `main` so
 
 - `feature/driftguard-base44-stripe-handoff-v1`
 
-## Implementation snapshot on 2026-04-07
+## Implementation snapshot on 2026-04-08
 
-The first branch slice is now implemented and locally validated.
+The first branch slice is now implemented, locally validated, and tunnel-validated for the GitHub-side flow.
 
 Delivered on this branch:
 
@@ -99,19 +99,22 @@ Delivered on this branch:
 - Stripe checkout, billing portal support, and authoritative webhook-driven subscription/entitlement projection
 - GitHub App install linkage, repository sync, repository allocation, and handoff into the existing onboarding engine
 - setup-aware customer pages for landing, login, pricing, workspace creation, billing, install, repo setup, and app state
+- actionable app-shell CTAs for incomplete setup states and the final active workspace state
+- additive legacy SQLite migrations for control-plane columns plus repaired foreign-key rebuilds for `repo_connections` and `repo_allocations`
 - dashboard gating for incomplete setup states
 - owner/admin protection on billing and provisioning mutations
 
-Validated locally before end-of-day handoff:
+Validated at the current checkpoint:
 
-- focused route-flow suite: `11 passed`
-- full automated suite: `148 passed`
-- local smoke check for `/`, `/login`, `/pricing`, and unauthenticated `/app`
+- focused route-flow suite: `17 passed`
+- focused control-plane foundation suite: `7 passed`
+- full automated suite: `157 passed`
+- live tunnel-backed validation for GitHub OAuth login/callback, workspace bootstrap, GitHub App installation linking, repo sync, repo allocation/onboarding, and dashboard unlock after simulated Team billing
 
 Still pending outside local validation:
 
-- one public-tunnel provider-backed pass with real GitHub OAuth callback registration and Stripe test-mode event forwarding
-- final polish for Base44 query-param passthrough and any UX text tweaks found during the provider-backed run
+- one Stripe-backed live pass with real webhook forwarding instead of simulated billing state
+- a small follow-up to keep persisted `workspaces.setup_state` aligned with the derived `active` resolver outcome after onboarding
 
 ## Execution sequence
 
@@ -238,7 +241,7 @@ These are not the Base44 public site. They are the authenticated product handoff
 
 ### Phase 9: Base44 integration contract
 
-Status on 2026-04-07: documented, with provider-backed live validation still pending.
+Status on 2026-04-08: documented and partially provider-validated; GitHub-side live validation is complete while real Stripe confirmation remains open.
 
 Document stable entry points such as:
 
@@ -254,7 +257,7 @@ Also document:
 
 ### Phase 10: Validation
 
-Status on 2026-04-07: local validation complete; external-provider validation remains open.
+Status on 2026-04-08: local validation complete; GitHub-side tunnel validation complete; real Stripe validation remains open.
 
 Required tests:
 

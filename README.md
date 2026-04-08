@@ -60,15 +60,18 @@ On the active integration branch, DriftGuard additionally provides:
 - workspace bootstrap, membership-aware access resolution, and setup-aware app surfaces
 - Stripe checkout, billing portal support, and authoritative webhook-driven subscription projection
 - GitHub App install linkage, setup-URL callback handling, synced repository connection inventory, and repo allocation into the existing onboarding engine
+- additive SQLite repair migrations for legacy control-plane databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys that now correctly target `github_installations.installation_id`
 - dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
+- actionable setup-state and active-state app shells so `/app` always exposes a real continuation path
 - a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
 
-Latest branch validation before end-of-day handoff:
+Latest branch validation on 2026-04-08:
 
-- focused control-plane route suite passed locally: `15 passed`
-- full automated suite passed locally: `152 passed`
-- local runtime smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app` behavior
+- focused control-plane UI suite passed locally: `17 passed`
+- focused control-plane foundation suite passed locally: `7 passed`
+- full automated suite passed locally: `157 passed`
+- tunnel-backed live validation confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and active dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -306,9 +309,9 @@ python -m pytest tests/test_control_plane_ui.py -q
 
 ### End-of-day branch note
 
-Today's control-plane work is implemented and validated locally on `feature/driftguard-base44-stripe-handoff-v1`.
+The control-plane branch is now implemented, locally validated, and tunnel-validated for the GitHub handoff/install/allocation path on `feature/driftguard-base44-stripe-handoff-v1`.
 
-The main unfinished validation item is external-provider confirmation with a real public tunnel, real GitHub OAuth callback registration, and Stripe test-mode event forwarding. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the branch handoff summary and tomorrow-start checklist.
+The main unfinished validation item is real Stripe provider confirmation without local billing simulation. A smaller follow-up is keeping persisted `workspaces.setup_state` in sync with the derived `active` resolver outcome after onboarding completes. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the updated branch handoff summary and next-step checklist.
 
 ## Local operator and dashboard testing
 

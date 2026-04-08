@@ -111,7 +111,7 @@ Still intentionally incomplete:
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
 - production-grade persistence/deployment posture beyond the current SQLite-first split-service scaffolding
 
-### Active branch architecture extension (2026-04-07)
+### Active branch architecture extension (2026-04-08)
 
 The active branch `feature/driftguard-base44-stripe-handoff-v1` adds a parallel customer-control-plane layer on top of the existing drift engine rather than replacing the audit architecture above.
 
@@ -119,9 +119,16 @@ That branch currently adds:
 
 - GitHub OAuth-backed customer identity and session persistence
 - workspace, subscription, entitlement, installation, and repo-allocation records in the same SQLite-first relational store
+- additive migration and legacy-table repair logic so older local SQLite files can be upgraded safely into the control-plane schema
 - a central workspace access-state resolver used by app pages, app APIs, and dashboard gating
 - Stripe webhook projection as the authority for paid access state
 - GitHub App installation linkage and repo allocation as the bridge into the existing onboarding engine
+
+Latest validation on the active branch now includes:
+
+- full local suite green at `157 passed`
+- live tunnel-backed confirmation of GitHub OAuth handoff, install linking, repo allocation, and dashboard unlock for `doria90/dummyAI`
+- remaining live gap isolated to real Stripe webhook confirmation without billing simulation
 
 Architecturally, this means DriftGuard now has two linked surfaces on the branch:
 

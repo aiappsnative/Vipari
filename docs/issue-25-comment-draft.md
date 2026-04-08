@@ -103,7 +103,7 @@ This avoids dragging older branch drift into the new implementation while still 
 
 Begin implementation on `feature/driftguard-base44-stripe-handoff-v1` with architecture docs and the access-state model before porting backend modules.
 
-## Addendum on 2026-04-07
+## Addendum on 2026-04-08
 
 The implementation proposed above is now largely landed on `feature/driftguard-base44-stripe-handoff-v1`.
 
@@ -114,13 +114,17 @@ Completed on the branch:
 - workspace bootstrap and access-state resolution
 - Stripe checkout, portal support, webhook verification, and entitlement projection
 - GitHub App install linkage, repo sync, repo allocation, and dashboard gating
+- legacy SQLite migration repair for existing local databases, including rebuilt foreign keys for repo connection and allocation records
 - setup-aware customer pages plus focused route-flow and service tests
+- actionable `/app` state shell cards including the final active-state dashboard handoff
 
 Validated locally:
 
-- focused control-plane route suite passed: `11 passed`
-- full suite passed: `148 passed`
+- focused control-plane UI suite passed: `17 passed`
+- focused control-plane foundation suite passed: `7 passed`
+- full suite passed: `157 passed`
+- live tunnel-backed validation confirmed the GitHub OAuth -> workspace -> install -> repo allocation -> dashboard path, with billing simulated locally after auth because real Stripe forwarding remains the last provider-backed gap
 
 Remaining practical step before merge prep:
 
-- complete one provider-backed tunnel-based pass with real GitHub OAuth and Stripe test mode to verify the external callbacks and webhook wiring end to end
+- complete one Stripe-backed tunnel pass without local billing simulation, then decide whether to fix the smaller persisted `workspaces.setup_state` sync gap before merge prep

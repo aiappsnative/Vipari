@@ -74,19 +74,23 @@ This framing should shape roadmap decisions:
 	- canonical architecture, state-model, and issue-analysis docs are checked in
 	- DB-backed control-plane records are implemented for users, sessions, workspaces, subscriptions, entitlements, installations, repo connections, allocations, and webhook receipts
 	- GitHub OAuth login, session issuance, workspace bootstrap, billing entry, Stripe webhook projection, installation linkage, and repo allocation are implemented in the monolith
+	- legacy local SQLite databases are now migrated forward safely, including additive column repair plus rebuilt `repo_connections` and `repo_allocations` foreign keys targeting `github_installations.installation_id`
 	- setup-aware control-plane templates and styling are implemented for landing, login, pricing, workspace creation, billing, install, repo setup, and app-state shells
+	- `/app` is now actionable in both setup-blocked and fully active states instead of rendering dead-end status cards
 	- dashboard routes are now gated through the access-state resolver when control-plane workspaces exist
 	- billing and provisioning mutations are restricted to workspace owner/admin roles in v1
-	- branch docs now include local automated E2E, local smoke, and tunnel-backed provider E2E guidance
-- Verified today:
-	- focused control-plane UI suite: `11 passed`
-	- full automated suite: `148 passed`
-	- local route smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app` behavior on a live uvicorn instance
+	- branch docs now include local automated E2E, live tunnel-backed GitHub validation notes, and explicit remaining Stripe follow-up
+- Verified on 2026-04-08:
+	- focused control-plane UI suite: `17 passed`
+	- focused control-plane foundation suite: `7 passed`
+	- full automated suite: `157 passed`
+	- tunnel-backed live validation confirmed GitHub OAuth login/callback, workspace bootstrap, GitHub App install linkage, repo sync, repo allocation/onboarding for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 - Remaining follow-up after today's checkpoint:
-	- run one real provider-backed E2E pass with a public tunnel, GitHub OAuth callback registration, GitHub App webhook wiring, and Stripe test-mode forwarding
-	- review UX copy and plan-preselection/Base44 query passthrough polish once provider-backed validation is complete
-- End-of-day restart point:
-	- use [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as the first checkpoint tomorrow, then run the tunnel-backed provider validation flow from [README.md](README.md)
+	- run one real Stripe-backed pass so billing activation is confirmed through actual webhook forwarding rather than local simulation
+	- tighten `workspaces.setup_state` synchronization so the persisted row lands on `active` once onboarding prerequisites are complete
+	- prepare merge/PR notes once the billing path is validated end to end
+- Restart point:
+	- use [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as the first checkpoint, then choose between real Stripe validation or the smaller `setup_state` sync cleanup
 
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
