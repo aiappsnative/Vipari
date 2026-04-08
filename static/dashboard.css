@@ -15,11 +15,6 @@
     --color-medium: #e0914a;
     --color-low: #6daa45;
     --color-gap: #5591c7;
-    .avatar-circle-active {
-        color: var(--color-primary);
-        background: rgba(79, 152, 163, 0.12);
-        border: 1px solid rgba(79, 152, 163, 0.24);
-    }
     --color-missing: #c45050;
     --space-1: 4px;
     --space-2: 8px;
@@ -46,9 +41,8 @@
 
 html,
 body {
-        .secondary-grid,
-        .profile-dashboard-grid {
     min-height: 100%;
+    margin: 0;
 }
 
 body {
@@ -86,8 +80,7 @@ strong {
 .repo-link:hover {
     color: var(--color-primary-hover);
 }
-        .secondary-grid,
-        .profile-dashboard-shell {
+
 .app-shell {
     display: grid;
     grid-template-columns: 64px minmax(0, 1fr);
@@ -154,6 +147,16 @@ strong {
     border-left-color: var(--color-primary);
 }
 
+.nav-icon {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
 .sidebar-nav-item::after {
     content: attr(data-tooltip);
     position: absolute;
@@ -190,6 +193,12 @@ strong {
     background: var(--color-surface-offset);
     color: var(--color-text-muted);
     font-size: 12px;
+}
+
+.avatar-circle-active {
+    color: var(--color-primary);
+    background: rgba(79, 152, 163, 0.12);
+    border: 1px solid rgba(79, 152, 163, 0.24);
 }
 
 .main-content {

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -10,6 +11,7 @@ from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from engine.analysis import analyze_diff
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.entitlements import derive_entitlement_payload
 
 
 PROMPT_BASELINE = """# Refund Copilot
@@ -231,6 +233,122 @@ def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
     assert payload["baseline"]["artifact_path"] == "prompts/refund.txt"
     assert payload["baseline"]["content_text"] == PROMPT_CURRENT
     assert payload["dashboard"]["baseline_version_count"] == 2
+
+
+def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):
+    db_path = str(tmp_path / "dashboard-workspace-filter.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="123",
+        github_login="doria90",
+        display_name="Doria",
+        primary_email="doria@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="doria-workspace",
+        display_name="Doria Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id="dashboard-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_123",
+        stripe_price_id="price_123",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-1",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+        status="active",
+    )
+
+    for repo_full in ["doria90/dummyAI", "doria90/openfang"]:
+        onboard_repository(
+            db_path,
+            repo_full=repo_full,
+            installation_id=123,
+            token="token",
+            get_default_branch_fn=lambda repo, token: "main",
+            list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+            fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+        )
+
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "onboarded")
+
+    with TestClient(main.app) as client:
+        overview_response = client.get(
+            "/api/dashboard/overview",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        index_response = client.get(
+            "/api/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        unallocated_repo_response = client.get(
+            "/api/repos/doria90/openfang/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert overview_response.status_code == 200
+    assert [repo["repo_full"] for repo in overview_response.json()["repos"]] == ["doria90/dummyAI"]
+    assert [repo["repo_full"] for repo in index_response.json()["repos"]] == ["doria90/dummyAI"]
+    assert unallocated_repo_response.status_code == 404
 
 
 def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):

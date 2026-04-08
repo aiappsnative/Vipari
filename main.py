@@ -547,6 +547,19 @@ def _require_repo_dashboard_access(request: Request, repo_full: str) -> dict[str
     return access_context
 
 
+def _dashboard_allowed_repo_fulls(access_context: dict[str, object]) -> set[str] | None:
+    if not access_context:
+        return None
+    workspace = access_context.get("workspace")
+    if workspace is None:
+        return None
+    return {
+        allocation.repo_full
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+        if allocation.allocation_status in {"active", "onboarded"}
+    }
+
+
 def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | None) -> bool:
     if not settings.billing_handoff_secret or not signature_header:
         return False
@@ -1295,14 +1308,16 @@ async def dashboard_repo_page(request: Request, repo_full: str):
 
 @app.get("/api/repos")
 async def list_repos(request: Request):
-    _require_dashboard_access(request)
-    return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH)]})
+    access_context = _require_dashboard_access(request)
+    allowed_repo_fulls = _dashboard_allowed_repo_fulls(access_context)
+    return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH, allowed_repo_fulls=allowed_repo_fulls)]})
 
 
 @app.get("/api/dashboard/overview")
 async def dashboard_overview(request: Request):
-    _require_dashboard_access(request)
-    return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH)))
+    access_context = _require_dashboard_access(request)
+    allowed_repo_fulls = _dashboard_allowed_repo_fulls(access_context)
+    return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH, allowed_repo_fulls=allowed_repo_fulls)))
 
 
 @app.get("/api/persistence")

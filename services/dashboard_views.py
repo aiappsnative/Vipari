@@ -383,8 +383,10 @@ class RepoDashboardView:
     artifacts: list[RepoDashboardArtifactEntry] = None
 
 
-def list_repo_dashboard_index(db_path: str) -> list[RepoDashboardIndexEntry]:
+def list_repo_dashboard_index(db_path: str, allowed_repo_fulls: set[str] | None = None) -> list[RepoDashboardIndexEntry]:
     onboardings = list_latest_repository_onboardings(db_path)
+    if allowed_repo_fulls is not None:
+        onboardings = [onboarding for onboarding in onboardings if onboarding.repo_full in allowed_repo_fulls]
     return [
         RepoDashboardIndexEntry(
             repo_full=onboarding.repo_full,
@@ -397,8 +399,8 @@ def list_repo_dashboard_index(db_path: str) -> list[RepoDashboardIndexEntry]:
     ]
 
 
-def build_dashboard_overview_view(db_path: str) -> DashboardOverviewView:
-    repos = list_repo_dashboard_index(db_path)
+def build_dashboard_overview_view(db_path: str, allowed_repo_fulls: set[str] | None = None) -> DashboardOverviewView:
+    repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
     repo_views = [build_repo_dashboard_view(db_path, repo.repo_full) for repo in repos]
 
     total_artifacts = sum(repo.discovered_artifact_count for repo in repos)
