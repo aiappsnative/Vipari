@@ -73,6 +73,17 @@ def _resolution_for_preview_state(state: str | None) -> WorkspaceAccessResolutio
             allocated_repo_count=2,
             onboarded_repo_count=0,
         ),
+        "active_comments_only": WorkspaceAccessSnapshot(
+            is_authenticated=True,
+            has_workspace=True,
+            has_membership=True,
+            role="owner",
+            has_subscription_record=True,
+            pr_comments_enabled=True,
+            has_linked_installation=True,
+            allocated_repo_count=1,
+            onboarded_repo_count=1,
+        ),
         "active": WorkspaceAccessSnapshot(
             is_authenticated=True,
             has_workspace=True,
@@ -147,6 +158,7 @@ def _state_primary_action_url(resolution: WorkspaceAccessResolution) -> str | No
         "payment_failed": "/app/billing",
         "awaiting_github_install": "/app/setup/install",
         "awaiting_repo_onboarding": "/app/setup/repos",
+        "active_comments_only": "/app/billing?plan=starter",
         "active": "/dashboard",
         "canceled_active_until_period_end": "/app/billing",
         "expired_read_only": "/app/billing",
@@ -159,6 +171,7 @@ def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | 
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing/portal",
         "awaiting_github_install": "/app/setup/install",
+        "active_comments_only": "/app/setup/repos",
         "canceled_active_until_period_end": "/app/billing",
         "expired_read_only": "/app/billing",
     }
@@ -174,6 +187,7 @@ def _state_next_action_url(resolution: WorkspaceAccessResolution) -> str | None:
         "payment_failed": "/app/billing/portal",
         "awaiting_github_install": "/app/setup/install",
         "awaiting_repo_onboarding": "/app/setup/repos",
+        "active_comments_only": "/app/setup/repos",
         "active": "/dashboard",
         "canceled_active_until_period_end": "/dashboard",
         "expired_read_only": "/app/billing",
@@ -193,6 +207,9 @@ def _checklist_cta_links(resolution: WorkspaceAccessResolution) -> dict[str, str
     if resolution.state == "active":
         links["repo_allocation"] = "/dashboard"
         links["first_scan"] = "/dashboard"
+    if resolution.state == "active_comments_only":
+        links["repo_allocation"] = "/app/setup/repos"
+        links["first_scan"] = "/app/setup/repos"
     return links
 
 
@@ -212,6 +229,7 @@ def _render_state_links(active_state: str) -> str:
         "payment_failed",
         "awaiting_github_install",
         "awaiting_repo_onboarding",
+        "active_comments_only",
         "active",
         "canceled_active_until_period_end",
         "expired_read_only",

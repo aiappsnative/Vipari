@@ -13,10 +13,25 @@ class PlanDefinition:
     seat_limit: int
     retention_policy: str
     support_tier: str
+    requires_billing: bool = True
     dashboard_enabled: bool = True
+    pr_comments_enabled: bool = True
 
 
 PLAN_DEFINITIONS = {
+    "free": PlanDefinition(
+        code="free",
+        label="Free",
+        price_lookup_keys=(),
+        repo_limit=1,
+        org_limit=1,
+        seat_limit=1,
+        retention_policy="basic",
+        support_tier="community",
+        requires_billing=False,
+        dashboard_enabled=False,
+        pr_comments_enabled=True,
+    ),
     "starter": PlanDefinition(
         code="starter",
         label="Starter",
@@ -71,6 +86,8 @@ def get_plan_definition(plan_code: str) -> PlanDefinition:
 
 def resolve_price_id(settings, plan_code: str) -> str:
     plan = get_plan_definition(plan_code)
+    if not plan.requires_billing:
+        return f"local_{plan.code}"
     for lookup_key in plan.price_lookup_keys:
         configured = getattr(settings, lookup_key, "")
         if configured:
@@ -81,13 +98,16 @@ def resolve_price_id(settings, plan_code: str) -> str:
 def derive_entitlement_payload(plan_code: str, subscription_status: str) -> dict[str, object]:
     plan = get_plan_definition(plan_code)
     normalized_status = (subscription_status or "").strip().lower()
-    active_statuses = {"active", "trialing"}
+    active_statuses = {"active", "trialing", "free_active"}
     warning_statuses = {"canceled"}
-    dashboard_enabled = normalized_status in active_statuses or normalized_status in warning_statuses
+    status_allows_access = normalized_status in active_statuses or normalized_status in warning_statuses
+    dashboard_enabled = plan.dashboard_enabled and status_allows_access
+    pr_comments_enabled = plan.pr_comments_enabled and status_allows_access
     return {
         "plan_code": plan.code,
         "subscription_status": normalized_status,
         "dashboard_enabled": dashboard_enabled,
+        "pr_comments_enabled": pr_comments_enabled,
         "repo_limit": plan.repo_limit,
         "org_limit": plan.org_limit,
         "seat_limit": plan.seat_limit,

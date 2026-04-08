@@ -61,3 +61,23 @@ def test_resolve_workspace_access_state_active():
     assert resolution.state == "active"
     assert resolution.can_access_dashboard is True
     assert resolution.is_read_only is False
+
+
+def test_resolve_workspace_access_state_active_comments_only():
+    resolution = resolve_workspace_access_state(
+        WorkspaceAccessSnapshot(
+            is_authenticated=True,
+            has_workspace=True,
+            has_membership=True,
+            has_subscription_record=True,
+            pr_comments_enabled=True,
+            has_linked_installation=True,
+            allocated_repo_count=1,
+            onboarded_repo_count=1,
+        )
+    )
+
+    assert resolution.state == "active_comments_only"
+    assert resolution.can_access_dashboard is False
+    assert resolution.is_read_only is False
+    assert resolution.primary_cta == "Upgrade to Starter"

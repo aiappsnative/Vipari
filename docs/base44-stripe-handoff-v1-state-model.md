@@ -1,4 +1,4 @@
-# DriftGuard Base44 + Stripe Handoff V1 State Model
+# DriftGuard Base44 Billing Handoff V1 State Model
 
 This document defines the canonical user-access and workspace-setup state model for issue `#25`.
 
@@ -59,7 +59,7 @@ The app should not scatter setup and access checks across unrelated routes. Ever
 
 ### `payment_failed`
 
-- meaning: Stripe indicates payment failure or past due state
+- meaning: the active billing provider indicates payment failure, entitlement loss, or past due state
 - dashboard access: no
 - primary action: `Fix billing`
 
@@ -74,6 +74,12 @@ The app should not scatter setup and access checks across unrelated routes. Ever
 - meaning: installation exists but no licensed repo is both allocated and onboarded
 - dashboard access: no
 - primary action: `Select repositories`
+
+### `active_comments_only`
+
+- meaning: the workspace is entitled for PR comments but not for dashboard access
+- dashboard access: no
+- primary action: `Upgrade to Starter`
 
 ### `active`
 
@@ -105,9 +111,10 @@ The resolver should short-circuit in this order:
 7. `payment_failed`
 8. `awaiting_github_install`
 9. `awaiting_repo_onboarding`
-10. `expired_read_only`
-11. `canceled_active_until_period_end`
-12. `active`
+10. `active_comments_only`
+11. `expired_read_only`
+12. `canceled_active_until_period_end`
+13. `active`
 
 ## Checklist contract
 
@@ -117,7 +124,7 @@ Minimum checklist items:
 
 - GitHub connected
 - workspace linked
-- billing active
+- plan active
 - GitHub App installed
 - repository allocated
 - first onboarding completed
@@ -161,6 +168,7 @@ Each checklist item should expose:
 ## Non-negotiable rule
 
 No route should independently decide that checkout success means active access. Only webhook-confirmed subscription projection may move a workspace into an active paid state.
+Free plans are the exception: local free-plan activation may move a workspace into the comments-only path without an external billing callback.
 
 ## Implementation status on 2026-04-08
 
@@ -172,18 +180,21 @@ Implemented usages:
 - `/api/auth/session` returns the current access resolution to the frontend
 - `/api/workspaces/current/access-state` exposes the same resolver directly for workspace-aware clients
 - `/dashboard` and `/dashboard/{owner/repo}` redirect to `/login` or `/app` when the workspace is not dashboard-eligible
+- dashboard JSON routes now apply the same gating when control-plane workspaces exist
 - `/app/billing/checkout`, `/app/billing/portal`, `/app/setup/install/link`, and `/app/setup/repos/allocate` enforce the owner/admin mutation rule documented above
+- `/webhook` now refuses to queue PR audits/comments for installed repos that are not allocated or whose workspace lacks comment entitlement
 
 Validated transitions covered by focused tests:
 
 - unauthenticated -> login redirect
 - authenticated without workspace -> workspace bootstrap
 - workspace without subscription -> billing entry
-- billing pending until Stripe webhook confirmation
+- billing pending until provider-confirmed activation
 - billing active but no install -> install required
 - install linked but no onboarded allocation -> repo onboarding required
+- onboarded allocation with comments entitlement but no dashboard entitlement -> `active_comments_only`
 - onboarded allocation -> active dashboard access
 - viewer role denied for billing/install mutation paths
 - active workspace shell exposes a clickable dashboard continuation path instead of a dead-end status card
 
-Live tunnel-backed validation has now confirmed the GitHub OAuth, install-link, repo-sync, allocation, and dashboard-unlock path for the same state machine. The remaining external-provider gap is real Stripe webhook confirmation without local billing simulation.
+Live tunnel-backed validation has now confirmed the GitHub OAuth, install-link, repo-sync, allocation, and dashboard-unlock path for the same state machine. The remaining external-provider gap is real Base44/Wix signed handoff confirmation without local simulation.

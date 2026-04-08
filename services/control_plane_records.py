@@ -20,6 +20,7 @@ CONTROL_PLANE_TABLES = (
     "github_installations",
     "repo_connections",
     "repo_allocations",
+    "billing_handoff_claims",
     "control_plane_audit_logs",
     "webhook_event_receipts",
 )
@@ -124,6 +125,7 @@ class EntitlementRecord:
     plan_code: str
     subscription_status: str
     dashboard_enabled: bool
+    pr_comments_enabled: bool
     repo_limit: int
     org_limit: int
     seat_limit: int
@@ -176,6 +178,24 @@ class RepoAllocationRecord:
     activated_by_user_id: int | None
     activated_at: float | None
     deactivated_at: float | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class BillingHandoffClaimRecord:
+    id: int
+    claim_token: str
+    provider: str
+    external_purchase_id: str
+    plan_code: str
+    billing_status: str
+    billing_email: str | None
+    source: str | None
+    claimed_workspace_id: int | None
+    claimed_user_id: int | None
+    expires_at: float
+    consumed_at: float | None
     created_at: float
     updated_at: float
 
@@ -275,6 +295,7 @@ def _row_to_entitlement(row: sqlite3.Row) -> EntitlementRecord:
         plan_code=row["plan_code"],
         subscription_status=row["subscription_status"],
         dashboard_enabled=bool(row["dashboard_enabled"]),
+        pr_comments_enabled=bool(row["pr_comments_enabled"]),
         repo_limit=row["repo_limit"],
         org_limit=row["org_limit"],
         seat_limit=row["seat_limit"],
@@ -341,6 +362,25 @@ def _row_to_repo_allocation(row: sqlite3.Row) -> RepoAllocationRecord:
         activated_by_user_id=row["activated_by_user_id"],
         activated_at=row["activated_at"],
         deactivated_at=row["deactivated_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_billing_handoff_claim(row: sqlite3.Row) -> BillingHandoffClaimRecord:
+    return BillingHandoffClaimRecord(
+        id=row["id"],
+        claim_token=row["claim_token"],
+        provider=row["provider"],
+        external_purchase_id=row["external_purchase_id"],
+        plan_code=row["plan_code"],
+        billing_status=row["billing_status"],
+        billing_email=row["billing_email"],
+        source=row["source"],
+        claimed_workspace_id=row["claimed_workspace_id"],
+        claimed_user_id=row["claimed_user_id"],
+        expires_at=row["expires_at"],
+        consumed_at=row["consumed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -619,6 +659,7 @@ def init_control_plane_db(db_path: str) -> None:
                 plan_code TEXT NOT NULL,
                 subscription_status TEXT NOT NULL,
                 dashboard_enabled INTEGER NOT NULL DEFAULT 0,
+                pr_comments_enabled INTEGER NOT NULL DEFAULT 0,
                 repo_limit INTEGER NOT NULL DEFAULT 0,
                 org_limit INTEGER NOT NULL DEFAULT 0,
                 seat_limit INTEGER NOT NULL DEFAULT 0,
@@ -628,6 +669,28 @@ def init_control_plane_db(db_path: str) -> None:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_handoff_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_token TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL,
+                external_purchase_id TEXT NOT NULL UNIQUE,
+                plan_code TEXT NOT NULL,
+                billing_status TEXT NOT NULL,
+                billing_email TEXT,
+                source TEXT,
+                claimed_workspace_id INTEGER,
+                claimed_user_id INTEGER,
+                expires_at REAL NOT NULL,
+                consumed_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(claimed_workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL,
+                FOREIGN KEY(claimed_user_id) REFERENCES users(id) ON DELETE SET NULL
             )
             """
         )
@@ -734,6 +797,7 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "subscriptions", "trial_ends_at", "REAL")
         _ensure_column(conn, "subscriptions", "last_webhook_event_id", "TEXT")
         _ensure_column(conn, "entitlements", "feature_flags_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "entitlements", "pr_comments_enabled", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "github_installations", "workspace_id", "INTEGER")
         _ensure_column(conn, "github_installations", "target_type", "TEXT NOT NULL DEFAULT 'Organization'")
         _ensure_column(conn, "github_installations", "status", "TEXT NOT NULL DEFAULT 'active'")
@@ -974,6 +1038,49 @@ def get_billing_customer_for_workspace(db_path: str, workspace_id: int) -> Billi
     return _row_to_billing_customer(row) if row else None
 
 
+def get_billing_handoff_claim_by_token(db_path: str, claim_token: str) -> BillingHandoffClaimRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM billing_handoff_claims WHERE claim_token = ?", (claim_token,)).fetchone()
+    return _row_to_billing_handoff_claim(row) if row else None
+
+
+def _refresh_workspace_setup_state(conn: sqlite3.Connection, workspace_id: int) -> None:
+    now = time.time()
+    entitlement = conn.execute("SELECT * FROM entitlements WHERE workspace_id = ?", (workspace_id,)).fetchone()
+    if entitlement is None:
+        setup_state = "workspace_no_subscription"
+    else:
+        subscription_status = str(entitlement["subscription_status"] or "").lower()
+        if subscription_status in {"incomplete", "pending", "trialing_pending"}:
+            setup_state = "billing_pending_confirmation"
+        elif subscription_status in {"past_due", "unpaid", "payment_failed", "incomplete_expired", "expired"}:
+            setup_state = "payment_failed"
+        elif not bool(entitlement["pr_comments_enabled"]):
+            setup_state = "payment_failed"
+        else:
+            installation = conn.execute(
+                "SELECT 1 FROM github_installations WHERE workspace_id = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+                (workspace_id,),
+            ).fetchone()
+            allocated = conn.execute(
+                "SELECT COUNT(*) FROM repo_allocations WHERE workspace_id = ? AND allocation_status IN ('active', 'onboarded')",
+                (workspace_id,),
+            ).fetchone()[0]
+            onboarded = conn.execute(
+                "SELECT COUNT(*) FROM repo_allocations WHERE workspace_id = ? AND allocation_status = 'onboarded'",
+                (workspace_id,),
+            ).fetchone()[0]
+            if installation is None:
+                setup_state = "awaiting_github_install"
+            elif int(allocated) <= 0 or int(onboarded) <= 0:
+                setup_state = "awaiting_repo_onboarding"
+            elif bool(entitlement["dashboard_enabled"]):
+                setup_state = "active"
+            else:
+                setup_state = "active_comments_only"
+    conn.execute("UPDATE workspaces SET setup_state = ?, updated_at = ? WHERE id = ?", (setup_state, now, workspace_id))
+
+
 def upsert_billing_customer(
     db_path: str,
     *,
@@ -996,6 +1103,42 @@ def upsert_billing_customer(
         )
         row = conn.execute("SELECT * FROM billing_customers WHERE workspace_id = ?", (workspace_id,)).fetchone()
     return _row_to_billing_customer(row)
+
+
+def create_billing_handoff_claim(
+    db_path: str,
+    *,
+    claim_token: str,
+    provider: str,
+    external_purchase_id: str,
+    plan_code: str,
+    billing_status: str,
+    billing_email: str | None,
+    source: str | None,
+    expires_at: float,
+) -> BillingHandoffClaimRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO billing_handoff_claims (
+                claim_token, provider, external_purchase_id, plan_code, billing_status, billing_email, source,
+                claimed_workspace_id, claimed_user_id, expires_at, consumed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
+            ON CONFLICT(external_purchase_id) DO UPDATE SET
+                claim_token = excluded.claim_token,
+                provider = excluded.provider,
+                plan_code = excluded.plan_code,
+                billing_status = excluded.billing_status,
+                billing_email = excluded.billing_email,
+                source = excluded.source,
+                expires_at = excluded.expires_at,
+                updated_at = excluded.updated_at
+            """,
+            (claim_token, provider, external_purchase_id, plan_code, billing_status, billing_email, source, expires_at, now, now),
+        )
+        row = conn.execute("SELECT * FROM billing_handoff_claims WHERE external_purchase_id = ?", (external_purchase_id,)).fetchone()
+    return _row_to_billing_handoff_claim(row)
 
 
 def upsert_subscription(
@@ -1052,7 +1195,7 @@ def upsert_subscription(
             "SELECT * FROM subscriptions WHERE stripe_subscription_id = ?",
             (stripe_subscription_id,),
         ).fetchone()
-        conn.execute("UPDATE workspaces SET setup_state = ?, updated_at = ? WHERE id = ?", ("billing_pending_confirmation" if status in {"incomplete", "pending"} else "awaiting_github_install", now, workspace_id))
+        _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_subscription(row)
 
 
@@ -1062,13 +1205,14 @@ def upsert_entitlement(db_path: str, *, workspace_id: int, payload: dict[str, ob
         conn.execute(
             """
             INSERT INTO entitlements (
-                workspace_id, plan_code, subscription_status, dashboard_enabled, repo_limit, org_limit, seat_limit,
+                workspace_id, plan_code, subscription_status, dashboard_enabled, pr_comments_enabled, repo_limit, org_limit, seat_limit,
                 retention_policy, support_tier, feature_flags_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(workspace_id) DO UPDATE SET
                 plan_code = excluded.plan_code,
                 subscription_status = excluded.subscription_status,
                 dashboard_enabled = excluded.dashboard_enabled,
+                pr_comments_enabled = excluded.pr_comments_enabled,
                 repo_limit = excluded.repo_limit,
                 org_limit = excluded.org_limit,
                 seat_limit = excluded.seat_limit,
@@ -1082,6 +1226,7 @@ def upsert_entitlement(db_path: str, *, workspace_id: int, payload: dict[str, ob
                 payload["plan_code"],
                 payload["subscription_status"],
                 int(bool(payload["dashboard_enabled"])),
+                int(bool(payload.get("pr_comments_enabled", False))),
                 payload["repo_limit"],
                 payload["org_limit"],
                 payload["seat_limit"],
@@ -1093,9 +1238,106 @@ def upsert_entitlement(db_path: str, *, workspace_id: int, payload: dict[str, ob
             ),
         )
         row = conn.execute("SELECT * FROM entitlements WHERE workspace_id = ?", (workspace_id,)).fetchone()
-        setup_state = "awaiting_github_install" if bool(payload["dashboard_enabled"]) else "payment_failed"
-        conn.execute("UPDATE workspaces SET setup_state = ?, updated_at = ? WHERE id = ?", (setup_state, now, workspace_id))
+        _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_entitlement(row)
+
+
+def activate_billing_handoff_claim(
+    db_path: str,
+    *,
+    claim_token: str,
+    workspace_id: int,
+    user_id: int,
+) -> BillingHandoffClaimRecord:
+    from .entitlements import derive_entitlement_payload
+
+    now = time.time()
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM billing_handoff_claims WHERE claim_token = ?", (claim_token,)).fetchone()
+        if row is None:
+            raise ValueError("Unknown billing handoff claim.")
+        claim = _row_to_billing_handoff_claim(row)
+        if claim.consumed_at is not None and claim.claimed_workspace_id not in (None, workspace_id):
+            raise ValueError("Billing handoff claim is already consumed.")
+        if claim.expires_at < now:
+            raise ValueError("Billing handoff claim has expired.")
+
+        synthetic_customer_id = f"{claim.provider}:customer:{claim.external_purchase_id}"
+        synthetic_subscription_id = f"{claim.provider}:subscription:{claim.external_purchase_id}"
+        synthetic_price_id = f"{claim.provider}:plan:{claim.plan_code}"
+
+        conn.execute(
+            """
+            INSERT INTO billing_customers (workspace_id, stripe_customer_id, billing_email, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id) DO UPDATE SET
+                stripe_customer_id = excluded.stripe_customer_id,
+                billing_email = excluded.billing_email,
+                updated_at = excluded.updated_at
+            """,
+            (workspace_id, synthetic_customer_id, claim.billing_email, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO subscriptions (
+                workspace_id, stripe_subscription_id, stripe_price_id, plan_code, status,
+                cancel_at_period_end, current_period_start_at, current_period_end_at, trial_ends_at,
+                last_webhook_event_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, ?)
+            ON CONFLICT(stripe_subscription_id) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                stripe_price_id = excluded.stripe_price_id,
+                plan_code = excluded.plan_code,
+                status = excluded.status,
+                last_webhook_event_id = excluded.last_webhook_event_id,
+                updated_at = excluded.updated_at
+            """,
+            (workspace_id, synthetic_subscription_id, synthetic_price_id, claim.plan_code, claim.billing_status, claim.external_purchase_id, now, now),
+        )
+
+        payload = derive_entitlement_payload(claim.plan_code, claim.billing_status)
+        conn.execute(
+            """
+            INSERT INTO entitlements (
+                workspace_id, plan_code, subscription_status, dashboard_enabled, pr_comments_enabled, repo_limit, org_limit, seat_limit,
+                retention_policy, support_tier, feature_flags_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id) DO UPDATE SET
+                plan_code = excluded.plan_code,
+                subscription_status = excluded.subscription_status,
+                dashboard_enabled = excluded.dashboard_enabled,
+                pr_comments_enabled = excluded.pr_comments_enabled,
+                repo_limit = excluded.repo_limit,
+                org_limit = excluded.org_limit,
+                seat_limit = excluded.seat_limit,
+                retention_policy = excluded.retention_policy,
+                support_tier = excluded.support_tier,
+                feature_flags_json = excluded.feature_flags_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                workspace_id,
+                payload["plan_code"],
+                payload["subscription_status"],
+                int(bool(payload["dashboard_enabled"])),
+                int(bool(payload.get("pr_comments_enabled", False))),
+                payload["repo_limit"],
+                payload["org_limit"],
+                payload["seat_limit"],
+                payload["retention_policy"],
+                payload["support_tier"],
+                payload.get("feature_flags_json", "{}"),
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE billing_handoff_claims SET claimed_workspace_id = ?, claimed_user_id = ?, consumed_at = ?, updated_at = ? WHERE id = ?",
+            (workspace_id, user_id, now, now, claim.id),
+        )
+        _refresh_workspace_setup_state(conn, workspace_id)
+        updated = conn.execute("SELECT * FROM billing_handoff_claims WHERE id = ?", (claim.id,)).fetchone()
+    return _row_to_billing_handoff_claim(updated)
 
 
 def has_processed_webhook_event(db_path: str, provider: str, event_id: str) -> bool:
@@ -1163,7 +1405,7 @@ def upsert_github_installation(
             (workspace_id, installation_id, account_id, account_login, account_type, target_type, status, now, now, now),
         )
         row = conn.execute("SELECT * FROM github_installations WHERE installation_id = ?", (installation_id,)).fetchone()
-        conn.execute("UPDATE workspaces SET setup_state = 'awaiting_repo_onboarding', updated_at = ? WHERE id = ?", (now, workspace_id))
+        _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_installation(row)
 
 
@@ -1223,6 +1465,15 @@ def get_repo_allocation_for_workspace(db_path: str, workspace_id: int, repo_full
     return _row_to_repo_allocation(row) if row else None
 
 
+def get_repo_allocation_for_installation(db_path: str, installation_id: int, repo_full: str) -> RepoAllocationRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM repo_allocations WHERE installation_id = ? AND repo_full = ? AND allocation_status IN ('active', 'onboarded') ORDER BY updated_at DESC LIMIT 1",
+            (installation_id, repo_full),
+        ).fetchone()
+    return _row_to_repo_allocation(row) if row else None
+
+
 def allocate_repo_to_workspace(
     db_path: str,
     *,
@@ -1269,4 +1520,6 @@ def update_repo_allocation_status(db_path: str, allocation_id: int, allocation_s
             (allocation_status, deactivated_at, now, allocation_id),
         )
         row = conn.execute("SELECT * FROM repo_allocations WHERE id = ?", (allocation_id,)).fetchone()
+        if row is not None:
+            _refresh_workspace_setup_state(conn, row["workspace_id"])
     return _row_to_repo_allocation(row)

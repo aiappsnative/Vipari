@@ -1,4 +1,4 @@
-# DriftGuard Base44 + Stripe Handoff V1 Plan
+# DriftGuard Base44 Billing Handoff V1 Plan
 
 This document turns GitHub issue `#25` into the implementation plan for DriftGuard's first production-facing acquisition-to-product handoff.
 
@@ -13,10 +13,10 @@ Target journey:
 3. DriftGuard authenticates the user with GitHub.
 4. DriftGuard creates or resumes a workspace.
 5. DriftGuard selects or preselects a plan.
-6. DriftGuard creates a Stripe Checkout session.
-7. Stripe webhooks activate workspace billing and entitlements.
-8. DriftGuard guides the user through GitHub App install and repo setup.
-9. DriftGuard gates dashboard access until setup is complete.
+6. Free users activate locally, while paid users complete checkout in Base44/Wix first.
+7. Base44/Wix sends a signed billing handoff to DriftGuard, which creates a claim token.
+8. DriftGuard consumes the claim after login/workspace bootstrap, activates entitlements, and guides the user through GitHub App install and repo setup.
+9. DriftGuard gates dashboard and webhook behavior until setup and entitlements are complete.
 
 ## Scope boundary
 
@@ -33,9 +33,11 @@ Target journey:
 - GitHub web login
 - user identity and session state
 - workspace and membership state
-- plan selection and billing linkage
-- Stripe Checkout / portal integration
-- authoritative Stripe webhook handling
+- plan selection and entitlement linkage
+- free-tier activation
+- signed billing claim creation/consumption
+- optional Stripe Checkout / portal fallback integration
+- authoritative billing activation handling
 - workspace entitlements
 - GitHub App installation linkage
 - repo allocation and onboarding
@@ -63,7 +65,7 @@ DriftGuard does not yet have:
 
 - GitHub OAuth login
 - user / workspace / session persistence
-- Stripe subscription lifecycle handling
+- provider-neutral billing activation handling
 - entitlement enforcement
 - customer-facing GitHub installation and repo allocation flow
 - central access-state gating
@@ -95,26 +97,28 @@ Delivered on this branch:
 - control-plane persistence for users, sessions, workspaces, memberships, subscriptions, entitlements, installations, repo connections, repo allocations, and webhook receipts
 - GitHub OAuth start/callback flow with encrypted token storage and session issuance
 - workspace bootstrap and app-shell access resolution
-- canonical plan catalog with `starter`, `team`, and `enterprise`, plus legacy `business -> enterprise` compatibility
-- Stripe checkout, billing portal support, and authoritative webhook-driven subscription/entitlement projection
+- canonical plan catalog with `free`, `starter`, `team`, and `enterprise`, plus legacy `business -> enterprise` compatibility
+- provider-neutral entitlement capabilities via `dashboard_enabled` and `pr_comments_enabled`
+- signed billing handoff claim persistence and activation flow for external providers
+- free-tier activation plus Stripe checkout, billing portal support, and authoritative webhook-driven subscription/entitlement projection for fallback paid flows
 - GitHub App install linkage, repository sync, repository allocation, and handoff into the existing onboarding engine
 - setup-aware customer pages for landing, login, pricing, workspace creation, billing, install, repo setup, and app state
-- actionable app-shell CTAs for incomplete setup states and the final active workspace state
+- actionable app-shell CTAs for incomplete setup states, the free comments-only terminal state, and the final active workspace state
 - additive legacy SQLite migrations for control-plane columns plus repaired foreign-key rebuilds for `repo_connections` and `repo_allocations`
-- dashboard gating for incomplete setup states
+- dashboard JSON/API gating for incomplete or non-dashboard states when the control plane is active
+- webhook allocation and entitlement gating for PR comment generation
 - owner/admin protection on billing and provisioning mutations
 
 Validated at the current checkpoint:
 
-- focused route-flow suite: `17 passed`
-- focused control-plane foundation suite: `7 passed`
-- full automated suite: `157 passed`
+- full automated suite: `162 passed`
+- targeted control-plane/access-state coverage now includes free-tier activation, signed claim creation/consumption, free-workspace dashboard denial, and webhook allocation enforcement
 - live tunnel-backed validation for GitHub OAuth login/callback, workspace bootstrap, GitHub App installation linking, repo sync, repo allocation/onboarding, and dashboard unlock after simulated Team billing
 
 Still pending outside local validation:
 
-- one Stripe-backed live pass with real webhook forwarding instead of simulated billing state
-- a small follow-up to keep persisted `workspaces.setup_state` aligned with the derived `active` resolver outcome after onboarding
+- one Base44/Wix-backed live pass with real signed handoff activation instead of simulated billing state
+- optional confirmation of the Stripe fallback path with real webhook forwarding
 
 ## Execution sequence
 
@@ -178,19 +182,23 @@ Add:
 - canonical plan-code definitions
 - plan-to-entitlement mapping
 - in-app plan selection or preselection from CTA params
-- Stripe Checkout session creation with workspace/user/plan metadata
+- local free-tier activation for non-billed plans
+- signed handoff claim entry points for external paid providers
+- Stripe Checkout session creation with workspace/user/plan metadata as a fallback path
 - Stripe billing portal session creation
 
 ### Phase 5: Authoritative billing projection
 
-Status on 2026-04-07: complete for webhook verification, idempotent receipts, and entitlement projection.
+Status on 2026-04-08: complete for external handoff claims, webhook verification, idempotent receipts, and entitlement projection.
 
-Add `/webhooks/stripe` with:
+Add billing activation surfaces with:
 
-- Stripe signature verification
-- event receipt storage for idempotency
+- `POST /api/billing/handoff/base44` with signed purchase activation handling and claim creation
+- `GET /claim/{token}` plus `/app/billing/claim` for post-login claim consumption
+- `POST /webhooks/stripe` with Stripe signature verification and fallback paid-plan projection
+- event receipt storage for idempotency where webhook-driven providers are used
 - projection of subscription/customer state into internal records
-- entitlement updates only from verified webhook events
+- entitlement updates only from verified billing-provider inputs
 
 ### Phase 6: GitHub install and repo allocation
 
@@ -217,6 +225,7 @@ Introduce a single resolver that determines whether the user is:
 - payment failed
 - waiting on GitHub install
 - waiting on repo onboarding
+- active comments only
 - active
 - canceled but still active
 - expired read-only

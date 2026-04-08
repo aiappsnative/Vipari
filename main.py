@@ -55,12 +55,17 @@ from services.control_plane_frontend import (
     render_repo_connection_cards,
 )
 from services.control_plane_records import (
+    activate_billing_handoff_claim,
     allocate_repo_to_workspace,
     count_workspace_repo_allocations,
     count_workspaces,
+    create_billing_handoff_claim,
     create_user_session,
     create_workspace,
     get_billing_customer_for_workspace,
+    get_billing_handoff_claim_by_token,
+    get_repo_allocation_for_installation,
+    get_repo_allocation_for_workspace,
     get_github_identity_for_user,
     get_repo_connection_for_workspace,
     get_user_by_id,
@@ -87,7 +92,7 @@ from services.control_plane_records import (
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
-from services.entitlements import get_plan_definition
+from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -118,6 +123,7 @@ PR_DIFF_FETCH_RETRY_SECONDS = settings.pr_diff_fetch_retry_seconds
 CONTROL_PLANE_OAUTH_STATE_COOKIE = "promptdrift_oauth_state"
 CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
 CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
+SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
 worker: AuditWorker | None = None
@@ -167,6 +173,15 @@ class RepositoryBackfillRequest(BaseModel):
     installation_id: int
 
 
+class BillingHandoffActivationRequest(BaseModel):
+    provider: str = "base44"
+    external_purchase_id: str
+    plan_code: str
+    billing_status: str = "active"
+    billing_email: str | None = None
+    source: str | None = None
+
+
 def _control_plane_active() -> bool:
     try:
         return count_workspaces(AUDIT_DB_PATH) > 0
@@ -205,7 +220,8 @@ def _build_access_context(session) -> dict[str, object]:
         has_subscription_record=subscription is not None,
         billing_pending_confirmation=subscription_status in {"incomplete", "pending", "trialing_pending"},
         payment_failed=subscription_status in {"past_due", "unpaid", "payment_failed"},
-        dashboard_enabled=bool(entitlement.dashboard_enabled) if entitlement else subscription_status in {"active", "trialing", "canceled"},
+        dashboard_enabled=bool(entitlement.dashboard_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
+        pr_comments_enabled=bool(entitlement.pr_comments_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
         has_linked_installation=installation is not None,
         allocated_repo_count=allocated_repo_count,
         onboarded_repo_count=onboarded_repo_count,
@@ -299,11 +315,14 @@ def _flow_context_from_request(request: Request) -> dict[str, str]:
     cookie_payload = _decode_context_cookie(request.cookies.get(CONTROL_PLANE_OAUTH_CONTEXT_COOKIE))
     source = _normalize_source_hint(request.query_params.get("source")) or _normalize_source_hint(str(cookie_payload.get("source") or ""))
     plan = _normalize_plan_hint(request.query_params.get("plan")) or _normalize_plan_hint(str(cookie_payload.get("plan") or ""))
+    claim_token = (request.query_params.get("claim") or str(cookie_payload.get("claim") or "")).strip()
     context: dict[str, str] = {}
     if source:
         context["source"] = source
     if plan:
         context["plan"] = plan
+    if claim_token:
+        context["claim"] = claim_token
     return context
 
 
@@ -356,6 +375,8 @@ def _resume_destination_for_session(session, flow_context: dict[str, str]) -> st
     if session.workspace_id is None:
         return _workspace_new_url(flow_context)
     access_context = _build_access_context(session)
+    if flow_context.get("claim") and access_context.get("subscription") is None:
+        return _path_with_flow_context("/app/billing/claim", flow_context)
     if flow_context.get("plan") and access_context.get("subscription") is None:
         return _billing_url(flow_context)
     if access_context.get("installation") is None and access_context["resolution"].state == "awaiting_github_install":
@@ -468,6 +489,33 @@ def _current_workspace_context(request: Request) -> dict[str, object]:
     if access_context["workspace"] is None:
         raise HTTPException(status_code=400, detail="Workspace context is required.")
     return access_context
+
+
+def _require_dashboard_access(request: Request) -> dict[str, object]:
+    if not _control_plane_active():
+        return {}
+    access_context = _current_workspace_context(request)
+    if not access_context["resolution"].can_access_dashboard:
+        raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
+    return access_context
+
+
+def _require_repo_dashboard_access(request: Request, repo_full: str) -> dict[str, object]:
+    access_context = _require_dashboard_access(request)
+    if not access_context:
+        return access_context
+    workspace = access_context["workspace"]
+    allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
+    if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
+        raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+    return access_context
+
+
+def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | None) -> bool:
+    if not settings.billing_handoff_secret or not signature_header:
+        return False
+    expected = hmac.new(settings.billing_handoff_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header.strip())
 
 
 def _require_workspace_role(access_context: dict[str, object], *allowed_roles: str) -> None:
@@ -665,6 +713,16 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
         raise HTTPException(status_code=409, detail="Unable to create a unique workspace slug.")
 
     update_session_workspace(AUDIT_DB_PATH, session.session_id, workspace.id)
+    if flow_context.get("claim"):
+        try:
+            activate_billing_handoff_claim(
+                AUDIT_DB_PATH,
+                claim_token=flow_context["claim"],
+                workspace_id=workspace.id,
+                user_id=session.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if pending_install and pending_install.get("workspace_id") in (None, workspace.id):
         try:
             _link_installation_to_workspace(
@@ -694,6 +752,12 @@ async def billing_page(request: Request):
     checkout_status_note = None
     if request.query_params.get("checkout_session_id"):
         checkout_status_note = "Checkout returned to DriftGuard. Access remains pending until Stripe webhook confirmation arrives."
+    elif request.query_params.get("claim_activated"):
+        checkout_status_note = "Billing activation was accepted. GitHub installation is the next required step."
+    elif request.query_params.get("free_activated"):
+        checkout_status_note = "Free tier activated. Link the GitHub App and allocate one repository to start PR comments."
+    elif request.query_params.get("external_checkout_required"):
+        checkout_status_note = "Paid plan checkout is handled by the external billing provider before DriftGuard grants access."
     elif request.query_params.get("canceled"):
         checkout_status_note = "Checkout was canceled before payment confirmation."
     return HTMLResponse(
@@ -710,13 +774,49 @@ async def billing_page(request: Request):
 
 
 @app.post("/app/billing/checkout")
-async def billing_checkout(request: Request, plan: str):
+async def billing_checkout(request: Request, plan: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
     _require_workspace_role(access_context, "owner", "admin")
-    normalized_plan = _normalize_plan_hint(plan)
+    normalized_plan = _normalize_plan_hint(plan or request.query_params.get("plan"))
     if normalized_plan is None:
         raise HTTPException(status_code=400, detail="Unknown plan code.")
+    plan_definition = get_plan_definition(normalized_plan)
     workspace = access_context["workspace"]
+    flow_context = _flow_context_from_request(request)
+    if not plan_definition.requires_billing:
+        synthetic_subscription_id = f"local:free:{workspace.id}:{normalized_plan}"
+        upsert_subscription(
+            AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            stripe_subscription_id=synthetic_subscription_id,
+            stripe_price_id=f"local:{normalized_plan}",
+            plan_code=normalized_plan,
+            status="free_active",
+            cancel_at_period_end=False,
+            current_period_start_at=time.time(),
+            current_period_end_at=None,
+            trial_ends_at=None,
+            last_webhook_event_id=None,
+        )
+        upsert_entitlement(
+            AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            payload=derive_entitlement_payload(normalized_plan, "free_active"),
+        )
+        return RedirectResponse(_path_with_flow_context("/app/setup/install?free_activated=1", flow_context), status_code=303)
+
+    if settings.base44_checkout_url:
+        checkout_url = f"{settings.base44_checkout_url}?{urlencode({
+            'plan': normalized_plan,
+            'workspace_id': workspace.id,
+            'workspace_slug': workspace.slug,
+            'workspace_name': workspace.display_name,
+            'billing_email': (access_context['user'].primary_email if access_context['user'] else '') or '',
+            'source': flow_context.get('source') or 'driftguard',
+            'return_url': f'{settings.app_base_url}/claim',
+        })}"
+        return RedirectResponse(checkout_url, status_code=303)
+
     existing_customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
     checkout = create_checkout_session(
         settings=settings,
@@ -745,6 +845,58 @@ async def billing_checkout(request: Request, plan: str):
         last_webhook_event_id=None,
     )
     return RedirectResponse(checkout.checkout_url, status_code=303)
+
+
+@app.get("/claim")
+@app.get("/claim/{claim_token}")
+async def claim_entry(request: Request, claim_token: str | None = None):
+    token = (claim_token or request.query_params.get("claim") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Claim token is required.")
+    claim = get_billing_handoff_claim_by_token(AUDIT_DB_PATH, token)
+    if claim is None:
+        raise HTTPException(status_code=404, detail="Billing handoff claim was not found.")
+    if claim.expires_at < time.time():
+        raise HTTPException(status_code=410, detail="Billing handoff claim has expired.")
+
+    flow_context = {
+        "claim": claim.claim_token,
+        "plan": claim.plan_code,
+        "source": _normalize_source_hint(claim.source) or claim.provider,
+    }
+    session = _get_session(request)
+    if session is None:
+        destination = _auth_start_url(flow_context)
+    elif session.workspace_id is None:
+        destination = _workspace_new_url(flow_context)
+    else:
+        destination = _path_with_flow_context("/app/billing/claim", flow_context)
+    response = RedirectResponse(destination, status_code=303)
+    _set_context_cookie(response, CONTROL_PLANE_OAUTH_CONTEXT_COOKIE, flow_context, max_age=1800)
+    return response
+
+
+@app.get("/app/billing/claim")
+async def billing_claim(request: Request):
+    access_context = _current_workspace_context(request)
+    _require_workspace_role(access_context, "owner", "admin")
+    flow_context = _flow_context_from_request(request)
+    claim_token = flow_context.get("claim")
+    if not claim_token:
+        raise HTTPException(status_code=400, detail="Claim token is required.")
+
+    try:
+        activate_billing_handoff_claim(
+            AUDIT_DB_PATH,
+            claim_token=claim_token,
+            workspace_id=access_context["workspace"].id,
+            user_id=access_context["session"].user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    next_flow_context = {key: value for key, value in flow_context.items() if key != "claim"}
+    return RedirectResponse(_path_with_flow_context("/app/setup/install?claim_activated=1", next_flow_context), status_code=303)
 
 
 @app.get("/app/billing/portal")
@@ -954,6 +1106,38 @@ async def current_workspace_access_state(request: Request):
     return JSONResponse(asdict(access_context["resolution"]))
 
 
+@app.post("/api/billing/handoff/base44")
+async def base44_billing_handoff(request: Request):
+    raw_body = await request.body()
+    if not _verify_billing_handoff_signature(raw_body, request.headers.get("X-DriftGuard-Signature")):
+        raise HTTPException(status_code=401, detail="Invalid billing handoff signature.")
+
+    try:
+        payload = BillingHandoffActivationRequest.model_validate_json(raw_body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid billing handoff payload.") from exc
+
+    normalized_plan = _normalize_plan_hint(payload.plan_code)
+    if normalized_plan is None:
+        raise HTTPException(status_code=400, detail="Unknown plan code.")
+    if not get_plan_definition(normalized_plan).requires_billing:
+        raise HTTPException(status_code=400, detail="Free plan does not require billing handoff.")
+
+    claim = create_billing_handoff_claim(
+        AUDIT_DB_PATH,
+        claim_token=generate_session_id(),
+        provider=_normalize_source_hint(payload.provider) or "base44",
+        external_purchase_id=payload.external_purchase_id.strip(),
+        plan_code=normalized_plan,
+        billing_status=(payload.billing_status or "active").strip().lower(),
+        billing_email=(payload.billing_email or "").strip() or None,
+        source=_normalize_source_hint(payload.source) or "base44",
+        expires_at=time.time() + settings.billing_handoff_ttl_seconds,
+    )
+    claim_url = f"{settings.app_base_url.rstrip('/')}/claim/{claim.claim_token}?plan={claim.plan_code}&source={claim.source or claim.provider}"
+    return JSONResponse({"status": "created", "claim_token": claim.claim_token, "claim_url": claim_url})
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_index_page(request: Request):
     redirect, _session = _dashboard_redirect_for_request(request)
@@ -971,12 +1155,14 @@ async def dashboard_repo_page(request: Request, repo_full: str):
 
 
 @app.get("/api/repos")
-async def list_repos():
+async def list_repos(request: Request):
+    _require_dashboard_access(request)
     return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH)]})
 
 
 @app.get("/api/dashboard/overview")
-async def dashboard_overview():
+async def dashboard_overview(request: Request):
+    _require_dashboard_access(request)
     return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH)))
 
 
@@ -988,12 +1174,14 @@ async def persistence_status():
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
-async def repo_dashboard(repo_full: str):
+async def repo_dashboard(request: Request, repo_full: str):
+    _require_repo_dashboard_access(request, repo_full)
     return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
-async def artifact_storyline(repo_full: str, artifact_path: str):
+async def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
+    _require_repo_dashboard_access(request, repo_full)
     storyline = build_repo_artifact_storyline(AUDIT_DB_PATH, repo_full, artifact_path)
     if storyline is None:
         raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
@@ -1007,7 +1195,8 @@ async def artifact_storyline(repo_full: str, artifact_path: str):
 
 
 @app.post("/api/repos/{repo_full:path}/onboard")
-async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest):
+async def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
+    _require_repo_dashboard_access(request, repo_full)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, payload.installation_id)
 
@@ -1048,7 +1237,8 @@ async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingReque
 
 
 @app.post("/api/repos/{repo_full:path}/backfill")
-async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest):
+async def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
+    _require_repo_dashboard_access(request, repo_full)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, payload.installation_id)
     executed_jobs = execute_repository_history_backfill(
@@ -1069,7 +1259,8 @@ async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest):
 
 
 @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
-async def promote_artifact_baseline(repo_full: str, artifact_path: str):
+async def promote_artifact_baseline(request: Request, repo_full: str, artifact_path: str):
+    _require_repo_dashboard_access(request, repo_full)
     baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
     if baseline is None:
         raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
@@ -1246,6 +1437,15 @@ async def webhook(request: Request):
 
     if not all([installation_id, repo_full, pr_number]):
         raise HTTPException(status_code=400, detail="Missing payload data")
+
+    if _control_plane_active():
+        allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
+        if allocation is None:
+            return JSONResponse({"message": "ignored: repo not allocated"})
+
+        entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
+        if entitlement is None or not entitlement.pr_comments_enabled:
+            return JSONResponse({"message": "ignored: workspace not entitled"})
 
     if action in ("closed", "reopened"):
         update_job_pr_state(

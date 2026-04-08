@@ -34,7 +34,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, and dashboard UX hardening slices.
 
-The active integration branch `feature/driftguard-base44-stripe-handoff-v1` extends that baseline with a first customer-facing control plane for the Base44 -> DriftGuard -> Stripe -> GitHub App handoff.
+The active integration branch `feature/driftguard-base44-stripe-handoff-v1` extends that baseline with a first customer-facing control plane for the Base44/Wix -> DriftGuard billing handoff plus GitHub App onboarding flow.
 
 In practical terms, DriftGuard currently provides:
 
@@ -56,22 +56,26 @@ In practical terms, DriftGuard currently provides:
 On the active integration branch, DriftGuard additionally provides:
 
 - GitHub OAuth login and encrypted session-backed identity state for the customer control plane
-- Base44 handoff source/plan passthrough across login, workspace bootstrap, and billing continuation
+- Base44 handoff source/plan passthrough across login, workspace bootstrap, claim continuation, and billing entry
 - workspace bootstrap, membership-aware access resolution, and setup-aware app surfaces
-- Stripe checkout, billing portal support, and authoritative webhook-driven subscription projection
+- a first-class `free` plan with one-repository entitlement, PR comments enabled, and dashboard access disabled
+- provider-neutral entitlement flags separating PR-comment access from dashboard access
+- signed billing handoff claims for external providers, with Base44/Wix-style payment-first activation and workspace claim flow
+- local free-tier activation plus optional Stripe fallback for paid checkout and billing portal support
 - GitHub App install linkage, setup-URL callback handling, synced repository connection inventory, and repo allocation into the existing onboarding engine
 - additive SQLite repair migrations for legacy control-plane databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys that now correctly target `github_installations.installation_id`
-- dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes
+- setup-state persistence that now recomputes `workspaces.setup_state` from entitlement, install, and onboarding facts
+- dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes, including JSON API routes when the control plane is active
+- webhook gating that suppresses PR audits/comments for repos that are installed but not allocated or not entitled for comments
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
-- actionable setup-state and active-state app shells so `/app` always exposes a real continuation path
+- actionable setup-state, free-tier, and active-state app shells so `/app` always exposes a real continuation path
 - a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
 
 Latest branch validation on 2026-04-08:
 
-- focused control-plane UI suite passed locally: `17 passed`
-- focused control-plane foundation suite passed locally: `7 passed`
-- full automated suite passed locally: `157 passed`
-- tunnel-backed live validation confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and active dashboard unlock after simulated Team billing
+- full automated suite passed locally: `162 passed`
+- targeted control-plane/access-state regression coverage passed locally for free-tier activation, signed billing handoff claims, dashboard gating, and webhook allocation enforcement
+- tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -173,6 +177,7 @@ Optional variables:
 - `APP_ENCRYPTION_KEY`
 - `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, and `SESSION_TTL_SECONDS`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_CALLBACK_URL`
+- `BILLING_HANDOFF_SECRET`, `BILLING_HANDOFF_TTL_SECONDS`, and `BASE44_CHECKOUT_URL`
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`
 - `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_TEAM`, `STRIPE_PRICE_ENTERPRISE`, and `STRIPE_PRICE_BUSINESS`
 - `REDIS_URL`
@@ -186,7 +191,7 @@ Control-plane preflight helper:
 python scripts/control_plane_preflight.py
 ```
 
-Use it before the live-provider run to confirm the GitHub OAuth, GitHub App, Stripe, and app-base settings are populated and consistent.
+Use it before the live-provider run to confirm the GitHub OAuth, GitHub App, billing-provider, and app-base settings are populated and consistent.
 
 ## Installation
 
@@ -250,11 +255,12 @@ The fastest proof is the focused route-flow suite in [tests/test_control_plane_u
 - GitHub OAuth start and callback
 - session creation
 - workspace bootstrap
-- Stripe checkout initiation
-- Stripe webhook activation
+- free-tier activation
+- signed billing handoff claim creation and claim consumption
 - GitHub installation linkage
 - repo allocation
-- dashboard unlock
+- dashboard unlock and free-tier dashboard denial
+- webhook suppression for unallocated repos
 
 Run it with:
 
@@ -274,12 +280,12 @@ Then confirm:
 
 1. `/` renders the DriftGuard control-plane landing page
 2. `/login` renders the GitHub auth entry
-3. `/pricing` renders Starter, Team, and Enterprise plans
+3. `/pricing` renders Free, Starter, Team, and Enterprise plans
 4. `/app` redirects to `/login` when no session exists
 
 ### Real provider-backed E2E
 
-For a true end-to-end pass with GitHub OAuth, GitHub App install, and Stripe test mode, the local server must be reachable from GitHub and Stripe.
+For a true end-to-end pass with GitHub OAuth, GitHub App install, and Base44/Wix payment-first handoff, the local server must be reachable from GitHub and the external billing provider.
 
 Recommended flow:
 
@@ -289,9 +295,12 @@ Recommended flow:
 4. Set `GITHUB_OAUTH_CALLBACK_URL=https://<tunnel-host>/auth/github/callback`.
 5. Register the same callback URL in the GitHub OAuth app settings.
 6. Point the GitHub App webhook URL to `https://<tunnel-host>/webhook`.
-7. Forward Stripe events to `https://<tunnel-host>/webhooks/stripe` using `stripe listen --forward-to ...` or the Stripe test dashboard.
-8. Start from `/auth/github/start?source=base44&plan=team` and walk through login, workspace creation, checkout, install, repo allocation, and dashboard access.
-9. If the GitHub App supports a setup URL, point it to `https://<tunnel-host>/app/setup/install/callback` so installation completion returns directly into DriftGuard.
+7. Configure Base44/Wix to POST signed purchase activations to `https://<tunnel-host>/api/billing/handoff/base44` using `BILLING_HANDOFF_SECRET`.
+8. Start from the claim URL returned by that handoff or from `/claim/<token>` and walk through login, workspace creation, claim activation, install, repo allocation, and dashboard access.
+9. For the free tier, start from `/app/billing` or `POST /app/billing/checkout` with `plan=free`, then continue directly to install and repo allocation.
+10. If the GitHub App supports a setup URL, point it to `https://<tunnel-host>/app/setup/install/callback` so installation completion returns directly into DriftGuard.
+
+Stripe remains available as a compatibility fallback for paid checkout on this branch, but it is no longer the primary launch path.
 
 Recommended sequence before the live run:
 
@@ -303,15 +312,17 @@ python -m pytest tests/test_control_plane_ui.py -q
 ### What is authoritative in E2E
 
 - GitHub OAuth success creates identity and session state
-- Stripe success redirect is not authoritative for access
-- `POST /webhooks/stripe` is authoritative for subscription activation
-- dashboard access is granted only after webhook-confirmed billing plus install and repo onboarding
+- free checkout is authoritative only for the local free entitlement path
+- external paid checkout redirects are not authoritative for access on their own
+- `POST /api/billing/handoff/base44` plus the resulting claim activation is authoritative for external paid-plan activation
+- `POST /webhooks/stripe` remains authoritative for Stripe-backed paid-plan activation when Stripe fallback is used
+- dashboard access is granted only after plan activation plus install and repo onboarding, and free workspaces remain comments-only
 
 ### End-of-day branch note
 
 The control-plane branch is now implemented, locally validated, and tunnel-validated for the GitHub handoff/install/allocation path on `feature/driftguard-base44-stripe-handoff-v1`.
 
-The main unfinished validation item is real Stripe provider confirmation without local billing simulation. A smaller follow-up is keeping persisted `workspaces.setup_state` in sync with the derived `active` resolver outcome after onboarding completes. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the updated branch handoff summary and next-step checklist.
+The main unfinished validation item is a real Base44/Wix signed handoff pass without local simulation. Stripe fallback remains available, and persisted `workspaces.setup_state` is now synchronized from entitlement/install/onboarding facts. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the updated branch handoff summary and next-step checklist.
 
 ## Local operator and dashboard testing
 

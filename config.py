@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     stripe_price_team: str = ""
     stripe_price_enterprise: str = ""
     stripe_price_business: str = ""
+    billing_handoff_secret: str = ""
+    billing_handoff_ttl_seconds: int = 86400
+    base44_checkout_url: str = ""
 
     worker_concurrency: int = 4
     worker_max_retries: int = 3

@@ -243,6 +243,311 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_free_checkout_activates_local_entitlement_and_redirects_to_install(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "free-checkout.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        get_workspace_entitlement,
+        get_workspace_subscription,
+        upsert_github_identity,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="901",
+        github_login="free-owner",
+        display_name="Free Owner",
+        primary_email="free-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-workspace",
+        display_name="Free Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="free-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.post(
+        "/app/billing/checkout",
+        data={"plan": "free"},
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup/install?free_activated=1"
+
+    subscription = get_workspace_subscription(main.AUDIT_DB_PATH, workspace.id)
+    entitlement = get_workspace_entitlement(main.AUDIT_DB_PATH, workspace.id)
+    assert subscription is not None
+    assert subscription.status == "free_active"
+    assert entitlement is not None
+    assert entitlement.plan_code == "free"
+    assert entitlement.pr_comments_enabled is True
+    assert entitlement.dashboard_enabled is False
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_api_rejects_free_tier_workspace(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "free-dashboard.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="902",
+        github_login="free-dashboard",
+        display_name="Free Dashboard",
+        primary_email="free-dashboard@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-dashboard-workspace",
+        display_name="Free Dashboard Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="free-dashboard-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:902",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "basic",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9020,
+        account_id="9020",
+        account_login="free-dashboard-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9020,
+        repositories=[
+            {
+                "repo_github_id": "free-dashboard-org/repo-one",
+                "repo_full": "free-dashboard-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9020,
+        repo_github_id="free-dashboard-org/repo-one",
+        repo_full="free-dashboard-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    response = client.get(
+        "/api/dashboard/overview",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Dashboard access is not available for this workspace."
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_base44_handoff_creates_claim_url(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_secret = main.settings.billing_handoff_secret
+    main.AUDIT_DB_PATH = str(tmp_path / "base44-handoff.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.billing_handoff_secret = "shared-secret"
+
+    payload = {
+        "provider": "base44",
+        "external_purchase_id": "purchase-123",
+        "plan_code": "starter",
+        "billing_status": "active",
+        "billing_email": "buyer@example.com",
+        "source": "base44",
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+    signature = main.hmac.new(b"shared-secret", raw_body, main.hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/api/billing/handoff/base44",
+        content=raw_body,
+        headers={"X-DriftGuard-Signature": signature, "content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "created"
+    assert body["claim_token"]
+    assert "/claim/" in body["claim_url"]
+
+    main.settings.billing_handoff_secret = original_secret
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_webhook_ignores_unallocated_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-unallocated.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1201",
+        github_login="webhook-owner",
+        display_name="Webhook Owner",
+        primary_email="webhook-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="webhook-workspace",
+        display_name="Webhook Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:webhook:starter",
+        stripe_price_id="local:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=1234,
+        account_id="1234",
+        account_login="example-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+
+    payload = {
+        "action": "opened",
+        "installation": {"id": 1234},
+        "repository": {"full_name": "example/repo"},
+        "pull_request": {
+            "number": 7,
+            "state": "open",
+            "merged": False,
+            "head": {"sha": "headsha"},
+            "base": {"sha": "basesha"},
+            "updated_at": "2025-01-01T00:00:00Z",
+        },
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + main.hmac.new(main.GITHUB_WEBHOOK_SECRET.encode(), raw_body, main.hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/webhook",
+        content=raw_body,
+        headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": signature, "content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "ignored: repo not allocated"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_dashboard_requires_session_when_control_plane_is_active(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "gated.db")

@@ -13,6 +13,7 @@ AccessState = Literal[
     "payment_failed",
     "awaiting_github_install",
     "awaiting_repo_onboarding",
+    "active_comments_only",
     "active",
     "canceled_active_until_period_end",
     "expired_read_only",
@@ -42,6 +43,7 @@ class WorkspaceAccessSnapshot:
     billing_pending_confirmation: bool = False
     payment_failed: bool = False
     dashboard_enabled: bool = False
+    pr_comments_enabled: bool = False
     has_linked_installation: bool = False
     allocated_repo_count: int = 0
     onboarded_repo_count: int = 0
@@ -69,23 +71,24 @@ def _build_checklist(snapshot: WorkspaceAccessSnapshot) -> list[AccessChecklistI
         and not snapshot.payment_failed
         and not snapshot.subscription_expired
     )
-    install_complete = billing_complete and snapshot.has_linked_installation
+    plan_active = billing_complete or (snapshot.has_subscription_record and snapshot.pr_comments_enabled)
+    install_complete = plan_active and snapshot.has_linked_installation
     repo_allocated = install_complete and snapshot.allocated_repo_count > 0
     onboarding_complete = repo_allocated and snapshot.onboarded_repo_count > 0
 
     return [
         AccessChecklistItem(
             key="billing",
-            label="Billing active",
+            label="Plan active",
             status="complete" if billing_complete else "current" if snapshot.has_workspace else "pending",
-            detail="Stripe-backed subscription controls workspace entitlements.",
+            detail="Workspace entitlements come from the selected DriftGuard plan and billing provider.",
             cta=None if billing_complete else "Choose plan",
         ),
         AccessChecklistItem(
             key="workspace",
             label="Workspace linked",
             status="complete" if snapshot.has_workspace else "current" if snapshot.is_authenticated else "pending",
-            detail="Users act inside a specific paid DriftGuard workspace.",
+            detail="Users act inside a specific DriftGuard workspace with plan-scoped access.",
             cta=None if snapshot.has_workspace else "Create workspace",
         ),
         AccessChecklistItem(
@@ -98,7 +101,7 @@ def _build_checklist(snapshot: WorkspaceAccessSnapshot) -> list[AccessChecklistI
         AccessChecklistItem(
             key="installation",
             label="GitHub App installed",
-            status="complete" if install_complete else "current" if billing_complete else "blocked",
+            status="complete" if install_complete else "current" if plan_active else "blocked",
             detail="DriftGuard needs GitHub App installation authority before it can enumerate repos.",
             cta=None if install_complete else "Install DriftGuard",
         ),
@@ -106,7 +109,7 @@ def _build_checklist(snapshot: WorkspaceAccessSnapshot) -> list[AccessChecklistI
             key="repo_allocation",
             label="Repository allocated",
             status="complete" if repo_allocated else "current" if install_complete else "blocked",
-            detail="Allocated repositories consume paid entitlement capacity.",
+            detail="Allocated repositories consume plan entitlement capacity.",
             cta=None if repo_allocated else "Select repositories",
         ),
         AccessChecklistItem(
@@ -236,6 +239,19 @@ def resolve_workspace_access_state(snapshot: WorkspaceAccessSnapshot) -> Workspa
             ui_body="Your workspace is connected to GitHub, but no licensed repositories are fully onboarded yet.",
             primary_cta="Select repositories",
             secondary_cta=None,
+            checklist=checklist,
+        )
+
+    if snapshot.pr_comments_enabled and not snapshot.dashboard_enabled:
+        return WorkspaceAccessResolution(
+            state="active_comments_only",
+            can_access_dashboard=False,
+            is_read_only=False,
+            required_next_action="Upgrade to Starter",
+            ui_title="Free tier active",
+            ui_body="GitHub install, repository allocation, and onboarding are complete. This workspace can receive PR comments for one repository, but dashboards require a paid plan.",
+            primary_cta="Upgrade to Starter",
+            secondary_cta="Manage repository setup",
             checklist=checklist,
         )
 
