@@ -4,6 +4,7 @@ from html import escape as html_escape
 from pathlib import Path
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
+from .entitlements import PLAN_DEFINITIONS
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -157,16 +158,26 @@ def render_control_plane_marketing_page() -> str:
     return _load_template("control_plane_marketing.html")
 
 
-def render_control_plane_login_page() -> str:
-    return _load_template("control_plane_login.html")
+def render_control_plane_login_page(*, auth_start_url: str, context_note: str | None = None) -> str:
+    template = _load_template("control_plane_login.html")
+    return template.replace("{{AUTH_START_URL}}", html_escape(auth_start_url)).replace(
+        "{{CONTEXT_NOTE}}", html_escape(context_note or "GitHub identity anchors workspace membership, install authority, and repository allocation.")
+    )
 
 
 def render_control_plane_pricing_page() -> str:
     return _load_template("control_plane_pricing.html")
 
 
-def render_control_plane_workspace_new_page() -> str:
-    return _load_template("control_plane_workspace_new.html")
+def render_control_plane_workspace_new_page(*, selected_plan_label: str | None = None, source_label: str | None = None) -> str:
+    template = _load_template("control_plane_workspace_new.html")
+    context_lines: list[str] = []
+    if selected_plan_label:
+        context_lines.append(f"Selected plan: {selected_plan_label}.")
+    if source_label:
+        context_lines.append(f"Entry source: {source_label}.")
+    context_message = " ".join(context_lines) if context_lines else "Create the first DriftGuard workspace before billing and GitHub installation continue."
+    return template.replace("{{WORKSPACE_CONTEXT}}", html_escape(context_message))
 
 
 def render_control_plane_billing_page(
@@ -174,35 +185,74 @@ def render_control_plane_billing_page(
     workspace_name: str,
     current_plan_label: str,
     subscription_status: str,
-    checkout_url: str | None,
+    selected_plan_code: str,
+    checkout_status_note: str | None,
+    flow_context: dict[str, str],
     portal_url: str | None,
 ) -> str:
     template = _load_template("control_plane_billing.html")
-    checkout_block = (
-        f'<a class="button" href="{html_escape(checkout_url)}">Refresh checkout status</a>' if checkout_url else '<span class="subtle-link">Checkout not started</span>'
-    )
     portal_block = (
         f'<a class="subtle-link" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="subtle-link">Portal unavailable</span>'
     )
+    flow_query = ""
+    if flow_context:
+        flow_query = "?" + "&".join(f"{html_escape(key)}={html_escape(value)}" for key, value in flow_context.items())
+    plan_cards = []
+    for code, plan in PLAN_DEFINITIONS.items():
+        recommendation = "Recommended from Base44." if code == selected_plan_code else ""
+        button_label = "Continue with this plan" if code == selected_plan_code else f"Choose {plan.label}"
+        plan_cards.append(
+            f'''
+            <article class="action-card{' action-card-strong' if code == selected_plan_code else ''}">
+                <div class="eyebrow">{html_escape(plan.label)}</div>
+                <h2>{html_escape(plan.label)}</h2>
+                <p>Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
+                <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}">
+                    <button type="submit" class="button">{html_escape(button_label)}</button>
+                </form>
+            </article>
+            '''
+        )
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{CURRENT_PLAN_LABEL}}", html_escape(current_plan_label))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape(subscription_status))
-        .replace("{{CHECKOUT_ACTION}}", checkout_block)
+        .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_status_note or "Choose a plan to create or resume Stripe checkout."))
+        .replace("{{PLAN_CARDS}}", "".join(plan_cards))
         .replace("{{PORTAL_ACTION}}", portal_block)
     )
 
 
-def render_control_plane_install_page(*, workspace_name: str, install_hint: str, installation_summary: str, install_url: str | None) -> str:
+def render_control_plane_install_page(
+    *,
+    workspace_name: str,
+    install_hint: str,
+    installation_summary: str,
+    install_url: str | None,
+    install_callback_url: str,
+) -> str:
     template = _load_template("control_plane_install.html")
     install_action = (
         f'<a class="button" href="{html_escape(install_url)}">Start GitHub App install</a>' if install_url else '<span class="subtle-link">GitHub App install URL unavailable</span>'
     )
+    manual_link_form = f'''
+        <form method="post" action="/app/setup/install/link" class="action-form">
+            <label class="field-label" for="installation-id">Installation id</label>
+            <input class="field-input" id="installation-id" name="installation_id" placeholder="12345678" />
+            <label class="field-label" for="account-login">Account login</label>
+            <input class="field-input" id="account-login" name="account_login" placeholder="your-org" />
+            <label class="field-label" for="repo-fulls">Fallback repo list</label>
+            <textarea class="field-input field-input-area" id="repo-fulls" name="repo_fulls" placeholder="owner/repo-one&#10;owner/repo-two"></textarea>
+            <button type="submit" class="button">Link installation manually</button>
+        </form>
+    '''
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{INSTALL_HINT}}", html_escape(install_hint))
         .replace("{{INSTALLATION_SUMMARY}}", html_escape(installation_summary))
         .replace("{{INSTALL_ACTION}}", install_action)
+        .replace("{{INSTALL_CALLBACK_URL}}", html_escape(install_callback_url))
+        .replace("{{MANUAL_LINK_FORM}}", manual_link_form)
     )
 
 

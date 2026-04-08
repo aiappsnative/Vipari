@@ -56,16 +56,18 @@ In practical terms, DriftGuard currently provides:
 On the active integration branch, DriftGuard additionally provides:
 
 - GitHub OAuth login and encrypted session-backed identity state for the customer control plane
+- Base44 handoff source/plan passthrough across login, workspace bootstrap, and billing continuation
 - workspace bootstrap, membership-aware access resolution, and setup-aware app surfaces
 - Stripe checkout, billing portal support, and authoritative webhook-driven subscription projection
-- GitHub App install linkage, synced repository connection inventory, and repo allocation into the existing onboarding engine
+- GitHub App install linkage, setup-URL callback handling, synced repository connection inventory, and repo allocation into the existing onboarding engine
 - dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
+- a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
 
 Latest branch validation before end-of-day handoff:
 
-- focused control-plane route suite passed locally: `11 passed`
-- full automated suite passed locally: `148 passed`
+- focused control-plane route suite passed locally: `15 passed`
+- full automated suite passed locally: `152 passed`
 - local runtime smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app` behavior
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -175,6 +177,14 @@ Optional variables:
 - `API_ADMIN_TOKEN` for the split API service
 - `ENABLE_METRICS` (defaults to `false`)
 
+Control-plane preflight helper:
+
+```bash
+python scripts/control_plane_preflight.py
+```
+
+Use it before the live-provider run to confirm the GitHub OAuth, GitHub App, Stripe, and app-base settings are populated and consistent.
+
 ## Installation
 
 Install dependencies:
@@ -278,6 +288,14 @@ Recommended flow:
 6. Point the GitHub App webhook URL to `https://<tunnel-host>/webhook`.
 7. Forward Stripe events to `https://<tunnel-host>/webhooks/stripe` using `stripe listen --forward-to ...` or the Stripe test dashboard.
 8. Start from `/auth/github/start?source=base44&plan=team` and walk through login, workspace creation, checkout, install, repo allocation, and dashboard access.
+9. If the GitHub App supports a setup URL, point it to `https://<tunnel-host>/app/setup/install/callback` so installation completion returns directly into DriftGuard.
+
+Recommended sequence before the live run:
+
+```bash
+python scripts/control_plane_preflight.py
+python -m pytest tests/test_control_plane_ui.py -q
+```
 
 ### What is authoritative in E2E
 

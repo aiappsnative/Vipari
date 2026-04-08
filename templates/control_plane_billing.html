@@ -15,14 +15,10 @@
             <p class="eyebrow">Billing</p>
             <h1>{{WORKSPACE_NAME}}</h1>
             <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
+            <p class="page-note">{{CHECKOUT_STATUS_NOTE}}</p>
         </section>
         <section class="card-grid">
-            <article class="action-card">
-                <div class="eyebrow">Checkout</div>
-                <h2>Refresh or continue</h2>
-                <p>Use Stripe as the billing source of truth and wait for webhook-confirmed activation.</p>
-                {{CHECKOUT_ACTION}}
-            </article>
+            {{PLAN_CARDS}}
             <article class="action-card">
                 <div class="eyebrow">Portal</div>
                 <h2>Manage billing</h2>

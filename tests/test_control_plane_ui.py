@@ -4,6 +4,8 @@ import sys
 import time
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
@@ -15,6 +17,13 @@ from services.secure_store import decrypt_text
 
 
 client = TestClient(main.app)
+
+
+@pytest.fixture(autouse=True)
+def reset_test_client_cookies():
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
 
 
 def test_marketing_page_renders():
@@ -40,6 +49,14 @@ def test_login_page_renders_github_entry():
 
     assert response.status_code == 200
     assert "Sign in with GitHub" in response.text
+
+
+def test_login_page_preserves_handoff_context():
+    response = client.get("/login?source=base44&plan=team")
+
+    assert response.status_code == 200
+    assert "/auth/github/start?source=base44&amp;plan=team" in response.text
+    assert "Resuming the Team plan handoff from base44." in response.text
 
 
 def test_app_page_renders_preview_state():
@@ -68,6 +85,43 @@ def test_github_auth_start_redirects_to_provider_when_configured():
     assert "promptdrift_oauth_state=" in response.headers.get("set-cookie", "")
 
 
+def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "existing-session.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="125",
+        github_login="existing-user",
+        display_name="Existing User",
+        primary_email="existing@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="existing-session",
+        user_id=user.id,
+        workspace_id=None,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get(
+        "/auth/github/start?source=base44&plan=team",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/workspaces/new?source=base44&plan=team"
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstrap(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "auth.db")
@@ -90,16 +144,19 @@ def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstr
             avatar_url="https://avatars.example.com/u/12345",
         ),
     ):
-        start_response = client.get("/auth/github/start", follow_redirects=False)
+        start_response = client.get("/auth/github/start?source=base44&plan=team", follow_redirects=False)
         state_cookie = start_response.cookies.get("promptdrift_oauth_state")
         response = client.get(
             f"/auth/github/callback?code=test-code&state={state_cookie}",
-            cookies={"promptdrift_oauth_state": state_cookie},
+            cookies={
+                "promptdrift_oauth_state": state_cookie,
+                "promptdrift_oauth_context": start_response.cookies.get("promptdrift_oauth_context"),
+            },
             follow_redirects=False,
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/workspaces/new"
+    assert response.headers["location"] == "/app/workspaces/new?source=base44&plan=team"
     session_cookie = response.cookies.get(main.settings.session_cookie_name)
     assert session_cookie
 
@@ -148,12 +205,15 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
 
     response = client.post(
         "/app/workspaces/bootstrap?name=PromptDrift%20Team",
-        cookies={main.settings.session_cookie_name: session.session_id},
+        cookies={
+            main.settings.session_cookie_name: session.session_id,
+            "promptdrift_oauth_context": main._encode_context_cookie({"source": "base44", "plan": "team"}),
+        },
         follow_redirects=False,
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app"
+    assert response.headers["location"] == "/app/billing?source=base44&plan=team"
 
     auth_payload = client.get(
         "/api/auth/session",
@@ -230,6 +290,13 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     )
 
     with patch.object(main.settings, "stripe_webhook_secret", "whsec_test"):
+        billing_page_response = client.get(
+            "/app/billing?plan=team&source=base44",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        assert billing_page_response.status_code == 200
+        assert "Continue with this plan" in billing_page_response.text
+
         checkout_response = client.post(
             "/app/billing/checkout?plan=team",
             cookies={main.settings.session_cookie_name: session.session_id},
@@ -281,6 +348,13 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     ).json()
     assert access_after_billing["access"]["state"] == "awaiting_github_install"
+
+    install_page_response = client.get(
+        "/app/setup/install",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+    assert install_page_response.status_code == 200
+    assert "/app/setup/install/callback" in install_page_response.text
 
     install_response = client.post(
         "/app/setup/install/link",
@@ -398,4 +472,111 @@ def test_workspace_viewer_cannot_mutate_billing_or_repo_setup(tmp_path):
     assert billing_response.status_code == 403
     assert install_response.status_code == 403
 
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "install-callback.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="820",
+        github_login="install-owner",
+        display_name="Install Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="install-callback-workspace",
+        display_name="Install Callback Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="install-callback-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch.object(main.settings, "github_app_id", "app-id"), patch.object(
+        main.settings, "github_app_private_key", "dummy-private-key"
+    ), patch(
+        "main.sync_installation_repositories",
+        return_value=(
+            {"target_type": "Organization", "account": {"login": "doria90", "type": "Organization", "id": 77}},
+            [{"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"}],
+        ),
+    ):
+        response = client.get(
+            f"/app/setup/install/callback?installation_id=12345&setup_action=install&state={workspace.id}",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup/repos?installation_linked=1&setup_action=install"
+
+    auth_payload = client.get(
+        "/api/auth/session",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    ).json()
+    assert auth_payload["access"]["state"] == "workspace_no_subscription"
+
+    repo_setup_response = client.get(
+        "/app/setup/repos",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+    assert repo_setup_response.status_code == 200
+    assert "doria90/dummyAI" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_billing_checkout_rejects_unknown_plan(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "invalid-plan.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="830",
+        github_login="plan-owner",
+        display_name="Plan Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="invalid-plan-workspace",
+        display_name="Invalid Plan Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="invalid-plan-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.post(
+        "/app/billing/checkout?plan=unknown",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 400
     main.AUDIT_DB_PATH = original_db_path

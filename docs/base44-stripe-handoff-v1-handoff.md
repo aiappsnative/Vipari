@@ -9,19 +9,21 @@ The first implementation slice for issue `#25` is in place and locally validated
 Implemented today and preserved on the branch:
 
 - GitHub OAuth login and session handling
+- Base44 source/plan passthrough across auth, workspace bootstrap, and billing continuation
 - workspace bootstrap and access-state-driven app shell
 - Stripe checkout, portal support, and webhook-driven subscription projection
-- GitHub App installation linkage and repository allocation into the existing onboarding engine
+- GitHub App installation linkage, setup-URL callback handling, and repository allocation into the existing onboarding engine
 - dashboard gating for incomplete setup states
 - owner/admin protection for billing and provisioning mutations
+- provider-setup preflight tooling via `python scripts/control_plane_preflight.py`
 - updated README, roadmap, changelog, and architecture docs reflecting the branch state
 
 ## Validation status
 
 Validated locally before shutdown:
 
-- `python -m pytest tests/test_control_plane_ui.py -q` -> `11 passed`
-- `python -m pytest` -> `148 passed`
+- `python -m pytest tests/test_control_plane_ui.py -q` -> `15 passed`
+- `python -m pytest` -> `152 passed`
 - live smoke check confirmed `/`, `/login`, `/pricing`, and unauthenticated `/app`
 
 Known non-blocking signal:
@@ -34,8 +36,10 @@ The main remaining work item is real provider-backed validation.
 
 Specifically:
 
+- run `python scripts/control_plane_preflight.py`
 - expose the local server with `ngrok` or equivalent
 - register the public callback URL in the GitHub OAuth app
+- set the GitHub App setup URL to `/app/setup/install/callback` when supported
 - point the GitHub App webhook to the public URL
 - forward Stripe test-mode events to `/webhooks/stripe`
 - walk the full login -> workspace -> checkout -> install -> repo allocation -> dashboard flow with real providers

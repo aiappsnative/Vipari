@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import hashlib
 import hmac
+import json
 import re
 import sqlite3
 import time
@@ -8,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -113,6 +116,8 @@ AUDIT_WORKER_POLL_SECONDS = settings.audit_worker_poll_seconds
 PR_DIFF_FETCH_ATTEMPTS = settings.pr_diff_fetch_attempts
 PR_DIFF_FETCH_RETRY_SECONDS = settings.pr_diff_fetch_retry_seconds
 CONTROL_PLANE_OAUTH_STATE_COOKIE = "promptdrift_oauth_state"
+CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
+CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
 worker: AuditWorker | None = None
@@ -244,6 +249,206 @@ def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
     )
 
 
+def _set_context_cookie(response: RedirectResponse, name: str, payload: dict[str, object], *, max_age: int = 1800) -> None:
+    response.set_cookie(
+        name,
+        _encode_context_cookie(payload),
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        max_age=max_age,
+    )
+
+
+def _normalize_source_hint(value: str | None) -> str | None:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[a-z0-9_-]{1,40}", normalized):
+        return None
+    return normalized
+
+
+def _normalize_plan_hint(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return get_plan_definition(candidate).code
+    except ValueError:
+        return None
+
+
+def _encode_context_cookie(payload: dict[str, object]) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+
+def _decode_context_cookie(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        decoded = base64.urlsafe_b64decode(value.encode("utf-8")).decode("utf-8")
+        payload = json.loads(decoded)
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _flow_context_from_request(request: Request) -> dict[str, str]:
+    cookie_payload = _decode_context_cookie(request.cookies.get(CONTROL_PLANE_OAUTH_CONTEXT_COOKIE))
+    source = _normalize_source_hint(request.query_params.get("source")) or _normalize_source_hint(str(cookie_payload.get("source") or ""))
+    plan = _normalize_plan_hint(request.query_params.get("plan")) or _normalize_plan_hint(str(cookie_payload.get("plan") or ""))
+    context: dict[str, str] = {}
+    if source:
+        context["source"] = source
+    if plan:
+        context["plan"] = plan
+    return context
+
+
+def _pending_install_context_from_request(request: Request) -> dict[str, object]:
+    payload = _decode_context_cookie(request.cookies.get(CONTROL_PLANE_PENDING_INSTALL_COOKIE))
+    installation_id = payload.get("installation_id")
+    workspace_id = payload.get("workspace_id")
+    setup_action = payload.get("setup_action")
+    context: dict[str, object] = {}
+    if isinstance(installation_id, int) or (isinstance(installation_id, str) and str(installation_id).isdigit()):
+        context["installation_id"] = int(installation_id)
+    if isinstance(workspace_id, int) or (isinstance(workspace_id, str) and str(workspace_id).isdigit()):
+        context["workspace_id"] = int(workspace_id)
+    if isinstance(setup_action, str) and setup_action.strip():
+        context["setup_action"] = setup_action.strip()
+    return context
+
+
+def _flow_query_string(flow_context: dict[str, str]) -> str:
+    if not flow_context:
+        return ""
+    return urlencode(flow_context)
+
+
+def _path_with_flow_context(base_path: str, flow_context: dict[str, str]) -> str:
+    query = _flow_query_string(flow_context)
+    if not query:
+        return base_path
+    separator = "&" if "?" in base_path else "?"
+    return f"{base_path}{separator}{query}"
+
+
+def _auth_start_url(flow_context: dict[str, str]) -> str:
+    return _path_with_flow_context("/auth/github/start", flow_context)
+
+
+def _workspace_new_url(flow_context: dict[str, str]) -> str:
+    return _path_with_flow_context("/app/workspaces/new", flow_context)
+
+
+def _billing_url(flow_context: dict[str, str]) -> str:
+    return _path_with_flow_context("/app/billing", flow_context)
+
+
+def _install_url(flow_context: dict[str, str]) -> str:
+    return _path_with_flow_context("/app/setup/install", flow_context)
+
+
+def _resume_destination_for_session(session, flow_context: dict[str, str]) -> str:
+    if session.workspace_id is None:
+        return _workspace_new_url(flow_context)
+    access_context = _build_access_context(session)
+    if flow_context.get("plan") and access_context.get("subscription") is None:
+        return _billing_url(flow_context)
+    if access_context.get("installation") is None and access_context["resolution"].state == "awaiting_github_install":
+        return _install_url(flow_context)
+    return _path_with_flow_context("/app", flow_context)
+
+
+def _coerce_workspace_hint(value: str | None) -> int | None:
+    if not value or not str(value).isdigit():
+        return None
+    parsed = int(value)
+    return parsed if parsed > 0 else None
+
+
+def _switch_session_workspace_if_allowed(session, workspace_id: int | None):
+    if session is None or workspace_id is None or session.workspace_id == workspace_id:
+        return session
+    membership = get_workspace_membership(AUDIT_DB_PATH, workspace_id, session.user_id)
+    if membership is None:
+        return session
+    update_session_workspace(AUDIT_DB_PATH, session.session_id, workspace_id)
+    return get_user_session(AUDIT_DB_PATH, session.session_id)
+
+
+def _link_installation_to_workspace(
+    *,
+    workspace_id: int,
+    installation_id: int,
+    account_login: str = "",
+    account_type: str = "Organization",
+    repo_fulls: str = "",
+) -> None:
+    repositories: list[dict[str, object]] = []
+    account_id = account_login or str(installation_id)
+    target_type = account_type or "Organization"
+
+    if repo_fulls.strip():
+        for repo_full in [value.strip() for value in repo_fulls.replace("\n", ",").split(",") if value.strip()]:
+            repositories.append(
+                {
+                    "repo_github_id": repo_full,
+                    "repo_full": repo_full,
+                    "default_branch": "main",
+                    "is_private": True,
+                    "status": "available",
+                }
+            )
+    elif settings.has_github_app_credentials:
+        installation_payload, repositories = sync_installation_repositories(
+            app_id=settings.github_app_id,
+            private_key_path=settings.github_private_key_path,
+            private_key=settings.resolved_github_private_key,
+            installation_id=installation_id,
+        )
+        account = installation_payload.get("account") if isinstance(installation_payload, dict) else {}
+        if isinstance(account, dict):
+            account_login = str(account.get("login") or account_login)
+            account_id = str(account.get("id") or account_id)
+            account_type = str(account.get("type") or account_type)
+        target_type = str(installation_payload.get("target_type") or target_type)
+
+    upsert_github_installation(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        installation_id=installation_id,
+        account_id=account_id,
+        account_login=account_login or str(installation_id),
+        account_type=account_type or "Organization",
+        target_type=target_type,
+    )
+    replace_repo_connections(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        installation_id=installation_id,
+        repositories=repositories,
+    )
+
+
+def _redirect_with_pending_install(request: Request, *, installation_id: int, workspace_id: int | None, setup_action: str | None) -> RedirectResponse:
+    response = RedirectResponse(_auth_start_url(_flow_context_from_request(request)), status_code=303)
+    _set_context_cookie(
+        response,
+        CONTROL_PLANE_PENDING_INSTALL_COOKIE,
+        {
+            "installation_id": installation_id,
+            "workspace_id": workspace_id,
+            "setup_action": setup_action or "install",
+        },
+        max_age=1800,
+    )
+    return response
+
+
 def _workspace_slug_candidates(name: str) -> list[str]:
     base = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-") or "workspace"
     return [base, f"{base}-{int(time.time())}"]
@@ -282,12 +487,26 @@ async def pricing_page():
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page():
-    return HTMLResponse(render_control_plane_login_page())
+async def login_page(request: Request):
+    flow_context = _flow_context_from_request(request)
+    selected_plan = flow_context.get("plan")
+    source = flow_context.get("source")
+    context_note = None
+    if selected_plan and source:
+        context_note = f"Resuming the {selected_plan.title()} plan handoff from {source}."
+    elif selected_plan:
+        context_note = f"Resuming the {selected_plan.title()} plan handoff."
+    elif source:
+        context_note = f"Resuming the handoff from {source}."
+    return HTMLResponse(render_control_plane_login_page(auth_start_url=_auth_start_url(flow_context), context_note=context_note))
 
 
 @app.get("/auth/github/start")
 async def github_auth_start(request: Request):
+    existing_session = _get_session(request)
+    flow_context = _flow_context_from_request(request)
+    if existing_session is not None:
+        return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
     if not settings.has_github_oauth_credentials:
         raise HTTPException(status_code=503, detail="GitHub OAuth is not configured.")
     state = generate_oauth_state()
@@ -297,6 +516,8 @@ async def github_auth_start(request: Request):
         state,
     )
     response = RedirectResponse(authorize_url, status_code=302)
+    if flow_context:
+        _set_context_cookie(response, CONTROL_PLANE_OAUTH_CONTEXT_COOKIE, flow_context, max_age=1800)
     response.set_cookie(
         CONTROL_PLANE_OAUTH_STATE_COOKIE,
         state,
@@ -309,10 +530,27 @@ async def github_auth_start(request: Request):
 
 
 @app.get("/auth/github/callback")
-async def github_auth_callback(request: Request, code: str, state: str):
+async def github_auth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    flow_context = _flow_context_from_request(request)
+    pending_install = _pending_install_context_from_request(request)
+    if error:
+        destination = _path_with_flow_context("/login", flow_context)
+        if error_description:
+            destination = _path_with_flow_context(destination, {"oauth_error": error})
+        response = RedirectResponse(destination, status_code=303)
+        response.delete_cookie(CONTROL_PLANE_OAUTH_STATE_COOKIE)
+        return response
     expected_state = request.cookies.get(CONTROL_PLANE_OAUTH_STATE_COOKIE)
-    if not expected_state or state != expected_state:
+    if not expected_state or not state or state != expected_state:
         raise HTTPException(status_code=400, detail="OAuth state validation failed.")
+    if not code:
+        raise HTTPException(status_code=400, detail="GitHub OAuth callback is missing the code parameter.")
 
     token: GithubOAuthToken = exchange_code_for_access_token(
         settings.github_oauth_client_id,
@@ -342,10 +580,26 @@ async def github_auth_callback(request: Request, code: str, state: str):
         csrf_secret=generate_csrf_secret(),
         expires_at=time.time() + settings.session_ttl_seconds,
     )
-    destination = "/app" if workspace_id else "/app/workspaces/new"
+    session = _switch_session_workspace_if_allowed(session, _coerce_workspace_hint(str(pending_install.get("workspace_id") or "")))
+    destination = _resume_destination_for_session(session, flow_context)
+    if pending_install and session.workspace_id is not None:
+        try:
+            access_context = _build_access_context(session)
+            _require_workspace_role(access_context, "owner", "admin")
+            _link_installation_to_workspace(
+                workspace_id=session.workspace_id,
+                installation_id=int(pending_install["installation_id"]),
+            )
+            destination = _path_with_flow_context(
+                f"/app/setup/repos?installation_linked=1&setup_action={pending_install.get('setup_action') or 'install'}",
+                flow_context,
+            )
+        except Exception:
+            destination = _path_with_flow_context("/app/setup/install?install_error=callback_link_failed", flow_context)
     response = RedirectResponse(destination, status_code=303)
     _set_session_cookie(response, session.session_id)
     response.delete_cookie(CONTROL_PLANE_OAUTH_STATE_COOKIE)
+    response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
     return response
 
 
@@ -375,7 +629,17 @@ async def control_plane_app_page_route(request: Request, state: str | None = Non
 async def workspace_new_page(request: Request):
     if _get_session(request) is None:
         return RedirectResponse("/login", status_code=303)
-    return HTMLResponse(render_control_plane_workspace_new_page())
+    flow_context = _flow_context_from_request(request)
+    selected_plan = flow_context.get("plan")
+    source = flow_context.get("source")
+    source_label = source.title() if source else None
+    selected_plan_label = get_plan_definition(selected_plan).label if selected_plan else None
+    return HTMLResponse(
+        render_control_plane_workspace_new_page(
+            selected_plan_label=selected_plan_label,
+            source_label=source_label,
+        )
+    )
 
 
 @app.post("/app/workspaces/bootstrap")
@@ -383,6 +647,8 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
     session = _get_session(request)
     if session is None:
         return RedirectResponse("/login", status_code=303)
+    flow_context = _flow_context_from_request(request)
+    pending_install = _pending_install_context_from_request(request)
     workspace_name = (name or request.query_params.get("name") or "DriftGuard Workspace").strip()
     for slug in _workspace_slug_candidates(workspace_name):
         try:
@@ -399,28 +665,45 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
         raise HTTPException(status_code=409, detail="Unable to create a unique workspace slug.")
 
     update_session_workspace(AUDIT_DB_PATH, session.session_id, workspace.id)
-    return RedirectResponse("/app", status_code=303)
+    if pending_install and pending_install.get("workspace_id") in (None, workspace.id):
+        try:
+            _link_installation_to_workspace(
+                workspace_id=workspace.id,
+                installation_id=int(pending_install["installation_id"]),
+            )
+            response = RedirectResponse(_path_with_flow_context("/app/setup/repos?installation_linked=1", flow_context), status_code=303)
+            response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
+            return response
+        except Exception:
+            return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=callback_link_failed", flow_context), status_code=303)
+    return RedirectResponse(_resume_destination_for_session(get_user_session(AUDIT_DB_PATH, session.session_id), flow_context), status_code=303)
 
 
 @app.get("/app/billing", response_class=HTMLResponse)
 async def billing_page(request: Request):
     access_context = _current_workspace_context(request)
+    flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     current_plan_label = get_plan_definition(plan_code).label if plan_code else "No plan"
+    selected_plan_code = _normalize_plan_hint(request.query_params.get("plan")) or plan_code
     portal_url = "/app/billing/portal" if customer else None
-    checkout_url = request.url.path
-    if request.url.query:
-        checkout_url = f"{checkout_url}?{request.url.query}"
+    checkout_status_note = None
+    if request.query_params.get("checkout_session_id"):
+        checkout_status_note = "Checkout returned to DriftGuard. Access remains pending until Stripe webhook confirmation arrives."
+    elif request.query_params.get("canceled"):
+        checkout_status_note = "Checkout was canceled before payment confirmation."
     return HTMLResponse(
         render_control_plane_billing_page(
             workspace_name=workspace.display_name,
             current_plan_label=current_plan_label,
             subscription_status=subscription.status if subscription else "not_started",
-            checkout_url=checkout_url,
+            selected_plan_code=selected_plan_code,
+            checkout_status_note=checkout_status_note,
+            flow_context=flow_context,
             portal_url=portal_url,
         )
     )
@@ -430,13 +713,16 @@ async def billing_page(request: Request):
 async def billing_checkout(request: Request, plan: str):
     access_context = _current_workspace_context(request)
     _require_workspace_role(access_context, "owner", "admin")
+    normalized_plan = _normalize_plan_hint(plan)
+    if normalized_plan is None:
+        raise HTTPException(status_code=400, detail="Unknown plan code.")
     workspace = access_context["workspace"]
     existing_customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
     checkout = create_checkout_session(
         settings=settings,
         workspace_id=workspace.id,
         workspace_slug=workspace.slug,
-        plan_code=plan,
+        plan_code=normalized_plan,
         stripe_customer_id=existing_customer.stripe_customer_id if existing_customer else None,
     )
     upsert_billing_customer(
@@ -480,6 +766,7 @@ async def billing_portal(request: Request):
 @app.get("/app/setup/install", response_class=HTMLResponse)
 async def install_page(request: Request):
     access_context = _current_workspace_context(request)
+    flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     installation = access_context["installation"]
     install_url = None
@@ -496,14 +783,62 @@ async def install_page(request: Request):
     installation_summary = (
         f"Connected installation {installation.account_login} ({installation.account_type})." if installation else "No GitHub App installation is linked yet."
     )
+    install_hint = "Billing is active. The next gate is granting GitHub App installation authority."
+    if request.query_params.get("installation_linked"):
+        install_hint = "GitHub installation linked successfully. Review the synced repositories below."
+    elif request.query_params.get("install_error"):
+        install_hint = "GitHub installation completed, but DriftGuard could not finish linking it automatically. Use the manual fallback form below."
     return HTMLResponse(
         render_control_plane_install_page(
             workspace_name=workspace.display_name,
-            install_hint="Billing is active. The next gate is granting GitHub App installation authority.",
+            install_hint=install_hint,
             installation_summary=installation_summary,
             install_url=install_url,
+            install_callback_url=_path_with_flow_context("/app/setup/install/callback", flow_context),
         )
     )
+
+
+@app.get("/app/setup/install/callback")
+async def install_callback(
+    request: Request,
+    installation_id: str,
+    setup_action: str | None = None,
+    state: str | None = None,
+):
+    if not installation_id.isdigit():
+        raise HTTPException(status_code=400, detail="Installation callback is missing a valid installation id.")
+    installation_id_int = int(installation_id)
+    workspace_hint = _coerce_workspace_hint(state)
+    session = _switch_session_workspace_if_allowed(_get_session(request), workspace_hint)
+    if session is None:
+        return _redirect_with_pending_install(
+            request,
+            installation_id=installation_id_int,
+            workspace_id=workspace_hint,
+            setup_action=setup_action,
+        )
+    access_context = _build_access_context(session)
+    if access_context.get("workspace") is None:
+        response = RedirectResponse(_workspace_new_url(_flow_context_from_request(request)), status_code=303)
+        _set_context_cookie(
+            response,
+            CONTROL_PLANE_PENDING_INSTALL_COOKIE,
+            {"installation_id": installation_id_int, "workspace_id": workspace_hint, "setup_action": setup_action or "install"},
+            max_age=1800,
+        )
+        return response
+    _require_workspace_role(access_context, "owner", "admin")
+    _link_installation_to_workspace(workspace_id=access_context["workspace"].id, installation_id=installation_id_int)
+    response = RedirectResponse(
+        _path_with_flow_context(
+            f"/app/setup/repos?installation_linked=1&setup_action={setup_action or 'install'}",
+            _flow_context_from_request(request),
+        ),
+        status_code=303,
+    )
+    response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
+    return response
 
 
 @app.post("/app/setup/install/link")
@@ -517,50 +852,15 @@ async def install_link(
     access_context = _current_workspace_context(request)
     _require_workspace_role(access_context, "owner", "admin")
     workspace = access_context["workspace"]
+    if not installation_id.isdigit():
+        raise HTTPException(status_code=400, detail="A valid installation id is required.")
     installation_id_int = int(installation_id)
-    repositories: list[dict[str, object]] = []
-    account_id = account_login or str(installation_id_int)
-    target_type = account_type or "Organization"
-
-    if repo_fulls.strip():
-        for repo_full in [value.strip() for value in repo_fulls.replace("\n", ",").split(",") if value.strip()]:
-            repositories.append(
-                {
-                    "repo_github_id": repo_full,
-                    "repo_full": repo_full,
-                    "default_branch": "main",
-                    "is_private": True,
-                    "status": "available",
-                }
-            )
-    elif settings.has_github_app_credentials:
-        installation_payload, repositories = sync_installation_repositories(
-            app_id=settings.github_app_id,
-            private_key_path=settings.github_private_key_path,
-            private_key=settings.resolved_github_private_key,
-            installation_id=installation_id_int,
-        )
-        account = installation_payload.get("account") if isinstance(installation_payload, dict) else {}
-        if isinstance(account, dict):
-            account_login = str(account.get("login") or account_login)
-            account_id = str(account.get("id") or account_id)
-            account_type = str(account.get("type") or account_type)
-        target_type = str(installation_payload.get("target_type") or target_type)
-
-    upsert_github_installation(
-        AUDIT_DB_PATH,
+    _link_installation_to_workspace(
         workspace_id=workspace.id,
         installation_id=installation_id_int,
-        account_id=account_id,
-        account_login=account_login or str(installation_id_int),
-        account_type=account_type or "Organization",
-        target_type=target_type,
-    )
-    replace_repo_connections(
-        AUDIT_DB_PATH,
-        workspace_id=workspace.id,
-        installation_id=installation_id_int,
-        repositories=repositories,
+        account_login=account_login,
+        account_type=account_type,
+        repo_fulls=repo_fulls,
     )
     return RedirectResponse("/app/setup/repos", status_code=303)
 

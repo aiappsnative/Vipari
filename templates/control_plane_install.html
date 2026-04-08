@@ -23,6 +23,13 @@
                 <h2>Grant repository visibility</h2>
                 <p>DriftGuard needs GitHub App installation authority before repositories can be allocated to the paid workspace.</p>
                 {{INSTALL_ACTION}}
+                <p class="page-note">If the GitHub App is configured with a setup URL, point it to {{INSTALL_CALLBACK_URL}} so installation completion lands back in DriftGuard automatically.</p>
+            </article>
+            <article class="action-card">
+                <div class="eyebrow">Manual fallback</div>
+                <h2>Link installation manually</h2>
+                <p>Use this when GitHub cannot return directly to DriftGuard or when you want to seed repository connections during local testing.</p>
+                {{MANUAL_LINK_FORM}}
             </article>
         </section>
     </main>

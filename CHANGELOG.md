@@ -8,6 +8,8 @@
 - setup-aware customer pages for landing, login, pricing, billing, install flow, repo setup, and access-state shells
 - Stripe checkout, billing portal, webhook verification, and entitlement projection support
 - GitHub App install linkage and repository allocation flow that hands selected repos into the existing onboarding engine
+- Base44 handoff context passthrough plus GitHub App setup callback handling for smoother provider-backed integration
+- a dedicated `scripts/control_plane_preflight.py` helper for live setup readiness checks
 - focused regression coverage for control-plane records, auth, billing, GitHub provisioning, access-state resolution, and route/UI flows
 - architecture, state-model, issue-analysis, and handoff docs for the Base44 -> DriftGuard -> Stripe -> GitHub App integration slice
 
@@ -18,8 +20,8 @@
 - README and roadmap documentation now describe the control-plane validation path and restart context for the active branch
 
 ### Verified
-- focused control-plane UI suite passed locally (`11 passed`)
-- full automated suite passed locally (`148 passed`)
+- focused control-plane UI suite passed locally (`15 passed`)
+- full automated suite passed locally (`152 passed`)
 - live local smoke validation confirmed control-plane landing/login/pricing routes and unauthenticated app redirect behavior
 
 ### Product impact

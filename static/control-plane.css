@@ -231,6 +231,15 @@ button.button {
     background: rgba(255, 255, 255, 0.8);
 }
 
+.field-input-area {
+    min-height: 110px;
+    resize: vertical;
+}
+
+.action-form {
+    display: block;
+}
+
 @media (max-width: 720px) {
     .hero-panel,
     .simple-panel,
