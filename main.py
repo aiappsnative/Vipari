@@ -58,6 +58,7 @@ from services.control_plane_frontend import (
 from services.control_plane_records import (
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
+    get_billing_customer_by_stripe_customer_id,
     count_workspace_repo_allocations,
     count_workspaces,
     create_billing_handoff_claim,
@@ -76,6 +77,7 @@ from services.control_plane_records import (
     get_workspace_installation,
     get_workspace_membership,
     get_workspace_subscription,
+    get_subscription_by_stripe_subscription_id,
     has_processed_webhook_event,
     list_admin_workspace_users,
     list_billing_handoff_claims,
@@ -1610,6 +1612,33 @@ def _parse_github_timestamp(value: str | None) -> float | None:
         return None
 
 
+def _resolve_stripe_workspace_id(projection: dict[str, object]) -> int:
+    projected_workspace_id = int(projection["workspace_id"])
+    resolved_workspace_ids: set[int] = set()
+
+    stripe_customer_id = str(projection.get("stripe_customer_id") or "")
+    if stripe_customer_id:
+        customer = get_billing_customer_by_stripe_customer_id(AUDIT_DB_PATH, stripe_customer_id)
+        if customer is not None:
+            resolved_workspace_ids.add(customer.workspace_id)
+
+    stripe_subscription_id = str(projection.get("stripe_subscription_id") or "")
+    if stripe_subscription_id:
+        subscription = get_subscription_by_stripe_subscription_id(AUDIT_DB_PATH, stripe_subscription_id)
+        if subscription is not None:
+            resolved_workspace_ids.add(subscription.workspace_id)
+
+    if not resolved_workspace_ids:
+        raise ValueError("Stripe webhook event could not be matched to an existing workspace billing record.")
+    if len(resolved_workspace_ids) != 1:
+        raise ValueError("Stripe webhook event resolved to conflicting workspace billing records.")
+
+    resolved_workspace_id = next(iter(resolved_workspace_ids))
+    if projected_workspace_id != resolved_workspace_id:
+        raise ValueError("Stripe webhook workspace metadata does not match the stored billing owner.")
+    return resolved_workspace_id
+
+
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request):
     if not settings.stripe_webhook_secret:
@@ -1638,16 +1667,18 @@ async def stripe_webhook(request: Request):
                 )
             return JSONResponse({"status": "ignored"})
 
+        resolved_workspace_id = _resolve_stripe_workspace_id(projection)
+
         if projection["stripe_customer_id"]:
             upsert_billing_customer(
                 AUDIT_DB_PATH,
-                workspace_id=projection["workspace_id"],
+                workspace_id=resolved_workspace_id,
                 stripe_customer_id=projection["stripe_customer_id"],
                 billing_email=projection["billing_email"],
             )
         upsert_subscription(
             AUDIT_DB_PATH,
-            workspace_id=projection["workspace_id"],
+            workspace_id=resolved_workspace_id,
             stripe_subscription_id=str(projection["stripe_subscription_id"] or event_id or "stripe-event"),
             stripe_price_id=str(projection["stripe_price_id"] or ""),
             plan_code=str(projection["plan_code"]),
@@ -1661,7 +1692,7 @@ async def stripe_webhook(request: Request):
         )
         upsert_entitlement(
             AUDIT_DB_PATH,
-            workspace_id=projection["workspace_id"],
+            workspace_id=resolved_workspace_id,
             payload=projection["entitlement"],
         )
         if event_id:

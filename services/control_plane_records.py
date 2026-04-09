@@ -1138,6 +1138,12 @@ def get_billing_customer_for_workspace(db_path: str, workspace_id: int) -> Billi
     return _row_to_billing_customer(row) if row else None
 
 
+def get_billing_customer_by_stripe_customer_id(db_path: str, stripe_customer_id: str) -> BillingCustomerRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM billing_customers WHERE stripe_customer_id = ?", (stripe_customer_id,)).fetchone()
+    return _row_to_billing_customer(row) if row else None
+
+
 def get_billing_handoff_claim_by_token(db_path: str, claim_token: str) -> BillingHandoffClaimRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM billing_handoff_claims WHERE claim_token = ?", (claim_token,)).fetchone()
@@ -1302,6 +1308,12 @@ def upsert_subscription(
         ).fetchone()
         _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_subscription(row)
+
+
+def get_subscription_by_stripe_subscription_id(db_path: str, stripe_subscription_id: str) -> SubscriptionRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM subscriptions WHERE stripe_subscription_id = ?", (stripe_subscription_id,)).fetchone()
+    return _row_to_subscription(row) if row else None
 
 
 def upsert_entitlement(db_path: str, *, workspace_id: int, payload: dict[str, object]) -> EntitlementRecord:

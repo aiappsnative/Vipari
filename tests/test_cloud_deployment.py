@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import sys
+import time
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
@@ -16,8 +17,19 @@ from services.audit_jobs import create_audit_job, init_db
 from services.audit_records import record_audit_result
 from services.cloud_worker import _process_message
 from services.observability import configure_logging
+from services.control_plane_records import (
+    allocate_repo_to_workspace,
+    create_workspace,
+    init_control_plane_db,
+    update_repo_allocation_status,
+    upsert_entitlement,
+    upsert_github_identity,
+    upsert_github_installation,
+)
+from services.entitlements import derive_entitlement_payload
 from services.queue import LocalSQLiteQueue
 from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
+from services.webhook_deliveries import claim_webhook_delivery, init_webhook_delivery_db
 from services.webhook_service import create_webhook_app
 from services.api_service import create_api_app
 
@@ -135,6 +147,23 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
 
 
+def test_stale_processing_delivery_can_be_reclaimed(tmp_path):
+    db_path = str(tmp_path / "webhook-stale.db")
+    init_webhook_delivery_db(db_path)
+
+    queue = LocalSQLiteQueue(db_path)
+    with queue._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO webhook_deliveries (delivery_id, received_at, event_type, enqueued, status)
+            VALUES (?, ?, ?, 0, 'processing')
+            """,
+            ("delivery-stale", time.time() - 601, "pull_request"),
+        )
+
+    assert claim_webhook_delivery(db_path, "delivery-stale", "pull_request") is True
+
+
 def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
     db_path = str(tmp_path / "worker.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -180,6 +209,74 @@ def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
                 "repo_full": "doria90/dummyAI",
                 "pr_number": 9,
                 "head_sha": "sha-9",
+            }
+        )
+        message = (await queue.dequeue(1))[0]
+        await _process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock())
+        assert await queue.dequeue(1) == []
+
+    with patch("services.cloud_worker.fetch_diff_with_retry") as fetch_diff:
+        asyncio.run(exercise_worker())
+    fetch_diff.assert_not_called()
+
+
+def test_worker_skips_message_for_inactive_allocation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-control-plane.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "/tmp/test-key.pem")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    _reset_settings_cache()
+    init_control_plane_db(db_path)
+
+    user, _ = upsert_github_identity(
+        db_path,
+        github_user_id="123",
+        github_login="reviewer",
+        display_name="Reviewer",
+        primary_email="reviewer@example.com",
+        avatar_url=None,
+        granted_scopes=["repo"],
+        access_token_encrypted="token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="secure-workspace",
+        display_name="Secure Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_entitlement(db_path, workspace_id=workspace.id, payload=derive_entitlement_payload("team", "active"))
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-1",
+        account_login="reviewer",
+        account_type="User",
+        target_type="User",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="repo-1",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "inactive")
+
+    queue = LocalSQLiteQueue(db_path)
+
+    async def exercise_worker():
+        await queue.enqueue(
+            {
+                "action": "opened",
+                "installation_id": 123,
+                "repo_full": "doria90/dummyAI",
+                "pr_number": 10,
+                "head_sha": "sha-10",
             }
         )
         message = (await queue.dequeue(1))[0]

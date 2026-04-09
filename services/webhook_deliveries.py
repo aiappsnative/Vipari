@@ -8,6 +8,8 @@ from .persistence import connect_sqlite
 DELIVERY_TTL_HOURS = 48
 # Keep delivery dedupe records for two days so repeated GitHub redeliveries are ignored during retries/debugging.
 DELIVERY_TTL_SECONDS = DELIVERY_TTL_HOURS * 60 * 60
+PROCESSING_RECLAIM_MINUTES = 10
+PROCESSING_RECLAIM_SECONDS = PROCESSING_RECLAIM_MINUTES * 60
 
 
 def init_webhook_delivery_db(db_path: str) -> None:
@@ -34,6 +36,7 @@ def init_webhook_delivery_db(db_path: str) -> None:
 def claim_webhook_delivery(db_path: str, delivery_id: str, event_type: str) -> bool:
     init_webhook_delivery_db(db_path)
     now = time.time()
+    reclaim_before = now - PROCESSING_RECLAIM_SECONDS
     with connect_sqlite(db_path) as conn:
         inserted = conn.execute(
             """
@@ -54,10 +57,13 @@ def claim_webhook_delivery(db_path: str, delivery_id: str, event_type: str) -> b
                 event_type = ?,
                 status = 'processing'
             WHERE delivery_id = ?
-              AND status = 'pending'
+                            AND (
+                                        status = 'pending'
+                                        OR (status = 'processing' AND received_at <= ?)
+                            )
             RETURNING delivery_id
             """,
-            (now, event_type, delivery_id),
+                        (now, event_type, delivery_id, reclaim_before),
         ).fetchone()
     return reclaimed is not None
 

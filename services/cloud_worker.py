@@ -13,6 +13,7 @@ from .audit_jobs import claim_job_by_id, create_audit_job, get_job, init_db
 from .audit_records import has_completed_audit
 from .audit_worker import WorkerSettings, process_job
 from .cloud_common import fetch_diff_with_retry, is_transient_error, needs_audit
+from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_entitlement
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, SQSQueue
@@ -63,11 +64,43 @@ async def _update_queue_depth(queue: QueueBackend) -> None:
         QUEUE_DEPTH.set(await queue.depth())  # type: ignore[attr-defined]
 
 
+def _control_plane_active(db_path: str) -> bool:
+    try:
+        return count_workspaces(db_path) > 0
+    except Exception:
+        return False
+
+
+def _message_still_authorized(payload: dict[str, object], settings: Settings) -> bool:
+    if not _control_plane_active(settings.resolved_db_path):
+        return True
+
+    allocation = get_repo_allocation_for_installation(
+        settings.resolved_db_path,
+        int(payload["installation_id"]),
+        str(payload["repo_full"]),
+    )
+    if allocation is None:
+        return False
+
+    entitlement = get_workspace_entitlement(settings.resolved_db_path, allocation.workspace_id)
+    return entitlement is not None and bool(entitlement.pr_comments_enabled)
+
+
 async def _process_message(queue: QueueBackend, message: QueueMessage, settings: Settings, logger, llm_client) -> None:
     payload = message.payload
     repo_full = payload["repo_full"]
     pr_number = payload["pr_number"]
     head_sha = payload.get("head_sha")
+
+    if not _message_still_authorized(payload, settings):
+        JOBS_PROCESSED.labels(status="skipped").inc()
+        logger.info(
+            "Skipped queued message after allocation or entitlement changed",
+            extra={"repo": repo_full, "pr_number": pr_number, "installation_id": payload["installation_id"]},
+        )
+        await queue.ack(message.receipt_handle)
+        return
 
     if head_sha and has_completed_audit(settings.resolved_db_path, repo_full=repo_full, pr_number=pr_number, head_sha=head_sha):
         JOBS_PROCESSED.labels(status="skipped").inc()

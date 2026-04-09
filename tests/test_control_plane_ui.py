@@ -1092,7 +1092,13 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     main.AUDIT_DB_PATH = str(tmp_path / "control-plane-flow.db")
     main.init_db(main.AUDIT_DB_PATH)
 
-    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        get_billing_customer_for_workspace,
+        get_workspace_subscription,
+        upsert_github_identity,
+    )
 
     user, _identity = upsert_github_identity(
         main.AUDIT_DB_PATH,
@@ -1143,13 +1149,18 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         ).json()
         assert access_after_checkout["access"]["state"] == "billing_pending_confirmation"
 
+        customer = get_billing_customer_for_workspace(main.AUDIT_DB_PATH, workspace.id)
+        subscription = get_workspace_subscription(main.AUDIT_DB_PATH, workspace.id)
+        assert customer is not None
+        assert subscription is not None
+
         stripe_event = {
             "id": "evt_subscription_active",
             "type": "customer.subscription.updated",
             "data": {
                 "object": {
-                    "id": "sub_team_active",
-                    "customer": "cus_team_active",
+                    "id": subscription.stripe_subscription_id,
+                    "customer": customer.stripe_customer_id,
                     "status": "active",
                     "cancel_at_period_end": False,
                     "current_period_start": int(time.time()),
@@ -1165,11 +1176,12 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         }
         stripe_payload = json.dumps(stripe_event).encode("utf-8")
         stripe_signature = build_stripe_signature(stripe_payload, "whsec_test")
-        webhook_response = client.post(
-            "/webhooks/stripe",
-            content=stripe_payload,
-            headers={"Stripe-Signature": stripe_signature, "Content-Type": "application/json"},
-        )
+        with TestClient(main.app, raise_server_exceptions=False) as non_raising_client:
+            webhook_response = non_raising_client.post(
+                "/webhooks/stripe",
+                content=stripe_payload,
+                headers={"Stripe-Signature": stripe_signature, "Content-Type": "application/json"},
+            )
 
     assert webhook_response.status_code == 200
     assert webhook_response.json()["status"] == "processed"
@@ -1235,6 +1247,100 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert dashboard_response.status_code == 200
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_stripe_webhook_rejects_workspace_metadata_mismatch(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "stripe-mismatch.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        get_billing_customer_for_workspace,
+        get_workspace_subscription,
+        upsert_github_identity,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="801",
+        github_login="workspace-owner",
+        display_name="Workspace Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="workspace-a",
+        display_name="Workspace A",
+        billing_owner_user_id=user.id,
+    )
+    other_workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="workspace-b",
+        display_name="Workspace B",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="workspace-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch.object(main.settings, "stripe_webhook_secret", "whsec_test"):
+        checkout_response = client.post(
+            "/app/billing/checkout?plan=team",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
+            follow_redirects=False,
+        )
+
+        assert checkout_response.status_code == 303
+
+        customer = get_billing_customer_for_workspace(main.AUDIT_DB_PATH, workspace.id)
+        subscription = get_workspace_subscription(main.AUDIT_DB_PATH, workspace.id)
+        assert customer is not None
+        assert subscription is not None
+
+        stripe_event = {
+            "id": "evt_workspace_mismatch",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": subscription.stripe_subscription_id,
+                    "customer": customer.stripe_customer_id,
+                    "status": "active",
+                    "cancel_at_period_end": False,
+                    "current_period_start": int(time.time()),
+                    "current_period_end": int(time.time()) + 86400,
+                    "metadata": {
+                        "workspace_id": str(other_workspace.id),
+                        "plan_code": "team",
+                        "price_id": "price_team",
+                        "billing_email": "owner@example.com",
+                    },
+                }
+            },
+        }
+        stripe_payload = json.dumps(stripe_event).encode("utf-8")
+        stripe_signature = build_stripe_signature(stripe_payload, "whsec_test")
+        with TestClient(main.app, raise_server_exceptions=False) as non_raising_client:
+            webhook_response = non_raising_client.post(
+                "/webhooks/stripe",
+                content=stripe_payload,
+                headers={"Stripe-Signature": stripe_signature, "Content-Type": "application/json"},
+            )
+
+    assert webhook_response.status_code == 500
+    assert get_workspace_subscription(main.AUDIT_DB_PATH, other_workspace.id) is None
 
     main.AUDIT_DB_PATH = original_db_path
 
