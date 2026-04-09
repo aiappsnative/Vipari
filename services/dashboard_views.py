@@ -3,7 +3,8 @@ from __future__ import annotations
 import difflib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from .baseline_provenance import (
@@ -29,6 +30,7 @@ from .onboarding_records import (
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
 )
+from .persistence import connect_sqlite
 
 
 @dataclass(frozen=True)
@@ -383,6 +385,8 @@ class RepoDashboardView:
     history_cues: list[RepoHistoryCue] = None
     design_profiles: list[RepoArtifactDesignProfile] = None
     artifacts: list[RepoDashboardArtifactEntry] = None
+    journey_snapshots: list[dict[str, Any]] = None
+    journey_comparison: dict[str, Any] | None = None
 
 
 def list_repo_dashboard_index(
@@ -420,7 +424,7 @@ def build_dashboard_overview_view(
         repo_scope_by_full=repo_scope_by_full,
         allocation_status_by_full=allocation_status_by_full,
     )
-    repo_views = [build_repo_dashboard_view(db_path, repo.repo_full) for repo in repos]
+    repo_views = [build_repo_dashboard_view(db_path, repo.repo_full, include_journey=False) for repo in repos]
 
     total_artifacts = sum(repo.discovered_artifact_count for repo in repos)
     total_backfill_jobs = sum(view.backfill.job_count for view in repo_views)
@@ -479,11 +483,15 @@ def build_dashboard_overview_view(
     )
 
 
-def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView:
+def build_repo_dashboard_view(db_path: str, repo_full: str, *, include_journey: bool = True) -> RepoDashboardView:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
     drift_summary = get_repo_static_drift_summary(db_path, repo_full)
     top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
     pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
+    journey_snapshots: list[dict[str, Any]] = []
+    journey_comparison: dict[str, Any] | None = None
+    if include_journey:
+        journey_snapshots, journey_comparison = _build_repo_journey_panel(db_path, repo_full)
 
     if onboarding is None:
         return RepoDashboardView(
@@ -510,6 +518,8 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
             history_cues=[],
             design_profiles=[],
             artifacts=[],
+            journey_snapshots=journey_snapshots,
+            journey_comparison=journey_comparison,
         )
 
     artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
@@ -601,13 +611,25 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
         history_cues=history_cues,
         design_profiles=design_profiles,
         artifacts=artifact_entries,
+        journey_snapshots=journey_snapshots,
+        journey_comparison=journey_comparison,
     )
 
 
+def _build_repo_journey_panel(db_path: str, repo_full: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    from .repo_journey import build_repo_journey, compare_repo_snapshots, snapshot_to_public_payload
+
+    snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
+    baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
+    current_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "current"), None)
+    comparison = None
+    if baseline_snapshot is not None and current_snapshot is not None and baseline_snapshot["id"] != current_snapshot["id"]:
+        comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
+    return snapshots, comparison
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    return connection
+    return connect_sqlite(db_path)
 
 
 def _empty_artifact_metrics() -> dict[str, float | int]:

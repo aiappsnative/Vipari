@@ -79,10 +79,12 @@ def init_db(db_path: str) -> None:
     from .audit_records import init_audit_record_db
     from .control_plane_records import init_control_plane_db
     from .onboarding_records import init_onboarding_record_db
+    from .repo_journey_records import init_repo_journey_db
 
     init_audit_record_db(db_path)
     init_onboarding_record_db(db_path)
     init_control_plane_db(db_path)
+    init_repo_journey_db(db_path)
     init_persistence_metadata(db_path)
 
 

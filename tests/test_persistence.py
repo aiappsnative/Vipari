@@ -20,8 +20,9 @@ def test_init_db_persists_backend_metadata_and_table_groups(tmp_path):
     assert "audit_jobs" in status.operational_tables
     assert "pull_request_audits" in status.durable_tables
     assert "historical_static_profiles" in status.durable_tables
+    assert "repo_posture_snapshots" in status.durable_tables
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT backend, schema_version FROM persistence_metadata WHERE id = 1").fetchone()
 
-    assert row == ("sqlite", 2)
+    assert row == ("sqlite", 3)

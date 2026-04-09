@@ -17,6 +17,7 @@ from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
+from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .audit_jobs import init_db
 
 
@@ -80,24 +81,24 @@ def create_api_app() -> FastAPI:
         return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(db_path)]})
 
     @app.get("/api/dashboard/overview")
-    async def dashboard_overview(request: Request):
+    def dashboard_overview(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_dashboard_overview_view(db_path)))
 
     @app.get("/api/persistence")
-    async def persistence_status(request: Request):
+    def persistence_status(request: Request):
         _require_admin_token(request, settings)
         payload = asdict(get_persistence_status(db_path))
         payload.pop("database_path", None)
         return JSONResponse(payload)
 
     @app.get("/api/repos/{repo_full:path}/dashboard")
-    async def repo_dashboard(repo_full: str, request: Request):
+    def repo_dashboard(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
 
     @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
-    async def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
+    def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
         _require_admin_token(request, settings)
         storyline = build_repo_artifact_storyline(db_path, repo_full, artifact_path)
         if storyline is None:
@@ -109,6 +110,33 @@ def create_api_app() -> FastAPI:
                 "storyline": asdict(storyline),
             }
         )
+
+    @app.get("/api/repos/{repo_full:path}/journey")
+    def repo_journey(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
+        return JSONResponse(
+            {
+                "repo_full": repo_full,
+                "snapshots": [snapshot_to_public_payload(item) for item in build_repo_journey(db_path, repo_full)],
+            }
+        )
+
+    @app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
+    def repo_snapshot_detail(repo_full: str, snapshot_id: int, request: Request):
+        _require_admin_token(request, settings)
+        snapshot = get_repo_snapshot_detail(db_path, repo_full, snapshot_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Repo posture snapshot was not found.")
+        return JSONResponse({"repo_full": repo_full, "snapshot": snapshot_to_public_payload(snapshot)})
+
+    @app.get("/api/repos/{repo_full:path}/compare")
+    def repo_snapshot_compare(repo_full: str, left: int, right: int, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            comparison = compare_repo_snapshots(db_path, repo_full, left, right)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(asdict(comparison))
 
     @app.post("/api/repos/{repo_full:path}/onboard")
     async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):
@@ -175,6 +203,7 @@ def create_api_app() -> FastAPI:
         baseline = promote_latest_source_to_onboarding_baseline(db_path, repo_full, artifact_path)
         if baseline is None:
             raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
+        build_repo_journey(db_path, repo_full)
         return JSONResponse(
             {
                 "repo_full": repo_full,

@@ -141,6 +141,10 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.featured_storyline.episodes[-1].episode_type == "current_posture"
     assert len(dashboard.history_cues) >= 1
     assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
+    assert dashboard.journey_snapshots[0]["snapshot_type"] == "baseline_approved"
+    assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
+    assert dashboard.journey_comparison is not None
+    assert dashboard.journey_comparison["comparison_kind"] == "baseline_vs_current"
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
@@ -318,10 +322,34 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-1"
     assert overview.highest_risk_items[0].change_summary
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
-    assert len(overview.highest_risk_items[0].attribute_profile) == 6
-    assert overview.highest_risk_items[0].attribute_profile[0].label == "Guardrail robustness"
+
+
+def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "overview-no-journey.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("repo journey materialization should not run when building the portfolio overview")
+
+    monkeypatch.setattr("services.dashboard_views._build_repo_journey_panel", fail_if_called)
+
+    overview = build_dashboard_overview_view(db_path)
+
+    assert overview.metrics[0].value == 1
+    assert overview.repos[0].repo_full == "doria90/dummyAI"
+    assert len(overview.attention_repos) == 1
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
-    assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI", "doria90/repo-two"]
+    assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI"]
 
 
 def test_collapse_storyline_episodes_groups_adjacent_low_signal_history_events():

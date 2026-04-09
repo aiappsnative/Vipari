@@ -319,26 +319,73 @@ function formatDateLabel(timestamp) {
     }
 }
 
-function renderStorylineEpisodeCard(episode) {
+function storylineRiskClass(episode) {
+    if (episode?.episode_type === "baseline_milestone" || episode?.source_type === "baseline_promotion") {
+        return "storyline-risk-baseline";
+    }
+    const severity = String(episode?.severity || "low").toLowerCase();
+    if (severity === "high") {
+        return "storyline-risk-high";
+    }
+    if (severity === "medium") {
+        return "storyline-risk-medium";
+    }
+    return "storyline-risk-low";
+}
+
+function storylineRiskLabel(episode) {
+    if (episode?.episode_type === "baseline_milestone" || episode?.source_type === "baseline_promotion") {
+        return "Approved baseline";
+    }
+    const severity = String(episode?.severity || "low").toLowerCase();
+    if (severity === "high") {
+        return "High attention";
+    }
+    if (severity === "medium") {
+        return "Medium attention";
+    }
+    return "Low attention";
+}
+
+function storylineEpisodeTypeLabel(episode) {
+    if (episode?.episode_type === "baseline_milestone") {
+        return "Baseline checkpoint";
+    }
+    if (episode?.episode_type === "current_posture") {
+        return "Current posture";
+    }
+    return String(episode?.episode_type || "mixed").replaceAll("_", " ");
+}
+
+function renderStorylineEpisodeNode(episode, index) {
     const provenance = episode.source_url
         ? `<a class="link" href="${episode.source_url}" data-open-source-change="${episode.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(episode.source_ref || "Open provenance")}</a>`
         : escapeHtml(episode.source_ref || "No provenance link");
+    const riskClass = storylineRiskClass(episode);
+    const laneClass = index % 2 === 0 ? "storyline-node-top" : "storyline-node-bottom";
+    const attributeTags = asArray(episode.top_attributes).slice(0, 3);
     return `
-        <div class="artifact-card">
-            <div class="artifact-card-head">
-                <div>
-                    <strong>${escapeHtml(episode.source_label)}</strong>
-                    <div class="artifact-card-type">${escapeHtml(formatDateLabel(episode.episode_timestamp))} · ${escapeHtml(String(episode.episode_type || "mixed").replaceAll("_", " "))}</div>
+        <article class="storyline-node ${laneClass} ${riskClass}">
+            <div class="storyline-node-date">${escapeHtml(formatDateLabel(episode.episode_timestamp))}</div>
+            <div class="storyline-node-rail">
+                <span class="storyline-node-dot" aria-hidden="true"></span>
+            </div>
+            <div class="storyline-node-card">
+                <div class="storyline-node-card-head">
+                    <div>
+                        <strong>${escapeHtml(episode.source_label)}</strong>
+                        <div class="artifact-card-type">${escapeHtml(storylineEpisodeTypeLabel(episode))}</div>
+                    </div>
+                    <span class="storyline-risk-pill">${escapeHtml(storylineRiskLabel(episode))}</span>
                 </div>
-                <span class="tag tag-muted">${escapeHtml(episode.severity || "low")}</span>
+                ${attributeTags.length ? `<div class="tag-row">${attributeTags.map((item) => `<span class="tag tag-muted">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+                <div class="artifact-card-reason">${escapeHtml(episode.episode_summary || "")}</div>
+                <div class="storyline-node-footer muted">
+                    <span>${escapeHtml(episode.confidence || "")}</span>
+                    <span>${provenance}</span>
+                </div>
             </div>
-            ${asArray(episode.top_attributes).length ? `<div class="tag-row">${asArray(episode.top_attributes).map((item) => `<span class="tag tag-muted">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
-            <div class="artifact-card-reason">${escapeHtml(episode.episode_summary || "")}</div>
-            <div class="storyline-episode-meta muted">
-                <span>${escapeHtml(episode.confidence || "")}</span>
-                <span>${provenance}</span>
-            </div>
-        </div>
+        </article>
     `;
 }
 
@@ -354,7 +401,9 @@ function renderStoryline(storyline) {
                 <div class="brief-row"><span class="brief-label">Posture</span><span class="brief-copy">${escapeHtml(storyline.current_posture_label || "")}</span></div>
             </div>
             ${storyline.limited_history_note ? `<div class="detail-note">${escapeHtml(storyline.limited_history_note)}</div>` : ""}
-            <div class="stack compact-stack">${asArray(storyline.episodes).map((episode) => renderStorylineEpisodeCard(episode)).join("")}</div>
+            <div class="storyline-timeline-scroll">
+                <div class="storyline-timeline">${asArray(storyline.episodes).map((episode, index) => renderStorylineEpisodeNode(episode, index)).join("")}</div>
+            </div>
         </div>
     `;
 }
@@ -458,14 +507,173 @@ function bindOpenSourceChangeLinks(scope = document) {
     });
 }
 
+function journeyToneForRisk(riskLevel) {
+    const normalized = String(riskLevel || "").toLowerCase();
+    if (normalized === "high") {
+        return "journey-tone-medium";
+    }
+    if (normalized === "medium") {
+        return "journey-tone-gap";
+    }
+    return "journey-tone-low";
+}
+
+function severityClassForRisk(riskLevel) {
+    const normalized = String(riskLevel || "").toLowerCase();
+    if (normalized === "high") {
+        return "severity-high";
+    }
+    if (normalized === "medium") {
+        return "severity-medium";
+    }
+    return "severity-low";
+}
+
+function snapshotTypeLabel(snapshotType) {
+    const normalized = String(snapshotType || "checkpoint").replaceAll("_", " ");
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatSigned(value, digits = 3) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+        return "0.000";
+    }
+    return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}`;
+}
+
+function renderJourneySummary(snapshots = []) {
+    if (!snapshots.length) {
+        return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
+    }
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots[snapshots.length - 1];
+    const baseline = snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
+    const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
+    const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
+    const riskLevel = current?.risk_summary?.risk_level || "low";
+    return `
+        <div class="journey-strip">
+            <div class="journey-node journey-tone-primary">
+                <span class="journey-node-value">${snapshots.length}</span>
+                <span class="journey-node-label">Snapshots</span>
+                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
+            </div>
+            <div class="journey-node journey-tone-gap">
+                <span class="journey-node-value">${baseline ? "Yes" : "No"}</span>
+                <span class="journey-node-label">Baseline</span>
+                <span class="journey-node-caption">${escapeHtml(baseline?.source_ref || "No approved baseline")}</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
+            </div>
+            <div class="journey-node ${journeyToneForRisk(riskLevel)}">
+                <span class="journey-node-value">${escapeHtml(String(riskLevel).toUpperCase())}</span>
+                <span class="journey-node-label">Current risk</span>
+                <span class="journey-node-caption">score ${asNumber(current?.risk_summary?.score).toFixed(3)}</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
+            </div>
+            <div class="journey-node journey-tone-primary">
+                <span class="journey-node-value">${asNumber(current?.distance_from_baseline).toFixed(3)}</span>
+                <span class="journey-node-label">Drift from baseline</span>
+                <span class="journey-node-caption">${asNumber(current?.change_breakdown?.critical_surfaces_changed)} critical surfaces changed</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderJourneyTimelineCard(snapshot) {
+    const source = snapshot.source_url
+        ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
+        : escapeHtml(snapshot.source_ref || "Stored checkpoint");
+    const labels = asArray(snapshot.change_labels).slice(0, 3);
+    return `
+        <div class="artifact-card journey-card">
+            <div class="artifact-card-head">
+                <div>
+                    <strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong>
+                    <div class="artifact-card-type">${escapeHtml(formatDateLabel(snapshot.created_at))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+                </div>
+                <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
+            </div>
+            <div class="journey-metrics-row">
+                <span>drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)}</span>
+                <span>critical ${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)}</span>
+                <span>artifacts ${asNumber(snapshot.artifact_coverage?.artifact_count)}</span>
+            </div>
+            ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="tag tag-muted">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+            <div class="artifact-card-reason">${escapeHtml(snapshot.change_summary?.changed_artifact_count ? `${snapshot.change_summary.changed_artifact_count} changed, ${snapshot.change_summary.added_artifact_count} added, ${snapshot.change_summary.removed_artifact_count} removed.` : "No material artifact changes recorded for this checkpoint.")}</div>
+            <div class="storyline-episode-meta muted">
+                <span>${escapeHtml(snapshot.default_branch || "")}</span>
+                <span>${source}</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderJourneyTimeline(snapshots = []) {
+    if (!snapshots.length) {
+        return '<div class="muted">No timeline is available yet.</div>';
+    }
+    const timeline = snapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(snapshot)).join("");
+    return `<div class="stack compact-stack">${timeline}</div>`;
+}
+
+function renderJourneyCompare(comparison) {
+    if (!comparison) {
+        return '<div class="muted">Baseline and current snapshots are required before DriftGuard can render a repository-level comparison.</div>';
+    }
+    const deltas = Object.entries(comparison.vector_delta || {})
+        .sort((left, right) => Math.abs(Number(right[1]) || 0) - Math.abs(Number(left[1]) || 0))
+        .slice(0, 6);
+    const labels = asArray(comparison.change_labels);
+    return `
+        <div class="stack compact-stack">
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-gap">
+                    <span class="journey-node-value">${escapeHtml(String(comparison.comparison_kind || "arbitrary").replaceAll("_", " "))}</span>
+                    <span class="journey-node-label">Comparison</span>
+                    <span class="journey-node-caption">${escapeHtml(comparison.left?.snapshot_key || "left")} → ${escapeHtml(comparison.right?.snapshot_key || "right")}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${formatSigned(comparison.drift_summary?.drift_delta)}</span>
+                    <span class="journey-node-label">Drift delta</span>
+                    <span class="journey-node-caption">current ${asNumber(comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node ${journeyToneForRisk(comparison.risk_summary?.risk_level)}">
+                    <span class="journey-node-value">${escapeHtml(String(comparison.risk_summary?.risk_level || "low").toUpperCase())}</span>
+                    <span class="journey-node-label">Risk level</span>
+                    <span class="journey-node-caption">score ${asNumber(comparison.risk_summary?.score).toFixed(3)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${asNumber(comparison.change_breakdown?.critical_surfaces_changed)}</span>
+                    <span class="journey-node-label">Critical surfaces</span>
+                    <span class="journey-node-caption">${asNumber(comparison.change_breakdown?.changed_artifact_count)} changed artifacts</span>
+                </div>
+            </div>
+            ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="drift-chip chip-model">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+            <div class="journey-compare-grid">
+                ${deltas.map(([key, value]) => `
+                    <div class="journey-compare-row">
+                        <span class="journey-compare-label">${escapeHtml(key.replaceAll("_", " "))}</span>
+                        <span class="journey-compare-value ${Number(value) > 0 ? "journey-compare-up" : Number(value) < 0 ? "journey-compare-down" : ""}">${formatSigned(value, 4)}</span>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="detail-note">${escapeHtml(`${asNumber(comparison.change_breakdown?.added_artifact_count)} added, ${asNumber(comparison.change_breakdown?.removed_artifact_count)} removed, and ${asNumber(comparison.change_breakdown?.changed_artifact_count)} changed artifacts between the approved baseline and the current landed posture.`)}</div>
+        </div>
+    `;
+}
+
 async function loadDashboard() {
     try {
-        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
-        if (!response.ok) {
-            throw new Error(`Repo dashboard request failed with ${response.status}`);
+        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
+        if (!dashboardResponse.ok) {
+            throw new Error(`Repo dashboard request failed with ${dashboardResponse.status}`);
         }
 
-        const payload = await response.json();
+        const payload = await dashboardResponse.json();
         const onboarding = payload.onboarding || null;
         const backfill = payload.backfill || {};
         const insights = asArray(payload.insights);
@@ -474,8 +682,10 @@ async function loadDashboard() {
         const historyCues = asArray(payload.history_cues);
         const artifacts = asArray(payload.artifacts);
         const historyTimelines = asArray(payload.history_timelines);
+        const journeySnapshots = asArray(payload.journey_snapshots);
         const preferredArtifactPath = requestedArtifactPath();
         window.__designProfiles = asArray(payload.design_profiles);
+        const comparison = payload.journey_comparison || null;
 
         setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
         setText("repo-stat-review", String(insights.length));
@@ -490,6 +700,9 @@ async function loadDashboard() {
         setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
         setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
         setSectionHtml("history-cues", renderCueCards(historyCues));
+        setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots));
+        setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots));
+        setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
         setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
             ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
             : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
@@ -510,6 +723,9 @@ async function loadDashboard() {
         setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
         setSectionHtml("control-surfaces", fallback);
         setSectionHtml("history-cues", fallback);
+        setSectionHtml("repo-journey-summary", fallback);
+        setSectionHtml("repo-journey-timeline", fallback);
+        setSectionHtml("repo-journey-compare", fallback);
         setSectionHtml("lower-confidence-insights", fallback);
         setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);
         setText("detail-artifact-name", repoFull || "Repository unavailable");

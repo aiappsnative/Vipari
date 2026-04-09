@@ -105,6 +105,7 @@ from services.github_provisioning import get_live_github_install_url, sync_insta
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
+from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.secure_store import encrypt_text
 
 settings = get_settings()
@@ -1429,7 +1430,7 @@ async def list_repos(request: Request):
 
 
 @app.get("/api/dashboard/overview")
-async def dashboard_overview(request: Request):
+def dashboard_overview(request: Request):
     access_context = _require_dashboard_access(request)
     visibility = _dashboard_repo_visibility(access_context)
     return JSONResponse(
@@ -1445,7 +1446,7 @@ async def dashboard_overview(request: Request):
 
 
 @app.get("/api/persistence")
-async def persistence_status(request: Request):
+def persistence_status(request: Request):
     _require_dashboard_access(request)
     payload = asdict(get_persistence_status(AUDIT_DB_PATH))
     payload.pop("database_path", None)
@@ -1453,13 +1454,13 @@ async def persistence_status(request: Request):
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
-async def repo_dashboard(request: Request, repo_full: str):
+def repo_dashboard(request: Request, repo_full: str):
     _require_repo_dashboard_read_access(request, repo_full)
     return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
-async def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
+def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
     _require_repo_dashboard_read_access(request, repo_full)
     storyline = build_repo_artifact_storyline(AUDIT_DB_PATH, repo_full, artifact_path)
     if storyline is None:
@@ -1471,6 +1472,36 @@ async def artifact_storyline(request: Request, repo_full: str, artifact_path: st
             "storyline": asdict(storyline),
         }
     )
+
+
+@app.get("/api/repos/{repo_full:path}/journey")
+def repo_journey(request: Request, repo_full: str):
+    _require_repo_dashboard_read_access(request, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "snapshots": [snapshot_to_public_payload(item) for item in build_repo_journey(AUDIT_DB_PATH, repo_full)],
+        }
+    )
+
+
+@app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
+def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
+    _require_repo_dashboard_read_access(request, repo_full)
+    snapshot = get_repo_snapshot_detail(AUDIT_DB_PATH, repo_full, snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Repo posture snapshot was not found.")
+    return JSONResponse({"repo_full": repo_full, "snapshot": snapshot_to_public_payload(snapshot)})
+
+
+@app.get("/api/repos/{repo_full:path}/compare")
+def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: int):
+    _require_repo_dashboard_read_access(request, repo_full)
+    try:
+        comparison = compare_repo_snapshots(AUDIT_DB_PATH, repo_full, left, right)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(asdict(comparison))
 
 
 @app.post("/api/repos/{repo_full:path}/onboard")
@@ -1543,6 +1574,7 @@ async def promote_artifact_baseline(request: Request, repo_full: str, artifact_p
     baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
     if baseline is None:
         raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
+    build_repo_journey(AUDIT_DB_PATH, repo_full)
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse(
         {

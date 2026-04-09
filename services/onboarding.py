@@ -28,6 +28,7 @@ from .onboarding_records import (
     record_repository_onboarding,
     update_historical_backfill_job_status,
 )
+from .repo_journey import materialize_repo_journey
 
 
 DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".py", ".toml"}
@@ -192,6 +193,7 @@ def onboard_repository(
         extract_signal_terms_fn=extract_signal_terms_from_text,
         build_profile_fn=build_attribute_profile,
     )
+    materialize_repo_journey(db_path, repo_full)
     artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baselines = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
     return RepositoryOnboardingResult(onboarding=onboarding, artifacts=artifacts, baseline_versions=baselines)
@@ -320,5 +322,8 @@ def execute_repository_history_backfill(
                 raise RuntimeError("Failed to reload historical backfill job after execution.")
 
         execution_results.append(HistoricalBackfillExecutionResult(job=updated_job, versions=versions, profiles=profiles))
+
+    if execution_results:
+        materialize_repo_journey(db_path, repo_full)
 
     return execution_results
