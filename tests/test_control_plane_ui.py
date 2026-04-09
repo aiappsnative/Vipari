@@ -543,6 +543,8 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Plan active" in get_response.text
     assert 'href="/dashboard"' in get_response.text
     assert "sidebar" in get_response.text
+    assert 'data-theme="dark"' in get_response.text
+    assert 'value="dark" checked' in get_response.text
 
     workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
     assert workspace_response.status_code == 303
@@ -551,13 +553,23 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     post_response = client.post(
         "/app/profile",
         cookies={main.settings.session_cookie_name: session.session_id},
-        data={"display_name": "Updated Starter User"},
+        data={"display_name": "Updated Starter User", "theme_preference": "light"},
         follow_redirects=False,
     )
 
     assert post_response.status_code == 303
     assert post_response.headers["location"] == "/app/profile?updated=1"
     assert get_user_by_id(main.AUDIT_DB_PATH, user.id).display_name == "Updated Starter User"
+    assert get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference == "light"
+
+    updated_get_response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    assert updated_get_response.status_code == 200
+    assert 'data-theme="light"' in updated_get_response.text
+    assert 'value="light" checked' in updated_get_response.text
+
+    from services.dashboard_frontend import render_dashboard_index_page
+
+    assert 'data-theme="light"' in render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
 
     main.AUDIT_DB_PATH = original_db_path
 

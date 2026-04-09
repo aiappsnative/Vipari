@@ -88,7 +88,7 @@ from services.control_plane_records import (
     revoke_user_session,
     update_repo_allocation_status,
     update_session_workspace,
-    update_user_profile_display_name,
+    update_user_profile_preferences,
     upsert_billing_customer,
     upsert_entitlement,
     upsert_github_identity,
@@ -320,6 +320,13 @@ def _normalize_plan_hint(value: str | None) -> str | None:
         return None
 
 
+def _normalize_theme_preference(value: str | None) -> str | None:
+    candidate = (value or "").strip().lower()
+    if candidate in {"dark", "light"}:
+        return candidate
+    return None
+
+
 def _encode_context_cookie(payload: dict[str, object]) -> str:
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("utf-8")
@@ -534,6 +541,16 @@ def _require_dashboard_access(request: Request) -> dict[str, object]:
     if not access_context["resolution"].can_access_dashboard:
         raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
     return access_context
+
+
+def _current_theme_preference(request: Request) -> str:
+    if not _control_plane_active():
+        return "dark"
+    session = _get_session(request)
+    if session is None:
+        return "dark"
+    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
+    return user.theme_preference if user else "dark"
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
@@ -804,6 +821,7 @@ async def profile_page(request: Request):
     return HTMLResponse(
         render_control_plane_profile_page(
             display_name=user.display_name if user else "",
+            theme_preference=user.theme_preference if user else "dark",
             github_login=identity.github_login if identity else "Unavailable",
             github_user_id=identity.github_user_id if identity else "Unavailable",
             workspace_name=workspace.display_name,
@@ -817,7 +835,7 @@ async def profile_page(request: Request):
 
 
 @app.post("/app/profile")
-async def profile_update(request: Request, display_name: str = Form(...)):
+async def profile_update(request: Request, display_name: str = Form(...), theme_preference: str | None = Form(None)):
     access_context = _current_workspace_context(request)
     if not _has_profile_access(access_context):
         raise HTTPException(status_code=403, detail="Profile page is available only for Starter tier and above.")
@@ -826,7 +844,16 @@ async def profile_update(request: Request, display_name: str = Form(...)):
         raise HTTPException(status_code=400, detail="Display name cannot be empty.")
     if len(normalized_name) > 120:
         raise HTTPException(status_code=400, detail="Display name must be 120 characters or fewer.")
-    update_user_profile_display_name(AUDIT_DB_PATH, access_context["session"].user_id, normalized_name)
+    normalized_theme = _normalize_theme_preference(theme_preference)
+    if theme_preference is not None and normalized_theme is None:
+        raise HTTPException(status_code=400, detail="Theme preference must be dark or light.")
+    current_user = access_context["user"]
+    update_user_profile_preferences(
+        AUDIT_DB_PATH,
+        access_context["session"].user_id,
+        display_name=normalized_name,
+        theme_preference=normalized_theme or current_user.theme_preference,
+    )
     return RedirectResponse("/app/profile?updated=1", status_code=303)
 
 
@@ -1324,7 +1351,7 @@ async def dashboard_index_page(request: Request):
     redirect, _session = _dashboard_redirect_for_request(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(render_dashboard_index_page())
+    return HTMLResponse(render_dashboard_index_page(_current_theme_preference(request)))
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
@@ -1332,7 +1359,7 @@ async def dashboard_repo_page(request: Request, repo_full: str):
     redirect, _session = _dashboard_redirect_for_request(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(render_repo_dashboard_page(repo_full))
+    return HTMLResponse(render_repo_dashboard_page(repo_full, _current_theme_preference(request)))
 
 
 @app.get("/api/repos")

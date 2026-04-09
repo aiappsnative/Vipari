@@ -25,9 +25,13 @@ def _load_template(name: str) -> str:
     return template
 
 
-def render_dashboard_index_page() -> str:
-    return _load_template("dashboard_index.html")
+def render_dashboard_index_page(theme_preference: str = "dark") -> str:
+    return _load_template("dashboard_index.html").replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
 
 
-def render_repo_dashboard_page(repo_full: str) -> str:
-    return _load_template("dashboard_repo.html").replace("{{REPO_FULL}}", html_escape(repo_full))
+def render_repo_dashboard_page(repo_full: str, theme_preference: str = "dark") -> str:
+    return (
+        _load_template("dashboard_repo.html")
+        .replace("{{REPO_FULL}}", html_escape(repo_full))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+    )

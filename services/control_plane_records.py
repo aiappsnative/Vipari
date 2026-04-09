@@ -31,6 +31,7 @@ class UserRecord:
     id: int
     display_name: str
     profile_name_override: str | None
+    theme_preference: str
     primary_email: str | None
     active: bool
     created_at: float
@@ -265,6 +266,7 @@ def _row_to_user(row: sqlite3.Row) -> UserRecord:
         id=row["id"],
         display_name=row["profile_name_override"] or row["display_name"],
         profile_name_override=row["profile_name_override"],
+        theme_preference=row["theme_preference"] or "dark",
         primary_email=row["primary_email"],
         active=bool(row["active"]),
         created_at=row["created_at"],
@@ -604,6 +606,7 @@ def init_control_plane_db(db_path: str) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 display_name TEXT NOT NULL,
                 profile_name_override TEXT,
+                theme_preference TEXT NOT NULL DEFAULT 'dark',
                 primary_email TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
@@ -854,6 +857,7 @@ def init_control_plane_db(db_path: str) -> None:
 
         # Additive migrations for databases created before the latest control-plane schema.
         _ensure_column(conn, "users", "profile_name_override", "TEXT")
+        _ensure_column(conn, "users", "theme_preference", "TEXT NOT NULL DEFAULT 'dark'")
         _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
@@ -1001,11 +1005,27 @@ def get_user_by_id(db_path: str, user_id: int) -> UserRecord | None:
 
 
 def update_user_profile_display_name(db_path: str, user_id: int, display_name: str) -> UserRecord:
+    existing_user = get_user_by_id(db_path, user_id)
+    return update_user_profile_preferences(
+        db_path,
+        user_id,
+        display_name=display_name,
+        theme_preference=existing_user.theme_preference if existing_user else "dark",
+    )
+
+
+def update_user_profile_preferences(
+    db_path: str,
+    user_id: int,
+    *,
+    display_name: str,
+    theme_preference: str,
+) -> UserRecord:
     now = time.time()
     with _connect(db_path) as conn:
         conn.execute(
-            "UPDATE users SET profile_name_override = ?, updated_at = ? WHERE id = ?",
-            (display_name, now, user_id),
+            "UPDATE users SET profile_name_override = ?, theme_preference = ?, updated_at = ? WHERE id = ?",
+            (display_name, theme_preference, now, user_id),
         )
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_to_user(row)

@@ -446,6 +446,7 @@ def render_control_plane_app_page(
 def render_control_plane_profile_page(
     *,
     display_name: str,
+    theme_preference: str,
     github_login: str,
     github_user_id: str,
     workspace_name: str,
@@ -461,6 +462,9 @@ def render_control_plane_profile_page(
         admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
     return (
         template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{THEME_DARK_CHECKED}}", "checked" if theme_preference == "dark" else "")
+        .replace("{{THEME_LIGHT_CHECKED}}", "checked" if theme_preference == "light" else "")
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{GITHUB_LOGIN}}", html_escape(github_login))
