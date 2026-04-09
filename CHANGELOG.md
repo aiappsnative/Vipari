@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-09 — Control-plane hardening merged to main
+
+### Added
+- stale webhook-delivery reclaim so GitHub redeliveries can recover after ingress crashes that happen between delivery claim and queue enqueue
+- worker-side allocation and entitlement revalidation before queued PR audits fetch diffs or create jobs
+- Stripe customer/subscription ownership resolution helpers for verified workspace lookup during paid-plan webhook projection
+- focused regression coverage for stale webhook reclaim, worker authorization revalidation, and Stripe workspace-metadata mismatch rejection
+
+### Changed
+- the Base44/Wix control-plane branch is now merged into `main`
+- Stripe webhook activation no longer trusts `workspace_id` metadata as the authority for where paid billing state should land; stored Stripe billing bindings now win
+- README, roadmap, and architecture docs now describe the merged control-plane state instead of an active feature-branch checkpoint
+
+### Verified
+- targeted billing/control-plane/webhook/worker regression slice passed locally (`73 passed`)
+
+### Product impact
+- the customer control plane is now part of the mainline product surface rather than a pending integration branch
+- paid-plan activation and queued audit execution are harder to misroute across workspaces after setup or billing state changes
+
 ## 2026-04-08 — Control-plane live validation and legacy SQLite repairs
 
 ### Added

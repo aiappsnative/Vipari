@@ -41,7 +41,7 @@ This framing should shape roadmap decisions:
 ## Current repository map (April 2026)
 
 ### `main`
-- Purpose: active post-merge baseline for the static-first drift engine
+- Purpose: active post-merge baseline for the static-first drift engine plus the merged customer control plane
 - Current status:
 	- includes the merged `feature/drift-engine-v1` milestone
 	- includes the merged `feature/pr-escalation-v1` slice
@@ -49,9 +49,11 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
 	- includes the merged `feature/pr-comment-v2-tuning` slice
-	- is green at the full-suite level (`111 passed` on the latest local verification)
+	- now includes the merged `feature/driftguard-base44-stripe-handoff-v1` slice
+	- is green at the targeted hardening-slice level (`73 passed` on the latest local verification)
 	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
+	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, and the final Stripe billing-ownership and webhook/worker hardening pass
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-storyline-v1`
@@ -69,30 +71,13 @@ This framing should shape roadmap decisions:
 	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
 
 ### `feature/driftguard-base44-stripe-handoff-v1`
-- Purpose: active integration branch for issue `#25`, connecting Base44/Wix acquisition flows to DriftGuard auth, provider-backed billing activation, GitHub App install, repo onboarding, and setup-aware dashboard access
-- Current status:
-	- canonical architecture, state-model, and issue-analysis docs are checked in
-	- DB-backed control-plane records are implemented for users, sessions, workspaces, subscriptions, entitlements, installations, repo connections, allocations, and webhook receipts
-	- GitHub OAuth login, session issuance, workspace bootstrap, billing entry, external claim activation, installation linkage, and repo allocation are implemented in the monolith
-	- the entitlement model now includes a first-class `free` plan plus provider-neutral `dashboard_enabled` and `pr_comments_enabled` capability flags
-	- signed billing handoff claims are now persisted so Base44/Wix can activate paid plans first and DriftGuard can complete the identity/workspace claim later
-	- legacy local SQLite databases are now migrated forward safely, including additive column repair plus rebuilt `repo_connections` and `repo_allocations` foreign keys targeting `github_installations.installation_id`
-	- setup-aware control-plane templates and styling are implemented for landing, login, pricing, workspace creation, billing, install, repo setup, and app-state shells, including the free comments-only terminal state
-	- `/app` is now actionable in both setup-blocked and fully active states instead of rendering dead-end status cards
-	- dashboard routes and dashboard JSON APIs are now gated through the access-state resolver when control-plane workspaces exist
-	- webhook auditing is now blocked for installed repos that are not allocated or whose workspace lacks PR-comment entitlement
-	- billing and provisioning mutations are restricted to workspace owner/admin roles in v1
-	- branch docs now include local automated E2E, live tunnel-backed GitHub validation notes, and explicit remaining Base44/Wix handoff follow-up
-- Verified on 2026-04-08:
-	- full automated suite: `162 passed`
-	- targeted control-plane/access-state coverage now includes free-tier activation, claim handoff activation, dashboard denial for free workspaces, and webhook allocation enforcement
-	- tunnel-backed live validation confirmed GitHub OAuth login/callback, workspace bootstrap, GitHub App install linkage, repo sync, repo allocation/onboarding for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
-- Remaining follow-up after today's checkpoint:
-	- run one real Base44/Wix-backed signed handoff pass so paid-plan activation is confirmed through the external claim flow rather than local simulation
-	- optionally run one real Stripe-backed fallback pass so the compatibility path is also confirmed end to end
-	- prepare merge/PR notes once the billing path is validated end to end
-- Restart point:
-	- use [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as the first checkpoint, then choose between real Base44/Wix validation or Stripe-fallback confirmation
+- Purpose: completed integration branch for issue `#25`, now merged to `main`
+- Final status at merge:
+	- customer control-plane persistence, auth, billing, install-linking, repo allocation, and setup-aware access gating are now mainline functionality
+	- the final merge included Stripe billing-ownership hardening, worker allocation/entitlement revalidation, and stale webhook-delivery reclaim
+	- remote and local feature-branch cleanup is complete
+- Historical note:
+	- keep [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as archived branch context rather than a live restart target
 
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening

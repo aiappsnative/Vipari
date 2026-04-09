@@ -1,12 +1,12 @@
 # Base44 Billing Handoff V1 Handoff
 
-This note is the current restart point for `feature/driftguard-base44-stripe-handoff-v1`.
+This note is now an archived handoff record for the merged `feature/driftguard-base44-stripe-handoff-v1` work.
 
 ## Branch status
 
 The first implementation slice for issue `#25` is in place, locally validated, and partially provider-validated through a live tunnel-backed GitHub flow.
 
-Implemented today and preserved on the branch:
+Implemented and merged:
 
 - GitHub OAuth login and session handling
 - Base44 source/plan passthrough across auth, workspace bootstrap, and billing continuation
@@ -24,13 +24,16 @@ Implemented today and preserved on the branch:
 - webhook gating so installed-but-unallocated repos do not receive PR audits/comments
 - owner/admin protection for billing and provisioning mutations
 - provider-setup preflight tooling via `python scripts/control_plane_preflight.py`
-- updated README, roadmap, changelog, and architecture docs reflecting the branch state
+- updated README, roadmap, changelog, and architecture docs reflecting the merged control-plane state
+- Stripe webhook ownership hardening against stored customer/subscription records
+- worker-side allocation and entitlement revalidation for queued audits
+- stale webhook-delivery reclaim for crash-safe GitHub redelivery
 
 ## Validation status
 
-Validated at the current checkpoint:
+Validated at the final merge checkpoint:
 
-- `python -m pytest -q` -> `162 passed`
+- `python -m pytest tests/test_control_plane_ui.py tests/test_billing_service.py tests/test_cloud_deployment.py tests/test_audit_worker.py -q` -> `73 passed`
 - targeted control-plane/access-state coverage now includes free-tier activation, signed billing handoff claims, dashboard denial for free workspaces, and webhook allocation enforcement
 - live tunnel-backed flow confirmed GitHub OAuth callback, workspace creation, GitHub App install linking, repo sync, repo allocation/onboarding for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
@@ -40,7 +43,7 @@ Known non-blocking signal:
 
 ## What is still open
 
-The main remaining work item is real Base44/Wix-backed validation.
+The main remaining operational follow-up is real Base44/Wix-backed validation.
 
 Specifically:
 
@@ -49,7 +52,7 @@ Specifically:
 - complete one payment -> signed handoff -> claim -> install -> repo allocation -> dashboard run without local billing simulation
 - optionally validate the Stripe fallback path by forwarding Stripe test-mode events to `/webhooks/stripe`
 
-## Files to re-open first tomorrow
+## Files to re-open first for provider validation
 
 - [README.md](../README.md)
 - [Plan.MD](../Plan.MD)
@@ -64,5 +67,4 @@ Specifically:
 python -m pytest -q
 ```
 
-Then either run the real Stripe-backed E2E flow from [README.md](../README.md) or fix the smaller `setup_state` persistence gap.
-Then either run the real Base44/Wix-backed E2E flow from [README.md](../README.md) or validate the Stripe fallback path.
+Then run either the real Base44/Wix-backed E2E flow from [README.md](../README.md) or the real Stripe fallback validation path.

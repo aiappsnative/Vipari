@@ -86,11 +86,11 @@ It should not be merged wholesale. Port modules in slices onto current `main` so
 
 ## Branch
 
-- `feature/driftguard-base44-stripe-handoff-v1`
+- `feature/driftguard-base44-stripe-handoff-v1` (merged to `main` on 2026-04-09)
 
-## Implementation snapshot on 2026-04-08
+## Implementation snapshot on 2026-04-09
 
-The first branch slice is now implemented, locally validated, and tunnel-validated for the GitHub-side flow.
+This implementation is now merged to `main`.
 
 Delivered on this branch:
 
@@ -108,14 +108,17 @@ Delivered on this branch:
 - dashboard JSON/API gating for incomplete or non-dashboard states when the control plane is active
 - webhook allocation and entitlement gating for PR comment generation
 - owner/admin protection on billing and provisioning mutations
+- Stripe webhook ownership validation against stored customer/subscription records
+- worker-side allocation and entitlement revalidation for queued PR audits
+- stale webhook-delivery reclaim for crash-safe GitHub redelivery handling
 
 Validated at the current checkpoint:
 
-- full automated suite: `162 passed`
+- targeted billing/control-plane/webhook/worker regression slice: `73 passed`
 - targeted control-plane/access-state coverage now includes free-tier activation, signed claim creation/consumption, free-workspace dashboard denial, and webhook allocation enforcement
 - live tunnel-backed validation for GitHub OAuth login/callback, workspace bootstrap, GitHub App installation linking, repo sync, repo allocation/onboarding, and dashboard unlock after simulated Team billing
 
-Still pending outside local validation:
+Remaining operational follow-up outside this merged implementation:
 
 - one Base44/Wix-backed live pass with real signed handoff activation instead of simulated billing state
 - optional confirmation of the Stripe fallback path with real webhook forwarding
@@ -189,7 +192,7 @@ Add:
 
 ### Phase 5: Authoritative billing projection
 
-Status on 2026-04-08: complete for external handoff claims, webhook verification, idempotent receipts, and entitlement projection.
+Status on 2026-04-09: complete for external handoff claims, webhook verification, idempotent receipts, entitlement projection, and stored-owner Stripe workspace resolution.
 
 Add billing activation surfaces with:
 
@@ -266,7 +269,7 @@ Also document:
 
 ### Phase 10: Validation
 
-Status on 2026-04-08: local validation complete; GitHub-side tunnel validation complete; real Stripe validation remains open.
+Status on 2026-04-09: merged to `main`; local validation complete; GitHub-side tunnel validation complete; real Base44/Wix and optional real Stripe provider confirmation remain operational follow-up items rather than merge blockers.
 
 Required tests:
 
@@ -288,13 +291,13 @@ Observed results on this branch:
 - `python -m pytest tests/test_control_plane_ui.py -q` -> `11 passed`
 - `python -m pytest` -> `148 passed`
 
-## Tomorrow restart checklist
+## Post-merge operational checklist
 
-1. Re-read [docs/base44-stripe-handoff-v1-handoff.md](base44-stripe-handoff-v1-handoff.md).
-2. Start DriftGuard locally and expose it through a public tunnel.
-3. Register the tunnel URL in the GitHub OAuth app and GitHub App webhook settings.
-4. Forward Stripe test events to `/webhooks/stripe`.
-5. Walk the Base44-style entry flow and capture any provider-backed defects before merge prep.
+1. Start DriftGuard locally and expose it through a public tunnel.
+2. Register the tunnel URL in the GitHub OAuth app and GitHub App webhook settings.
+3. Forward Stripe test events to `/webhooks/stripe` if validating the fallback path.
+4. Walk the Base44-style entry flow and capture any provider-backed defects.
+5. Record provider-backed results in [CHANGELOG.md](../CHANGELOG.md) and [README.md](../README.md).
 
 ## Primary failure modes to avoid
 

@@ -32,9 +32,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, and dashboard UX hardening slices.
-
-The active integration branch `feature/driftguard-base44-stripe-handoff-v1` extends that baseline with a first customer-facing control plane for the Base44/Wix -> DriftGuard billing handoff plus GitHub App onboarding flow.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, dashboard UX hardening, and customer control-plane slices.
 
 In practical terms, DriftGuard currently provides:
 
@@ -51,10 +49,6 @@ In practical terms, DriftGuard currently provides:
 - a lightweight baseline-promotion action that lets operators promote the latest stored source version as the approved baseline for an artifact
 - real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
 - bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
-- a local operator CLI and JSON APIs for onboarding, backfill, and dashboard inspection
-
-On the active integration branch, DriftGuard additionally provides:
-
 - GitHub OAuth login and encrypted session-backed identity state for the customer control plane
 - Base44 handoff source/plan passthrough across login, workspace bootstrap, claim continuation, and billing entry
 - workspace bootstrap, membership-aware access resolution, and setup-aware app surfaces
@@ -73,11 +67,13 @@ On the active integration branch, DriftGuard additionally provides:
 - strictly allowlisted admin pages covering registered users, dashboard-entitled workspaces, billing handoff claims, and unclaimed/public GitHub App installations
 - public GitHub App install callback capture so direct marketplace/setup flows are visible before workspace claiming completes
 - a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
+- Stripe webhook ownership hardening so paid-plan activation now resolves through stored Stripe customer/subscription bindings instead of trusting workspace metadata alone
+- worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
 
-Latest branch validation on 2026-04-08:
+Latest merge validation on 2026-04-09:
 
-- full automated suite passed locally: `167 passed`
-- targeted control-plane/access-state regression coverage passed locally for free-tier activation, signed billing handoff claims, dashboard gating, and webhook allocation enforcement
+- targeted billing/control-plane/webhook/worker regression slice passed locally: `73 passed`
+- full automated suite previously passed locally before the final webhook/worker and billing-ownership hardening pass: `167 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -239,7 +235,7 @@ You can start the split services locally with Docker Compose after providing the
 
 The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py) can be used to validate the local credential setup before testing.
 
-Recent live validation on the active branch covered:
+Recent live validation covered:
 
 - risky opened PR flow with durable audit persistence and bot comment posting
 - synchronize re-audit flow with exact-SHA diff reconstruction, same-head comment updates, and prior-episode comment preservation across new commits

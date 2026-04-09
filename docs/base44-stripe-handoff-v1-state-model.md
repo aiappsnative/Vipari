@@ -170,9 +170,9 @@ Each checklist item should expose:
 No route should independently decide that checkout success means active access. Only webhook-confirmed subscription projection may move a workspace into an active paid state.
 Free plans are the exception: local free-plan activation may move a workspace into the comments-only path without an external billing callback.
 
-## Implementation status on 2026-04-08
+## Implementation status on 2026-04-09
 
-The v1 branch now applies this state model in the main runtime.
+This state model is now merged into `main`.
 
 Implemented usages:
 
@@ -197,4 +197,4 @@ Validated transitions covered by focused tests:
 - viewer role denied for billing/install mutation paths
 - active workspace shell exposes a clickable dashboard continuation path instead of a dead-end status card
 
-Live tunnel-backed validation has now confirmed the GitHub OAuth, install-link, repo-sync, allocation, and dashboard-unlock path for the same state machine. The remaining external-provider gap is real Base44/Wix signed handoff confirmation without local simulation.
+Live tunnel-backed validation confirmed the GitHub OAuth, install-link, repo-sync, allocation, and dashboard-unlock path for the same state machine. The final merge hardening also ensures Stripe webhook activation resolves through stored customer/subscription ownership instead of trusting workspace metadata alone.
