@@ -248,6 +248,24 @@ Recent live validation on the active branch covered:
 - invalid-model fallback flow posting a deterministic preliminary comment and recording `fallback_posted`
 - escalation-label lifecycle validation covering add, remove, and re-add behavior as PR risk changes across review passes
 
+## SBOM generation
+
+DriftGuard now includes a repeatable CycloneDX SBOM path for dependency tracking.
+
+Install the SBOM tooling alongside the application dependencies:
+
+```bash
+pip install -r requirements.txt -r requirements-sbom.txt
+```
+
+Generate an SBOM from the current Python environment:
+
+```bash
+python scripts/generate_sbom.py --output artifacts/sbom/driftguard.cyclonedx.json
+```
+
+The repository also includes [.github/workflows/sbom.yml](.github/workflows/sbom.yml), which generates the SBOM on pushes, pull requests, and manual workflow dispatch, then uploads it as a workflow artifact.
+
 ## Control-plane end-to-end testing
 
 The Base44 -> DriftGuard handoff work adds a second end-to-end path on top of the existing PR-audit flow.

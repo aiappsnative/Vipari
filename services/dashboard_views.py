@@ -38,6 +38,8 @@ class RepoDashboardIndexEntry:
     onboarding_status: str
     discovered_artifact_count: int
     last_onboarded_at: float
+    dashboard_scope: str = "allocated"
+    allocation_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -383,7 +385,12 @@ class RepoDashboardView:
     artifacts: list[RepoDashboardArtifactEntry] = None
 
 
-def list_repo_dashboard_index(db_path: str, allowed_repo_fulls: set[str] | None = None) -> list[RepoDashboardIndexEntry]:
+def list_repo_dashboard_index(
+    db_path: str,
+    allowed_repo_fulls: set[str] | None = None,
+    repo_scope_by_full: dict[str, str] | None = None,
+    allocation_status_by_full: dict[str, str] | None = None,
+) -> list[RepoDashboardIndexEntry]:
     onboardings = list_latest_repository_onboardings(db_path)
     if allowed_repo_fulls is not None:
         onboardings = [onboarding for onboarding in onboardings if onboarding.repo_full in allowed_repo_fulls]
@@ -394,13 +401,25 @@ def list_repo_dashboard_index(db_path: str, allowed_repo_fulls: set[str] | None 
             onboarding_status=onboarding.status,
             discovered_artifact_count=onboarding.discovered_artifact_count,
             last_onboarded_at=onboarding.updated_at,
+            dashboard_scope=(repo_scope_by_full or {}).get(onboarding.repo_full, "allocated"),
+            allocation_status=(allocation_status_by_full or {}).get(onboarding.repo_full),
         )
         for onboarding in onboardings
     ]
 
 
-def build_dashboard_overview_view(db_path: str, allowed_repo_fulls: set[str] | None = None) -> DashboardOverviewView:
-    repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
+def build_dashboard_overview_view(
+    db_path: str,
+    allowed_repo_fulls: set[str] | None = None,
+    repo_scope_by_full: dict[str, str] | None = None,
+    allocation_status_by_full: dict[str, str] | None = None,
+) -> DashboardOverviewView:
+    repos = list_repo_dashboard_index(
+        db_path,
+        allowed_repo_fulls=allowed_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
     repo_views = [build_repo_dashboard_view(db_path, repo.repo_full) for repo in repos]
 
     total_artifacts = sum(repo.discovered_artifact_count for repo in repos)

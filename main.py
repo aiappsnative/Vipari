@@ -101,7 +101,7 @@ from services.entitlements import derive_entitlement_payload, get_plan_definitio
 from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
-from services.onboarding_records import promote_latest_source_to_onboarding_baseline
+from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
 from services.secure_store import encrypt_text
 
@@ -536,7 +536,22 @@ def _require_dashboard_access(request: Request) -> dict[str, object]:
     return access_context
 
 
-def _require_repo_dashboard_access(request: Request, repo_full: str) -> dict[str, object]:
+def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
+    access_context = _require_dashboard_access(request)
+    if not access_context:
+        return access_context
+    workspace = access_context["workspace"]
+    allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
+    if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
+        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+    connection = get_repo_connection_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+    if connection is not None and connection.status == "available" and onboarding is not None:
+        return {**access_context, "dashboard_repo_scope": "connected_history", "dashboard_repo_allocation_status": None}
+    raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
+
+
+def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) -> dict[str, object]:
     access_context = _require_dashboard_access(request)
     if not access_context:
         return access_context
@@ -544,19 +559,33 @@ def _require_repo_dashboard_access(request: Request, repo_full: str) -> dict[str
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
         raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
-    return access_context
+    return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
 
 
-def _dashboard_allowed_repo_fulls(access_context: dict[str, object]) -> set[str] | None:
+def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
     if not access_context:
-        return None
+        return {"allowed_repo_fulls": None, "repo_scope_by_full": None, "allocation_status_by_full": None}
     workspace = access_context.get("workspace")
     if workspace is None:
-        return None
+        return {"allowed_repo_fulls": None, "repo_scope_by_full": None, "allocation_status_by_full": None}
+    allowed_repo_fulls: set[str] = set()
+    repo_scope_by_full: dict[str, str] = {}
+    allocation_status_by_full: dict[str, str] = {}
+    for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id):
+        if connection.status != "available":
+            continue
+        allowed_repo_fulls.add(connection.repo_full)
+        repo_scope_by_full[connection.repo_full] = "connected_history"
+    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id):
+        if allocation.allocation_status not in {"active", "onboarded"}:
+            continue
+        allowed_repo_fulls.add(allocation.repo_full)
+        repo_scope_by_full[allocation.repo_full] = "allocated"
+        allocation_status_by_full[allocation.repo_full] = allocation.allocation_status
     return {
-        allocation.repo_full
-        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
-        if allocation.allocation_status in {"active", "onboarded"}
+        "allowed_repo_fulls": allowed_repo_fulls,
+        "repo_scope_by_full": repo_scope_by_full,
+        "allocation_status_by_full": allocation_status_by_full,
     }
 
 
@@ -1309,15 +1338,36 @@ async def dashboard_repo_page(request: Request, repo_full: str):
 @app.get("/api/repos")
 async def list_repos(request: Request):
     access_context = _require_dashboard_access(request)
-    allowed_repo_fulls = _dashboard_allowed_repo_fulls(access_context)
-    return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(AUDIT_DB_PATH, allowed_repo_fulls=allowed_repo_fulls)]})
+    visibility = _dashboard_repo_visibility(access_context)
+    return JSONResponse(
+        {
+            "repos": [
+                asdict(item)
+                for item in list_repo_dashboard_index(
+                    AUDIT_DB_PATH,
+                    allowed_repo_fulls=visibility["allowed_repo_fulls"],
+                    repo_scope_by_full=visibility["repo_scope_by_full"],
+                    allocation_status_by_full=visibility["allocation_status_by_full"],
+                )
+            ]
+        }
+    )
 
 
 @app.get("/api/dashboard/overview")
 async def dashboard_overview(request: Request):
     access_context = _require_dashboard_access(request)
-    allowed_repo_fulls = _dashboard_allowed_repo_fulls(access_context)
-    return JSONResponse(asdict(build_dashboard_overview_view(AUDIT_DB_PATH, allowed_repo_fulls=allowed_repo_fulls)))
+    visibility = _dashboard_repo_visibility(access_context)
+    return JSONResponse(
+        asdict(
+            build_dashboard_overview_view(
+                AUDIT_DB_PATH,
+                allowed_repo_fulls=visibility["allowed_repo_fulls"],
+                repo_scope_by_full=visibility["repo_scope_by_full"],
+                allocation_status_by_full=visibility["allocation_status_by_full"],
+            )
+        )
+    )
 
 
 @app.get("/api/persistence")
@@ -1329,13 +1379,13 @@ async def persistence_status():
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
 async def repo_dashboard(request: Request, repo_full: str):
-    _require_repo_dashboard_access(request, repo_full)
+    _require_repo_dashboard_read_access(request, repo_full)
     return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
 async def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
-    _require_repo_dashboard_access(request, repo_full)
+    _require_repo_dashboard_read_access(request, repo_full)
     storyline = build_repo_artifact_storyline(AUDIT_DB_PATH, repo_full, artifact_path)
     if storyline is None:
         raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
@@ -1350,7 +1400,7 @@ async def artifact_storyline(request: Request, repo_full: str, artifact_path: st
 
 @app.post("/api/repos/{repo_full:path}/onboard")
 async def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
-    _require_repo_dashboard_access(request, repo_full)
+    _require_repo_dashboard_mutation_access(request, repo_full)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, payload.installation_id)
 
@@ -1392,7 +1442,7 @@ async def run_repo_onboarding(request: Request, repo_full: str, payload: Reposit
 
 @app.post("/api/repos/{repo_full:path}/backfill")
 async def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
-    _require_repo_dashboard_access(request, repo_full)
+    _require_repo_dashboard_mutation_access(request, repo_full)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
     token = get_installation_token(jwt_token, payload.installation_id)
     executed_jobs = execute_repository_history_backfill(
@@ -1414,7 +1464,7 @@ async def run_repo_backfill(request: Request, repo_full: str, payload: Repositor
 
 @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
 async def promote_artifact_baseline(request: Request, repo_full: str, artifact_path: str):
-    _require_repo_dashboard_access(request, repo_full)
+    _require_repo_dashboard_mutation_access(request, repo_full)
     baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
     if baseline is None:
         raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")

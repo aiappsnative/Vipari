@@ -246,6 +246,7 @@ def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):
         allocate_repo_to_workspace,
         create_user_session,
         create_workspace,
+        replace_repo_connections,
         update_repo_allocation_status,
         upsert_entitlement,
         upsert_github_identity,
@@ -306,6 +307,27 @@ def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):
         target_type="User",
         status="active",
     )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repositories=[
+            {
+                "repo_github_id": "dummyAI",
+                "repo_full": "doria90/dummyAI",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "openfang",
+                "repo_full": "doria90/openfang",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
 
     for repo_full in ["doria90/dummyAI", "doria90/openfang"]:
         onboard_repository(
@@ -342,13 +364,21 @@ def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):
             "/api/repos/doria90/openfang/dashboard",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
+        mutation_response = client.post(
+            "/api/repos/doria90/openfang/artifacts/prompts/refund.txt/baseline",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     main.AUDIT_DB_PATH = original_db_path
 
     assert overview_response.status_code == 200
-    assert [repo["repo_full"] for repo in overview_response.json()["repos"]] == ["doria90/dummyAI"]
-    assert [repo["repo_full"] for repo in index_response.json()["repos"]] == ["doria90/dummyAI"]
-    assert unallocated_repo_response.status_code == 404
+    assert [repo["repo_full"] for repo in overview_response.json()["repos"]] == ["doria90/dummyAI", "doria90/openfang"]
+    assert overview_response.json()["repos"][0]["dashboard_scope"] == "allocated"
+    assert overview_response.json()["repos"][1]["dashboard_scope"] == "connected_history"
+    assert [repo["repo_full"] for repo in index_response.json()["repos"]] == ["doria90/dummyAI", "doria90/openfang"]
+    assert index_response.json()["repos"][1]["dashboard_scope"] == "connected_history"
+    assert unallocated_repo_response.status_code == 200
+    assert mutation_response.status_code == 404
 
 
 def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):

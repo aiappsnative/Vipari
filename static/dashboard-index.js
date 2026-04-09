@@ -832,9 +832,14 @@ function renderReposTable(repos = [], attentionRepos = []) {
     return repos.map((repo) => {
         const attention = attentionByRepo.get(repo.repo_full);
         const openItems = Number(attention?.review_now_count || 0) + Number(attention?.watch_count || 0);
+        const scopeBadge = repo.dashboard_scope === "connected_history"
+            ? '<span class="tag tag-muted repo-scope-badge">connected history</span>'
+            : repo.allocation_status
+                ? `<span class="tag repo-scope-badge repo-scope-badge-active">${escapeHtml(repo.allocation_status)}</span>`
+                : "";
         return `
             <tr class="repos-table-row" data-repo-row="${escapeHtml(repo.repo_full)}" tabindex="0">
-                <td><a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${escapeHtml(repo.repo_full)}</a></td>
+                <td><div class="repo-name-cell"><a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${escapeHtml(repo.repo_full)}</a>${scopeBadge}</div></td>
                 <td>${openItems}</td>
                 <td>${summarizeDriftMagnitude(attention)}</td>
                 <td>—</td>

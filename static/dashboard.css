@@ -1103,6 +1103,22 @@ strong {
     outline-offset: -1px;
 }
 
+.repo-name-cell {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.repo-scope-badge {
+    flex-shrink: 0;
+}
+
+.repo-scope-badge-active {
+    background: rgba(79, 152, 163, 0.10);
+    color: var(--color-primary);
+}
+
 .brief-panel {
     display: grid;
     gap: var(--space-2);

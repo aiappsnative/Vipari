@@ -1,0 +1,40 @@
+name: Generate SBOM
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/**
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install application and SBOM dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-sbom.txt
+
+      - name: Generate CycloneDX SBOM
+        run: python scripts/generate_sbom.py --output artifacts/sbom/driftguard.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: driftguard-sbom
+          path: artifacts/sbom/driftguard.cyclonedx.json
+          if-no-files-found: error
+          retention-days: 14

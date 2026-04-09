@@ -30,6 +30,7 @@ dist/
 *.db-shm
 *.db-wal
 artifacts/oss-evals/
+artifacts/sbom/
 
 # Keys
 *.pem

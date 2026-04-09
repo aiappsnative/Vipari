@@ -218,6 +218,42 @@ def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_pat
     assert all(entry.discovered_artifact_count == 1 for entry in index)
 
 
+def test_list_repo_dashboard_index_carries_repo_scope_metadata(tmp_path):
+    db_path = str(tmp_path / "dashboard-scope.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-one",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/a.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "You are a safe assistant.",
+    )
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-two",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/b.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "Use judgment carefully.",
+    )
+
+    index = list_repo_dashboard_index(
+        db_path,
+        allowed_repo_fulls={"doria90/repo-one", "doria90/repo-two"},
+        repo_scope_by_full={"doria90/repo-one": "allocated", "doria90/repo-two": "connected_history"},
+        allocation_status_by_full={"doria90/repo-one": "onboarded"},
+    )
+
+    assert [(entry.repo_full, entry.dashboard_scope, entry.allocation_status) for entry in index] == [
+        ("doria90/repo-one", "allocated", "onboarded"),
+        ("doria90/repo-two", "connected_history", None),
+    ]
+
+
 def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(tmp_path):
     db_path = str(tmp_path / "overview.db")
     init_db(db_path)
