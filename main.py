@@ -653,6 +653,25 @@ def _require_workspace_role(access_context: dict[str, object], *allowed_roles: s
         raise HTTPException(status_code=403, detail="This action requires a workspace owner or admin role.")
 
 
+def _validate_csrf_secret(csrf_secret: str | None, submitted_token: str | None) -> None:
+    if not csrf_secret or not submitted_token or not hmac.compare_digest(csrf_secret, submitted_token):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+
+
+def _public_session_payload(session) -> dict[str, object] | None:
+    if session is None:
+        return None
+    return {
+        "user_id": session.user_id,
+        "workspace_id": session.workspace_id,
+        "expires_at": session.expires_at,
+        "revoked_at": session.revoked_at,
+        "last_seen_at": session.last_seen_at,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def marketing_page():
     return HTMLResponse(render_control_plane_marketing_page())
@@ -842,15 +861,17 @@ async def profile_page(request: Request):
             status_note="Profile updated." if request.query_params.get("updated") else None,
             resolution=access_context["resolution"],
             admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            csrf_token=access_context["session"].csrf_secret,
         )
     )
 
 
 @app.post("/app/profile")
-async def profile_update(request: Request, display_name: str = Form(...), theme_preference: str | None = Form(None)):
+async def profile_update(request: Request, display_name: str = Form(...), theme_preference: str | None = Form(None), csrf_token: str | None = Form(None)):
     access_context = _current_workspace_context(request)
     if not _has_profile_access(access_context):
         raise HTTPException(status_code=403, detail="Profile page is available only for Starter tier and above.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     normalized_name = display_name.strip()
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Display name cannot be empty.")
@@ -884,7 +905,8 @@ async def admin_page(request: Request):
 
 @app.get("/app/workspaces/new", response_class=HTMLResponse)
 async def workspace_new_page(request: Request):
-    if _get_session(request) is None:
+    session = _get_session(request)
+    if session is None:
         return RedirectResponse("/login", status_code=303)
     flow_context = _flow_context_from_request(request)
     selected_plan = flow_context.get("plan")
@@ -895,15 +917,17 @@ async def workspace_new_page(request: Request):
         render_control_plane_workspace_new_page(
             selected_plan_label=selected_plan_label,
             source_label=source_label,
+            csrf_token=session.csrf_secret,
         )
     )
 
 
 @app.post("/app/workspaces/bootstrap")
-async def workspace_bootstrap(request: Request, name: str | None = Form(default=None)):
+async def workspace_bootstrap(request: Request, name: str | None = Form(default=None), csrf_token: str | None = Form(default=None)):
     session = _get_session(request)
     if session is None:
         return RedirectResponse("/login", status_code=303)
+    _validate_csrf_secret(session.csrf_secret, csrf_token)
     flow_context = _flow_context_from_request(request)
     pending_install = _pending_install_context_from_request(request)
     workspace_name = (name or request.query_params.get("name") or "DriftGuard Workspace").strip()
@@ -978,13 +1002,15 @@ async def billing_page(request: Request):
             checkout_status_note=checkout_status_note,
             flow_context=flow_context,
             portal_url=portal_url,
+            csrf_token=access_context["session"].csrf_secret,
         )
     )
 
 
 @app.post("/app/billing/checkout")
-async def billing_checkout(request: Request, plan: str | None = Form(default=None)):
+async def billing_checkout(request: Request, plan: str | None = Form(default=None), csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     _require_workspace_role(access_context, "owner", "admin")
     normalized_plan = _normalize_plan_hint(plan or request.query_params.get("plan"))
     if normalized_plan is None:
@@ -1158,6 +1184,7 @@ async def install_page(request: Request):
             installation_summary=installation_summary,
             install_url=install_url,
             install_callback_url=_path_with_flow_context("/app/setup/install/callback", flow_context),
+            csrf_token=access_context["session"].csrf_secret,
         )
     )
 
@@ -1219,8 +1246,10 @@ async def install_link(
     account_login: str = Form(default=""),
     account_type: str = Form(default="Organization"),
     repo_fulls: str = Form(default=""),
+    csrf_token: str | None = Form(default=None),
 ):
     access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     _require_workspace_role(access_context, "owner", "admin")
     workspace = access_context["workspace"]
     if not installation_id.isdigit():
@@ -1245,15 +1274,16 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
-            repo_cards=render_repo_connection_cards(connections),
+            repo_cards=render_repo_connection_cards(connections, csrf_token=access_context["session"].csrf_secret),
             allocation_cards=render_repo_allocation_cards(allocations),
         )
     )
 
 
 @app.post("/app/setup/repos/allocate")
-async def repo_allocate(request: Request, repo_full: str):
+async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     _require_workspace_role(access_context, "owner", "admin")
     workspace = access_context["workspace"]
     installation = access_context["installation"]
@@ -1307,7 +1337,7 @@ async def auth_session(request: Request):
     access_context = _build_access_context(session)
     payload = {
         "authenticated": True,
-        "session": asdict(access_context["session"]),
+        "session": _public_session_payload(access_context["session"]),
         "user": asdict(access_context["user"]) if access_context["user"] else None,
         "identity": asdict(access_context["identity"]) if access_context["identity"] else None,
         "workspace": asdict(access_context["workspace"]) if access_context["workspace"] else None,
@@ -1413,7 +1443,8 @@ async def dashboard_overview(request: Request):
 
 
 @app.get("/api/persistence")
-async def persistence_status():
+async def persistence_status(request: Request):
+    _require_dashboard_access(request)
     payload = asdict(get_persistence_status(AUDIT_DB_PATH))
     payload.pop("database_path", None)
     return JSONResponse(payload)

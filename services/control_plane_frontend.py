@@ -224,6 +224,10 @@ def _render_action_chip(label: str | None, href: str | None, *, fallback: str) -
     return f'<span>{html_escape(text)}</span>'
 
 
+def _csrf_input(csrf_token: str) -> str:
+    return f'<input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />'
+
+
 def _render_quick_links(*, profile_url: str | None = None, admin_url: str | None = None) -> str:
     links = ['<a class="subtle-link" href="/app">Workspace</a>']
     if profile_url:
@@ -285,7 +289,7 @@ def render_control_plane_pricing_page() -> str:
     return _load_template("control_plane_pricing.html")
 
 
-def render_control_plane_workspace_new_page(*, selected_plan_label: str | None = None, source_label: str | None = None) -> str:
+def render_control_plane_workspace_new_page(*, selected_plan_label: str | None = None, source_label: str | None = None, csrf_token: str) -> str:
     template = _load_template("control_plane_workspace_new.html")
     context_lines: list[str] = []
     if selected_plan_label:
@@ -293,7 +297,7 @@ def render_control_plane_workspace_new_page(*, selected_plan_label: str | None =
     if source_label:
         context_lines.append(f"Entry source: {source_label}.")
     context_message = " ".join(context_lines) if context_lines else "Create the first DriftGuard workspace before billing and GitHub installation continue."
-    return template.replace("{{WORKSPACE_CONTEXT}}", html_escape(context_message))
+    return template.replace("{{WORKSPACE_CONTEXT}}", html_escape(context_message)).replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
 
 
 def render_control_plane_billing_page(
@@ -305,6 +309,7 @@ def render_control_plane_billing_page(
     checkout_status_note: str | None,
     flow_context: dict[str, str],
     portal_url: str | None,
+    csrf_token: str,
 ) -> str:
     template = _load_template("control_plane_billing.html")
     portal_block = (
@@ -324,6 +329,7 @@ def render_control_plane_billing_page(
                 <h2>{html_escape(plan.label)}</h2>
                 <p>Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
                 <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}">
+                    {_csrf_input(csrf_token)}
                     <button type="submit" class="button">{html_escape(button_label)}</button>
                 </form>
             </article>
@@ -346,6 +352,7 @@ def render_control_plane_install_page(
     installation_summary: str,
     install_url: str | None,
     install_callback_url: str,
+    csrf_token: str,
 ) -> str:
     template = _load_template("control_plane_install.html")
     install_action = (
@@ -353,6 +360,7 @@ def render_control_plane_install_page(
     )
     manual_link_form = f'''
         <form method="post" action="/app/setup/install/link" class="action-form">
+            {_csrf_input(csrf_token)}
             <label class="field-label" for="installation-id">Installation id</label>
             <input class="field-input" id="installation-id" name="installation_id" placeholder="12345678" />
             <label class="field-label" for="account-login">Account login</label>
@@ -381,7 +389,7 @@ def render_control_plane_repo_setup_page(*, workspace_name: str, repo_cards: str
     )
 
 
-def render_repo_connection_cards(connections: list[dict[str, str]]) -> str:
+def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
     if not connections:
         return '<article class="action-card"><div class="eyebrow">No synced repositories</div><h2>Link an installation first</h2><p>No repository connections are available for allocation yet.</p></article>'
     rendered: list[str] = []
@@ -393,6 +401,7 @@ def render_repo_connection_cards(connections: list[dict[str, str]]) -> str:
                 <h2>{html_escape(connection["repo_full"])}</h2>
                 <p>Default branch: {html_escape(connection.get("default_branch") or "unknown")}</p>
                 <form action="/app/setup/repos/allocate?repo_full={html_escape(connection['repo_full'])}" method="post">
+                    {_csrf_input(csrf_token)}
                     <button type="submit" class="button">Allocate and onboard</button>
                 </form>
             </article>
@@ -455,6 +464,7 @@ def render_control_plane_profile_page(
     status_note: str | None,
     resolution: WorkspaceAccessResolution,
     admin_url: str | None,
+    csrf_token: str,
 ) -> str:
     template = _load_template("control_plane_profile.html")
     admin_nav_item = ""
@@ -465,6 +475,7 @@ def render_control_plane_profile_page(
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{THEME_DARK_CHECKED}}", "checked" if theme_preference == "dark" else "")
         .replace("{{THEME_LIGHT_CHECKED}}", "checked" if theme_preference == "light" else "")
+        .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{GITHUB_LOGIN}}", html_escape(github_login))

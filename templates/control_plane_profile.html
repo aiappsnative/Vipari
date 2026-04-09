@@ -62,6 +62,7 @@
                             <h1 class="profile-title">{{DISPLAY_NAME}}</h1>
                             <p class="profile-copy">Update how your name appears inside DriftGuard and choose the dashboard shell theme. Your GitHub identity remains read-only.</p>
                             <form method="post" action="/app/profile" class="profile-form">
+                                {{CSRF_INPUT}}
                                 <label class="profile-label" for="display-name">Display name</label>
                                 <input class="profile-input" id="display-name" name="display_name" value="{{DISPLAY_NAME}}" maxlength="120" />
                                 <fieldset class="theme-picker" aria-labelledby="theme-picker-title">

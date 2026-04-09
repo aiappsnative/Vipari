@@ -177,6 +177,8 @@ def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstr
     ).json()
     assert auth_payload["authenticated"] is True
     assert auth_payload["session"]["workspace_id"] is None
+    assert "session_id" not in auth_payload["session"]
+    assert "csrf_secret" not in auth_payload["session"]
 
     from services.control_plane_records import _connect
 
@@ -216,6 +218,7 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
 
     response = client.post(
         "/app/workspaces/bootstrap?name=PromptDrift%20Team",
+        data={"csrf_token": session.csrf_secret},
         cookies={
             main.settings.session_cookie_name: session.session_id,
             "promptdrift_oauth_context": main._encode_context_cookie({"source": "base44", "plan": "team"}),
@@ -277,7 +280,7 @@ def test_free_checkout_activates_local_entitlement_and_redirects_to_install(tmp_
 
     response = client.post(
         "/app/billing/checkout",
-        data={"plan": "free"},
+        data={"plan": "free", "csrf_token": session.csrf_secret},
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
@@ -565,7 +568,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     post_response = client.post(
         "/app/profile",
         cookies={main.settings.session_cookie_name: session.session_id},
-        data={"display_name": "Updated Starter User", "theme_preference": "light"},
+        data={"display_name": "Updated Starter User", "theme_preference": "light", "csrf_token": session.csrf_secret},
         follow_redirects=False,
     )
 
@@ -1052,6 +1055,38 @@ def test_dashboard_requires_session_when_control_plane_is_active(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_persistence_api_requires_dashboard_access_when_control_plane_is_active(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "persistence-guard.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="701",
+        github_login="persistence-owner",
+        display_name="Persistence Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="persistence-workspace",
+        display_name="Persistence Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    response = client.get("/api/persistence")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "control-plane-flow.db")
@@ -1095,6 +1130,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         checkout_response = client.post(
             "/app/billing/checkout?plan=team",
             cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
         )
 
@@ -1155,6 +1191,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         "/app/setup/install/link",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
+            "csrf_token": session.csrf_secret,
             "installation_id": "12345",
             "account_login": "doria90",
             "account_type": "Organization",
@@ -1180,6 +1217,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         allocate_response = client.post(
             "/app/setup/repos/allocate?repo_full=doria90/dummyAI",
             cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
         )
 
@@ -1252,11 +1290,13 @@ def test_workspace_viewer_cannot_mutate_billing_or_repo_setup(tmp_path):
     billing_response = client.post(
         "/app/billing/checkout?plan=team",
         cookies={main.settings.session_cookie_name: viewer_session.session_id},
+        data={"csrf_token": viewer_session.csrf_secret},
     )
     install_response = client.post(
         "/app/setup/install/link",
         cookies={main.settings.session_cookie_name: viewer_session.session_id},
         data={
+            "csrf_token": viewer_session.csrf_secret,
             "installation_id": "12345",
             "account_login": "doria90",
             "account_type": "Organization",
@@ -1409,6 +1449,7 @@ def test_billing_checkout_rejects_unknown_plan(tmp_path):
     response = client.post(
         "/app/billing/checkout?plan=unknown",
         cookies={main.settings.session_cookie_name: session.session_id},
+        data={"csrf_token": session.csrf_secret},
     )
 
     assert response.status_code == 400
