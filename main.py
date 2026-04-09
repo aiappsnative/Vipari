@@ -320,11 +320,21 @@ def _normalize_plan_hint(value: str | None) -> str | None:
         return None
 
 
+def _normalize_email(value: str | None) -> str | None:
+    candidate = (value or "").strip().lower()
+    return candidate or None
+
+
 def _normalize_theme_preference(value: str | None) -> str | None:
     candidate = (value or "").strip().lower()
     if candidate in {"dark", "light"}:
         return candidate
     return None
+
+
+def _require_token_encryption_config() -> None:
+    if not settings.has_encryption_key:
+        raise HTTPException(status_code=503, detail="APP_ENCRYPTION_KEY must be configured before GitHub OAuth can store user tokens.")
 
 
 def _encode_context_cookie(payload: dict[str, object]) -> str:
@@ -676,6 +686,7 @@ async def github_auth_start(request: Request):
         return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
     if not settings.has_github_oauth_credentials:
         raise HTTPException(status_code=503, detail="GitHub OAuth is not configured.")
+    _require_token_encryption_config()
     state = generate_oauth_state()
     authorize_url = build_github_oauth_authorize_url(
         settings.github_oauth_client_id,
@@ -718,6 +729,7 @@ async def github_auth_callback(
         raise HTTPException(status_code=400, detail="OAuth state validation failed.")
     if not code:
         raise HTTPException(status_code=400, detail="GitHub OAuth callback is missing the code parameter.")
+    _require_token_encryption_config()
 
     token: GithubOAuthToken = exchange_code_for_access_token(
         settings.github_oauth_client_id,
@@ -1329,6 +1341,9 @@ async def base44_billing_handoff(request: Request):
         raise HTTPException(status_code=400, detail="Unknown plan code.")
     if not get_plan_definition(normalized_plan).requires_billing:
         raise HTTPException(status_code=400, detail="Free plan does not require billing handoff.")
+    billing_email = _normalize_email(payload.billing_email)
+    if billing_email is None:
+        raise HTTPException(status_code=400, detail="Billing handoff payload must include a billing email.")
 
     claim = create_billing_handoff_claim(
         AUDIT_DB_PATH,
@@ -1337,7 +1352,7 @@ async def base44_billing_handoff(request: Request):
         external_purchase_id=payload.external_purchase_id.strip(),
         plan_code=normalized_plan,
         billing_status=(payload.billing_status or "active").strip().lower(),
-        billing_email=(payload.billing_email or "").strip() or None,
+        billing_email=billing_email,
         source=_normalize_source_hint(payload.source) or "base44",
         next_payment_at=_parse_optional_timestamp(payload.next_payment_at),
         expires_at=time.time() + settings.billing_handoff_ttl_seconds,

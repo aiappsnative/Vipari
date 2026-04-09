@@ -76,7 +76,9 @@ def test_app_page_ignores_preview_state_and_redirects_to_login_when_unauthentica
 def test_github_auth_start_redirects_to_provider_when_configured():
     with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
         main.settings, "github_oauth_client_secret", "client-secret"
-    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"):
+    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"), patch.object(
+        main.settings, "app_encryption_key", "very-secret"
+    ):
         response = client.get("/auth/github/start", follow_redirects=False)
 
     assert response.status_code == 302
@@ -119,6 +121,16 @@ def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
     assert response.status_code == 303
     assert response.headers["location"] == "/app/workspaces/new?source=base44&plan=team"
     main.AUDIT_DB_PATH = original_db_path
+
+
+def test_github_auth_start_requires_encryption_key_when_oauth_is_enabled():
+    with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
+        main.settings, "github_oauth_client_secret", "client-secret"
+    ), patch.object(main.settings, "app_encryption_key", ""):
+        response = client.get("/auth/github/start", follow_redirects=False)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "APP_ENCRYPTION_KEY must be configured before GitHub OAuth can store user tokens."
 
 
 def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstrap(tmp_path):
@@ -823,6 +835,92 @@ def test_base44_handoff_creates_claim_url(tmp_path):
     assert "/claim/" in body["claim_url"]
 
     main.settings.billing_handoff_secret = original_secret
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_base44_handoff_requires_billing_email(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_secret = main.settings.billing_handoff_secret
+    main.AUDIT_DB_PATH = str(tmp_path / "base44-handoff-missing-email.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.billing_handoff_secret = "shared-secret"
+
+    payload = {
+        "provider": "base44",
+        "external_purchase_id": "purchase-456",
+        "plan_code": "starter",
+        "billing_status": "active",
+        "source": "base44",
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+    signature = main.hmac.new(b"shared-secret", raw_body, main.hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/api/billing/handoff/base44",
+        content=raw_body,
+        headers={"X-DriftGuard-Signature": signature, "content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Billing handoff payload must include a billing email."
+
+    main.settings.billing_handoff_secret = original_secret
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_billing_claim_rejects_workspace_user_with_mismatched_email(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "billing-claim-email-guard.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_billing_handoff_claim, create_user_session, create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="955",
+        github_login="wrong-buyer",
+        display_name="Wrong Buyer",
+        primary_email="wrong@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="claim-guard-workspace",
+        display_name="Claim Guard Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="claim-guard-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    create_billing_handoff_claim(
+        main.AUDIT_DB_PATH,
+        claim_token="claim-email-guard-1",
+        provider="base44",
+        external_purchase_id="purchase-email-guard-1",
+        plan_code="starter",
+        billing_status="active",
+        billing_email="buyer@example.com",
+        source="base44",
+        next_payment_at=time.time() + 604800,
+        expires_at=time.time() + 604800,
+    )
+
+    response = client.get(
+        "/app/billing/claim?claim=claim-email-guard-1",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Billing handoff claim does not belong to this user."
+
     main.AUDIT_DB_PATH = original_db_path
 
 

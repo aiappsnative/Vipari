@@ -1,1 +1,1 @@
-cyclonedx-bom
+cyclonedx-bom==7.3.0

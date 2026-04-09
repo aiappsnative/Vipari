@@ -13,7 +13,7 @@ def _fernet(secret: str) -> Fernet:
 
 def encrypt_text(value: str, secret: str) -> str:
     if not secret:
-        return value
+        raise ValueError("APP_ENCRYPTION_KEY is required to encrypt stored secrets.")
     return _fernet(secret).encrypt(value.encode("utf-8")).decode("utf-8")
 
 

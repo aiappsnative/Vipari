@@ -84,6 +84,9 @@ def main() -> None:
     if oauth_callback_url and not oauth_callback_url.endswith("/auth/github/callback"):
         print("GITHUB_OAUTH_CALLBACK_URL should normally end with /auth/github/callback: CHECK")
 
+    if not os.getenv("APP_ENCRYPTION_KEY") and (os.getenv("GITHUB_OAUTH_CLIENT_ID") or os.getenv("GITHUB_OAUTH_CLIENT_SECRET")):
+        print("APP_ENCRYPTION_KEY is required when GitHub OAuth is enabled: CHECK")
+
     install_callback_url = f"{app_base_url.rstrip('/')}/app/setup/install/callback" if app_base_url else None
     if install_callback_url:
         print(f"Recommended GitHub App setup URL: {install_callback_url}")

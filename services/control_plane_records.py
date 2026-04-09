@@ -1362,10 +1362,21 @@ def activate_billing_handoff_claim(
         if row is None:
             raise ValueError("Unknown billing handoff claim.")
         claim = _row_to_billing_handoff_claim(row)
-        if claim.consumed_at is not None and claim.claimed_workspace_id not in (None, workspace_id):
+        if claim.consumed_at is not None and (claim.claimed_workspace_id != workspace_id or claim.claimed_user_id != user_id):
             raise ValueError("Billing handoff claim is already consumed.")
         if claim.expires_at < now:
             raise ValueError("Billing handoff claim has expired.")
+        if not claim.billing_email:
+            raise ValueError("Billing handoff claim is missing a billing email and cannot be securely activated.")
+
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user_row is None:
+            raise ValueError("Authenticated user not found.")
+        user = _row_to_user(user_row)
+        normalized_user_email = (user.primary_email or "").strip().lower()
+        normalized_claim_email = claim.billing_email.strip().lower()
+        if not normalized_user_email or normalized_user_email != normalized_claim_email:
+            raise ValueError("Billing handoff claim does not belong to this user.")
 
         synthetic_customer_id = f"{claim.provider}:customer:{claim.external_purchase_id}"
         synthetic_subscription_id = f"{claim.provider}:subscription:{claim.external_purchase_id}"
