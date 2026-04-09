@@ -81,12 +81,26 @@ function detailAttributeProfile(item) {
     return asArray(riskItem?.attribute_profile).filter((entry) => entry.attribute_key !== "control_surface_type");
 }
 
+function attributeScore(entry, keyPrefix) {
+    const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
+    const score = Number(entry?.[scoreKey]);
+    if (Number.isFinite(score)) {
+        return clamp(score, 0, 1);
+    }
+    const fallbackKey = keyPrefix === "baseline" ? "baseline_value" : "current_value";
+    const fallback = Number(entry?.[fallbackKey]);
+    if (Number.isFinite(fallback)) {
+        return clamp(fallback, 0, 1);
+    }
+    return 0;
+}
+
 function averageProfileValue(entries, keyPrefix) {
     if (!entries.length) {
         return 0;
     }
     const values = entries
-        .map((entry) => Number(keyPrefix === "baseline" ? entry.baseline_value : entry.current_value))
+        .map((entry) => attributeScore(entry, keyPrefix))
         .filter((value) => Number.isFinite(value));
     if (!values.length) {
         return 0;
@@ -150,10 +164,14 @@ function renderAttributeBars(entries) {
         return '<div class="muted">No attribute-level drift profile is available for this selected repo yet.</div>';
     }
     return entries.map((entry) => {
-        const baseline = clamp(Number(entry.baseline_value || 0), 0, 1);
-        const current = clamp(Number(entry.current_value || 0), 0, 1);
+        const baseline = attributeScore(entry, "baseline");
+        const current = attributeScore(entry, "current");
         const direction = String(entry.direction || "").toLowerCase();
-        const currentTone = direction === "weaker" ? "declined" : direction === "stronger" ? "expanded" : "stable";
+        const currentTone = ["weaker", "reduced", "decreased"].includes(direction)
+            ? "declined"
+            : ["stronger", "expanded", "increased"].includes(direction)
+                ? "expanded"
+                : "stable";
         return `
             <div class="attr-row">
                 <span class="attr-label">${escapeHtml(entry.label || entry.attribute_key || "Attribute")}</span>

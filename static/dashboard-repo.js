@@ -79,6 +79,20 @@ function findDesignProfile(artifactPath) {
     return asArray(window.__designProfiles).find((item) => item.artifact_path === artifactPath) || null;
 }
 
+function attributeScore(entry, keyPrefix) {
+    const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
+    const score = Number(entry?.[scoreKey]);
+    if (Number.isFinite(score)) {
+        return clamp(score, 0, 1);
+    }
+    const fallbackKey = keyPrefix === "baseline" ? "baseline_value" : "current_value";
+    const fallback = Number(entry?.[fallbackKey]);
+    if (Number.isFinite(fallback)) {
+        return clamp(fallback, 0, 1);
+    }
+    return 0;
+}
+
 function renderInsightChips(item, profile) {
     const reasons = [...new Set([...(item.risk_reasons || []), ...((profile?.risk_tags) || [])])];
     return reasons.slice(0, 4).map((reason) => {
@@ -122,10 +136,14 @@ function renderAttributeBars(profile) {
         return '<div class="muted">No attribute-level baseline comparison is available for this artifact yet.</div>';
     }
     return attributes.map((entry) => {
-        const baseline = clamp(Number(entry.baseline_value || 0), 0, 1);
-        const current = clamp(Number(entry.current_value || 0), 0, 1);
+        const baseline = attributeScore(entry, "baseline");
+        const current = attributeScore(entry, "current");
         const direction = String(entry.direction || "").toLowerCase();
-        const tone = direction === "weaker" ? "declined" : direction === "stronger" ? "expanded" : "stable";
+        const tone = ["weaker", "reduced", "decreased"].includes(direction)
+            ? "declined"
+            : ["stronger", "expanded", "increased"].includes(direction)
+                ? "expanded"
+                : "stable";
         return `
             <div class="attr-row">
                 <span class="attr-label">${escapeHtml(entry.label || entry.attribute_key || "Attribute")}</span>
@@ -149,7 +167,7 @@ function averageProfileScore(profile, key) {
         return 0;
     }
     const values = attributes
-        .map((entry) => Number(key === "baseline" ? entry.baseline_value : entry.current_value))
+        .map((entry) => attributeScore(entry, key))
         .filter((value) => Number.isFinite(value));
     if (!values.length) {
         return 0;
