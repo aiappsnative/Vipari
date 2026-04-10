@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape as html_escape
 from pathlib import Path
+from urllib.parse import quote
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
 from .entitlements import PLAN_DEFINITIONS
@@ -380,29 +381,43 @@ def render_control_plane_install_page(
     )
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, repo_cards: str, allocation_cards: str) -> str:
+def _repo_dashboard_href(repo_full: str) -> str:
+    return f'/dashboard/{quote(repo_full, safe="")}'
+
+
+def render_control_plane_repo_setup_page(*, workspace_name: str, repo_cards: str, allocation_cards: str, audit_href: str) -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{REPO_CARDS}}", repo_cards)
         .replace("{{ALLOCATION_CARDS}}", allocation_cards)
+        .replace("{{AUDIT_HREF}}", html_escape(audit_href))
     )
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
     if not connections:
-        return '<article class="action-card"><div class="eyebrow">No synced repositories</div><h2>Link an installation first</h2><p>No repository connections are available for allocation yet.</p></article>'
+        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">No synced repositories</div><h3>Link an installation first</h3><p>No repository connections are available for allocation yet.</p></article>'
     rendered: list[str] = []
     for connection in connections:
+        visibility = "Private" if connection.get("is_private") else "Public"
         rendered.append(
             f'''
-            <article class="action-card">
-                <div class="eyebrow">Available repository</div>
-                <h2>{html_escape(connection["repo_full"])}</h2>
-                <p>Default branch: {html_escape(connection.get("default_branch") or "unknown")}</p>
+            <article class="repo-setup-card">
+                <div class="repo-setup-card-top">
+                    <div class="repo-setup-card-label">Available repository</div>
+                    <span class="repo-setup-chip">{html_escape(visibility)}</span>
+                </div>
+                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(connection['repo_full']))}">{html_escape(connection["repo_full"])}</a></h3>
+                <div class="repo-setup-meta-row">
+                    <span class="repo-setup-meta-label">Default branch</span>
+                    <span class="repo-setup-meta-value">{html_escape(connection.get("default_branch") or "unknown")}</span>
+                </div>
+                <p>Allocate this repository to start onboarding, baseline capture, and repo-level journey tracking.</p>
+                <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(connection['repo_full']))}">Open audit page</a>
                 <form action="/app/setup/repos/allocate?repo_full={html_escape(connection['repo_full'])}" method="post">
                     {_csrf_input(csrf_token)}
-                    <button type="submit" class="button">Allocate and onboard</button>
+                    <button type="submit" class="repo-setup-button">Allocate and onboard</button>
                 </form>
             </article>
             '''
@@ -412,15 +427,19 @@ def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_toke
 
 def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
     if not allocations:
-        return '<article class="action-card"><div class="eyebrow">Licensed repositories</div><h2>No allocations yet</h2><p>Allocated repositories will appear here as soon as a workspace starts onboarding.</p></article>'
+        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Allocated repositories</div><h3>No allocations yet</h3><p>Allocated repositories will appear here as soon as a workspace starts onboarding.</p></article>'
     rendered: list[str] = []
     for allocation in allocations:
         rendered.append(
             f'''
-            <article class="action-card action-card-strong">
-                <div class="eyebrow">Allocated repository</div>
-                <h2>{html_escape(allocation["repo_full"])}</h2>
-                <p>Status: {html_escape(allocation["allocation_status"])}.</p>
+            <article class="repo-setup-card repo-setup-card-strong">
+                <div class="repo-setup-card-top">
+                    <div class="repo-setup-card-label">Allocated repository</div>
+                    <span class="repo-setup-chip repo-setup-chip-strong">{html_escape(allocation["allocation_status"].replace('_', ' '))}</span>
+                </div>
+                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(allocation['repo_full']))}">{html_escape(allocation["repo_full"])}</a></h3>
+                <p>This repository is already assigned to the workspace and contributes to dashboard posture and journey views.</p>
+                <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(allocation['repo_full']))}">Open audit page</a>
             </article>
             '''
         )

@@ -582,9 +582,26 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'data-theme="light"' in updated_get_response.text
     assert 'value="light" checked' in updated_get_response.text
 
-    from services.dashboard_frontend import render_dashboard_index_page
+    from services.dashboard_frontend import render_dashboard_index_page, render_repo_dashboard_page
 
-    assert 'data-theme="light"' in render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
+    dashboard_html = render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
+    assert 'data-theme="light"' in dashboard_html
+    assert 'class="dashboard-index-page"' in dashboard_html
+    assert "Urgent Items for Review" in dashboard_html
+    assert "Version Journey" in dashboard_html
+    assert "Repo Posture Radar" in dashboard_html
+    assert "Coverage" in dashboard_html
+    assert 'href="/app/setup/repos"' in dashboard_html
+    assert 'id="audit-logs-link"' in dashboard_html
+    assert 'class="sidebar-profile-link"' in dashboard_html
+    assert 'id="journey-repo-name"' in dashboard_html
+
+    repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
+    assert 'class="repo-audit-page"' in repo_dashboard_html
+    assert "Audit Page" in repo_dashboard_html
+    assert "Audit Queue" in repo_dashboard_html
+    assert 'href="/dashboard/doria90/hermes-agent"' in repo_dashboard_html
+    assert 'href="/app/setup/repos"' in repo_dashboard_html
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1247,6 +1264,9 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert dashboard_response.status_code == 200
+    assert "Urgent Items for Review" in dashboard_response.text
+    assert "Repo Posture Radar" in dashboard_response.text
+    assert 'href="/app/setup/repos"' in dashboard_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1478,6 +1498,12 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
+    assert 'class="repo-setup-page"' in repo_setup_response.text
+    assert "Available Repositories" in repo_setup_response.text
+    assert 'href="/dashboard"' in repo_setup_response.text
+    assert 'href="/app/setup/repos"' in repo_setup_response.text
+    assert 'href="/dashboard/doria90%2FdummyAI"' in repo_setup_response.text
+    assert "Open audit page" in repo_setup_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

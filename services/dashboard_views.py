@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import sqlite3
-from dataclasses import asdict, dataclass
+import threading
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
@@ -31,6 +33,54 @@ from .onboarding_records import (
     list_onboarding_baseline_versions_for_onboarding,
 )
 from .persistence import connect_sqlite
+
+
+_DASHBOARD_CACHE_LOCK = threading.RLock()
+_DASHBOARD_CACHE_MAX_ENTRIES = 128
+_OVERVIEW_VIEW_CACHE: dict[tuple[Any, ...], DashboardOverviewView] = {}
+_REPO_VIEW_CACHE: dict[tuple[Any, ...], RepoDashboardView] = {}
+
+
+def _db_cache_signature(db_path: str) -> tuple[int, int]:
+    try:
+        stat = os.stat(db_path)
+    except OSError:
+        return (0, 0)
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _freeze_mapping(value: dict[str, str] | None) -> tuple[tuple[str, str], ...] | None:
+    if not value:
+        return None
+    return tuple(sorted((str(key), str(item)) for key, item in value.items()))
+
+
+def _freeze_repo_scope(value: dict[str, str] | None) -> tuple[tuple[str, str], ...] | None:
+    return _freeze_mapping(value)
+
+
+def _freeze_allowed_repo_fulls(value: set[str] | None) -> tuple[str, ...] | None:
+    if not value:
+        return None
+    return tuple(sorted(str(item) for item in value))
+
+
+def _cache_get(cache: dict[tuple[Any, ...], Any], key: tuple[Any, ...]) -> Any | None:
+    with _DASHBOARD_CACHE_LOCK:
+        cached = cache.get(key)
+        if cached is not None:
+            cache.pop(key, None)
+            cache[key] = cached
+        return cached
+
+
+def _cache_set(cache: dict[tuple[Any, ...], Any], key: tuple[Any, ...], value: Any) -> Any:
+    with _DASHBOARD_CACHE_LOCK:
+        cache[key] = value
+        while len(cache) > _DASHBOARD_CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+    return value
 
 
 @dataclass(frozen=True)
@@ -419,13 +469,48 @@ def build_dashboard_overview_view(
     repo_scope_by_full: dict[str, str] | None = None,
     allocation_status_by_full: dict[str, str] | None = None,
 ) -> DashboardOverviewView:
+    cache_key = (
+        "overview",
+        db_path,
+        _db_cache_signature(db_path),
+        _freeze_allowed_repo_fulls(allowed_repo_fulls),
+        _freeze_repo_scope(repo_scope_by_full),
+        _freeze_mapping(allocation_status_by_full),
+    )
+    cached = _cache_get(_OVERVIEW_VIEW_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
+    view = _build_dashboard_overview_view_uncached(
+        db_path,
+        allowed_repo_fulls=allowed_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    return _cache_set(_OVERVIEW_VIEW_CACHE, cache_key, view)
+
+
+def _build_dashboard_overview_view_uncached(
+    db_path: str,
+    allowed_repo_fulls: set[str] | None = None,
+    repo_scope_by_full: dict[str, str] | None = None,
+    allocation_status_by_full: dict[str, str] | None = None,
+) -> DashboardOverviewView:
     repos = list_repo_dashboard_index(
         db_path,
         allowed_repo_fulls=allowed_repo_fulls,
         repo_scope_by_full=repo_scope_by_full,
         allocation_status_by_full=allocation_status_by_full,
     )
-    repo_views = [build_repo_dashboard_view(db_path, repo.repo_full, include_journey=False) for repo in repos]
+    repo_views = [
+        build_repo_dashboard_view(
+            db_path,
+            repo.repo_full,
+            include_journey=False,
+            include_detail_sections=False,
+        )
+        for repo in repos
+    ]
     repo_view_by_full = {view.repo_full: view for view in repo_views}
     repos = [
         RepoDashboardIndexEntry(
@@ -498,7 +583,41 @@ def build_dashboard_overview_view(
     )
 
 
-def build_repo_dashboard_view(db_path: str, repo_full: str, *, include_journey: bool = True) -> RepoDashboardView:
+def build_repo_dashboard_view(
+    db_path: str,
+    repo_full: str,
+    *,
+    include_journey: bool = True,
+    include_detail_sections: bool = True,
+) -> RepoDashboardView:
+    cache_key = (
+        "repo",
+        db_path,
+        _db_cache_signature(db_path),
+        repo_full,
+        include_journey,
+        include_detail_sections,
+    )
+    cached = _cache_get(_REPO_VIEW_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
+    view = _build_repo_dashboard_view_uncached(
+        db_path,
+        repo_full,
+        include_journey=include_journey,
+        include_detail_sections=include_detail_sections,
+    )
+    return _cache_set(_REPO_VIEW_CACHE, cache_key, view)
+
+
+def _build_repo_dashboard_view_uncached(
+    db_path: str,
+    repo_full: str,
+    *,
+    include_journey: bool = True,
+    include_detail_sections: bool = True,
+) -> RepoDashboardView:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
     drift_summary = get_repo_static_drift_summary(db_path, repo_full)
     top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
@@ -588,19 +707,29 @@ def build_repo_dashboard_view(db_path: str, repo_full: str, *, include_journey: 
         )
     )
 
-    insights, lower_confidence_insights = _build_repo_insights(artifact_entries, baseline_by_path, profile_context_by_path)
-    control_surface_groups = _build_control_surface_groups(artifact_entries)
-    history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
-    featured_storyline = _build_featured_storyline(
-        db_path,
-        repo_full,
+    insights, lower_confidence_insights = _build_repo_insights(
         artifact_entries,
-        insights,
         baseline_by_path,
         profile_context_by_path,
+        attribute_profile_mode=("all" if include_detail_sections else "ranked"),
     )
-    history_cues = _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path)
-    design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
+    control_surface_groups = _build_control_surface_groups(artifact_entries)
+    history_timelines: list[RepoArtifactHistoryTimeline] = []
+    featured_storyline: RepoArtifactStoryline | None = None
+    history_cues: list[RepoHistoryCue] = []
+    design_profiles: list[RepoArtifactDesignProfile] = []
+    if include_detail_sections:
+        history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
+        featured_storyline = _build_featured_storyline(
+            db_path,
+            repo_full,
+            artifact_entries,
+            insights,
+            baseline_by_path,
+            profile_context_by_path,
+        )
+        history_cues = _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path)
+        design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -827,9 +956,12 @@ def _build_repo_insights(
     artifacts: list[RepoDashboardArtifactEntry],
     baseline_by_path,
     profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
+    *,
+    attribute_profile_mode: str = "all",
 ) -> tuple[list[RepoDashboardInsightEntry], list[RepoDashboardInsightEntry]]:
     primary_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     lower_confidence_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
+    enrichable_profiles: dict[str, tuple[RepoDashboardArtifactEntry, Any, _RepoArtifactProfileContext | None]] = {}
     for artifact in artifacts:
         evidence_bundle = profile_context_by_path.get(artifact.artifact_path)
         score = _insight_score(artifact, evidence_bundle)
@@ -838,17 +970,10 @@ def _build_repo_insights(
         context = _preferred_profile_context(evidence_bundle)
         attribute_profile = None
         if baseline is not None and context is not None:
-            attribute_profile = build_artifact_attribute_profile(
-                artifact_path=artifact.artifact_path,
-                artifact_type=artifact.artifact_type,
-                baseline_profile=baseline.profile,
-                current_profile=context.profile,
-                attribute_deltas=context.attribute_deltas,
-                baseline_signal_terms=baseline.signal_terms,
-                current_signal_terms=context.signal_terms,
-                baseline_content=baseline.content_text,
-                current_content=context.content_text,
-            ).dimensions
+            if attribute_profile_mode == "all":
+                attribute_profile = _build_insight_attribute_profile(artifact, baseline, context)
+            else:
+                enrichable_profiles[artifact.artifact_path] = (artifact, baseline, context)
         queue_lane = _insight_queue_lane(artifact, priority, score)
         title = _insight_title(artifact, priority)
         rationale = _insight_rationale(artifact, priority, evidence_bundle)
@@ -888,7 +1013,50 @@ def _build_repo_insights(
     sort_key = lambda item: (-item[0], -(item[1].updated_at or 0.0), item[1].artifact_path)
     primary_ranked.sort(key=sort_key)
     lower_confidence_ranked.sort(key=sort_key)
-    return [entry for _, entry in primary_ranked[:8]], [entry for _, entry in lower_confidence_ranked[:6]]
+    primary_entries = [entry for _, entry in primary_ranked[:8]]
+    lower_confidence_entries = [entry for _, entry in lower_confidence_ranked[:6]]
+
+    if attribute_profile_mode == "ranked":
+        primary_entries = _enrich_ranked_insights_with_attribute_profiles(primary_entries, enrichable_profiles)
+        lower_confidence_entries = _enrich_ranked_insights_with_attribute_profiles(lower_confidence_entries, enrichable_profiles)
+
+    return primary_entries, lower_confidence_entries
+
+
+def _build_insight_attribute_profile(
+    artifact: RepoDashboardArtifactEntry,
+    baseline: Any,
+    context: _RepoArtifactProfileContext,
+) -> list[AttributeProfileDimension]:
+    return build_artifact_attribute_profile(
+        artifact_path=artifact.artifact_path,
+        artifact_type=artifact.artifact_type,
+        baseline_profile=baseline.profile,
+        current_profile=context.profile,
+        attribute_deltas=context.attribute_deltas,
+        baseline_signal_terms=baseline.signal_terms,
+        current_signal_terms=context.signal_terms,
+        baseline_content=baseline.content_text,
+        current_content=context.content_text,
+    ).dimensions
+
+
+def _enrich_ranked_insights_with_attribute_profiles(
+    insights: list[RepoDashboardInsightEntry],
+    enrichable_profiles: dict[str, tuple[RepoDashboardArtifactEntry, Any, _RepoArtifactProfileContext | None]],
+) -> list[RepoDashboardInsightEntry]:
+    enriched: list[RepoDashboardInsightEntry] = []
+    for insight in insights:
+        profile_parts = enrichable_profiles.get(insight.artifact_path)
+        if profile_parts is None:
+            enriched.append(insight)
+            continue
+        artifact, baseline, context = profile_parts
+        if context is None:
+            enriched.append(insight)
+            continue
+        enriched.append(replace(insight, attribute_profile=_build_insight_attribute_profile(artifact, baseline, context)))
+    return enriched
 
 
 def _insight_score(

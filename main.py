@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -1274,11 +1274,17 @@ async def repo_setup_page(request: Request):
     workspace = access_context["workspace"]
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    audit_repo_full = (
+        (allocations[0]["repo_full"] if allocations else None)
+        or (connections[0]["repo_full"] if connections else None)
+    )
+    audit_href = f"/dashboard/{quote(audit_repo_full, safe='')}" if audit_repo_full else "/dashboard"
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
             repo_cards=render_repo_connection_cards(connections, csrf_token=access_context["session"].csrf_secret),
             allocation_cards=render_repo_allocation_cards(allocations),
+            audit_href=audit_href,
         )
     )
 

@@ -5,8 +5,8 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
-from services.audit_records import record_audit_result
-from services.dashboard_views import DriftEpisode, RepoDashboardArtifactEntry, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.audit_records import RepoStaticDriftSummary, record_audit_result
+from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -351,6 +351,132 @@ def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_pa
     assert len(overview.attention_repos) == 1
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI"]
+
+
+def test_build_dashboard_overview_view_skips_repo_detail_section_materialization(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "overview-no-detail-sections.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("repo detail sections should not materialize when building the portfolio overview")
+
+    monkeypatch.setattr("services.dashboard_views._build_repo_history_timelines", fail_if_called)
+    monkeypatch.setattr("services.dashboard_views._build_featured_storyline", fail_if_called)
+    monkeypatch.setattr("services.dashboard_views._build_repo_history_cues", fail_if_called)
+    monkeypatch.setattr("services.dashboard_views._build_repo_design_profiles", fail_if_called)
+
+    overview = build_dashboard_overview_view(db_path)
+
+    assert overview.metrics[0].value == 1
+    assert overview.repos[0].repo_full == "doria90/dummyAI"
+    assert len(overview.attention_repos) == 1
+
+
+def test_build_dashboard_overview_view_reuses_cached_result_for_same_db_signature(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "overview-cache.db")
+    init_db(db_path)
+
+    call_count = 0
+
+    def fake_uncached(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return DashboardOverviewView(
+            risk_state=DashboardOverviewRiskState(
+                status="baseline",
+                headline="Stable",
+                summary="cached",
+                review_now_repo_count=0,
+                watch_repo_count=0,
+                baseline_review_repo_count=0,
+                highest_risk_repo_full=None,
+                highest_risk_artifact_path=None,
+                highest_risk_title=None,
+                highest_drift_magnitude=0.0,
+            ),
+            metrics=[],
+            regression_patterns=[],
+            highest_risk_items=[],
+            control_surface_risk=[],
+            attention_repos=[],
+            control_surface_coverage=[],
+            repos=[],
+        )
+
+    monkeypatch.setattr("services.dashboard_views._build_dashboard_overview_view_uncached", fake_uncached)
+
+    first = build_dashboard_overview_view(db_path)
+    second = build_dashboard_overview_view(db_path)
+
+    assert first is second
+    assert call_count == 1
+
+
+def test_build_repo_dashboard_view_reuses_cached_result_for_same_db_signature(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "repo-cache.db")
+    init_db(db_path)
+
+    call_count = 0
+
+    def fake_uncached(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return RepoDashboardView(
+            repo_full="doria90/dummyAI",
+            onboarding=None,
+            backfill=RepoDashboardBackfillSummary(
+                job_count=0,
+                planned_job_count=0,
+                processing_job_count=0,
+                completed_job_count=0,
+                failed_job_count=0,
+                total_historical_versions=0,
+                total_historical_profiles=0,
+            ),
+            pull_request_audit_count=0,
+            baseline_version_count=0,
+            drift_summary=RepoStaticDriftSummary(
+                repo_full="doria90/dummyAI",
+                artifact_count=0,
+                profile_count=0,
+                baseline_linked_profile_count=0,
+                avg_semantic_distance=0.0,
+                avg_guardrail_shift=0.0,
+                avg_capability_shift=0.0,
+                avg_autonomy_shift=0.0,
+                highest_capability_artifact_path=None,
+                highest_capability_delta=0.0,
+            ),
+            top_drifting_artifacts=[],
+            insights=[],
+            lower_confidence_insights=[],
+            control_surface_groups=[],
+            history_timelines=[],
+            featured_storyline=None,
+            history_cues=[],
+            design_profiles=[],
+            artifacts=[],
+            journey_snapshots=[],
+            journey_comparison=None,
+        )
+
+    monkeypatch.setattr("services.dashboard_views._build_repo_dashboard_view_uncached", fake_uncached)
+
+    first = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    second = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert first is second
+    assert call_count == 1
 
 
 def test_collapse_storyline_episodes_groups_adjacent_low_signal_history_events():

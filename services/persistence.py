@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,11 @@ DURABLE_TABLES = (
 )
 
 
+_SQLITE_INIT_LOCK = threading.RLock()
+_PREPARED_DB_DIRECTORIES: set[str] = set()
+_WAL_CONFIGURED_DB_PATHS: set[str] = set()
+
+
 @dataclass(frozen=True)
 class PersistenceStatus:
     backend: str
@@ -65,12 +71,19 @@ def resolve_db_path(explicit_path: str | None = None) -> str:
 
 
 def connect_sqlite(db_path: str, *, foreign_keys: bool = False) -> sqlite3.Connection:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    normalized_db_path = str(Path(db_path).resolve())
+    with _SQLITE_INIT_LOCK:
+        if normalized_db_path not in _PREPARED_DB_DIRECTORIES:
+            Path(normalized_db_path).parent.mkdir(parents=True, exist_ok=True)
+            _PREPARED_DB_DIRECTORIES.add(normalized_db_path)
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     connection.execute(f"PRAGMA busy_timeout = {DEFAULT_SQLITE_BUSY_TIMEOUT_MS}")
-    connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = NORMAL")
+    with _SQLITE_INIT_LOCK:
+        if normalized_db_path not in _WAL_CONFIGURED_DB_PATHS:
+            connection.execute("PRAGMA journal_mode = WAL")
+            _WAL_CONFIGURED_DB_PATHS.add(normalized_db_path)
     if foreign_keys:
         connection.execute("PRAGMA foreign_keys = ON")
     return connection
