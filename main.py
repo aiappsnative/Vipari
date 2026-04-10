@@ -10,11 +10,10 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from github.GithubException import GithubException
 from openai import OpenAI
 from pydantic import BaseModel
@@ -66,6 +65,7 @@ from services.control_plane_records import (
     create_workspace,
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
+    get_github_installation_by_installation_id,
     get_repo_allocation_for_installation,
     get_repo_allocation_for_workspace,
     get_github_identity_for_user,
@@ -107,6 +107,7 @@ from services.onboarding_records import get_latest_repository_onboarding, promot
 from services.persistence import get_persistence_status
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.secure_store import encrypt_text
+from services.static_assets import FingerprintedStaticFiles
 
 settings = get_settings()
 
@@ -167,7 +168,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
+app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -617,6 +618,18 @@ def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, o
         "repo_scope_by_full": repo_scope_by_full,
         "allocation_status_by_full": allocation_status_by_full,
     }
+
+
+def _record_server_timing_metric(metrics: list[tuple[str, float]], metric_name: str, started_at: float) -> None:
+    metrics.append((metric_name, (time.perf_counter() - started_at) * 1000.0))
+
+
+def _attach_server_timing(response, metrics: list[tuple[str, float]]):
+    if metrics:
+        response.headers["Server-Timing"] = ", ".join(
+            f"{metric_name};dur={max(duration_ms, 0.0):.2f}" for metric_name, duration_ms in metrics
+        )
+    return response
 
 
 def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | None) -> bool:
@@ -1274,11 +1287,17 @@ async def repo_setup_page(request: Request):
     workspace = access_context["workspace"]
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    audit_repo_full = (
+        (allocations[0]["repo_full"] if allocations else None)
+        or (connections[0]["repo_full"] if connections else None)
+    )
+    audit_href = f"/dashboard/{quote(audit_repo_full, safe='')}" if audit_repo_full else "/dashboard"
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
             repo_cards=render_repo_connection_cards(connections, csrf_token=access_context["session"].csrf_secret),
             allocation_cards=render_repo_allocation_cards(allocations),
+            audit_href=audit_href,
         )
     )
 
@@ -1396,25 +1415,50 @@ async def base44_billing_handoff(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_index_page(request: Request):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     redirect, _session = _dashboard_redirect_for_request(request)
+    _record_server_timing_metric(timing_metrics, "access", access_started)
     if redirect is not None:
-        return redirect
-    return HTMLResponse(render_dashboard_index_page(_current_theme_preference(request)))
+        timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+        return _attach_server_timing(redirect, timing_metrics)
+    render_started = time.perf_counter()
+    response = HTMLResponse(render_dashboard_index_page(_current_theme_preference(request)))
+    _record_server_timing_metric(timing_metrics, "render", render_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
 async def dashboard_repo_page(request: Request, repo_full: str):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     redirect, _session = _dashboard_redirect_for_request(request)
+    _record_server_timing_metric(timing_metrics, "access", access_started)
     if redirect is not None:
-        return redirect
-    return HTMLResponse(render_repo_dashboard_page(repo_full, _current_theme_preference(request)))
+        timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+        return _attach_server_timing(redirect, timing_metrics)
+    render_started = time.perf_counter()
+    response = HTMLResponse(render_repo_dashboard_page(repo_full, _current_theme_preference(request)))
+    _record_server_timing_metric(timing_metrics, "render", render_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/api/repos")
 async def list_repos(request: Request):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     access_context = _require_dashboard_access(request)
+    _record_server_timing_metric(timing_metrics, "access", access_started)
+    visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
-    return JSONResponse(
+    _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
+    list_started = time.perf_counter()
+    response = JSONResponse(
         {
             "repos": [
                 asdict(item)
@@ -1427,22 +1471,38 @@ async def list_repos(request: Request):
             ]
         }
     )
+    _record_server_timing_metric(timing_metrics, "list", list_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/api/dashboard/overview")
 def dashboard_overview(request: Request):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     access_context = _require_dashboard_access(request)
+    _record_server_timing_metric(timing_metrics, "access", access_started)
+    visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
-    return JSONResponse(
+    _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
+    build_started = time.perf_counter()
+    overview_view = build_dashboard_overview_view(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visibility["allowed_repo_fulls"],
+        repo_scope_by_full=visibility["repo_scope_by_full"],
+        allocation_status_by_full=visibility["allocation_status_by_full"],
+    )
+    _record_server_timing_metric(timing_metrics, "build", build_started)
+    json_started = time.perf_counter()
+    response = JSONResponse(
         asdict(
-            build_dashboard_overview_view(
-                AUDIT_DB_PATH,
-                allowed_repo_fulls=visibility["allowed_repo_fulls"],
-                repo_scope_by_full=visibility["repo_scope_by_full"],
-                allocation_status_by_full=visibility["allocation_status_by_full"],
-            )
+            overview_view
         )
     )
+    _record_server_timing_metric(timing_metrics, "json", json_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/api/persistence")
@@ -1455,8 +1515,19 @@ def persistence_status(request: Request):
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
 def repo_dashboard(request: Request, repo_full: str):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     _require_repo_dashboard_read_access(request, repo_full)
-    return JSONResponse(asdict(build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)))
+    _record_server_timing_metric(timing_metrics, "access", access_started)
+    build_started = time.perf_counter()
+    repo_view = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    _record_server_timing_metric(timing_metrics, "build", build_started)
+    json_started = time.perf_counter()
+    response = JSONResponse(asdict(repo_view))
+    _record_server_timing_metric(timing_metrics, "json", json_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
@@ -1779,7 +1850,8 @@ async def webhook(request: Request):
     if not all([installation_id, repo_full, pr_number]):
         raise HTTPException(status_code=400, detail="Missing payload data")
 
-    if _control_plane_active():
+    managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
+    if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
         allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
         if allocation is None:
             return JSONResponse({"message": "ignored: repo not allocated"})

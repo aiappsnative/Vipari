@@ -1113,6 +1113,15 @@ def get_workspace_installation(db_path: str, workspace_id: int) -> GithubInstall
     return _row_to_installation(row) if row else None
 
 
+def get_github_installation_by_installation_id(db_path: str, installation_id: int) -> GithubInstallationRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM github_installations WHERE installation_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (installation_id,),
+        ).fetchone()
+    return _row_to_installation(row) if row else None
+
+
 def count_workspace_repo_allocations(db_path: str, workspace_id: int) -> tuple[int, int]:
     with _connect(db_path) as conn:
         allocated = conn.execute(
