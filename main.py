@@ -14,7 +14,6 @@ from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from github.GithubException import GithubException
 from openai import OpenAI
 from pydantic import BaseModel
@@ -107,6 +106,7 @@ from services.onboarding_records import get_latest_repository_onboarding, promot
 from services.persistence import get_persistence_status
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.secure_store import encrypt_text
+from services.static_assets import FingerprintedStaticFiles
 
 settings = get_settings()
 
@@ -167,7 +167,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
+app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
 
 
 class RepositoryOnboardingRequest(BaseModel):

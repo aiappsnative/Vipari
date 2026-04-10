@@ -1508,6 +1508,18 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_versioned_dashboard_assets_are_cacheable():
+    css_response = client.get("/static/dashboard.css?v=123")
+    js_response = client.get("/static/dashboard-index.js?v=123")
+    plain_response = client.get("/static/dashboard.css")
+
+    assert css_response.status_code == 200
+    assert js_response.status_code == 200
+    assert css_response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert js_response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert plain_response.headers["cache-control"] == "public, max-age=300"
+
+
 def test_public_install_callback_persists_unclaimed_installation(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "public-install-callback.db")
