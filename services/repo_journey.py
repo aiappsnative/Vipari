@@ -17,6 +17,7 @@ from .repo_journey_records import (
     RepoPostureSnapshotRecord,
     delete_repo_posture_snapshots_not_in_keys,
     get_repo_posture_snapshot,
+    get_repo_posture_snapshot_for_repo,
     init_repo_journey_db,
     list_repo_posture_snapshots_for_repo,
     upsert_repo_posture_snapshot,
@@ -24,6 +25,10 @@ from .repo_journey_records import (
 
 
 REPO_JOURNEY_MATERIALIZER_VERSION = 1
+
+
+def _repo_snapshot_key(repo_full: str, snapshot_key: str) -> str:
+    return f"{repo_full}::{snapshot_key}"
 
 
 @dataclass(frozen=True)
@@ -110,7 +115,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         baseline_snapshot = _persist_snapshot(
             db_path,
             repo_full=repo_full,
-            snapshot_key="baseline-approved",
+            snapshot_key=_repo_snapshot_key(repo_full, "baseline-approved"),
             snapshot_type="baseline_approved",
             created_at=0.0,
             commit_sha=None,
@@ -135,7 +140,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     events_by_key: dict[str, dict[str, Any]] = {}
     for artifact_path, artifact_type in sorted(artifact_types_by_path.items()):
         for profile in list_historical_static_profiles_for_repo_artifact(db_path, repo_full, artifact_path):
-            key = f"historical:{profile.commit_sha}"
+            key = _repo_snapshot_key(repo_full, f"historical:{profile.commit_sha}")
             bucket = events_by_key.setdefault(
                 key,
                 {
@@ -176,7 +181,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             if audit is None:
                 continue
             commit_sha = audit.pr_merge_commit_sha or audit.head_sha
-            key = f"merge:{commit_sha}"
+            key = _repo_snapshot_key(repo_full, f"merge:{commit_sha}")
             bucket = events_by_key.setdefault(
                 key,
                 {
@@ -256,7 +261,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             current_snapshot = _persist_snapshot(
                 db_path,
                 repo_full=repo_full,
-                snapshot_key="current",
+                snapshot_key=_repo_snapshot_key(repo_full, "current"),
                 snapshot_type="current",
                 created_at=latest.created_at + 0.001,
                 commit_sha=latest.commit_sha,
@@ -291,7 +296,7 @@ def get_repo_snapshot_detail(db_path: str, repo_full: str, snapshot_id: int) -> 
     for snapshot in snapshots:
         if snapshot.id == snapshot_id:
             return snapshot
-    return get_repo_posture_snapshot(db_path, snapshot_id)
+    return get_repo_posture_snapshot_for_repo(db_path, repo_full, snapshot_id)
 
 
 def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, right_snapshot_id: int) -> RepoJourneyComparison:

@@ -126,6 +126,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
+    assert overview_payload["repos"][0]["historical_version_count"] >= 1
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -308,6 +309,40 @@ def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):
     assert compare_payload["comparison_kind"] == "baseline_vs_current"
     assert compare_payload["change_breakdown"]["critical_surfaces_changed"] >= 1
     assert compare_payload["risk_summary"]["risk_level"] in {"low", "medium", "high"}
+
+
+def test_dashboard_api_snapshot_detail_is_repo_scoped(tmp_path):
+    db_path = str(tmp_path / "api-journey-scope.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    onboard_repository(
+        db_path,
+        repo_full="doria90/openfang",
+        installation_id=124,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    dummy_snapshot = build_repo_journey(db_path, "doria90/dummyAI")[0]
+    build_repo_journey(db_path, "doria90/openfang")
+
+    with TestClient(main.app) as client:
+        response = client.get(f"/api/repos/doria90/openfang/snapshots/{dummy_snapshot.id}")
+
+    assert response.status_code == 404
 
 
 def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):

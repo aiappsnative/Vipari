@@ -825,7 +825,7 @@ function renderReposTable(repos = [], attentionRepos = []) {
                 <td><div class="repo-name-cell"><a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${escapeHtml(repo.repo_full)}</a>${scopeBadge}</div></td>
                 <td>${openItems}</td>
                 <td>${summarizeDriftMagnitude(attention)}</td>
-                <td>—</td>
+                <td>${escapeHtml(String(Number(repo.historical_version_count || 0)))}</td>
                 <td>${escapeHtml(summarizeBaselineStatus(attention || repo))}</td>
                 <td>${escapeHtml(formatRelativeTimestamp(repo.last_onboarded_at))}</td>
                 <td>${escapeHtml(`${Number(repo.discovered_artifact_count || 0)} tracked`)}</td>

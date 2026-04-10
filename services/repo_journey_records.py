@@ -44,11 +44,13 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 def init_repo_journey_db(db_path: str) -> None:
     with _connect(db_path) as conn:
+        if _repo_journey_table_needs_rebuild(conn):
+            _rebuild_repo_journey_table(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS repo_posture_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                snapshot_key TEXT NOT NULL UNIQUE,
+                snapshot_key TEXT NOT NULL,
                 repo_full TEXT NOT NULL,
                 commit_sha TEXT,
                 pr_number INTEGER,
@@ -72,13 +74,84 @@ def init_repo_journey_db(db_path: str) -> None:
                 distance_from_baseline REAL NOT NULL DEFAULT 0,
                 distance_from_previous REAL NOT NULL DEFAULT 0,
                 materializer_version INTEGER NOT NULL DEFAULT 1,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, snapshot_key)
             )
             """
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_repo_posture_snapshots_repo_created ON repo_posture_snapshots(repo_full, created_at, id)"
         )
+
+
+def _repo_journey_table_needs_rebuild(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'repo_posture_snapshots'"
+    ).fetchone()
+    if row is None:
+        return False
+    sql = str(row["sql"] or "")
+    return "snapshot_key TEXT NOT NULL UNIQUE" in sql or "UNIQUE(repo_full, snapshot_key)" not in sql
+
+
+def _rebuild_repo_journey_table(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS repo_posture_snapshots__new")
+    conn.execute(
+        """
+        CREATE TABLE repo_posture_snapshots__new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_key TEXT NOT NULL,
+            repo_full TEXT NOT NULL,
+            commit_sha TEXT,
+            pr_number INTEGER,
+            author TEXT,
+            created_at REAL NOT NULL,
+            snapshot_type TEXT NOT NULL,
+            baseline_reference TEXT,
+            default_branch TEXT,
+            source_ref TEXT,
+            source_url TEXT,
+            attribute_vector_json TEXT NOT NULL,
+            artifact_coverage_json TEXT NOT NULL,
+            artifact_state_json TEXT NOT NULL,
+            change_summary_json TEXT NOT NULL,
+            change_breakdown_json TEXT NOT NULL,
+            drift_summary_json TEXT NOT NULL,
+            risk_summary_json TEXT NOT NULL,
+            change_labels_json TEXT NOT NULL,
+            baseline_authority_json TEXT NOT NULL,
+            input_summary_json TEXT NOT NULL,
+            distance_from_baseline REAL NOT NULL DEFAULT 0,
+            distance_from_previous REAL NOT NULL DEFAULT 0,
+            materializer_version INTEGER NOT NULL DEFAULT 1,
+            updated_at REAL NOT NULL,
+            UNIQUE(repo_full, snapshot_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO repo_posture_snapshots__new (
+            id, snapshot_key, repo_full, commit_sha, pr_number, author, created_at, snapshot_type,
+            baseline_reference, default_branch, source_ref, source_url,
+            attribute_vector_json, artifact_coverage_json, artifact_state_json,
+            change_summary_json, change_breakdown_json, drift_summary_json, risk_summary_json,
+            change_labels_json, baseline_authority_json, input_summary_json,
+            distance_from_baseline, distance_from_previous, materializer_version, updated_at
+        )
+        SELECT
+            id, snapshot_key, repo_full, commit_sha, pr_number, author, created_at, snapshot_type,
+            baseline_reference, default_branch, source_ref, source_url,
+            attribute_vector_json, artifact_coverage_json, artifact_state_json,
+            change_summary_json, change_breakdown_json, drift_summary_json, risk_summary_json,
+            change_labels_json, baseline_authority_json, input_summary_json,
+            distance_from_baseline, distance_from_previous, materializer_version, updated_at
+        FROM repo_posture_snapshots
+        ORDER BY updated_at ASC, id ASC
+        """
+    )
+    conn.execute("DROP TABLE repo_posture_snapshots")
+    conn.execute("ALTER TABLE repo_posture_snapshots__new RENAME TO repo_posture_snapshots")
 
 
 def upsert_repo_posture_snapshot(
@@ -121,8 +194,7 @@ def upsert_repo_posture_snapshot(
                 change_labels_json, baseline_authority_json, input_summary_json,
                 distance_from_baseline, distance_from_previous, materializer_version, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(snapshot_key) DO UPDATE SET
-                repo_full = excluded.repo_full,
+            ON CONFLICT(repo_full, snapshot_key) DO UPDATE SET
                 commit_sha = excluded.commit_sha,
                 pr_number = excluded.pr_number,
                 author = excluded.author,
@@ -175,7 +247,10 @@ def upsert_repo_posture_snapshot(
                 now,
             ),
         )
-        row = conn.execute("SELECT * FROM repo_posture_snapshots WHERE snapshot_key = ?", (snapshot_key,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM repo_posture_snapshots WHERE repo_full = ? AND snapshot_key = ?",
+            (repo_full, snapshot_key),
+        ).fetchone()
     if row is None:
         raise RuntimeError("Failed to persist repo posture snapshot.")
     return _row_to_repo_posture_snapshot(row)
@@ -205,6 +280,15 @@ def list_repo_posture_snapshots_for_repo(db_path: str, repo_full: str) -> list[R
 def get_repo_posture_snapshot(db_path: str, snapshot_id: int) -> RepoPostureSnapshotRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM repo_posture_snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+    return _row_to_repo_posture_snapshot(row) if row is not None else None
+
+
+def get_repo_posture_snapshot_for_repo(db_path: str, repo_full: str, snapshot_id: int) -> RepoPostureSnapshotRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM repo_posture_snapshots WHERE repo_full = ? AND id = ?",
+            (repo_full, snapshot_id),
+        ).fetchone()
     return _row_to_repo_posture_snapshot(row) if row is not None else None
 
 

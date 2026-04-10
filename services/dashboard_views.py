@@ -40,6 +40,7 @@ class RepoDashboardIndexEntry:
     onboarding_status: str
     discovered_artifact_count: int
     last_onboarded_at: float
+    historical_version_count: int = 0
     dashboard_scope: str = "allocated"
     allocation_status: str | None = None
 
@@ -425,6 +426,20 @@ def build_dashboard_overview_view(
         allocation_status_by_full=allocation_status_by_full,
     )
     repo_views = [build_repo_dashboard_view(db_path, repo.repo_full, include_journey=False) for repo in repos]
+    repo_view_by_full = {view.repo_full: view for view in repo_views}
+    repos = [
+        RepoDashboardIndexEntry(
+            repo_full=repo.repo_full,
+            default_branch=repo.default_branch,
+            onboarding_status=repo.onboarding_status,
+            discovered_artifact_count=repo.discovered_artifact_count,
+            last_onboarded_at=repo.last_onboarded_at,
+            historical_version_count=(repo_view_by_full[repo.repo_full].backfill.total_historical_versions if repo.repo_full in repo_view_by_full else 0),
+            dashboard_scope=repo.dashboard_scope,
+            allocation_status=repo.allocation_status,
+        )
+        for repo in repos
+    ]
 
     total_artifacts = sum(repo.discovered_artifact_count for repo in repos)
     total_backfill_jobs = sum(view.backfill.job_count for view in repo_views)

@@ -304,6 +304,7 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert len(overview.regression_patterns) >= 1
     assert overview.metrics[0].label == "Onboarded repositories"
     assert overview.metrics[0].value == 2
+    assert overview.repos[0].historical_version_count >= 1
     assert len(overview.attention_repos) == 2
     assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}

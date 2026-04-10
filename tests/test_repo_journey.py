@@ -7,7 +7,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
-from services.repo_journey import build_repo_journey, compare_repo_snapshots
+from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail
 from services.repo_journey_records import list_repo_posture_snapshots_for_repo
 
 
@@ -175,3 +175,49 @@ def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):
     assert comparison.drift_summary["drift_delta"] >= 0
     assert comparison.risk_summary["risk_level"] in {"low", "medium", "high"}
     assert "capability_expanded" in comparison.change_labels
+
+
+def test_repo_journey_snapshots_do_not_collide_across_repositories(tmp_path):
+    db_path = str(tmp_path / "journey-multi-repo.db")
+    init_db(db_path)
+    _seed_repo_history(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/openfang",
+        installation_id=124,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    dummy_snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+    openfang_snapshots = build_repo_journey(db_path, "doria90/openfang")
+
+    assert all(snapshot.repo_full == "doria90/dummyAI" for snapshot in dummy_snapshots)
+    assert all(snapshot.repo_full == "doria90/openfang" for snapshot in openfang_snapshots)
+    assert {snapshot.snapshot_key for snapshot in dummy_snapshots}.isdisjoint(
+        {snapshot.snapshot_key for snapshot in openfang_snapshots}
+    )
+
+
+def test_get_repo_snapshot_detail_is_scoped_to_requested_repository(tmp_path):
+    db_path = str(tmp_path / "journey-scoped-detail.db")
+    init_db(db_path)
+    _seed_repo_history(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/openfang",
+        installation_id=124,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    dummy_snapshot = build_repo_journey(db_path, "doria90/dummyAI")[0]
+    build_repo_journey(db_path, "doria90/openfang")
+
+    assert get_repo_snapshot_detail(db_path, "doria90/openfang", dummy_snapshot.id) is None
