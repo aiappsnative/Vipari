@@ -3,90 +3,105 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{REPO_FULL}} · DriftGuard</title>
+    <title>{{REPO_FULL}} · Audit Page · DriftGuard</title>
     <meta name="driftguard-repo-full" content="{{REPO_FULL}}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/dashboard-repo.js"></script>
 </head>
-<body data-theme="{{THEME_PREFERENCE}}">
+<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
-                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                    <rect x="4" y="6" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5"/>
-                    <rect x="10" y="10" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5" opacity="0.5"/>
-                    <circle cx="8" cy="10" r="1.5" fill="#4f98a3"/>
-                </svg>
+                <span class="sidebar-logo-mark">D</span>
             </a>
-
-            <div class="sidebar-nav-group">
-                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard" data-tooltip="Dashboard">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.5-2.7 7.8-7 9-4.3-1.2-7-4.5-7-9V7l7-4z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
                 </a>
-                <a href="#repo-triage-section" class="sidebar-nav-item" aria-label="Attention Queue" data-tooltip="Attention Queue">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11"/><path d="M4 12h8"/><path d="M4 17h6"/><path d="m17 6 3 3-3 3"/><path d="M14 9h6"/></svg>
+                <a href="/dashboard/{{REPO_FULL}}" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Audit Logs">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
                 </a>
-                <a href="#repo-surfaces-section" class="sidebar-nav-item" aria-label="Control Surfaces" data-tooltip="Control Surfaces">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5"/><path d="M4 8.5V16l8 4 8-4V8.5"/><path d="M12 12 4 8.5"/><path d="M12 12l8-3.5"/><path d="M12 12v8"/></svg>
+                <a href="/app/setup/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
                 </a>
-                <a href="#repo-artifacts-section" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Artifacts" data-tooltip="Artifacts">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V7a2 2 0 0 1 2-2h8"/><path d="M14 20V4"/><path d="M14 7h6"/><path d="M17 4v16"/><path d="M7 9h4"/><path d="M7 13h4"/></svg>
+                <a href="#repo-journey-section" class="sidebar-nav-item" aria-label="Version Journey">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5"/><path d="M4 12h9"/><path d="M4 18h13"/><circle cx="18" cy="6" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+                    <span>Version Journey</span>
                 </a>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <div class="sidebar-nav-group sidebar-nav-group-secondary">
-                <a href="#repo-storyline-section" class="sidebar-nav-item" aria-label="Drift Storyline" data-tooltip="Drift Storyline">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+                <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifacts">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
+                    <span>Artifacts</span>
                 </a>
-                <a href="#repo-journey-section" class="sidebar-nav-item" aria-label="Version Journey" data-tooltip="Version Journey">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5"/><path d="M4 12h9"/><path d="M4 18h13"/><circle cx="18" cy="6" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+                <a href="/app/profile" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
                 </a>
-                <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
-                </a>
-                <a href="#repo-history-section" class="sidebar-nav-item" aria-label="History Cues" data-tooltip="History Cues">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 20V8"/><path d="M6 8h10l-1.5 3L16 14H6"/></svg>
-                </a>
-                <a href="#top" class="sidebar-nav-item" aria-label="Top Of Page" data-tooltip="Top Of Page">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4 4 4"/><path d="m12 4-4 4"/><path d="M12 4v11"/><path d="M5 19h14"/></svg>
+                <a href="/app" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
                 </a>
             </div>
 
-            <div class="sidebar-avatar">
-                <a href="/app/profile" class="avatar-circle" aria-label="User profile">D</a>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="Profile">D</a>
             </div>
         </nav>
 
         <div class="main-content">
-            <div class="posture-strip">
-                <div class="posture-strip-left">
-                    <span class="posture-title">{{REPO_FULL}}</span>
-                    <div class="filter-pills">
-                        <span class="filter-pill">repository</span>
-                        <a class="filter-pill" href="/dashboard">all repositories</a>
-                    </div>
-                </div>
-                <div class="posture-strip-center">
-                    <span class="posture-disclaimer">Static analysis only — derived from code, prompts, and config. Not runtime telemetry.</span>
-                </div>
-                <div class="posture-strip-right">
-                    <div class="posture-stat posture-stat-ok"><span id="repo-stat-artifacts">-</span> tracked artifacts</div>
-                    <div class="posture-stat posture-stat-urgent"><span id="repo-stat-review">-</span> open items</div>
-                    <div class="posture-stat posture-stat-warning"><span id="repo-stat-baselines">-</span> approved baselines</div>
-                    <div class="posture-stat posture-stat-gap"><span id="repo-stat-history">-</span> history markers</div>
-                </div>
-            </div>
-
             <main class="page-scroll" id="top">
+                <section class="repo-audit-hero">
+                    <div class="repo-audit-hero-copy">
+                        <p class="repo-audit-eyebrow">Audit Page</p>
+                        <h1>{{REPO_FULL}}</h1>
+                        <p>Repo-level drift review for prompts, models, guardrails, and control surfaces across the full AI story of this repository.</p>
+                    </div>
+                    <div class="repo-audit-hero-note">
+                        <span class="repo-audit-note-label">Static posture</span>
+                        <span class="repo-audit-note-copy">Static analysis only. Derived from code, prompts, config, and approved baseline history rather than runtime telemetry.</span>
+                    </div>
+                </section>
+
+                <section class="repo-audit-metrics" aria-label="Repository audit summary">
+                    <article class="repo-audit-metric-card">
+                        <span class="repo-audit-metric-label">Tracked artifacts</span>
+                        <strong id="repo-stat-artifacts">-</strong>
+                        <span class="repo-audit-metric-foot">Artifacts under audit</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-alert">
+                        <span class="repo-audit-metric-label">Open items</span>
+                        <strong id="repo-stat-review">-</strong>
+                        <span class="repo-audit-metric-foot">Items requiring review</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-warm">
+                        <span class="repo-audit-metric-label">Approved baselines</span>
+                        <strong id="repo-stat-baselines">-</strong>
+                        <span class="repo-audit-metric-foot">Trusted checkpoints</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-cool">
+                        <span class="repo-audit-metric-label">History markers</span>
+                        <strong id="repo-stat-history">-</strong>
+                        <span class="repo-audit-metric-foot">Repo journey signals</span>
+                    </article>
+                </section>
+
+                <section class="repo-audit-anchor-bar" aria-label="Audit sections">
+                    <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
+                    <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
+                    <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
+                    <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
+                    <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
+                </section>
+
                 <section class="main-columns" id="repo-triage-section">
                     <section class="triage-column">
                         <div class="triage-header card-shell">
-                            <span class="triage-title">Needs attention now</span>
+                            <span class="triage-title">Audit Queue</span>
                             <span class="triage-count" id="repo-triage-count">Loading...</span>
                             <div class="triage-filters">
                                 <button type="button" class="triage-filter-btn active" data-filter="all">All</button>
@@ -148,7 +163,7 @@
 
                 <section class="secondary-grid">
                     <div class="secondary-panel" id="repo-history-section">
-                        <div class="secondary-panel-title">History cues</div>
+                        <div class="secondary-panel-title">Audit cues</div>
                         <div id="history-cues" class="loading-shell muted">Loading repo-level history cues...</div>
                     </div>
                     <div class="secondary-panel">
@@ -171,7 +186,7 @@
 
                 <section class="repos-section" id="repo-artifacts-section">
                     <div class="repos-header">
-                        <span class="repos-title">Artifacts</span>
+                        <span class="repos-title">Artifact Registry</span>
                     </div>
                     <table class="repos-table">
                         <thead>

@@ -6,7 +6,6 @@ from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import get_settings
@@ -19,6 +18,7 @@ from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .audit_jobs import init_db
+from .static_assets import FingerprintedStaticFiles
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -58,7 +58,7 @@ def create_api_app() -> FastAPI:
         yield
 
     app = FastAPI(lifespan=lifespan)
-    app.mount("/static", StaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
+    app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
     instrument_fastapi(app, enabled=settings.enable_metrics)
 
     @app.get("/health")
