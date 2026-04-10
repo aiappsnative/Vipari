@@ -25,6 +25,7 @@ from .audit_records import (
     list_top_drifting_artifacts_for_repo,
 )
 from .onboarding_records import (
+    OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
     get_latest_repository_onboarding,
     list_historical_backfill_jobs_for_repo,
@@ -502,15 +503,7 @@ def _build_dashboard_overview_view_uncached(
         repo_scope_by_full=repo_scope_by_full,
         allocation_status_by_full=allocation_status_by_full,
     )
-    repo_views = [
-        build_repo_dashboard_view(
-            db_path,
-            repo.repo_full,
-            include_journey=False,
-            include_detail_sections=False,
-        )
-        for repo in repos
-    ]
+    repo_views = _build_overview_repo_views(db_path, repos)
     repo_view_by_full = {view.repo_full: view for view in repo_views}
     repos = [
         RepoDashboardIndexEntry(
@@ -772,6 +765,451 @@ def _build_repo_journey_panel(db_path: str, repo_full: str) -> tuple[list[dict[s
     return snapshots, comparison
 
 
+def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry]) -> list[RepoDashboardView]:
+    if not repos:
+        return []
+
+    repo_fulls = [repo.repo_full for repo in repos]
+    latest_onboardings = {
+        onboarding.repo_full: onboarding
+        for onboarding in list_latest_repository_onboardings(db_path)
+        if onboarding.repo_full in set(repo_fulls)
+    }
+    latest_onboarding_ids = [onboarding.id for onboarding in latest_onboardings.values()]
+
+    artifacts_by_repo: dict[str, list[sqlite3.Row]] = {repo_full: [] for repo_full in repo_fulls}
+    baselines_by_repo: dict[str, list[OnboardingBaselineVersionRecord]] = {repo_full: [] for repo_full in repo_fulls}
+
+    with _connect(db_path) as conn:
+        if latest_onboarding_ids:
+            onboarding_placeholders = ", ".join("?" for _ in latest_onboarding_ids)
+            artifact_rows = conn.execute(
+                f"""
+                SELECT ro.repo_full, oa.*
+                FROM onboarded_artifacts oa
+                INNER JOIN repository_onboardings ro ON ro.id = oa.onboarding_id
+                WHERE oa.onboarding_id IN ({onboarding_placeholders})
+                ORDER BY ro.repo_full ASC, oa.created_at ASC, oa.id ASC
+                """,
+                tuple(latest_onboarding_ids),
+            ).fetchall()
+            for row in artifact_rows:
+                artifacts_by_repo.setdefault(str(row["repo_full"]), []).append(row)
+
+            baseline_rows = conn.execute(
+                f"""
+                SELECT ro.repo_full, obv.*
+                FROM onboarding_baseline_versions obv
+                INNER JOIN repository_onboardings ro ON ro.id = obv.onboarding_id
+                WHERE obv.onboarding_id IN ({onboarding_placeholders})
+                ORDER BY ro.repo_full ASC, obv.created_at ASC, obv.id ASC
+                """,
+                tuple(latest_onboarding_ids),
+            ).fetchall()
+            for row in baseline_rows:
+                baselines_by_repo.setdefault(str(row["repo_full"]), []).append(
+                    OnboardingBaselineVersionRecord(
+                        id=int(row["id"]),
+                        onboarding_id=int(row["onboarding_id"]),
+                        onboarded_artifact_id=int(row["onboarded_artifact_id"]),
+                        normalized_artifact_id=str(row["normalized_artifact_id"]),
+                        artifact_path=str(row["artifact_path"]),
+                        artifact_type=str(row["artifact_type"]),
+                        version_hash=str(row["version_hash"]),
+                        signal_terms=json.loads(row["signal_terms_json"]),
+                        line_count=int(row["line_count"]),
+                        profile=_profile_from_json(str(row["profile_json"])),
+                        created_at=float(row["created_at"]),
+                        content_text=row["content_text"],
+                    )
+                )
+
+        (
+            backfill_summaries,
+            pull_request_audit_counts,
+            metrics_by_repo,
+            profile_contexts_by_repo,
+            drift_summaries,
+            top_drifting_artifacts_by_repo,
+        ) = _load_overview_batch_state(conn, repo_fulls)
+
+    views: list[RepoDashboardView] = []
+    for repo in repos:
+        onboarding = latest_onboardings.get(repo.repo_full)
+        if onboarding is None:
+            views.append(_empty_repo_dashboard_view(repo.repo_full))
+            continue
+
+        artifact_rows = artifacts_by_repo.get(repo.repo_full, [])
+        baseline_versions = baselines_by_repo.get(repo.repo_full, [])
+        baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+        leaderboard_entries = top_drifting_artifacts_by_repo.get(repo.repo_full, [])
+        leaderboard_by_path = {entry.artifact_path: entry for entry in leaderboard_entries}
+        metrics_by_path = metrics_by_repo.get(repo.repo_full, {})
+        profile_context_by_path = profile_contexts_by_repo.get(repo.repo_full, {})
+
+        artifact_entries: list[RepoDashboardArtifactEntry] = []
+        for row in artifact_rows:
+            artifact_path = str(row["artifact_path"])
+            metrics = metrics_by_path.get(artifact_path, _empty_artifact_metrics())
+            leaderboard_entry = leaderboard_by_path.get(artifact_path)
+            baseline = baseline_by_path.get(artifact_path)
+            artifact_entries.append(
+                RepoDashboardArtifactEntry(
+                    artifact_path=artifact_path,
+                    artifact_type=str(row["artifact_type"]),
+                    discovery_reason=str(row["discovery_reason"]),
+                    discovery_confidence=float(row["confidence"]),
+                    baseline_line_count=(baseline.line_count if baseline is not None else 0),
+                    historical_version_count=int(metrics["historical_version_count"]),
+                    historical_profile_count=int(metrics["historical_profile_count"]),
+                    latest_historical_semantic_distance=float(metrics["latest_historical_semantic_distance"]),
+                    latest_historical_drift_magnitude=float(metrics["latest_historical_drift_magnitude"]),
+                    latest_historical_capability_shift=float(metrics["latest_historical_capability_shift"]),
+                    latest_historical_guardrail_shift=float(metrics["latest_historical_guardrail_shift"]),
+                    latest_historical_governance_shift=float(metrics["latest_historical_governance_shift"]),
+                    latest_historical_autonomy_shift=float(metrics["latest_historical_autonomy_shift"]),
+                    pr_profile_count=int(metrics["pr_profile_count"]),
+                    latest_pr_semantic_distance=float(metrics["latest_pr_semantic_distance"]),
+                    latest_pr_capability_shift=float(metrics["latest_pr_capability_shift"]),
+                    latest_pr_guardrail_shift=float(metrics["latest_pr_guardrail_shift"]),
+                    latest_pr_governance_shift=float(metrics["latest_pr_governance_shift"]),
+                    latest_pr_autonomy_shift=float(metrics["latest_pr_autonomy_shift"]),
+                    leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
+                    latest_activity_at=float(metrics["latest_activity_at"]),
+                )
+            )
+
+        artifact_entries.sort(
+            key=lambda entry: (
+                -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
+                -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
+                entry.artifact_path,
+            )
+        )
+
+        insights, lower_confidence_insights = _build_repo_insights(
+            artifact_entries,
+            baseline_by_path,
+            profile_context_by_path,
+            attribute_profile_mode="ranked",
+        )
+
+        views.append(
+            RepoDashboardView(
+                repo_full=repo.repo_full,
+                onboarding=onboarding,
+                backfill=backfill_summaries.get(repo.repo_full, _empty_backfill_summary()),
+                pull_request_audit_count=pull_request_audit_counts.get(repo.repo_full, 0),
+                baseline_version_count=len(baseline_versions),
+                drift_summary=drift_summaries.get(repo.repo_full, _empty_repo_static_drift_summary(repo.repo_full)),
+                top_drifting_artifacts=leaderboard_entries,
+                insights=insights,
+                lower_confidence_insights=lower_confidence_insights,
+                control_surface_groups=_build_control_surface_groups(artifact_entries),
+                history_timelines=[],
+                featured_storyline=None,
+                history_cues=[],
+                design_profiles=[],
+                artifacts=artifact_entries,
+                journey_snapshots=[],
+                journey_comparison=None,
+            )
+        )
+
+    return views
+
+
+def _load_overview_batch_state(
+    conn: sqlite3.Connection,
+    repo_fulls: list[str],
+) -> tuple[
+    dict[str, RepoDashboardBackfillSummary],
+    dict[str, int],
+    dict[str, dict[str, dict[str, float | int]]],
+    dict[str, dict[str, _RepoArtifactEvidenceBundle]],
+    dict[str, RepoStaticDriftSummary],
+    dict[str, list[ArtifactDriftLeaderboardEntry]],
+]:
+    if not repo_fulls:
+        return ({}, {}, {}, {}, {}, {})
+
+    repo_placeholders = ", ".join("?" for _ in repo_fulls)
+    repo_params = tuple(repo_fulls)
+
+    backfill_counts_by_repo: dict[str, dict[str, int]] = {repo_full: {} for repo_full in repo_fulls}
+    backfill_rows = conn.execute(
+        f"""
+        SELECT repo_full, status, COUNT(*) AS job_count
+        FROM historical_backfill_jobs
+        WHERE repo_full IN ({repo_placeholders})
+        GROUP BY repo_full, status
+        """,
+        repo_params,
+    ).fetchall()
+    for row in backfill_rows:
+        repo_full = str(row["repo_full"])
+        backfill_counts_by_repo.setdefault(repo_full, {})[str(row["status"])] = int(row["job_count"])
+
+    pull_request_audit_counts = {repo_full: 0 for repo_full in repo_fulls}
+    audit_rows = conn.execute(
+        f"""
+        SELECT repo_full, COUNT(*) AS audit_count
+        FROM pull_request_audits
+        WHERE repo_full IN ({repo_placeholders})
+        GROUP BY repo_full
+        """,
+        repo_params,
+    ).fetchall()
+    for row in audit_rows:
+        pull_request_audit_counts[str(row["repo_full"])] = int(row["audit_count"])
+
+    metrics_by_repo: dict[str, dict[str, dict[str, float | int]]] = {}
+    historical_version_rows = conn.execute(
+        f"""
+        SELECT ro.repo_full, hav.artifact_path, COUNT(*) AS version_count
+        FROM historical_artifact_versions hav
+        INNER JOIN repository_onboardings ro ON ro.id = hav.onboarding_id
+        WHERE ro.repo_full IN ({repo_placeholders})
+        GROUP BY ro.repo_full, hav.artifact_path
+        """,
+        repo_params,
+    ).fetchall()
+    for row in historical_version_rows:
+        repo_metrics = metrics_by_repo.setdefault(str(row["repo_full"]), {})
+        repo_metrics.setdefault(str(row["artifact_path"]), _empty_artifact_metrics())["historical_version_count"] = int(row["version_count"])
+
+    profile_contexts_by_repo: dict[str, dict[str, _RepoArtifactEvidenceBundle]] = {}
+    drift_profiles_by_repo_path: dict[str, dict[str, list[dict[str, object]]]] = {}
+    profile_rows = conn.execute(
+        f"""
+        SELECT
+            ro.repo_full,
+            hsp.id,
+            hsp.artifact_path,
+            hsp.artifact_type,
+            hsp.commit_sha,
+            hsp.created_at,
+            hsp.baseline_profile_id,
+            hsp.baseline_provenance_json,
+            hsp.semantic_distance,
+            hsp.profile_json,
+            hsp.attribute_deltas_json,
+            hsp.narrative_json,
+            hsp.signal_terms_json,
+            hav.content_text AS content_text
+        FROM historical_static_profiles hsp
+        INNER JOIN repository_onboardings ro ON ro.id = hsp.onboarding_id
+        INNER JOIN historical_artifact_versions hav ON hav.id = hsp.historical_artifact_version_id
+        WHERE ro.repo_full IN ({repo_placeholders})
+        ORDER BY ro.repo_full ASC, hsp.artifact_path ASC, hsp.created_at ASC, hsp.id ASC
+        """,
+        repo_params,
+    ).fetchall()
+    for row in profile_rows:
+        repo_full = str(row["repo_full"])
+        artifact_path = str(row["artifact_path"])
+        repo_metrics = metrics_by_repo.setdefault(repo_full, {})
+        metrics = repo_metrics.setdefault(artifact_path, _empty_artifact_metrics())
+        metrics["historical_profile_count"] = int(metrics["historical_profile_count"]) + 1
+
+        attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
+        semantic_distance = float(row["semantic_distance"])
+        created_at = float(row["created_at"])
+        metrics["latest_historical_semantic_distance"] = semantic_distance
+        metrics["latest_historical_drift_magnitude"] = _drift_magnitude(semantic_distance, attribute_deltas)
+        metrics["latest_historical_capability_shift"] = attribute_deltas.get("capability_risk", 0.0)
+        metrics["latest_historical_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
+        metrics["latest_historical_governance_shift"] = attribute_deltas.get("governance_strength", 0.0)
+        metrics["latest_historical_autonomy_shift"] = attribute_deltas.get("autonomy_level", 0.0)
+        metrics["latest_activity_at"] = max(float(metrics["latest_activity_at"]), created_at)
+
+        baseline_provenance = baseline_provenance_from_json(row["baseline_provenance_json"])
+        if baseline_provenance is None and row["baseline_profile_id"] is not None:
+            baseline_provenance = historical_fallback_provenance(int(row["baseline_profile_id"]))
+        if baseline_provenance is None:
+            baseline_provenance = no_baseline_provenance()
+
+        context = _RepoArtifactProfileContext(
+            profile=_profile_from_json(str(row["profile_json"])),
+            source_type="historical",
+            label="Historical backfill",
+            source_ref=f"commit {str(row['commit_sha'])[:7]}",
+            source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
+            review_context="Historical snapshot from backfill",
+            created_at=created_at,
+            baseline_provenance=baseline_provenance,
+            semantic_distance=semantic_distance,
+            attribute_deltas=attribute_deltas,
+            narrative=json.loads(row["narrative_json"]),
+            signal_terms=json.loads(row["signal_terms_json"]),
+            content_text=row["content_text"],
+        )
+        repo_contexts = profile_contexts_by_repo.setdefault(repo_full, {})
+        existing_bundle = repo_contexts.get(artifact_path, _RepoArtifactEvidenceBundle())
+        repo_contexts[artifact_path] = _RepoArtifactEvidenceBundle(
+            latest_pull_request=existing_bundle.latest_pull_request,
+            latest_historical=context,
+        )
+
+        drift_profiles_by_repo_path.setdefault(repo_full, {}).setdefault(artifact_path, []).append(
+            {
+                "id": int(row["id"]),
+                "artifact_type": str(row["artifact_type"]),
+                "semantic_distance": semantic_distance,
+                "attribute_deltas": attribute_deltas,
+                "narrative": json.loads(row["narrative_json"]),
+                "created_at": created_at,
+                "baseline_provenance": baseline_provenance,
+            }
+        )
+
+    backfill_summaries = {
+        repo_full: RepoDashboardBackfillSummary(
+            job_count=sum(status_counts.values()),
+            planned_job_count=status_counts.get("planned", 0),
+            processing_job_count=status_counts.get("processing", 0),
+            completed_job_count=status_counts.get("completed", 0),
+            failed_job_count=status_counts.get("failed", 0),
+            total_historical_versions=sum(
+                int(metrics["historical_version_count"])
+                for metrics in metrics_by_repo.get(repo_full, {}).values()
+            ),
+            total_historical_profiles=sum(
+                int(metrics["historical_profile_count"])
+                for metrics in metrics_by_repo.get(repo_full, {}).values()
+            ),
+        )
+        for repo_full, status_counts in backfill_counts_by_repo.items()
+    }
+
+    drift_summaries: dict[str, RepoStaticDriftSummary] = {}
+    top_drifting_artifacts_by_repo: dict[str, list[ArtifactDriftLeaderboardEntry]] = {}
+    for repo_full in repo_fulls:
+        grouped_profiles = drift_profiles_by_repo_path.get(repo_full, {})
+        artifact_paths = set(grouped_profiles)
+        profile_count = sum(len(profiles) for profiles in grouped_profiles.values())
+        baseline_linked_profiles: list[dict[str, object]] = []
+        highest_capability_artifact_path: str | None = None
+        highest_capability_delta = 0.0
+        leaderboard_entries: list[ArtifactDriftLeaderboardEntry] = []
+
+        for artifact_path, profiles in grouped_profiles.items():
+            for profile in profiles:
+                baseline_provenance = profile["baseline_provenance"]
+                if baseline_provenance is not None and baseline_provenance.source_type != "none":
+                    baseline_linked_profiles.append(profile)
+                    capability_delta = round(float(profile["attribute_deltas"].get("capability_risk", 0.0)), 4)
+                    if highest_capability_artifact_path is None or capability_delta >= highest_capability_delta:
+                        highest_capability_artifact_path = artifact_path
+                        highest_capability_delta = capability_delta
+
+            latest = profiles[-1]
+            latest_attribute_deltas = latest["attribute_deltas"]
+            latest_semantic_distance = float(latest["semantic_distance"])
+            leaderboard_entries.append(
+                ArtifactDriftLeaderboardEntry(
+                    artifact_path=artifact_path,
+                    artifact_type=str(latest["artifact_type"]),
+                    latest_profile_id=int(latest["id"]),
+                    sample_count=len(profiles),
+                    latest_created_at=float(latest["created_at"]),
+                    semantic_distance=latest_semantic_distance,
+                    guardrail_shift=round(float(latest_attribute_deltas.get("guardrail_robustness", 0.0)), 4),
+                    capability_shift=round(float(latest_attribute_deltas.get("capability_risk", 0.0)), 4),
+                    autonomy_shift=round(float(latest_attribute_deltas.get("autonomy_level", 0.0)), 4),
+                    drift_magnitude=_drift_magnitude(latest_semantic_distance, latest_attribute_deltas),
+                    narrative=list(latest["narrative"]),
+                )
+            )
+
+        leaderboard_entries.sort(key=lambda entry: (-entry.drift_magnitude, entry.artifact_path))
+        top_drifting_artifacts_by_repo[repo_full] = leaderboard_entries[:10]
+
+        drift_summaries[repo_full] = RepoStaticDriftSummary(
+            repo_full=repo_full,
+            artifact_count=len(artifact_paths),
+            profile_count=profile_count,
+            baseline_linked_profile_count=len(baseline_linked_profiles),
+            avg_semantic_distance=_average([float(profile["semantic_distance"]) for profile in baseline_linked_profiles]),
+            avg_guardrail_shift=_average(
+                [abs(float(profile["attribute_deltas"].get("guardrail_robustness", 0.0))) for profile in baseline_linked_profiles]
+            ),
+            avg_capability_shift=_average(
+                [abs(float(profile["attribute_deltas"].get("capability_risk", 0.0))) for profile in baseline_linked_profiles]
+            ),
+            avg_autonomy_shift=_average(
+                [abs(float(profile["attribute_deltas"].get("autonomy_level", 0.0))) for profile in baseline_linked_profiles]
+            ),
+            highest_capability_artifact_path=highest_capability_artifact_path,
+            highest_capability_delta=highest_capability_delta,
+        )
+
+    for repo_full in repo_fulls:
+        backfill_summaries.setdefault(repo_full, _empty_backfill_summary())
+        pull_request_audit_counts.setdefault(repo_full, 0)
+        drift_summaries.setdefault(repo_full, _empty_repo_static_drift_summary(repo_full))
+        top_drifting_artifacts_by_repo.setdefault(repo_full, [])
+
+    return (
+        backfill_summaries,
+        pull_request_audit_counts,
+        metrics_by_repo,
+        profile_contexts_by_repo,
+        drift_summaries,
+        top_drifting_artifacts_by_repo,
+    )
+
+
+def _empty_backfill_summary() -> RepoDashboardBackfillSummary:
+    return RepoDashboardBackfillSummary(
+        job_count=0,
+        planned_job_count=0,
+        processing_job_count=0,
+        completed_job_count=0,
+        failed_job_count=0,
+        total_historical_versions=0,
+        total_historical_profiles=0,
+    )
+
+
+def _empty_repo_static_drift_summary(repo_full: str) -> RepoStaticDriftSummary:
+    return RepoStaticDriftSummary(
+        repo_full=repo_full,
+        artifact_count=0,
+        profile_count=0,
+        baseline_linked_profile_count=0,
+        avg_semantic_distance=0.0,
+        avg_guardrail_shift=0.0,
+        avg_capability_shift=0.0,
+        avg_autonomy_shift=0.0,
+        highest_capability_artifact_path=None,
+        highest_capability_delta=0.0,
+    )
+
+
+def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
+    return RepoDashboardView(
+        repo_full=repo_full,
+        onboarding=None,
+        backfill=_empty_backfill_summary(),
+        pull_request_audit_count=0,
+        baseline_version_count=0,
+        drift_summary=_empty_repo_static_drift_summary(repo_full),
+        top_drifting_artifacts=[],
+        insights=[],
+        lower_confidence_insights=[],
+        control_surface_groups=[],
+        history_timelines=[],
+        featured_storyline=None,
+        history_cues=[],
+        design_profiles=[],
+        artifacts=[],
+        journey_snapshots=[],
+        journey_comparison=None,
+    )
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path)
 
@@ -950,6 +1388,12 @@ def _drift_magnitude(semantic_distance: float, attribute_deltas: dict[str, float
         + semantic_distance,
         4,
     )
+
+
+def _average(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
 
 
 def _build_repo_insights(

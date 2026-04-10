@@ -1520,6 +1520,119 @@ def test_versioned_dashboard_assets_are_cacheable():
     assert plain_response.headers["cache-control"] == "public, max-age=300"
 
 
+def test_dashboard_pages_emit_server_timing_headers():
+    with patch("main._dashboard_redirect_for_request", return_value=(None, None)):
+        dashboard_response = client.get("/dashboard")
+        repo_response = client.get("/dashboard/doria90/dummyAI")
+
+    assert dashboard_response.status_code == 200
+    assert repo_response.status_code == 200
+    assert "access;dur=" in dashboard_response.headers["server-timing"]
+    assert "render;dur=" in dashboard_response.headers["server-timing"]
+    assert "total;dur=" in dashboard_response.headers["server-timing"]
+    assert "access;dur=" in repo_response.headers["server-timing"]
+    assert "render;dur=" in repo_response.headers["server-timing"]
+    assert "total;dur=" in repo_response.headers["server-timing"]
+
+
+def test_dashboard_api_endpoints_emit_server_timing_headers():
+    from services.audit_records import RepoStaticDriftSummary
+    from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, RepoDashboardBackfillSummary, RepoDashboardView
+
+    overview_view = DashboardOverviewView(
+        risk_state=DashboardOverviewRiskState(
+            status="baseline",
+            headline="Stable",
+            summary="steady",
+            review_now_repo_count=0,
+            watch_repo_count=0,
+            baseline_review_repo_count=0,
+            highest_risk_repo_full=None,
+            highest_risk_artifact_path=None,
+            highest_risk_title=None,
+            highest_drift_magnitude=0.0,
+        ),
+        metrics=[],
+        regression_patterns=[],
+        highest_risk_items=[],
+        control_surface_risk=[],
+        attention_repos=[],
+        control_surface_coverage=[],
+        repos=[],
+    )
+    repo_view = RepoDashboardView(
+        repo_full="doria90/dummyAI",
+        onboarding=None,
+        backfill=RepoDashboardBackfillSummary(
+            job_count=0,
+            planned_job_count=0,
+            processing_job_count=0,
+            completed_job_count=0,
+            failed_job_count=0,
+            total_historical_versions=0,
+            total_historical_profiles=0,
+        ),
+        pull_request_audit_count=0,
+        baseline_version_count=0,
+        drift_summary=RepoStaticDriftSummary(
+            repo_full="doria90/dummyAI",
+            artifact_count=0,
+            profile_count=0,
+            baseline_linked_profile_count=0,
+            avg_semantic_distance=0.0,
+            avg_guardrail_shift=0.0,
+            avg_capability_shift=0.0,
+            avg_autonomy_shift=0.0,
+            highest_capability_artifact_path=None,
+            highest_capability_delta=0.0,
+        ),
+        top_drifting_artifacts=[],
+        insights=[],
+        lower_confidence_insights=[],
+        control_surface_groups=[],
+        history_timelines=[],
+        featured_storyline=None,
+        history_cues=[],
+        design_profiles=[],
+        artifacts=[],
+        journey_snapshots=[],
+        journey_comparison=None,
+    )
+
+    with patch("main._require_dashboard_access", return_value={"workspace": object()}), patch(
+        "main._dashboard_repo_visibility",
+        return_value={
+            "allowed_repo_fulls": {"doria90/dummyAI"},
+            "repo_scope_by_full": {"doria90/dummyAI": "allocated"},
+            "allocation_status_by_full": {"doria90/dummyAI": "onboarded"},
+        },
+    ), patch("main.list_repo_dashboard_index", return_value=[]), patch(
+        "main.build_dashboard_overview_view", return_value=overview_view
+    ), patch("main._require_repo_dashboard_read_access", return_value={"workspace": object()}), patch(
+        "main.build_repo_dashboard_view", return_value=repo_view
+    ):
+        repos_response = client.get("/api/repos")
+        overview_response = client.get("/api/dashboard/overview")
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert repos_response.status_code == 200
+    assert overview_response.status_code == 200
+    assert repo_response.status_code == 200
+    assert "access;dur=" in repos_response.headers["server-timing"]
+    assert "visibility;dur=" in repos_response.headers["server-timing"]
+    assert "list;dur=" in repos_response.headers["server-timing"]
+    assert "total;dur=" in repos_response.headers["server-timing"]
+    assert "access;dur=" in overview_response.headers["server-timing"]
+    assert "visibility;dur=" in overview_response.headers["server-timing"]
+    assert "build;dur=" in overview_response.headers["server-timing"]
+    assert "json;dur=" in overview_response.headers["server-timing"]
+    assert "total;dur=" in overview_response.headers["server-timing"]
+    assert "access;dur=" in repo_response.headers["server-timing"]
+    assert "build;dur=" in repo_response.headers["server-timing"]
+    assert "json;dur=" in repo_response.headers["server-timing"]
+    assert "total;dur=" in repo_response.headers["server-timing"]
+
+
 def test_public_install_callback_persists_unclaimed_installation(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "public-install-callback.db")
