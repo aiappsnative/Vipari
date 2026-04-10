@@ -66,19 +66,26 @@ function detailButton() {
     return document.getElementById("detail-escalate-btn");
 }
 
-const repoDashboardCache = new Map();
 let overviewRepoPreviewState = {
-    repoFull: null,
     activeRepoFull: null,
     lockedRepoFull: null,
     hoveredRepoFull: null,
-    requestToken: 0,
     itemsByRepo: new Map(),
 };
 
 function detailAttributeProfile(item) {
     const riskItem = item._matchedRiskItem || null;
     return asArray(riskItem?.attribute_profile).filter((entry) => entry.attribute_key !== "control_surface_type");
+}
+
+function profileAttribute(entries, attributeKey, keyPrefix) {
+    return normalizeScore(
+        averageNumeric(
+            entries
+                .filter((entry) => entry.attribute_key === attributeKey)
+                .map((entry) => attributeScore(entry, keyPrefix))
+        )
+    );
 }
 
 function attributeScore(entry, keyPrefix) {
@@ -403,6 +410,22 @@ function latestActivityLabel(payload) {
     return `Updated ${days}d ago`;
 }
 
+function formatRelativeTimestamp(timestamp) {
+    const numeric = Number(timestamp);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return "Unknown";
+    }
+    const deltaHours = Math.max(Math.round((Date.now() / 1000 - numeric) / 3600), 0);
+    if (deltaHours < 1) {
+        return "Within the last hour";
+    }
+    if (deltaHours < 24) {
+        return `${deltaHours}h ago`;
+    }
+    const days = Math.round(deltaHours / 24);
+    return `${days}d ago`;
+}
+
 function summarizeBaselineStatus(repo, payload = null) {
     if ((repo?.highest_baseline_label || "").includes("Approved") || Number(payload?.baseline_version_count || 0) > 0) {
         return "Approved";
@@ -431,21 +454,86 @@ function summarizeDriftMagnitude(repo) {
     return drift.toFixed(2);
 }
 
-function renderJourneyPreview(payload) {
-    const timelines = asArray(payload?.history_timelines);
-    const topTimeline = timelines[0] || null;
-    const points = asArray(topTimeline?.points);
-    const latestPoint = points.slice(-1)[0] || null;
-    const earliestPoint = points[0] || null;
+function latestActivityLabelFromOverview(repo) {
+    return `Last onboarded ${formatRelativeTimestamp(repo?.last_onboarded_at)}`;
+}
+
+function repoRadarVectorsFromOverview(repo) {
+    const profile = detailAttributeProfile(repo);
+    if (!profile.length) {
+        return null;
+    }
+    const changeVelocity = normalizeScore(Math.min(1, (Number(repo?.review_now_count || 0) + Number(repo?.watch_count || 0) + 1) / 4));
+    const criticality = normalizeScore(Math.min(1, Number(repo?.top_drift_magnitude || 0) * 1.6));
+    const baseline = {
+        guardrails: profileAttribute(profile, "guardrail_robustness", "baseline"),
+        capability: profileAttribute(profile, "capability_risk", "baseline"),
+        autonomy: profileAttribute(profile, "autonomy_level", "baseline"),
+        governance: profileAttribute(profile, "governance_strength", "baseline"),
+        changeVelocity: normalizeScore(Math.max(0.08, changeVelocity * 0.4)),
+        criticality: normalizeScore(Math.max(0.12, criticality * 0.78)),
+    };
+    const current = {
+        guardrails: profileAttribute(profile, "guardrail_robustness", "current"),
+        capability: profileAttribute(profile, "capability_risk", "current"),
+        autonomy: profileAttribute(profile, "autonomy_level", "current"),
+        governance: profileAttribute(profile, "governance_strength", "current"),
+        changeVelocity,
+        criticality,
+    };
+    return {
+        labels: ["Guardrails", "Capability", "Autonomy", "Governance", "Change velocity", "Criticality"],
+        series: [
+            {
+                label: "Approved baseline",
+                color: "#4f98a3",
+                fill: "rgba(79, 152, 163, 0.12)",
+                values: [baseline.guardrails, baseline.capability, baseline.autonomy, baseline.governance, baseline.changeVelocity, baseline.criticality],
+            },
+            {
+                label: "Current head",
+                color: "#e0914a",
+                fill: "rgba(224, 145, 74, 0.12)",
+                values: [current.guardrails, current.capability, current.autonomy, current.governance, current.changeVelocity, current.criticality],
+            },
+        ],
+    };
+}
+
+function journeyToneForPriority(priority) {
+    if (priority === "review_now") {
+        return "gap";
+    }
+    if (priority === "watch") {
+        return "medium";
+    }
+    return "primary";
+}
+
+function renderJourneyPreviewFromOverview(repo) {
     const milestones = [
-        { label: "Baseline", value: `${Number(payload?.baseline_version_count || 0)}`, caption: "approved", tone: "primary" },
-        earliestPoint ? { label: "First change", value: escapeHtml(earliestPoint.source_ref || earliestPoint.label || "history"), caption: "history", tone: "medium" } : null,
-        latestPoint ? { label: "Recent change", value: escapeHtml(latestPoint.source_ref || latestPoint.label || "recent"), caption: `${Number(latestPoint.drift_magnitude || 0).toFixed(2)} drift`, tone: "gap" } : null,
-        { label: "Current", value: `${Number(asArray(payload?.artifacts).length || 0)} surfaces`, caption: latestActivityLabel(payload), tone: "low" },
-    ].filter(Boolean);
+        {
+            label: "Baseline",
+            value: (repo?.highest_baseline_label || "Baseline: none").replace(/^Baseline:\s*/i, ""),
+            caption: "stored posture",
+            tone: (repo?.highest_baseline_label || "").includes("Approved") ? "primary" : "medium",
+        },
+        {
+            label: "Latest evidence",
+            value: repo?.highest_review_target || repo?.highest_evidence_label || "repo summary",
+            caption: repo?.highest_evidence_label || "latest signal",
+            tone: journeyToneForPriority(repo?.highest_priority),
+        },
+        {
+            label: "Current",
+            value: `${Number(repo?.discovered_artifact_count || 0)} surfaces`,
+            caption: `${Number(repo?.review_now_count || 0)} review now · ${Number(repo?.watch_count || 0)} watch`,
+            tone: "low",
+        },
+    ];
     return milestones.map((milestone, index) => `
         <div class="journey-node journey-tone-${escapeHtml(milestone.tone)}">
-            <div class="journey-node-value journey-node-text">${milestone.value}</div>
+            <div class="journey-node-value journey-node-text">${escapeHtml(milestone.value)}</div>
             <div class="journey-node-label">${escapeHtml(milestone.label)}</div>
             <div class="journey-node-caption">${escapeHtml(milestone.caption || "")}</div>
             ${index < milestones.length - 1 ? '<div class="journey-node-link" aria-hidden="true"></div>' : ""}
@@ -453,69 +541,22 @@ function renderJourneyPreview(payload) {
     `).join("");
 }
 
-function journeyPreviewNote(payload) {
-    const historicalVersions = Number(payload?.backfill?.total_historical_versions || 0);
-    const timelines = asArray(payload?.history_timelines);
-    const topTimeline = timelines[0] || null;
-    const timelineCount = timelines.length;
-    if (!historicalVersions && !timelineCount) {
-        return "Full repo version journey needs snapshot backend support; this preview shows what DriftGuard already tracks today.";
-    }
-    if (topTimeline) {
-        return `${topTimeline.artifact_path} shows ${topTimeline.point_count} stored checkpoints; full repo journey still needs snapshot backend support.`;
-    }
-    return `${historicalVersions} historical artifact versions and ${timelineCount} tracked storyline timelines are currently available for preview.`;
+function journeyPreviewNoteFromOverview(repo) {
+    return repo?.highest_change_summary || repo?.highest_flag_summary || repo?.highest_rationale || "Overview data is available; open the repo dashboard for the full version journey.";
 }
 
-function renderRepoRecentChanges(payload, repo) {
-    const profile = asArray(payload?.design_profiles).find((item) => item.artifact_path === artifactPathForRepo(repo)) || asArray(payload?.design_profiles)[0];
-    const groups = asArray(payload?.control_surface_groups).slice(0, 3).map((group) => group.label.toLowerCase());
-    const findings = asArray(profile?.attribute_findings);
-    const changes = [];
-    if (profile?.headline_summary) {
-        changes.push(profile.headline_summary.replace(/drift/gi, "change"));
-    }
-    findings.slice(0, 3).forEach((finding) => {
-        changes.push(`${finding.label} ${finding.direction} (${Math.abs(Number(finding.delta || 0)).toFixed(2)}).`);
-    });
-    if (groups.length) {
-        changes.push(`Most active control surfaces: ${groups.join(", ")}.`);
-    }
-    if (!changes.length) {
-        changes.push("Recent repository changes are available, but no dominant neutral change summary has been isolated yet.");
-    }
-    return changes.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
-}
-
-function renderRepoChangeBreakdown(payload, repo) {
-    const profile = asArray(payload?.design_profiles).find((item) => item.artifact_path === artifactPathForRepo(repo)) || asArray(payload?.design_profiles)[0];
-    const attributeProfile = asArray(profile?.attribute_profile);
-    if (attributeProfile.length) {
-        return renderAttributeBars(attributeProfile.filter((entry) => entry.attribute_key !== "control_surface_type"));
-    }
-    return renderAttributeBars(detailAttributeProfile(repo));
-}
-
-async function fetchRepoDashboard(repoFull) {
-    if (!repoFull) {
-        return null;
-    }
-    if (repoDashboardCache.has(repoFull)) {
-        return repoDashboardCache.get(repoFull);
-    }
-    const request = fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`)
-        .then(async (response) => {
-            if (!response.ok) {
-                throw new Error(`Repo dashboard request failed with ${response.status}`);
-            }
-            return response.json();
-        })
-        .catch((error) => {
-            repoDashboardCache.delete(repoFull);
-            throw error;
-        });
-    repoDashboardCache.set(repoFull, request);
-    return request;
+function updateOverviewRepoPreview(repo, subtitle = null) {
+    const vectors = repoRadarVectorsFromOverview(repo);
+    drawRepoRadar(vectors);
+    setSectionHtml("repo-posture-legend", renderRepoRadarLegend(vectors));
+    setText("repo-radar-title", `${repo.repo_full} posture`);
+    setText(
+        "repo-radar-subtitle",
+        subtitle || [repo.highest_insight_title, repo.highest_review_target, repo.highest_evidence_label].filter(Boolean).join(" · ") || "Selected repo posture"
+    );
+    setText("repo-radar-meta", latestActivityLabelFromOverview(repo));
+    setSectionHtml("repo-journey-strip", renderJourneyPreviewFromOverview(repo));
+    setText("repo-journey-note", journeyPreviewNoteFromOverview(repo));
 }
 
 function selectRepoTableRow(repoFull) {
@@ -524,82 +565,13 @@ function selectRepoTableRow(repoFull) {
     });
 }
 
-function updateRepoPreviewHeader(repo, payload) {
-    setText("repo-radar-title", `${repo.repo_full} posture`);
-    setText("repo-radar-subtitle", `${summarizeBaselineStatus(repo, payload)} baseline · ${Number(payload?.baseline_version_count || 0)} approved checkpoints · ${asArray(payload?.artifacts).length} tracked surfaces`);
-    setText("repo-radar-meta", latestActivityLabel(payload));
-}
-
-function hydrateRepoTableRow(repo, payload) {
-    const row = document.querySelector(`[data-repo-row="${CSS.escape(repo.repo_full)}"]`);
-    if (!row) {
-        return;
-    }
-    const cells = row.querySelectorAll("td");
-    if (cells.length < 7) {
-        return;
-    }
-    cells[3].textContent = summarizeVersionCount(payload);
-    cells[4].textContent = summarizeBaselineStatus(repo, payload);
-    cells[5].textContent = latestActivityLabel(payload);
-    cells[6].textContent = summarizeMonitoredSurfaces(payload);
-}
-
-async function enrichOverviewRepoDetail(repo, mode = "full") {
-    const shell = document.getElementById("repo-radar-shell");
-    if (shell) {
-        shell.classList.add("loading-shell", "muted");
-    }
-    const requestToken = ++overviewRepoPreviewState.requestToken;
-    overviewRepoPreviewState.repoFull = repo.repo_full;
-    if (mode === "full") {
-        overviewRepoPreviewState.activeRepoFull = repo.repo_full;
-        overviewRepoPreviewState.lockedRepoFull = repo.repo_full;
-        selectRepoTableRow(repo.repo_full);
-    }
-    if (mode === "preview") {
-        overviewRepoPreviewState.hoveredRepoFull = repo.repo_full;
-    }
-    try {
-        const payload = await fetchRepoDashboard(repo.repo_full);
-        if (requestToken !== overviewRepoPreviewState.requestToken || overviewRepoPreviewState.repoFull !== repo.repo_full) {
-            return;
-        }
-        const vectors = repoRadarVectors(payload);
-        drawRepoRadar(vectors);
-        setSectionHtml("repo-posture-legend", renderRepoRadarLegend(vectors));
-        updateRepoPreviewHeader(repo, payload);
-        setSectionHtml("repo-journey-strip", renderJourneyPreview(payload));
-        setText("repo-journey-note", journeyPreviewNote(payload));
-        hydrateRepoTableRow(repo, payload);
-        if (mode === "full") {
-            setSectionHtml("detail-attributes", renderRepoChangeBreakdown(payload, repo));
-            setSectionHtml("detail-evidence-list", renderRepoRecentChanges(payload, repo));
-        }
-    } catch (error) {
-        if (requestToken !== overviewRepoPreviewState.requestToken) {
-            return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to load repo posture preview.";
-        setSectionHtml("repo-posture-legend", `<div class="muted">${escapeHtml(message)}</div>`);
-        setSectionHtml("repo-journey-strip", `<div class="muted">${escapeHtml(message)}</div>`);
-        setText("repo-journey-note", message);
-        setText("repo-radar-meta", message);
-        drawRepoRadar(null);
-    } finally {
-        if (requestToken === overviewRepoPreviewState.requestToken && shell) {
-            shell.classList.remove("loading-shell", "muted");
-        }
-    }
-}
-
 function restoreRepoPreview() {
     const repoFull = overviewRepoPreviewState.lockedRepoFull || overviewRepoPreviewState.activeRepoFull;
     const item = repoFull ? overviewRepoPreviewState.itemsByRepo.get(repoFull) : null;
     if (!item) {
         return;
     }
-    enrichOverviewRepoDetail(item, "preview");
+    updateOverviewRepoPreview(item);
 }
 
 function setDetailScore(repo) {
@@ -649,7 +621,6 @@ function repoDetailUrl(repo) {
 
 function applyOverviewDetail(repo) {
     const severity = severityForPriority(repo.highest_priority);
-    const riskItem = repo._matchedRiskItem || null;
     const detailName = `${repo.repo_full} / ${artifactPathForRepo(repo) || "repo focus"}`;
     const subtitle = [repo.highest_insight_title, repo.highest_review_target, repo.highest_evidence_label].filter(Boolean).join(" · ") || "Selected repo posture";
 
@@ -667,13 +638,7 @@ function applyOverviewDetail(repo) {
     overviewRepoPreviewState.activeRepoFull = repo.repo_full;
     overviewRepoPreviewState.lockedRepoFull = repo.repo_full;
     selectRepoTableRow(repo.repo_full);
-    setText("repo-radar-title", `${repo.repo_full} posture`);
-    setText("repo-radar-subtitle", subtitle);
-    setText("repo-radar-meta", "Loading repo posture preview...");
-    setSectionHtml("repo-posture-legend", '<div class="muted">Loading posture comparison...</div>');
-    setSectionHtml("repo-journey-strip", '<div class="muted">Loading repo journey preview...</div>');
-    setText("repo-journey-note", "Loading current repo history preview...");
-    enrichOverviewRepoDetail(repo, "full");
+    updateOverviewRepoPreview(repo, subtitle);
 
     const button = detailButton();
     if (button) {
@@ -860,10 +825,10 @@ function renderReposTable(repos = [], attentionRepos = []) {
                 <td><div class="repo-name-cell"><a class="repo-link" href="/dashboard/${encodeURIComponent(repo.repo_full)}">${escapeHtml(repo.repo_full)}</a>${scopeBadge}</div></td>
                 <td>${openItems}</td>
                 <td>${summarizeDriftMagnitude(attention)}</td>
-                <td>—</td>
+                <td>${escapeHtml(String(Number(repo.historical_version_count || 0)))}</td>
                 <td>${escapeHtml(summarizeBaselineStatus(attention || repo))}</td>
-                <td>Loading…</td>
-                <td>Loading…</td>
+                <td>${escapeHtml(formatRelativeTimestamp(repo.last_onboarded_at))}</td>
+                <td>${escapeHtml(`${Number(repo.discovered_artifact_count || 0)} tracked`)}</td>
             </tr>
         `;
     }).join("");
@@ -880,10 +845,7 @@ function bindRepoTablePreview(items) {
         row.dataset.boundPreview = "true";
         const preview = () => {
             overviewRepoPreviewState.hoveredRepoFull = repoFull;
-            setText("repo-radar-title", `${repoFull} posture`);
-            setText("repo-radar-subtitle", "Previewing repo posture from the repository table.");
-            setText("repo-radar-meta", "Loading repo posture preview...");
-            enrichOverviewRepoDetail(item, "preview");
+            updateOverviewRepoPreview(item, "Previewing repo posture from the repository table.");
         };
         row.addEventListener("mouseenter", preview);
         row.addEventListener("focus", preview);
@@ -901,18 +863,6 @@ function bindRepoTablePreview(items) {
                 applyOverviewDetail(item);
             }
         });
-    });
-}
-
-function warmRepoSummaries(items) {
-    items.forEach((item) => {
-        fetchRepoDashboard(item.repo_full)
-            .then((payload) => {
-                hydrateRepoTableRow(item, payload);
-            })
-            .catch(() => {
-                // Keep placeholder cells if this repo summary cannot be enriched.
-            });
     });
 }
 
@@ -950,7 +900,6 @@ async function loadOverview() {
         renderOverviewQueue(selectionItems, "all");
         bindOverviewFilters(selectionItems);
         bindRepoTablePreview(selectionItems);
-        warmRepoSummaries(selectionItems);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown overview error";
         const fallback = `<div class="muted">Unable to load dashboard overview. ${escapeHtml(message)}</div>`;

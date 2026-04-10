@@ -12,6 +12,8 @@ from services.audit_records import record_audit_result
 from engine.analysis import analyze_diff
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.entitlements import derive_entitlement_payload
+from services.repo_journey import build_repo_journey
+from services.repo_journey_records import list_repo_posture_snapshots_for_repo
 
 
 PROMPT_BASELINE = """# Refund Copilot
@@ -124,6 +126,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
+    assert overview_payload["repos"][0]["historical_version_count"] >= 1
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -193,6 +196,10 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_timelines"][0]["points"][-1]["review_context"] == "Historical snapshot from backfill"
     assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
+    assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
+    assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
+    assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
 
 
 def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
@@ -223,9 +230,13 @@ def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
     )
+    before_snapshots = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
+    before_current = next(snapshot for snapshot in before_snapshots if snapshot.snapshot_type == "current")
+    assert before_current.distance_from_baseline > 0
 
     with TestClient(main.app) as client:
         response = client.post("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline")
+        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
 
     assert response.status_code == 200
     payload = response.json()
@@ -233,6 +244,105 @@ def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
     assert payload["baseline"]["artifact_path"] == "prompts/refund.txt"
     assert payload["baseline"]["content_text"] == PROMPT_CURRENT
     assert payload["dashboard"]["baseline_version_count"] == 2
+    assert payload["dashboard"]["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
+    assert payload["dashboard"]["journey_snapshots"][-1]["snapshot_type"] == "current"
+    assert payload["dashboard"]["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
+    assert payload["dashboard"]["journey_comparison"]["drift_summary"]["right_distance_from_baseline"] == 0
+    assert journey_response.status_code == 200
+    current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
+    assert current_snapshot["distance_from_baseline"] == 0
+
+
+def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):
+    db_path = str(tmp_path / "api-journey.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+    baseline_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "baseline_approved")
+    current_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "current")
+
+    with TestClient(main.app) as client:
+        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        snapshot_response = client.get(f"/api/repos/doria90/dummyAI/snapshots/{baseline_snapshot.id}")
+        compare_response = client.get(
+            f"/api/repos/doria90/dummyAI/compare?left={baseline_snapshot.id}&right={current_snapshot.id}"
+        )
+
+    assert journey_response.status_code == 200
+    journey_payload = journey_response.json()
+    assert journey_payload["repo_full"] == "doria90/dummyAI"
+    assert journey_payload["snapshots"][0]["snapshot_type"] == "baseline_approved"
+    assert journey_payload["snapshots"][-1]["snapshot_type"] == "current"
+
+    assert snapshot_response.status_code == 200
+    assert snapshot_response.json()["snapshot"]["snapshot_key"] == baseline_snapshot.snapshot_key
+
+    assert compare_response.status_code == 200
+    compare_payload = compare_response.json()
+    assert compare_payload["comparison_kind"] == "baseline_vs_current"
+    assert compare_payload["change_breakdown"]["critical_surfaces_changed"] >= 1
+    assert compare_payload["risk_summary"]["risk_level"] in {"low", "medium", "high"}
+
+
+def test_dashboard_api_snapshot_detail_is_repo_scoped(tmp_path):
+    db_path = str(tmp_path / "api-journey-scope.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    onboard_repository(
+        db_path,
+        repo_full="doria90/openfang",
+        installation_id=124,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    dummy_snapshot = build_repo_journey(db_path, "doria90/dummyAI")[0]
+    build_repo_journey(db_path, "doria90/openfang")
+
+    with TestClient(main.app) as client:
+        response = client.get(f"/api/repos/doria90/openfang/snapshots/{dummy_snapshot.id}")
+
+    assert response.status_code == 404
 
 
 def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):

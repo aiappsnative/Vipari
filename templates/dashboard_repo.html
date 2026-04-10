@@ -43,6 +43,9 @@
                 <a href="#repo-storyline-section" class="sidebar-nav-item" aria-label="Drift Storyline" data-tooltip="Drift Storyline">
                     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
                 </a>
+                <a href="#repo-journey-section" class="sidebar-nav-item" aria-label="Version Journey" data-tooltip="Version Journey">
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5"/><path d="M4 12h9"/><path d="M4 18h13"/><circle cx="18" cy="6" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+                </a>
                 <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifact Registry" data-tooltip="Artifact Registry">
                     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
                 </a>
@@ -151,6 +154,18 @@
                     <div class="secondary-panel">
                         <div class="secondary-panel-title">Lower-confidence findings</div>
                         <div id="lower-confidence-insights" class="loading-shell muted">Loading lower-confidence findings...</div>
+                    </div>
+                </section>
+
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-journey-section">
+                        <div class="secondary-panel-title">Version journey</div>
+                        <div id="repo-journey-summary" class="loading-shell muted">Loading repository checkpoints...</div>
+                        <div id="repo-journey-timeline" class="loading-shell muted">Loading repository journey timeline...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-compare-section">
+                        <div class="secondary-panel-title">Baseline vs current</div>
+                        <div id="repo-journey-compare" class="loading-shell muted">Loading baseline comparison...</div>
                     </div>
                 </section>
 

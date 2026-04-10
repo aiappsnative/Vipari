@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-CURRENT_PERSISTENCE_SCHEMA_VERSION = 2
+CURRENT_PERSISTENCE_SCHEMA_VERSION = 3
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000
 DEFAULT_PRODUCTION_TARGET = "postgresql"
 OPERATIONAL_TABLES = (
@@ -41,6 +41,7 @@ DURABLE_TABLES = (
     "repo_allocations",
     "control_plane_audit_logs",
     "webhook_event_receipts",
+    "repo_posture_snapshots",
 )
 
 
