@@ -65,6 +65,7 @@ from services.control_plane_records import (
     create_workspace,
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
+    get_github_installation_by_installation_id,
     get_repo_allocation_for_installation,
     get_repo_allocation_for_workspace,
     get_github_identity_for_user,
@@ -1849,7 +1850,8 @@ async def webhook(request: Request):
     if not all([installation_id, repo_full, pr_number]):
         raise HTTPException(status_code=400, detail="Missing payload data")
 
-    if _control_plane_active():
+    managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
+    if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
         allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
         if allocation is None:
             return JSONResponse({"message": "ignored: repo not allocated"})
