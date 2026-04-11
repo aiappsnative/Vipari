@@ -725,6 +725,30 @@ def record_audit_result(
         else:
             conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
 
+        # After recording audit artifacts and profiles, if this PR was merged, attempt to reconcile
+        # added/removed artifact paths into the repository onboarding so the 'current' state
+        # discovery metrics and baseline coverage reflect the merge.
+        try:
+            from .onboarding import sync_on_pr_merge_artifact_changes
+            added = set()
+            removed = set()
+            for art in deterministic_analysis.artifacts:
+                if getattr(art.change, 'added_count', 0) > 0:
+                    added.add(art.relevance.path)
+                if getattr(art.change, 'removed_count', 0) > 0:
+                    removed.add(art.relevance.path)
+            # artifact_snapshots maps path -> text content when available
+            sync_on_pr_merge_artifact_changes(
+                db_path,
+                repo_full=repo_full,
+                artifact_snapshots=artifact_snapshots or {},
+                added_paths=added,
+                removed_paths=removed,
+            )
+        except Exception:
+            # best-effort sync; do not fail the audit recording on sync errors
+            pass
+
         row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
 
     if row is None:

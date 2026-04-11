@@ -483,6 +483,51 @@ def list_onboarded_artifacts_for_onboarding(db_path: str, onboarding_id: int) ->
     return [_row_to_onboarded_artifact(row) for row in rows]
 
 
+def add_onboarded_artifact(
+    db_path: str,
+    *,
+    onboarding_id: int,
+    repo_full: str,
+    artifact_path: str,
+    artifact_type: str,
+    discovery_reason: str,
+    confidence: float,
+) -> OnboardedArtifactRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO onboarded_artifacts (
+                onboarding_id, repo_full, artifact_path, artifact_type, discovery_reason, confidence, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (onboarding_id, repo_full, artifact_path, artifact_type, discovery_reason, confidence, now),
+        )
+        rowid = int(cursor.lastrowid)
+        row = conn.execute("SELECT * FROM onboarded_artifacts WHERE id = ?", (rowid,)).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to add onboarded artifact")
+    return _row_to_onboarded_artifact(row)
+
+
+def delete_onboarded_artifact_by_path(db_path: str, onboarding_id: int, artifact_path: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM onboarded_artifacts WHERE onboarding_id = ? AND artifact_path = ?",
+            (onboarding_id, artifact_path),
+        )
+
+
+def refresh_onboarding_discovered_count(db_path: str, onboarding_id: int) -> None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(1) as cnt FROM onboarded_artifacts WHERE onboarding_id = ?", (onboarding_id,)).fetchone()
+        count = int(row["cnt"]) if row is not None else 0
+        conn.execute(
+            "UPDATE repository_onboardings SET discovered_artifact_count = ?, updated_at = ? WHERE id = ?",
+            (count, time.time(), onboarding_id),
+        )
+
+
 def list_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardingBaselineVersionRecord]:
     with _connect(db_path) as conn:
         rows = conn.execute(
