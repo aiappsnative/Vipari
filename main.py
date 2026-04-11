@@ -25,8 +25,10 @@ from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.baseline_approval_service import (
+    approve_repo_baseline,
     approve_repo_baseline_artifact,
     build_repo_baseline_review_panel,
+    reject_repo_baseline,
     rebaseline_repo_from_snapshot,
     reject_repo_baseline_artifact,
 )
@@ -213,7 +215,7 @@ class BaselineDecisionRequest(BaseModel):
 
 class RepoRebaselineRequest(BaseModel):
     snapshot_id: int
-    rationale: str
+    rationale: str | None = None
 
 
 class BillingHandoffActivationRequest(BaseModel):
@@ -622,15 +624,19 @@ def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) ->
         return access_context
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
-    if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
-        raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
-    return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+    if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
+        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+    connection = get_repo_connection_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+    if connection is not None and connection.status == "available" and onboarding is not None:
+        return {**access_context, "dashboard_repo_scope": "connected_history", "dashboard_repo_allocation_status": None}
+    raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
 
 
 def _dashboard_actor_login(request: Request) -> str | None:
     if not _control_plane_active():
         return None
-    identity_context = _require_github_identity(request)
+    identity_context = _current_authenticated_identity_context(request)
     identity = identity_context.get("identity")
     return identity.github_login if identity is not None else None
 
@@ -1740,6 +1746,50 @@ async def reject_artifact_baseline(request: Request, repo_full: str, artifact_pa
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/approve")
+async def approve_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = approve_repo_baseline(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "approved_baseline_count": len(baselines),
+            "dashboard": asdict(dashboard),
+        }
+    )
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/reject")
+async def reject_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = reject_repo_baseline(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "rejected_baseline_count": len(baselines),
+            "dashboard": asdict(dashboard),
+        }
+    )
 
 
 @app.post("/api/repos/{repo_full:path}/baseline/rebaseline")

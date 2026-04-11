@@ -38,12 +38,12 @@ def test_onboard_repository_discovers_and_persists_ai_artifacts(tmp_path):
 
     assert result.onboarding.repo_full == "doria90/dummyAI"
     assert result.onboarding.default_branch == "main"
-    assert result.onboarding.status == "pending_baseline_approval"
+    assert result.onboarding.status == "baseline_approved"
     assert result.onboarding.discovered_artifact_count == 2
     assert [artifact.artifact_path for artifact in result.artifacts] == ["config/model.yaml", "prompts/system.txt"]
     assert [baseline.artifact_path for baseline in result.baseline_versions] == ["config/model.yaml", "prompts/system.txt"]
     assert all(baseline.line_count >= 1 for baseline in result.baseline_versions)
-    assert all(baseline.approval_status == "pending" for baseline in result.baseline_versions)
+    assert all(baseline.approval_status == "approved" for baseline in result.baseline_versions)
 
 
 def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_candidates(tmp_path):
@@ -199,7 +199,7 @@ temperature: 0.4
     assert profiles[0].baseline_profile_id is None
     assert profiles[0].baseline_provenance is not None
     assert profiles[0].baseline_provenance.source_type == "approved_baseline"
-    assert profiles[0].baseline_provenance.is_authoritative is False
+    assert profiles[0].baseline_provenance.is_authoritative is True
     assert profiles[0].semantic_distance > 0.0
     assert profiles[0].attribute_deltas["capability_risk"] < 0.0
     assert profiles[0].attribute_deltas["guardrail_robustness"] > 0.0
@@ -207,7 +207,7 @@ temperature: 0.4
     assert profiles[1].baseline_profile_id is None
     assert profiles[1].baseline_provenance is not None
     assert profiles[1].baseline_provenance.source_type == "approved_baseline"
-    assert profiles[1].baseline_provenance.is_authoritative is False
+    assert profiles[1].baseline_provenance.is_authoritative is True
     assert profiles[1].semantic_distance >= 0.0
     assert profiles[1].attribute_deltas["capability_risk"] <= 0.0
     assert profiles[1].attribute_deltas["guardrail_robustness"] > 0.0

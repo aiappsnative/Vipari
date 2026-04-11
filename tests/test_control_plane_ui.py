@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,42 @@ def reset_test_client_cookies():
     client.cookies.clear()
     yield
     client.cookies.clear()
+
+
+def test_repo_dashboard_mutation_access_allows_connected_history_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "mutation-access.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    request = SimpleNamespace()
+    workspace = SimpleNamespace(id=7)
+    access_context = {"workspace": workspace}
+    connection = SimpleNamespace(status="available")
+    onboarding = SimpleNamespace(id=11)
+
+    with patch("main._require_dashboard_access", return_value=access_context), patch(
+        "main.get_repo_allocation_for_workspace", return_value=None
+    ), patch("main.get_repo_connection_for_workspace", return_value=connection), patch(
+        "main.get_latest_repository_onboarding", return_value=onboarding
+    ):
+        result = main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
+
+    assert result["dashboard_repo_scope"] == "connected_history"
+    assert result["dashboard_repo_allocation_status"] is None
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_actor_login_uses_authenticated_identity_context():
+    request = SimpleNamespace()
+    identity = SimpleNamespace(github_login="doria90")
+
+    with patch("main._control_plane_active", return_value=True), patch(
+        "main._current_authenticated_identity_context",
+        return_value={"identity": identity},
+    ):
+        actor_login = main._dashboard_actor_login(request)
+
+    assert actor_login == "doria90"
 
 
 def test_marketing_page_renders():

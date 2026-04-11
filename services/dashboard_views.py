@@ -28,11 +28,14 @@ from .audit_records import (
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
+    get_latest_baseline_snapshot_id_for_onboarding,
     get_latest_repository_onboarding,
+    list_effective_onboarding_baseline_versions_for_onboarding,
     list_historical_backfill_jobs_for_repo,
     list_latest_repository_onboardings,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
+    select_effective_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
 
@@ -447,6 +450,7 @@ class RepoDashboardView:
     artifacts: list[RepoDashboardArtifactEntry] = None
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
+    selected_baseline_source_snapshot_id: int | None = None
 
 
 def list_repo_dashboard_index(
@@ -626,8 +630,11 @@ def _build_repo_dashboard_view_uncached(
     pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
+    selected_baseline_source_snapshot_id: int | None = None
     if include_journey:
         journey_snapshots, journey_comparison = _build_repo_journey_panel(db_path, repo_full)
+    if onboarding is not None:
+        selected_baseline_source_snapshot_id = get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id)
 
     if onboarding is None:
         return RepoDashboardView(
@@ -657,11 +664,15 @@ def _build_repo_dashboard_view_uncached(
             artifacts=[],
             journey_snapshots=journey_snapshots,
             journey_comparison=journey_comparison,
+            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         )
 
     artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+    baseline_by_path = {
+        baseline.artifact_path: baseline
+        for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    }
     jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
     metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
@@ -761,6 +772,7 @@ def _build_repo_dashboard_view_uncached(
         artifacts=artifact_entries,
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
+        selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
     )
 
 
@@ -859,7 +871,10 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
 
         artifact_rows = artifacts_by_repo.get(repo.repo_full, [])
         baseline_versions = baselines_by_repo.get(repo.repo_full, [])
-        baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+        baseline_by_path = {
+            baseline.artifact_path: baseline
+            for baseline in select_effective_onboarding_baseline_versions(baseline_versions)
+        }
         leaderboard_entries = top_drifting_artifacts_by_repo.get(repo.repo_full, [])
         leaderboard_by_path = {entry.artifact_path: entry for entry in leaderboard_entries}
         metrics_by_path = metrics_by_repo.get(repo.repo_full, {})
@@ -932,6 +947,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 artifacts=artifact_entries,
                 journey_snapshots=[],
                 journey_comparison=None,
+                selected_baseline_source_snapshot_id=get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
             )
         )
 

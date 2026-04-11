@@ -107,9 +107,10 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
 
     assert dashboard.repo_full == "doria90/dummyAI"
     assert dashboard.onboarding is not None
-    assert dashboard.onboarding.status == "pending_baseline_approval"
+    assert dashboard.onboarding.status == "baseline_approved"
     assert dashboard.baseline_review is not None
-    assert dashboard.baseline_review.is_pending_review is True
+    assert dashboard.baseline_review.is_pending_review is False
+    assert dashboard.baseline_review.authoritative_artifact_count == 1
     assert dashboard.baseline_version_count == 1
     assert dashboard.backfill.completed_job_count == 1
     assert dashboard.backfill.total_historical_versions == 3
@@ -125,7 +126,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.insights[0].confidence_label in {"high confidence", "medium confidence", "lower confidence"}
     assert dashboard.insights[0].evidence_label == "history only"
     assert dashboard.insights[0].evidence_summary == "Only merged-history evidence is available right now; start with commit sha-3."
-    assert dashboard.insights[0].baseline_label.startswith("Baseline: Pending approval")
+    assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
     assert dashboard.insights[0].provenance_summary == "From · commit sha-3 · Historical snapshot from backfill"
     assert dashboard.insights[0].review_target == "commit sha-3"
     assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-3"
@@ -149,7 +150,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert len(dashboard.history_cues) >= 1
     assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
     assert dashboard.journey_snapshots[0]["snapshot_type"] == "baseline_approved"
-    assert dashboard.journey_snapshots[0]["input_summary"]["baseline_verified"] is False
+    assert dashboard.journey_snapshots[0]["input_summary"]["baseline_verified"] is True
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
     assert dashboard.journey_comparison is not None
     assert dashboard.journey_comparison["comparison_kind"] == "baseline_vs_current"
@@ -157,7 +158,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
     assert dashboard.design_profiles[0].baseline_provenance.source_type == "approved_baseline"
-    assert dashboard.design_profiles[0].baseline_provenance.is_authoritative is False
+    assert dashboard.design_profiles[0].baseline_provenance.is_authoritative is True
     assert dashboard.design_profiles[0].provenance is not None
     assert dashboard.design_profiles[0].provenance.source_type == "historical"
     assert dashboard.design_profiles[0].provenance.label == "Historical backfill"
@@ -192,7 +193,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.artifacts[0].pr_profile_count == 0
     assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
-    assert dashboard.history_timelines[0].points[-1].baseline_provenance.is_authoritative is False
+    assert dashboard.history_timelines[0].points[-1].baseline_provenance.is_authoritative is True
     assert dashboard.history_timelines[0].points[0].label == "Historical backfill"
     assert dashboard.history_timelines[0].points[0].source_ref == "commit sha-1"
     assert dashboard.history_timelines[0].points[0].source_url == "https://github.com/doria90/dummyAI/commit/sha-1"
@@ -244,7 +245,7 @@ def test_live_branch_head_scan_becomes_current_repo_journey_checkpoint(tmp_path)
     assert snapshots[0].snapshot_type == "baseline_approved"
     assert snapshots[-1].snapshot_type == "branch_head"
     assert snapshots[-1].commit_sha == "livehead1"
-    assert snapshots[-1].input_summary["baseline_verified"] is False
+    assert snapshots[-1].input_summary["baseline_verified"] is True
 
     dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "branch_head"
@@ -375,7 +376,7 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.attention_repos[0].highest_change_summary
     assert (overview.attention_repos[0].highest_flag_summary or "").startswith("Flagged because")
     assert overview.attention_repos[0].lower_confidence_count == 0
-    assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Pending approval")
+    assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Approved")
     assert overview.highest_risk_items[0].evidence_label == "history only"
     assert overview.highest_risk_items[0].evidence_summary == "Only merged-history evidence is available right now; start with commit sha-1."
     assert overview.highest_risk_items[0].review_target == "commit sha-1"

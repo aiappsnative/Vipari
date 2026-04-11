@@ -319,9 +319,11 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "/static/dashboard-index.js" in index_response.text
     index_text = index_response.text.lower()
     assert "urgent items for review" in index_text
+    assert "repository atlas" in index_text
     assert "repo posture radar" in index_text
     assert "version journey" in index_text
     assert "coverage" in index_text
+    assert "overview-rebaseline-modal" in index_response.text
 
     assert repo_response.status_code == 200
     repo_text = repo_response.text.lower()
@@ -330,6 +332,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "attribute drift" in repo_text
     assert "control surface coverage" in repo_text
     assert "drift storyline" in repo_text
+    assert "baseline-review-panel" not in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
 
@@ -340,6 +343,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "--color-border" in css_response.text
     assert index_js_response.status_code == 200
     assert "renderUrgentRow" in index_js_response.text
+    assert "renderRepoAtlasCard" in index_js_response.text
+    assert "submitOverviewRebaseline" in index_js_response.text
     assert "loadOverview" in index_js_response.text
     assert "drawRadar" in index_js_response.text
     assert "Unable to load dashboard overview" in index_js_response.text

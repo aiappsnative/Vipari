@@ -431,9 +431,9 @@ def record_repository_onboarding(
                     artifact.baseline_content,
                     json.dumps(_profile_to_json(profile)),
                     now,
-                    "pending",
+                    "approved",
                     None,
-                    None,
+                    now,
                     None,
                 ),
             )
@@ -497,6 +497,43 @@ def list_latest_onboarding_baseline_versions_for_onboarding(db_path: str, onboar
     for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
         latest_by_path[baseline.artifact_path] = baseline
     return [latest_by_path[path] for path in sorted(latest_by_path)]
+
+
+def select_effective_onboarding_baseline_versions(
+    baselines: list[OnboardingBaselineVersionRecord],
+) -> list[OnboardingBaselineVersionRecord]:
+    latest_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    latest_approved_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    for baseline in baselines:
+        latest_by_path[baseline.artifact_path] = baseline
+        if baseline.approval_status == "approved":
+            latest_approved_by_path[baseline.artifact_path] = baseline
+
+    effective_by_path = {
+        artifact_path: latest_approved_by_path.get(artifact_path, latest_baseline)
+        for artifact_path, latest_baseline in latest_by_path.items()
+    }
+    return [effective_by_path[path] for path in sorted(effective_by_path)]
+
+
+def list_effective_onboarding_baseline_versions_for_onboarding(
+    db_path: str,
+    onboarding_id: int,
+) -> list[OnboardingBaselineVersionRecord]:
+    return select_effective_onboarding_baseline_versions(
+        list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id)
+    )
+
+
+def list_latest_approved_onboarding_baseline_versions_for_onboarding(
+    db_path: str,
+    onboarding_id: int,
+) -> list[OnboardingBaselineVersionRecord]:
+    latest_approved_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
+        if baseline.approval_status == "approved":
+            latest_approved_by_path[baseline.artifact_path] = baseline
+    return [latest_approved_by_path[path] for path in sorted(latest_approved_by_path)]
 
 
 def get_latest_onboarding_baseline_for_repo_artifact(
@@ -672,6 +709,44 @@ def record_baseline_audit_log(
     return _row_to_baseline_audit_log(row)
 
 
+def get_latest_baseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: int) -> int | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT snapshot_id
+            FROM baseline_audit_log
+            WHERE onboarding_id = ?
+                            AND action IN ('approve_repo_baseline', 'rebaseline')
+              AND snapshot_id IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (onboarding_id,),
+        ).fetchone()
+    if row is None or row["snapshot_id"] is None:
+        return None
+    return int(row["snapshot_id"])
+
+
+def get_latest_rebaseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: int) -> int | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT snapshot_id
+            FROM baseline_audit_log
+            WHERE onboarding_id = ?
+              AND action = 'rebaseline'
+              AND snapshot_id IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (onboarding_id,),
+        ).fetchone()
+    if row is None or row["snapshot_id"] is None:
+        return None
+    return int(row["snapshot_id"])
+
+
 def promote_latest_source_to_onboarding_baseline(
     db_path: str,
     repo_full: str,
@@ -738,13 +813,13 @@ def promote_latest_source_to_onboarding_baseline(
         conn.execute(
             """
             UPDATE repository_onboardings
-            SET status = 'pending_baseline_approval',
+            SET status = 'baseline_approved',
                 approved_by = NULL,
-                approved_at = NULL,
+                approved_at = ?,
                 updated_at = ?
             WHERE id = ?
             """,
-            (now, onboarding["id"]),
+            (now, now, onboarding["id"]),
         )
     return create_onboarding_baseline_version(
         db_path,
@@ -756,7 +831,8 @@ def promote_latest_source_to_onboarding_baseline(
         content_text=latest_source["content_text"],
         profile=_profile_from_json(latest_source["profile_json"]),
         signal_terms=json.loads(latest_source["signal_terms_json"]),
-        approval_status="pending",
+        approval_status="approved",
+        approved_at=now,
     )
 
 

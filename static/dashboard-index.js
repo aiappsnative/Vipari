@@ -8,6 +8,8 @@ const previewState = {
     activeRepoFull: null,
     pendingRepoFull: null,
 };
+window.__overviewPendingRebaseline = null;
+window.__overviewRebaselineBusy = false;
 
 const HOVER_PREVIEW_DELAY_MS = 80;
 
@@ -102,6 +104,46 @@ function reviewContext(repo) {
     return repo.highest_review_target || repo.highest_evidence_label || "latest signal";
 }
 
+function repoScopeLabel(repo) {
+    const scope = String(repo.dashboard_scope || "allocated").toLowerCase();
+    if (scope === "connected_history") {
+        return "Connected History";
+    }
+    return "Workspace Repo";
+}
+
+function repoStatusLabel(repo) {
+    const status = String(repo.onboarding_status || "").toLowerCase();
+    if (status === "baseline_approved") {
+        return "Baseline locked";
+    }
+    if (status === "pending_baseline_approval") {
+        return "Awaiting baseline";
+    }
+    return "Discovery pending";
+}
+
+function baselineLabelForRepo(repo) {
+    const status = String(repo.onboarding_status || "").toLowerCase();
+    if (status === "baseline_approved") {
+        return "Baseline: Approved";
+    }
+    if (status === "pending_baseline_approval") {
+        return "Baseline: Pending approval";
+    }
+    return "Baseline: none yet";
+}
+
+function priorityRank(priority) {
+    if (priority === "review_now") {
+        return 0;
+    }
+    if (priority === "watch") {
+        return 1;
+    }
+    return 2;
+}
+
 function compactRepoLabel(repoFull) {
     const tail = String(repoFull || "repo").split("/").pop() || "repo";
     return tail.length > 12 ? `${tail.slice(0, 12)}...` : tail;
@@ -193,6 +235,7 @@ function primeRepoDashboardCache(items) {
 
 function journeyNodesFromRepoPayload(repo, repoPayload) {
     const snapshots = asArray(repoPayload?.journey_snapshots);
+    const selectedBaselineSourceSnapshotId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
     if (!snapshots.length) {
         return [
             {
@@ -200,27 +243,87 @@ function journeyNodesFromRepoPayload(repo, repoPayload) {
                 title: "Approved Baseline",
                 caption: "Repo-level baseline checkpoint",
                 tone: "baseline",
+                snapshotId: null,
+                canRebaseline: false,
             },
             {
                 tag: reviewContext(repo),
                 title: "Latest Evidence",
                 caption: triageSummary(repo),
                 tone: "activity",
+                snapshotId: null,
+                canRebaseline: false,
             },
             {
                 tag: "Current state",
                 title: "Current State",
                 caption: `${Number(repo.review_now_count || 0)} review now · ${Number(repo.watch_count || 0)} watch`,
                 tone: "current",
+                snapshotId: null,
+                canRebaseline: false,
             },
         ];
     }
-    return snapshots.slice(0, 4).map((snapshot) => ({
-        tag: snapshotTag(snapshot),
-        title: snapshotTitle(snapshot),
-        caption: snapshotCaption(snapshot),
-        tone: snapshot.snapshot_type === "baseline_approved" ? "baseline" : (snapshot.snapshot_type === "current" || snapshot.snapshot_type === "branch_head") ? "current" : "activity",
-    }));
+
+    const displaySnapshots = selectedBaselineSourceSnapshotId
+        ? snapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved")
+        : snapshots;
+    const representativeSnapshots = selectRepresentativeJourneySnapshots(displaySnapshots, selectedBaselineSourceSnapshotId);
+    return representativeSnapshots.map((snapshot) => {
+        const isSelectedBaselineSource = selectedBaselineSourceSnapshotId > 0 && Number(snapshot.id) === selectedBaselineSourceSnapshotId;
+        return {
+            tag: snapshotTag(snapshot),
+            title: isSelectedBaselineSource ? "Approved Baseline" : snapshotTitle(snapshot),
+            caption: isSelectedBaselineSource ? "Current approved baseline checkpoint" : snapshotCaption(snapshot),
+            tone: isSelectedBaselineSource
+                ? "baseline"
+                : snapshot.snapshot_type === "baseline_approved"
+                    ? "baseline"
+                    : (snapshot.snapshot_type === "current" || snapshot.snapshot_type === "branch_head")
+                        ? "current"
+                        : "activity",
+            snapshotId: Number(snapshot.id || 0) || null,
+            canRebaseline: Boolean(snapshot.commit_sha),
+            sourceRef: snapshot.source_ref || "",
+            createdAt: snapshot.created_at || 0,
+        };
+    });
+}
+
+function selectRepresentativeJourneySnapshots(snapshots, selectedBaselineSourceSnapshotId) {
+    if (snapshots.length <= 4) {
+        return snapshots;
+    }
+
+    const indices = new Set([0, snapshots.length - 1]);
+    const baselineIndex = snapshots.findIndex((snapshot) => Number(snapshot.id) === selectedBaselineSourceSnapshotId);
+    const currentIndex = snapshots.findIndex((snapshot) => snapshot.snapshot_type === "current") >= 0
+        ? snapshots.findIndex((snapshot) => snapshot.snapshot_type === "current")
+        : snapshots.findIndex((snapshot) => snapshot.snapshot_type === "branch_head");
+
+    if (baselineIndex >= 0) {
+        indices.add(baselineIndex);
+    }
+    if (currentIndex >= 0) {
+        indices.add(currentIndex);
+    }
+
+    const fillers = [
+        Math.floor((snapshots.length - 1) / 3),
+        Math.floor((snapshots.length - 1) / 2),
+        Math.floor(((snapshots.length - 1) * 2) / 3),
+    ];
+    for (const candidateIndex of fillers) {
+        if (indices.size >= 4) {
+            break;
+        }
+        indices.add(candidateIndex);
+    }
+
+    return Array.from(indices)
+        .sort((left, right) => left - right)
+        .slice(0, 4)
+        .map((index) => snapshots[index]);
 }
 
 function renderJourney(repo, repoPayload = null) {
@@ -229,7 +332,7 @@ function renderJourney(repo, repoPayload = null) {
         <div class="journey-line" aria-hidden="true"></div>
         <div class="journey-points">
             ${nodes.map((node, index) => `
-                <div class="journey-point journey-point-${escapeHtml(node.tone || "activity")}">
+                <div class="journey-point journey-point-${escapeHtml(node.tone || "activity")}" ${node.snapshotId ? `data-overview-snapshot="${escapeHtml(String(node.snapshotId))}"` : ""}>
                     <div class="journey-dot-wrap">
                         <span class="journey-dot"></span>
                         ${index < nodes.length - 1 ? '<span class="journey-arrow">↓</span>' : ""}
@@ -237,9 +340,37 @@ function renderJourney(repo, repoPayload = null) {
                     <div class="journey-pill">${escapeHtml(node.tag)}</div>
                     <div class="journey-point-title">${escapeHtml(node.title)}</div>
                     <div class="journey-point-caption">${escapeHtml(node.caption)}</div>
+                    ${node.canRebaseline ? `<button type="button" class="journey-point-action" data-overview-rebaseline="${escapeHtml(String(node.snapshotId))}">Re-baseline here</button>` : ""}
                 </div>
             `).join("")}
         </div>
+    `;
+}
+
+function renderRepoAtlasCard(repo, index) {
+    const reviewNowCount = Number(repo.review_now_count || 0);
+    const watchCount = Number(repo.watch_count || 0);
+    const driftTone = reviewNowCount > 0 ? "high" : watchCount > 0 ? "medium" : "steady";
+    const checkpointCount = Number(repo.historical_version_count || 0);
+    const summary = repo.highest_insight_title || triageSummary(repo) || "Repository posture available";
+    return `
+        <button type="button" class="repo-atlas-card-button" data-repo-atlas-index="${index}" data-repo-full="${escapeHtml(repo.repo_full)}">
+            <div class="repo-atlas-topline">
+                <span class="repo-atlas-scope">${escapeHtml(repoScopeLabel(repo))}</span>
+                <span class="repo-atlas-status repo-atlas-status-${escapeHtml(driftTone)}">${escapeHtml(repoStatusLabel(repo))}</span>
+            </div>
+            <div class="repo-atlas-name">${escapeHtml(repo.repo_full)}</div>
+            <div class="repo-atlas-summary">${escapeHtml(summary)}</div>
+            <div class="repo-atlas-metrics">
+                <span>${escapeHtml(String(repo.discovered_artifact_count || 0))} artifacts</span>
+                <span>${escapeHtml(String(checkpointCount))} checkpoints</span>
+                <span>${reviewNowCount > 0 ? escapeHtml(`${String(reviewNowCount)} review`) : watchCount > 0 ? escapeHtml(`${String(watchCount)} watch`) : "stable"}</span>
+            </div>
+            <div class="repo-atlas-footer">
+                <span class="repo-atlas-baseline">${escapeHtml(repo.highest_baseline_label || baselineLabelForRepo(repo))}</span>
+                <span class="repo-atlas-open">Preview</span>
+            </div>
+        </button>
     `;
 }
 
@@ -480,19 +611,28 @@ function selectUrgentRow(index) {
     });
 }
 
+function selectRepoAtlasCard(repoFull) {
+    document.querySelectorAll(".repo-atlas-card-button").forEach((item) => {
+        item.classList.toggle("active", item.getAttribute("data-repo-full") === repoFull);
+    });
+}
+
 function applyRepoPreview(repo, repos, repoPayload = null) {
     previewState.activeRepoFull = repo.repo_full;
     setText("repo-radar-title", compactRepoLabel(repo.repo_full));
     setText("journey-repo-name", repo.repo_full);
     setText("repo-radar-meta", triageSummary(repo));
     setSectionHtml("repo-journey-strip", renderJourney(repo, repoPayload));
+    bindOverviewJourneyActions(repo, repoPayload);
     const repoStoryNote = repoPayload?.journey_comparison?.risk_summary?.headline || repoPayload?.featured_storyline?.summary || triageSummary(repo);
     setText("repo-journey-note", repoStoryNote);
     setSectionHtml("coverage-bars", renderCoverageBars(repo, repos));
+    setText("coverage-note", `${Number(repo.discovered_artifact_count || 0)} tracked artifacts · ${repoScopeLabel(repo)}`);
     drawRadar(repo);
     const drift = driftPercentFromPayload(repo, repoPayload);
     drawDriftRing(drift);
     setText("drift-ring-value", `${drift}%`);
+    selectRepoAtlasCard(repo.repo_full);
     const detailLink = document.getElementById("detail-escalate-btn");
     if (detailLink) {
         detailLink.setAttribute("href", repoDetailUrl(repo));
@@ -503,11 +643,68 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     }
 }
 
-function buildSelectionItems(attentionRepos, highestRiskItems) {
-    return attentionRepos.map((repo) => ({
-        ...repo,
-        _matchedRiskItem: highestRiskItems.find((item) => item.repo_full === repo.repo_full) || null,
-    }));
+function buildSelectionItems(repos, attentionRepos, highestRiskItems) {
+    const attentionByRepo = new Map(attentionRepos.map((repo) => [repo.repo_full, repo]));
+    const riskByRepo = new Map(highestRiskItems.map((item) => [item.repo_full, item]));
+    return repos.map((repo) => {
+        const attention = attentionByRepo.get(repo.repo_full) || null;
+        const matchedRiskItem = riskByRepo.get(repo.repo_full) || null;
+        return {
+            ...repo,
+            ...(attention || {}),
+            highest_priority: attention?.highest_priority || "baseline_review",
+            highest_insight_title: attention?.highest_insight_title || matchedRiskItem?.title || null,
+            highest_insight_artifact_path: attention?.highest_insight_artifact_path || matchedRiskItem?.artifact_path || null,
+            highest_evidence_label: attention?.highest_evidence_label || matchedRiskItem?.evidence_label || null,
+            highest_evidence_summary: attention?.highest_evidence_summary || matchedRiskItem?.evidence_summary || null,
+            highest_change_summary: attention?.highest_change_summary || matchedRiskItem?.change_summary || null,
+            highest_flag_summary: attention?.highest_flag_summary || matchedRiskItem?.flag_summary || null,
+            highest_rationale: attention?.highest_rationale || matchedRiskItem?.rationale || null,
+            highest_recommended_action: attention?.highest_recommended_action || matchedRiskItem?.recommended_action || null,
+            highest_baseline_label: attention?.highest_baseline_label || matchedRiskItem?.baseline_label || baselineLabelForRepo(repo),
+            highest_review_target: attention?.highest_review_target || matchedRiskItem?.review_target || null,
+            highest_review_url: attention?.highest_review_url || matchedRiskItem?.review_url || null,
+            insight_count: Number(attention?.insight_count || 0),
+            lower_confidence_count: Number(attention?.lower_confidence_count || 0),
+            review_now_count: Number(attention?.review_now_count || 0),
+            watch_count: Number(attention?.watch_count || 0),
+            baseline_review_count: Number(attention?.baseline_review_count || 0),
+            top_drift_magnitude: Number(attention?.top_drift_magnitude || 0),
+            avg_semantic_distance: Number(attention?.avg_semantic_distance || 0),
+            discovered_artifact_count: Number(attention?.discovered_artifact_count || repo.discovered_artifact_count || 0),
+            _matchedRiskItem: matchedRiskItem,
+        };
+    }).sort((left, right) => {
+        const priorityDelta = priorityRank(left.highest_priority) - priorityRank(right.highest_priority);
+        if (priorityDelta !== 0) {
+            return priorityDelta;
+        }
+        const driftDelta = Number(right.top_drift_magnitude || 0) - Number(left.top_drift_magnitude || 0);
+        if (driftDelta !== 0) {
+            return driftDelta;
+        }
+        return String(left.repo_full || "").localeCompare(String(right.repo_full || ""));
+    });
+}
+
+async function previewRepoSelection(repo, repos, rowIndex = null) {
+    previewState.pendingRepoFull = repo.repo_full;
+    if (Number.isFinite(rowIndex)) {
+        selectUrgentRow(rowIndex);
+    }
+    applyRepoPreview(repo, repos, null);
+    try {
+        const repoPayload = await fetchRepoDashboard(repo.repo_full);
+        if (previewState.pendingRepoFull !== repo.repo_full) {
+            return;
+        }
+        applyRepoPreview(repo, repos, repoPayload);
+    } catch {
+        if (previewState.pendingRepoFull !== repo.repo_full) {
+            return;
+        }
+        applyRepoPreview(repo, repos, null);
+    }
 }
 
 function bindUrgentRows(items, repos) {
@@ -517,22 +714,7 @@ function bindUrgentRows(items, repos) {
             if (!Number.isFinite(index) || !items[index]) {
                 return;
             }
-            const repo = items[index];
-            previewState.pendingRepoFull = repo.repo_full;
-            selectUrgentRow(index);
-            applyRepoPreview(repo, repos, null);
-            try {
-                const repoPayload = await fetchRepoDashboard(repo.repo_full);
-                if (previewState.pendingRepoFull !== repo.repo_full) {
-                    return;
-                }
-                applyRepoPreview(repo, repos, repoPayload);
-            } catch {
-                if (previewState.pendingRepoFull !== repo.repo_full) {
-                    return;
-                }
-                applyRepoPreview(repo, repos, null);
-            }
+            await previewRepoSelection(items[index], repos, index);
         };
         button.addEventListener("mouseenter", () => {
             clearPreviewTimer(button);
@@ -559,6 +741,172 @@ function bindUrgentRows(items, repos) {
     });
 }
 
+function bindRepoAtlasCards(items, repos) {
+    document.querySelectorAll(".repo-atlas-card-button").forEach((button) => {
+        const preview = async () => {
+            const index = Number(button.getAttribute("data-repo-atlas-index"));
+            if (!Number.isFinite(index) || !items[index]) {
+                return;
+            }
+            await previewRepoSelection(items[index], repos, null);
+        };
+        button.addEventListener("mouseenter", () => {
+            clearPreviewTimer(button);
+            button.dataset.previewTimer = String(window.setTimeout(() => {
+                void preview();
+            }, HOVER_PREVIEW_DELAY_MS));
+        });
+        button.addEventListener("mouseleave", () => {
+            clearPreviewTimer(button);
+        });
+        button.addEventListener("focus", () => {
+            clearPreviewTimer(button);
+            void preview();
+        });
+        button.addEventListener("click", () => {
+            clearPreviewTimer(button);
+            const index = Number(button.getAttribute("data-repo-atlas-index"));
+            if (!Number.isFinite(index) || !items[index]) {
+                return;
+            }
+            window.location.href = repoDetailUrl(items[index]);
+        });
+    });
+}
+
+function openOverviewRebaselineModal(repo, snapshot) {
+    const modal = document.getElementById("overview-rebaseline-modal");
+    const summary = document.getElementById("overview-rebaseline-modal-summary");
+    const textarea = document.getElementById("overview-rebaseline-rationale");
+    if (!modal || !summary || !(textarea instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    window.__overviewPendingRebaseline = { repo, snapshot };
+    summary.innerHTML = `
+        <div><strong>${escapeHtml(repo.repo_full)}</strong></div>
+        <div class="detail-note">${escapeHtml(snapshotTitle(snapshot))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key || "checkpoint")}</div>
+        <div class="detail-note">${escapeHtml(`${Number(snapshot.change_breakdown?.critical_surfaces_changed || 0)} critical surfaces changed · drift ${Number(snapshot.distance_from_baseline || 0).toFixed(3)} from the current baseline.`)}</div>
+    `;
+    textarea.value = "";
+    setOverviewRebaselineBusy(false);
+    modal.hidden = false;
+}
+
+function closeOverviewRebaselineModal(force = false) {
+    if (window.__overviewRebaselineBusy && !force) {
+        return;
+    }
+    const modal = document.getElementById("overview-rebaseline-modal");
+    if (modal) {
+        modal.hidden = true;
+    }
+    window.__overviewPendingRebaseline = null;
+}
+
+function setOverviewRebaselineBusy(isBusy) {
+    window.__overviewRebaselineBusy = Boolean(isBusy);
+    const modal = document.getElementById("overview-rebaseline-modal");
+    const card = modal?.querySelector(".modal-card");
+    const progress = document.getElementById("overview-rebaseline-progress");
+    const progressText = document.getElementById("overview-rebaseline-progress-text");
+    const textarea = document.getElementById("overview-rebaseline-rationale");
+    const confirmButton = document.getElementById("overview-rebaseline-confirm-btn");
+
+    if (card) {
+        card.classList.toggle("modal-card-busy", Boolean(isBusy));
+    }
+    if (progress) {
+        progress.hidden = !isBusy;
+    }
+    if (progressText) {
+        progressText.textContent = isBusy
+            ? "Applying the selected checkpoint as the active repo baseline..."
+            : "Applying the selected checkpoint as the repo baseline...";
+    }
+    if (textarea instanceof HTMLTextAreaElement) {
+        textarea.disabled = Boolean(isBusy);
+    }
+    if (confirmButton instanceof HTMLButtonElement) {
+        confirmButton.disabled = Boolean(isBusy);
+        confirmButton.textContent = isBusy ? "Working..." : "Confirm";
+    }
+    document.querySelectorAll("[data-close-overview-rebaseline]").forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+            button.disabled = Boolean(isBusy);
+        }
+    });
+}
+
+async function submitOverviewRebaseline() {
+    const pending = window.__overviewPendingRebaseline;
+    const textarea = document.getElementById("overview-rebaseline-rationale");
+    if (!pending || !(textarea instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    setOverviewRebaselineBusy(true);
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(pending.repo.repo_full)}/baseline/rebaseline`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ snapshot_id: pending.snapshot.id, rationale: textarea.value.trim() || null }),
+        });
+        if (!response.ok) {
+            throw new Error(`Re-baseline request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        if (payload?.dashboard) {
+            repoDashboardCache.set(pending.repo.repo_full, payload.dashboard);
+        } else {
+            repoDashboardCache.delete(pending.repo.repo_full);
+        }
+        repoDashboardInflightCache.delete(pending.repo.repo_full);
+        closeOverviewRebaselineModal(true);
+        await loadOverview(pending.repo.repo_full, payload?.dashboard || null);
+    } finally {
+        setOverviewRebaselineBusy(false);
+    }
+}
+
+function bindOverviewJourneyActions(repo, repoPayload) {
+    const snapshotById = new Map(asArray(repoPayload?.journey_snapshots).map((snapshot) => [String(snapshot.id), snapshot]));
+    document.querySelectorAll("[data-overview-rebaseline]").forEach((button) => {
+        if (button.dataset.boundOverviewRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundOverviewRebaseline = "true";
+        button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const snapshot = snapshotById.get(String(button.getAttribute("data-overview-rebaseline") || ""));
+            if (snapshot) {
+                openOverviewRebaselineModal(repo, snapshot);
+            }
+        });
+    });
+}
+
+function bindOverviewRebaselineModal() {
+    document.querySelectorAll("[data-close-overview-rebaseline]").forEach((button) => {
+        if (button.dataset.boundCloseOverviewRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundCloseOverviewRebaseline = "true";
+        button.addEventListener("click", () => closeOverviewRebaselineModal());
+    });
+    const confirmButton = document.getElementById("overview-rebaseline-confirm-btn");
+    if (confirmButton instanceof HTMLButtonElement && confirmButton.dataset.boundConfirmOverviewRebaseline !== "true") {
+        confirmButton.dataset.boundConfirmOverviewRebaseline = "true";
+        confirmButton.addEventListener("click", async () => {
+            try {
+                await submitOverviewRebaseline();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Unable to re-baseline from this checkpoint.";
+                window.alert(message);
+            }
+        });
+    }
+}
+
 function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos) {
     const approvedBaselineRepos = repos.filter((repo) => String(repo.onboarding_status || "") === "baseline_approved").length;
     setText("stat-needs-review", String(payload.risk_state?.review_now_repo_count || 0));
@@ -567,7 +915,7 @@ function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos)
     setText("repos-count", `${repos.length} repos`);
 }
 
-async function loadOverview() {
+async function loadOverview(preferredRepoFull = null, preferredRepoPayload = null) {
     try {
         const response = await fetch("/api/dashboard/overview");
         if (!response.ok) {
@@ -578,36 +926,56 @@ async function loadOverview() {
         const highestRiskItems = asArray(payload.highest_risk_items);
         const attentionRepos = asArray(payload.attention_repos);
         const repos = asArray(payload.repos);
-        const selectionItems = buildSelectionItems(attentionRepos, highestRiskItems);
+        const selectionItems = buildSelectionItems(repos, attentionRepos, highestRiskItems);
+        const visibleSelectionItems = selectionItems.slice(0, 4);
+        const repoAtlasItems = selectionItems;
 
         populateOverviewStats(payload, attentionRepos, highestRiskItems, repos);
         setSectionHtml(
             "triage-list",
-            selectionItems.length
-                ? selectionItems.slice(0, 4).map((repo, index) => renderUrgentRow(repo, index)).join("")
+            visibleSelectionItems.length
+                ? visibleSelectionItems.map((repo, index) => renderUrgentRow(repo, index)).join("")
                 : '<div class="muted">No urgent review items are available yet.</div>'
         );
-        const visibleSelectionItems = selectionItems.slice(0, 4);
+        setSectionHtml(
+            "repo-atlas-grid",
+            repoAtlasItems.length
+                ? repoAtlasItems.map((repo, index) => renderRepoAtlasCard(repo, index)).join("")
+                : '<div class="muted">No repositories are available for overview preview yet.</div>'
+        );
         bindUrgentRows(visibleSelectionItems, repos);
+        bindRepoAtlasCards(repoAtlasItems, repos);
 
         if (selectionItems.length) {
-            selectUrgentRow(0);
-            applyRepoPreview(selectionItems[0], repos, null);
-            primeRepoDashboardCache(visibleSelectionItems);
+            const preferredIndex = preferredRepoFull
+                ? selectionItems.findIndex((repo) => repo.repo_full === preferredRepoFull)
+                : -1;
+            const selectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
+            const selectedRepo = selectionItems[selectedIndex];
+            const urgentIndex = visibleSelectionItems.findIndex((repo) => repo.repo_full === selectedRepo.repo_full);
+            if (urgentIndex >= 0) {
+                selectUrgentRow(urgentIndex);
+            }
+            applyRepoPreview(selectedRepo, repos, null);
+            primeRepoDashboardCache(selectionItems.slice(0, 4));
             try {
-                const firstPayload = await fetchRepoDashboard(selectionItems[0].repo_full);
-                if (previewState.activeRepoFull === selectionItems[0].repo_full || previewState.pendingRepoFull === selectionItems[0].repo_full || previewState.activeRepoFull === null) {
-                    applyRepoPreview(selectionItems[0], repos, firstPayload);
+                const firstPayload = preferredRepoPayload && selectedRepo.repo_full === preferredRepoFull
+                    ? preferredRepoPayload
+                    : await fetchRepoDashboard(selectedRepo.repo_full);
+                if (previewState.activeRepoFull === selectedRepo.repo_full || previewState.pendingRepoFull === selectedRepo.repo_full || previewState.activeRepoFull === null) {
+                    applyRepoPreview(selectedRepo, repos, firstPayload);
                 }
             } catch {
-                previewState.activeRepoFull = selectionItems[0].repo_full;
+                previewState.activeRepoFull = selectedRepo.repo_full;
             }
         } else {
             setSectionHtml("repo-journey-strip", '<div class="muted">No version journey data is available.</div>');
             setSectionHtml("coverage-bars", '<div class="muted">No coverage data is available.</div>');
+            setSectionHtml("repo-atlas-grid", '<div class="muted">No repositories are available for overview preview yet.</div>');
             setText("repo-radar-title", "No repository selected");
             setText("journey-repo-name", "No repository selected");
             setText("repo-radar-meta", "Populate the workspace with onboarded repositories to see posture tracking.");
+            setText("coverage-note", "Coverage summary unavailable");
             setText("drift-ring-value", "0%");
             drawDriftRing(0);
         }
@@ -619,15 +987,18 @@ async function loadOverview() {
         setText("stat-approved", "-");
         setText("repos-count", "Unavailable");
         setSectionHtml("triage-list", fallback);
+        setSectionHtml("repo-atlas-grid", fallback);
         setSectionHtml("repo-journey-strip", fallback);
         setSectionHtml("coverage-bars", fallback);
         setText("repo-radar-title", "Overview unavailable");
         setText("journey-repo-name", "Overview unavailable");
         setText("repo-radar-meta", message);
         setText("repo-journey-note", message);
+        setText("coverage-note", message);
         setText("drift-ring-value", "--%");
         drawDriftRing(0);
     }
 }
 
+    bindOverviewRebaselineModal();
 loadOverview();

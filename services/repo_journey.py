@@ -8,7 +8,9 @@ from .baseline_provenance import BaselineProvenance, approved_onboarding_provena
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     get_latest_repository_onboarding,
+    list_effective_onboarding_baseline_versions_for_onboarding,
     list_historical_static_profiles_for_repo_artifact,
+    list_latest_approved_onboarding_baseline_versions_for_onboarding,
     list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
@@ -84,7 +86,9 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     onboarded_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
     latest_baseline_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {baseline.artifact_path: baseline for baseline in latest_baseline_versions}
+    effective_baseline_versions = list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    latest_approved_baseline_versions = list_latest_approved_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    baseline_by_path = {baseline.artifact_path: baseline for baseline in effective_baseline_versions}
 
     merged_audits = {
         audit.id: audit
@@ -107,11 +111,11 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         artifact_types_by_path.setdefault(row["artifact_path"], row["artifact_type"])
 
     baseline_state: dict[str, _ArtifactState] = {}
-    for baseline in latest_baseline_versions:
+    for baseline in effective_baseline_versions:
         baseline_state[baseline.artifact_path] = _artifact_state_from_baseline(baseline)
 
     latest_paths = {artifact.artifact_path for artifact in onboarded_artifacts}
-    approved_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "approved")
+    approved_latest_count = len(latest_approved_baseline_versions)
     pending_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "pending")
     rejected_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "rejected")
     baseline_verified = bool(latest_paths) and approved_latest_count == len(latest_paths) and onboarding.status == "baseline_approved"

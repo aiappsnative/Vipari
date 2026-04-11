@@ -15,8 +15,10 @@ from .github_integration import fetch_file_content, generate_jwt, get_installati
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from .baseline_approval_service import (
+    approve_repo_baseline,
     approve_repo_baseline_artifact,
     build_repo_baseline_review_panel,
+    reject_repo_baseline,
     rebaseline_repo_from_snapshot,
     reject_repo_baseline_artifact,
 )
@@ -45,7 +47,7 @@ class BaselineDecisionRequest(BaseModel):
 
 class RepoRebaselineRequest(BaseModel):
     snapshot_id: int
-    rationale: str
+    rationale: str | None = None
     actor_login: str | None = None
 
 
@@ -267,6 +269,34 @@ def create_api_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/baseline/approve")
+    async def approve_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baselines = approve_repo_baseline(
+                db_path,
+                repo_full=repo_full,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "approved_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/baseline/reject")
+    async def reject_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baselines = reject_repo_baseline(
+                db_path,
+                repo_full=repo_full,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "rejected_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
 
     @app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
     async def rebaseline_repo(repo_full: str, payload: RepoRebaselineRequest, request: Request):

@@ -175,7 +175,6 @@
                 <section class="secondary-row">
                     <div class="secondary-panel" id="repo-journey-section">
                         <div class="secondary-panel-title">Version journey</div>
-                        <div id="baseline-review-panel" class="loading-shell muted">Loading baseline review...</div>
                         <div id="repo-journey-summary" class="loading-shell muted">Loading repository checkpoints...</div>
                         <div id="repo-journey-timeline" class="loading-shell muted">Loading repository journey timeline...</div>
                     </div>
@@ -216,8 +215,12 @@
                 <button type="button" class="modal-close" data-close-rebaseline="true" aria-label="Close">×</button>
             </div>
             <div id="rebaseline-modal-summary" class="modal-body muted">Select a snapshot to review its delta.</div>
-            <label class="modal-field" for="rebaseline-rationale">Rationale</label>
-            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Explain why this snapshot should become the new baseline candidate."></textarea>
+            <label class="modal-field" for="rebaseline-rationale">Rationale (optional)</label>
+            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for reviewers if needed."></textarea>
+            <div id="rebaseline-progress" class="modal-progress" hidden>
+                <span class="modal-spinner" aria-hidden="true"></span>
+                <span id="rebaseline-progress-text">Preparing a new baseline proposal...</span>
+            </div>
             <div class="modal-actions">
                 <button type="button" class="modal-secondary" data-close-rebaseline="true">Cancel</button>
                 <button type="button" class="modal-primary" id="rebaseline-confirm-btn">Confirm</button>
