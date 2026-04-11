@@ -98,8 +98,14 @@
                                     <div class="radar-repo-title" id="repo-radar-title">Selected repo posture</div>
                                 </div>
                             </header>
-                            <div class="radar-visual-shell">
-                                <canvas id="repo-posture-radar" width="420" height="320"></canvas>
+                            <div class="radar-wrap">
+                                <div class="radar-visual-shell">
+                                    <canvas id="repo-posture-radar" width="420" height="320"></canvas>
+                                </div>
+                                <div class="radar-legend" aria-hidden="true">
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(78, 103, 255, 0.9); border: 1px solid rgba(79, 106, 255, 0.9);"></span><span>Approved baseline</span></div>
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(85, 230, 222, 0.92); border: 1px solid rgba(73, 223, 217, 0.92);"></span><span>Current posture</span></div>
+                                </div>
                             </div>
                             <div class="radar-axis-caption" id="repo-radar-meta">Compliance, stability, coverage, efficiency, performance, and security posture.</div>
                             <section class="coverage-section" id="coverage-section">
