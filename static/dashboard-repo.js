@@ -546,17 +546,18 @@ function renderJourneySummary(snapshots = []) {
     if (!snapshots.length) {
         return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
     }
-    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots[snapshots.length - 1];
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
     const baseline = snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
     const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
     const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
+    const branchHeadCount = snapshots.filter((item) => item.snapshot_type === "branch_head").length;
     const riskLevel = current?.risk_summary?.risk_level || "low";
     return `
         <div class="journey-strip">
             <div class="journey-node journey-tone-primary">
                 <span class="journey-node-value">${snapshots.length}</span>
                 <span class="journey-node-label">Snapshots</span>
-                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical</span>
+                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live</span>
                 <span class="journey-node-link" aria-hidden="true"></span>
             </div>
             <div class="journey-node journey-tone-gap">

@@ -53,7 +53,7 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid signature")
 
         event = request.headers.get("X-GitHub-Event", "")
-        if event != "pull_request":
+        if event not in {"pull_request", "push"}:
             return JSONResponse({"message": "ignored"}, status_code=202)
 
         delivery_id = request.headers.get("X-GitHub-Delivery")

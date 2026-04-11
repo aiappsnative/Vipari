@@ -24,7 +24,7 @@ from .repo_journey_records import (
 )
 
 
-REPO_JOURNEY_MATERIALIZER_VERSION = 1
+REPO_JOURNEY_MATERIALIZER_VERSION = 2
 
 
 def _repo_snapshot_key(repo_full: str, snapshot_key: str) -> str:
@@ -69,6 +69,8 @@ class _SnapshotEvent:
     artifact_type: str
     profile: dict[str, float]
     baseline_provenance: BaselineProvenance | None
+    branch_ref: str | None = None
+    triggered_by: str | None = None
 
 
 def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSnapshotRecord]:
@@ -110,6 +112,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     snapshots: list[RepoPostureSnapshotRecord] = []
     previous_snapshot: RepoPostureSnapshotRecord | None = None
     baseline_snapshot: RepoPostureSnapshotRecord | None = None
+    latest_branch_head_snapshot: RepoPostureSnapshotRecord | None = None
 
     if baseline_state:
         baseline_snapshot = _persist_snapshot(
@@ -145,12 +148,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 key,
                 {
                     "snapshot_key": key,
-                    "snapshot_type": "historical_commit",
+                    "snapshot_type": _historical_snapshot_type(profile, onboarding.default_branch),
                     "created_at": profile.created_at,
                     "commit_sha": profile.commit_sha,
                     "pr_number": None,
                     "author": None,
-                    "source_ref": f"commit {profile.commit_sha}",
+                    "source_ref": _historical_source_ref(profile, onboarding.default_branch),
                     "source_url": f"https://github.com/{repo_full}/commit/{profile.commit_sha}",
                     "events": [],
                     "historical_event_count": 0,
@@ -162,17 +165,19 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             bucket["events"].append(
                 _SnapshotEvent(
                     snapshot_key=key,
-                    snapshot_type="historical_commit",
+                    snapshot_type=_historical_snapshot_type(profile, onboarding.default_branch),
                     created_at=profile.created_at,
                     commit_sha=profile.commit_sha,
                     pr_number=None,
                     author=None,
-                    source_ref=f"commit {profile.commit_sha}",
+                    source_ref=_historical_source_ref(profile, onboarding.default_branch),
                     source_url=f"https://github.com/{repo_full}/commit/{profile.commit_sha}",
                     artifact_path=artifact_path,
                     artifact_type=artifact_type,
                     profile=_profile_dict(profile.profile),
                     baseline_provenance=profile.baseline_provenance,
+                    branch_ref=profile.branch_ref,
+                    triggered_by=profile.triggered_by,
                 )
             )
 
@@ -254,8 +259,10 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         snapshot_keys.add(snapshot.snapshot_key)
         snapshots.append(snapshot)
         previous_snapshot = snapshot
+        if snapshot.snapshot_type == "branch_head":
+            latest_branch_head_snapshot = snapshot
 
-    if current_state:
+    if current_state and latest_branch_head_snapshot is None:
         latest = previous_snapshot or baseline_snapshot
         if latest is not None:
             current_snapshot = _persist_snapshot(
@@ -329,7 +336,9 @@ def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, 
     comparison_kind = "arbitrary"
     if left.snapshot_type == "baseline_approved" and right.snapshot_type == "current":
         comparison_kind = "baseline_vs_current"
-    elif right.snapshot_type == "current":
+    elif left.snapshot_type == "baseline_approved" and right.snapshot_type == "branch_head":
+        comparison_kind = "baseline_vs_current"
+    elif right.snapshot_type in {"current", "branch_head"}:
         comparison_kind = "previous_vs_current"
     return RepoJourneyComparison(
         repo_full=repo_full,
@@ -432,6 +441,20 @@ def _artifact_state_from_baseline(baseline: OnboardingBaselineVersionRecord) -> 
         source_url=None,
         baseline_provenance=None,
     )
+
+
+def _historical_snapshot_type(profile, default_branch: str | None) -> str:
+    default_branch_ref = f"refs/heads/{default_branch}" if default_branch else None
+    if profile.triggered_by in {"push_webhook", "scheduled", "manual"} and profile.branch_ref == default_branch_ref:
+        return "branch_head"
+    return "historical_commit"
+
+
+def _historical_source_ref(profile, default_branch: str | None) -> str:
+    if _historical_snapshot_type(profile, default_branch) == "branch_head":
+        branch_name = (profile.branch_ref or "").removeprefix("refs/heads/") or (default_branch or "default")
+        return f"{branch_name} @ {profile.commit_sha[:7]}"
+    return f"commit {profile.commit_sha}"
 
 
 def _profile_dict(profile) -> dict[str, float]:

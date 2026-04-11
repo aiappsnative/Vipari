@@ -215,6 +215,60 @@ def test_webhook_retries_commit_pair_diff_after_transient_github_404():
     create_job.assert_called_once()
 
 
+def test_webhook_push_to_default_branch_queues_branch_scan_job():
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "ref": "refs/heads/main",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI", "default_branch": "main"},
+        "head_commit": {"id": "pushsha123"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "push",
+    }
+
+    with patch("main.get_latest_repository_onboarding", return_value=type("Onboarding", (), {"id": 1})()), patch(
+        "main.create_branch_scan_job"
+    ) as create_job:
+        create_job.return_value = type("BranchScanJob", (), {"id": 77})()
+        response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "branch scan queued", "job_id": 77}
+    create_job.assert_called_once_with(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="pushsha123",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+
+def test_webhook_push_ignores_non_default_branch():
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "ref": "refs/heads/feature/demo",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI", "default_branch": "main"},
+        "head_commit": {"id": "pushsha123"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "push",
+    }
+
+    with patch("main.create_branch_scan_job") as create_job:
+        response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "ignored"}
+    create_job.assert_not_called()
+
+
 def test_webhook_ignores_unallocated_repo_for_managed_installation(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "managed-installation-webhook.db")

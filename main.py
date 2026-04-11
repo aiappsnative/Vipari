@@ -24,6 +24,8 @@ from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_acc
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_worker import AuditWorker, WorkerSettings
+from services.branch_scan_jobs import create_branch_scan_job
+from services.branch_scan_worker import BranchScanWorker, BranchScanWorkerSettings
 from services.auth_service import (
     GithubOAuthToken,
     GithubUserProfile,
@@ -136,11 +138,12 @@ SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
 worker: AuditWorker | None = None
+branch_scan_worker: BranchScanWorker | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global worker
+    global worker, branch_scan_worker
     init_db(AUDIT_DB_PATH)
     if AUDIT_WORKER_ENABLED:
         assert client is not None
@@ -159,9 +162,25 @@ async def lifespan(_: FastAPI):
             )
         )
         worker.start()
+    if settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET:
+        branch_scan_worker = BranchScanWorker(
+            BranchScanWorkerSettings(
+                db_path=AUDIT_DB_PATH,
+                github_app_id=GITHUB_APP_ID,
+                github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+                github_app_private_key=settings.resolved_github_private_key,
+                max_attempts=AUDIT_MAX_ATTEMPTS,
+                max_retry_window_seconds=AUDIT_MAX_RETRY_WINDOW_SECONDS,
+                poll_interval_seconds=AUDIT_WORKER_POLL_SECONDS,
+            )
+        )
+        branch_scan_worker.start()
     try:
         yield
     finally:
+        if branch_scan_worker is not None:
+            branch_scan_worker.stop()
+            branch_scan_worker = None
         if worker is not None:
             worker.stop()
             worker = None
@@ -1826,10 +1845,47 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event = request.headers.get("X-GitHub-Event", "")
-    if event != "pull_request":
+    if event not in {"pull_request", "push"}:
         return JSONResponse({"message": "ignored"})
 
     payload = await request.json()
+    if event == "push":
+        installation_id = payload.get("installation", {}).get("id")
+        repo_full = payload.get("repository", {}).get("full_name")
+        branch_ref = payload.get("ref")
+        default_branch = payload.get("repository", {}).get("default_branch")
+        commit_sha = payload.get("head_commit", {}).get("id")
+
+        if not all([installation_id, repo_full, branch_ref, default_branch, commit_sha]):
+            raise HTTPException(status_code=400, detail="Missing payload data")
+
+        if branch_ref != f"refs/heads/{default_branch}":
+            return JSONResponse({"message": "ignored"})
+
+        managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
+        if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
+            allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
+            if allocation is None:
+                return JSONResponse({"message": "ignored: repo not allocated"})
+
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
+            if entitlement is None or not entitlement.dashboard_enabled:
+                return JSONResponse({"message": "ignored: workspace not entitled"})
+
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
+        if onboarding is None:
+            return JSONResponse({"message": "ignored: repo not onboarded"})
+
+        job = create_branch_scan_job(
+            AUDIT_DB_PATH,
+            repo_full=str(repo_full),
+            installation_id=int(installation_id),
+            commit_sha=str(commit_sha),
+            branch_ref=str(branch_ref),
+            triggered_by="push_webhook",
+        )
+        return JSONResponse({"message": "branch scan queued", "job_id": job.id})
+
     action = payload.get("action")
     if action not in ("opened", "synchronize", "closed", "reopened"):
         return JSONResponse({"message": "ignored"})

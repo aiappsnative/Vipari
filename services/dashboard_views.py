@@ -759,6 +759,8 @@ def _build_repo_journey_panel(db_path: str, repo_full: str) -> tuple[list[dict[s
     snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
     baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
     current_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "current"), None)
+    if current_snapshot is None:
+        current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
     comparison = None
     if baseline_snapshot is not None and current_snapshot is not None and baseline_snapshot["id"] != current_snapshot["id"]:
         comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
@@ -989,6 +991,8 @@ def _load_overview_batch_state(
             hsp.artifact_path,
             hsp.artifact_type,
             hsp.commit_sha,
+            hsp.branch_ref,
+            hsp.triggered_by,
             hsp.created_at,
             hsp.baseline_profile_id,
             hsp.baseline_provenance_json,
@@ -1030,13 +1034,19 @@ def _load_overview_batch_state(
         if baseline_provenance is None:
             baseline_provenance = no_baseline_provenance()
 
+        historical_source = _historical_source_context(
+            repo_full,
+            str(row["commit_sha"]),
+            row["branch_ref"],
+            row["triggered_by"],
+        )
         context = _RepoArtifactProfileContext(
             profile=_profile_from_json(str(row["profile_json"])),
-            source_type="historical",
-            label="Historical backfill",
-            source_ref=f"commit {str(row['commit_sha'])[:7]}",
-            source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-            review_context="Historical snapshot from backfill",
+            source_type=historical_source["source_type"],
+            label=historical_source["label"],
+            source_ref=historical_source["source_ref"],
+            source_url=historical_source["source_url"],
+            review_context=historical_source["review_context"],
             created_at=created_at,
             baseline_provenance=baseline_provenance,
             semantic_distance=semantic_distance,
@@ -1304,7 +1314,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
         historical_rows = conn.execute(
             """
              SELECT hsp.artifact_path, hsp.commit_sha, hsp.created_at, hsp.baseline_profile_id, hsp.baseline_provenance_json,
-                 hsp.semantic_distance, hsp.profile_json, hsp.attribute_deltas_json, hsp.narrative_json, hsp.signal_terms_json,
+                 hsp.branch_ref, hsp.triggered_by, hsp.semantic_distance, hsp.profile_json, hsp.attribute_deltas_json, hsp.narrative_json, hsp.signal_terms_json,
                  hav.content_text AS content_text
              FROM historical_static_profiles hsp
              INNER JOIN historical_artifact_versions hav ON hav.id = hsp.historical_artifact_version_id
@@ -1320,13 +1330,19 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
                 baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             context = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
-                source_type="historical",
-                label="Historical backfill",
-                source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-                review_context="Historical snapshot from backfill",
+                source_type=historical_source["source_type"],
+                label=historical_source["label"],
+                source_ref=historical_source["source_ref"],
+                source_url=historical_source["source_url"],
+                review_context=historical_source["review_context"],
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
@@ -1368,6 +1384,27 @@ def _github_pull_request_url(repo_full: str, pr_number: int) -> str:
 
 def _github_commit_url(repo_full: str, commit_sha: str) -> str:
     return f"https://github.com/{repo_full}/commit/{commit_sha}"
+
+
+def _historical_source_context(repo_full: str, commit_sha: str, branch_ref: object, triggered_by: object) -> dict[str, str]:
+    branch_ref_value = str(branch_ref or "")
+    triggered_by_value = str(triggered_by or "historical_backfill")
+    if triggered_by_value in {"push_webhook", "scheduled", "manual"} and branch_ref_value.startswith("refs/heads/"):
+        branch_name = branch_ref_value.removeprefix("refs/heads/")
+        return {
+            "source_type": "branch_head",
+            "label": "Default branch head",
+            "source_ref": f"{branch_name} @ {commit_sha[:7]}",
+            "source_url": _github_commit_url(repo_full, commit_sha),
+            "review_context": "Live default-branch scan",
+        }
+    return {
+        "source_type": "historical",
+        "label": "Historical backfill",
+        "source_ref": f"commit {commit_sha[:7]}",
+        "source_url": _github_commit_url(repo_full, commit_sha),
+        "review_context": "Historical snapshot from backfill",
+    }
 
 
 def _humanize_output_mode(output_mode: str) -> str:
@@ -2575,7 +2612,7 @@ def _build_repo_history_timelines(
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT artifact_path, artifact_type, commit_sha, created_at, baseline_profile_id, baseline_provenance_json,
+                 SELECT artifact_path, artifact_type, commit_sha, branch_ref, triggered_by, created_at, baseline_profile_id, baseline_provenance_json,
                    semantic_distance, attribute_deltas_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ?
@@ -2594,13 +2631,19 @@ def _build_repo_history_timelines(
                 baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
-                    source="historical",
-                    label="Historical backfill",
-                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-                    review_context="Historical snapshot from backfill",
+                    source=historical_source["source_type"],
+                    label=historical_source["label"],
+                    source_ref=historical_source["source_ref"],
+                    source_url=historical_source["source_url"],
+                    review_context=historical_source["review_context"],
                     created_at=float(row["created_at"]),
                     baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
@@ -2697,7 +2740,7 @@ def build_repo_artifact_storyline(
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT commit_sha, created_at, semantic_distance, attribute_deltas_json
+            SELECT commit_sha, branch_ref, triggered_by, created_at, semantic_distance, attribute_deltas_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ? AND artifact_path = ?
             ORDER BY created_at ASC, id ASC
@@ -2709,13 +2752,19 @@ def build_repo_artifact_storyline(
             attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
             semantic_distance = float(row["semantic_distance"])
             drift_magnitude = _drift_magnitude(semantic_distance, attribute_deltas)
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             episodes.append(
                 DriftEpisode(
                     episode_timestamp=float(row["created_at"]),
-                    source_type="historical_backfill",
-                    source_label="Historical backfill",
-                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
+                    source_type=historical_source["source_type"],
+                    source_label=historical_source["label"],
+                    source_ref=historical_source["source_ref"],
+                    source_url=historical_source["source_url"],
                     episode_type=_episode_type(attribute_deltas),
                     top_attributes=_top_attribute_labels(attribute_deltas),
                     episode_summary=_episode_summary(attribute_deltas, drift_magnitude),

@@ -111,6 +111,9 @@ function formatSnapshotType(snapshotType) {
     if (snapshotType === "baseline_approved") {
         return "Approved Baseline";
     }
+    if (snapshotType === "branch_head") {
+        return "Branch Head";
+    }
     if (snapshotType === "historical_commit") {
         return "Historical Commit";
     }
@@ -216,7 +219,7 @@ function journeyNodesFromRepoPayload(repo, repoPayload) {
         tag: snapshotTag(snapshot),
         title: snapshotTitle(snapshot),
         caption: snapshotCaption(snapshot),
-        tone: snapshot.snapshot_type === "baseline_approved" ? "baseline" : snapshot.snapshot_type === "current" ? "current" : "activity",
+        tone: snapshot.snapshot_type === "baseline_approved" ? "baseline" : (snapshot.snapshot_type === "current" || snapshot.snapshot_type === "branch_head") ? "current" : "activity",
     }));
 }
 

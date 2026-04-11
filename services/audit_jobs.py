@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from .branch_scan_jobs import init_branch_scan_job_db
 from .persistence import connect_sqlite, init_persistence_metadata
 
 
@@ -82,6 +83,7 @@ def init_db(db_path: str) -> None:
     from .repo_journey_records import init_repo_journey_db
 
     init_audit_record_db(db_path)
+    init_branch_scan_job_db(db_path)
     init_onboarding_record_db(db_path)
     init_control_plane_db(db_path)
     init_repo_journey_db(db_path)

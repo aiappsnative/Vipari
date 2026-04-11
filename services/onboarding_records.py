@@ -89,6 +89,7 @@ class HistoricalBackfillJobRecord:
     repo_full: str
     artifact_path: str
     artifact_type: str
+    job_kind: str
     status: str
     commit_count: int
     completed_commit_count: int
@@ -135,6 +136,8 @@ class HistoricalStaticProfileRecord:
     attribute_deltas: dict[str, float]
     narrative: list[str]
     signal_terms: list[str]
+    branch_ref: str | None
+    triggered_by: str | None
     created_at: float
 
 
@@ -202,6 +205,7 @@ def init_onboarding_record_db(db_path: str) -> None:
                 repo_full TEXT NOT NULL,
                 artifact_path TEXT NOT NULL,
                 artifact_type TEXT NOT NULL,
+                job_kind TEXT NOT NULL DEFAULT 'historical_backfill',
                 status TEXT NOT NULL,
                 commit_count INTEGER NOT NULL,
                 completed_commit_count INTEGER NOT NULL DEFAULT 0,
@@ -251,6 +255,8 @@ def init_onboarding_record_db(db_path: str) -> None:
                 artifact_type TEXT NOT NULL,
                 commit_sha TEXT NOT NULL,
                 profile_json TEXT NOT NULL,
+                branch_ref TEXT,
+                triggered_by TEXT NOT NULL DEFAULT 'historical_backfill',
                 baseline_profile_id INTEGER,
                 baseline_provenance_json TEXT,
                 semantic_similarity REAL NOT NULL,
@@ -287,6 +293,8 @@ def init_onboarding_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE historical_artifact_versions ADD COLUMN content_text TEXT")
 
         historical_backfill_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_backfill_jobs)").fetchall()}
+        if "job_kind" not in historical_backfill_columns:
+            conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'historical_backfill'")
         if "completed_commit_count" not in historical_backfill_columns:
             conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN completed_commit_count INTEGER NOT NULL DEFAULT 0")
         if "last_error" not in historical_backfill_columns:
@@ -295,6 +303,10 @@ def init_onboarding_record_db(db_path: str) -> None:
         historical_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_static_profiles)").fetchall()}
         if "baseline_provenance_json" not in historical_profile_columns:
             conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN baseline_provenance_json TEXT")
+        if "branch_ref" not in historical_profile_columns:
+            conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN branch_ref TEXT")
+        if "triggered_by" not in historical_profile_columns:
+            conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN triggered_by TEXT NOT NULL DEFAULT 'historical_backfill'")
 
 
 def record_repository_onboarding(
@@ -538,6 +550,7 @@ def create_historical_backfill_jobs(
     repo_full: str,
     jobs: list[HistoricalBackfillJobInput],
     status: str = "planned",
+    job_kind: str = "historical_backfill",
 ) -> list[HistoricalBackfillJobRecord]:
     now = time.time()
     created: list[HistoricalBackfillJobRecord] = []
@@ -547,8 +560,8 @@ def create_historical_backfill_jobs(
                 """
                 INSERT INTO historical_backfill_jobs (
                     onboarding_id, onboarded_artifact_id, repo_full, artifact_path, artifact_type,
-                    status, commit_count, completed_commit_count, commit_shas_json, last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    job_kind, status, commit_count, completed_commit_count, commit_shas_json, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     onboarding_id,
@@ -556,6 +569,7 @@ def create_historical_backfill_jobs(
                     repo_full,
                     job.artifact_path,
                     job.artifact_type,
+                    job_kind,
                     status,
                     len(job.commit_shas),
                     0,
@@ -571,12 +585,23 @@ def create_historical_backfill_jobs(
     return created
 
 
-def list_historical_backfill_jobs_for_repo(db_path: str, repo_full: str) -> list[HistoricalBackfillJobRecord]:
+def list_historical_backfill_jobs_for_repo(
+    db_path: str,
+    repo_full: str,
+    *,
+    job_kind: str | None = "historical_backfill",
+) -> list[HistoricalBackfillJobRecord]:
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? ORDER BY created_at ASC, id ASC",
-            (repo_full,),
-        ).fetchall()
+        if job_kind is None:
+            rows = conn.execute(
+                "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? ORDER BY created_at ASC, id ASC",
+                (repo_full,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? AND job_kind = ? ORDER BY created_at ASC, id ASC",
+                (repo_full, job_kind),
+            ).fetchall()
     return [_row_to_historical_backfill_job(row) for row in rows]
 
 
@@ -637,6 +662,8 @@ def record_historical_backfill_versions(
     snapshots: list[HistoricalArtifactSnapshotInput],
     extract_signal_terms_fn,
     build_profile_fn,
+    branch_ref: str | None = None,
+    triggered_by: str = "historical_backfill",
 ) -> tuple[list[HistoricalArtifactVersionRecord], list[HistoricalStaticProfileRecord]]:
     if not snapshots:
         return [], []
@@ -687,6 +714,19 @@ def record_historical_backfill_versions(
 
         base_time = time.time()
         for index, snapshot in enumerate(snapshots):
+            existing_version_row = conn.execute(
+                """
+                SELECT id
+                FROM historical_artifact_versions
+                WHERE normalized_artifact_id = ? AND commit_sha = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (normalized_artifact_id, snapshot.commit_sha),
+            ).fetchone()
+            if existing_version_row is not None:
+                continue
+
             version_hash = hashlib.sha256(snapshot.content.encode("utf-8")).hexdigest()
             if version_hash == previous_version_hash:
                 continue
@@ -763,10 +803,10 @@ def record_historical_backfill_versions(
                 """
                 INSERT INTO historical_static_profiles (
                     backfill_job_id, historical_artifact_version_id, onboarding_id, onboarded_artifact_id,
-                    normalized_artifact_id, artifact_path, artifact_type, commit_sha, profile_json,
+                    normalized_artifact_id, artifact_path, artifact_type, commit_sha, profile_json, branch_ref, triggered_by,
                     baseline_profile_id, baseline_provenance_json, semantic_similarity, semantic_distance, attribute_deltas_json,
                     narrative_json, signal_terms_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     backfill_job_id,
@@ -778,6 +818,8 @@ def record_historical_backfill_versions(
                     artifact_type,
                     snapshot.commit_sha,
                     json.dumps(_profile_to_json(profile)),
+                    branch_ref,
+                    triggered_by,
                     baseline_profile_id,
                     baseline_provenance_to_json(baseline_provenance),
                     semantic_similarity,
@@ -832,6 +874,8 @@ def record_historical_backfill_versions(
                     attribute_deltas=attribute_deltas,
                     narrative=narrative,
                     signal_terms=signal_terms,
+                    branch_ref=branch_ref,
+                    triggered_by=triggered_by,
                     created_at=created_at,
                 )
             )
@@ -928,6 +972,7 @@ def _row_to_historical_backfill_job(row: sqlite3.Row) -> HistoricalBackfillJobRe
         repo_full=row["repo_full"],
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],
+        job_kind=row["job_kind"],
         status=row["status"],
         commit_count=row["commit_count"],
         completed_commit_count=row["completed_commit_count"],
@@ -982,6 +1027,8 @@ def _row_to_historical_static_profile(row: sqlite3.Row) -> HistoricalStaticProfi
         attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
         narrative=json.loads(row["narrative_json"]),
         signal_terms=json.loads(row["signal_terms_json"]),
+        branch_ref=row["branch_ref"],
+        triggered_by=row["triggered_by"],
         created_at=row["created_at"],
     )
 
