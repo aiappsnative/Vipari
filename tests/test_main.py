@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
+from engine.drift_profile import build_attribute_profile
 
 import main
 
@@ -267,6 +268,59 @@ def test_webhook_push_ignores_non_default_branch():
     assert response.status_code == 200
     assert response.json() == {"message": "ignored"}
     create_job.assert_not_called()
+
+
+def test_webhook_push_is_idempotent_for_same_commit(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "push-idempotent.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.onboarding_records import record_repository_onboarding, DiscoveredArtifactInput
+
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        default_branch="main",
+        status="completed",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/refund.txt",
+                artifact_type="prompt",
+                discovery_reason="seeded for push idempotency test",
+                confidence=1.0,
+                baseline_content="You are a safe assistant.",
+            )
+        ],
+        extract_signal_terms_fn=lambda text: [],
+        build_profile_fn=build_attribute_profile,
+    )
+
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "ref": "refs/heads/main",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI", "default_branch": "main"},
+        "head_commit": {"id": "pushsha123"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "push",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        first = client.post("/webhook", content=body, headers=headers)
+        second = client.post("/webhook", content=body, headers=headers)
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["message"] == "branch scan queued"
+    assert second.json()["message"] == "branch scan queued"
+    assert first.json()["job_id"] == second.json()["job_id"]
 
 
 def test_webhook_ignores_unallocated_repo_for_managed_installation(tmp_path):
