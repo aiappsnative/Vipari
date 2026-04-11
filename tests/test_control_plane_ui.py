@@ -1563,6 +1563,7 @@ def test_dashboard_api_endpoints_emit_server_timing_headers():
     repo_view = RepoDashboardView(
         repo_full="doria90/dummyAI",
         onboarding=None,
+        baseline_review=None,
         backfill=RepoDashboardBackfillSummary(
             job_count=0,
             planned_job_count=0,

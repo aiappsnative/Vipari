@@ -4,11 +4,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .audit_records import list_pull_request_audits_for_repo, list_static_profiles_for_repo_artifact
-from .baseline_provenance import BaselineProvenance
+from .baseline_provenance import BaselineProvenance, approved_onboarding_provenance
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     get_latest_repository_onboarding,
     list_historical_static_profiles_for_repo_artifact,
+    list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
 )
@@ -82,7 +83,8 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
 
     onboarded_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+    latest_baseline_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    baseline_by_path = {baseline.artifact_path: baseline for baseline in latest_baseline_versions}
 
     merged_audits = {
         audit.id: audit
@@ -105,8 +107,14 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         artifact_types_by_path.setdefault(row["artifact_path"], row["artifact_type"])
 
     baseline_state: dict[str, _ArtifactState] = {}
-    for baseline in baseline_versions:
+    for baseline in latest_baseline_versions:
         baseline_state[baseline.artifact_path] = _artifact_state_from_baseline(baseline)
+
+    latest_paths = {artifact.artifact_path for artifact in onboarded_artifacts}
+    approved_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "approved")
+    pending_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "pending")
+    rejected_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "rejected")
+    baseline_verified = bool(latest_paths) and approved_latest_count == len(latest_paths) and onboarding.status == "baseline_approved"
 
     snapshot_keys: set[str] = set()
     snapshots: list[RepoPostureSnapshotRecord] = []
@@ -134,6 +142,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 "baseline_artifact_count": len(baseline_versions),
                 "historical_event_count": 0,
                 "merged_event_count": 0,
+                "baseline_verified": baseline_verified,
+                "approved_baseline_count": approved_latest_count,
+                "pending_baseline_count": pending_latest_count,
+                "rejected_baseline_count": rejected_latest_count,
+                "approved_by": onboarding.approved_by,
+                "approved_at": onboarding.approved_at,
             },
         )
         snapshot_keys.add(baseline_snapshot.snapshot_key)
@@ -254,6 +268,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 "baseline_artifact_count": len(baseline_versions),
                 "historical_event_count": bucket["historical_event_count"],
                 "merged_event_count": bucket["merged_event_count"],
+                "baseline_verified": baseline_verified,
+                "approved_baseline_count": approved_latest_count,
+                "pending_baseline_count": pending_latest_count,
+                "rejected_baseline_count": rejected_latest_count,
+                "approved_by": onboarding.approved_by,
+                "approved_at": onboarding.approved_at,
             },
         )
         snapshot_keys.add(snapshot.snapshot_key)
@@ -284,6 +304,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                     "baseline_artifact_count": len(baseline_versions),
                     "historical_event_count": sum(bucket["historical_event_count"] for bucket in events_by_key.values()),
                     "merged_event_count": sum(bucket["merged_event_count"] for bucket in events_by_key.values()),
+                    "baseline_verified": baseline_verified,
+                    "approved_baseline_count": approved_latest_count,
+                    "pending_baseline_count": pending_latest_count,
+                    "rejected_baseline_count": rejected_latest_count,
+                    "approved_by": onboarding.approved_by,
+                    "approved_at": onboarding.approved_at,
                 },
             )
             snapshot_keys.add(current_snapshot.snapshot_key)
@@ -432,14 +458,22 @@ def _persist_snapshot(
 
 
 def _artifact_state_from_baseline(baseline: OnboardingBaselineVersionRecord) -> _ArtifactState:
+    provenance = approved_onboarding_provenance(
+        baseline.id,
+        is_authoritative=baseline.approval_status == "approved",
+        approval_status=baseline.approval_status,
+        approved_by=baseline.approved_by,
+        approved_at=baseline.approved_at,
+        approval_note=baseline.approval_note,
+    )
     return _ArtifactState(
         artifact_path=baseline.artifact_path,
         artifact_type=baseline.artifact_type,
         profile=_profile_dict(baseline.profile),
         source_type="baseline_approved",
-        source_ref=f"approved baseline @ {baseline.artifact_path}",
+        source_ref=(f"approved baseline @ {baseline.artifact_path}" if provenance.is_authoritative else f"baseline candidate @ {baseline.artifact_path}"),
         source_url=None,
-        baseline_provenance=None,
+        baseline_provenance=provenance,
     )
 
 
@@ -534,6 +568,8 @@ def _build_artifact_coverage(artifact_state: dict[str, _ArtifactState]) -> dict[
 def _build_baseline_authority(artifact_state: dict[str, _ArtifactState]) -> dict[str, object]:
     authority_counts = {
         "approved_baseline": 0,
+        "pending_baseline": 0,
+        "rejected_baseline": 0,
         "historical_fallback": 0,
         "none": 0,
     }
@@ -545,7 +581,12 @@ def _build_baseline_authority(artifact_state: dict[str, _ArtifactState]) -> dict
                 authority_counts["none"] += 1
             continue
         if provenance.source_type == "approved_baseline":
-            authority_counts["approved_baseline"] += 1
+            if provenance.is_authoritative:
+                authority_counts["approved_baseline"] += 1
+            elif provenance.approval_status == "rejected":
+                authority_counts["rejected_baseline"] += 1
+            else:
+                authority_counts["pending_baseline"] += 1
         elif provenance.source_type == "historical_fallback":
             authority_counts["historical_fallback"] += 1
         else:

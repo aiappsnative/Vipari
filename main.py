@@ -24,6 +24,12 @@ from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_acc
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_worker import AuditWorker, WorkerSettings
+from services.baseline_approval_service import (
+    approve_repo_baseline_artifact,
+    build_repo_baseline_review_panel,
+    rebaseline_repo_from_snapshot,
+    reject_repo_baseline_artifact,
+)
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorker, BranchScanWorkerSettings
 from services.auth_service import (
@@ -102,7 +108,7 @@ from services.control_plane_records import (
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
-from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
+from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
@@ -199,6 +205,15 @@ class RepositoryOnboardingRequest(BaseModel):
 
 class RepositoryBackfillRequest(BaseModel):
     installation_id: int
+
+
+class BaselineDecisionRequest(BaseModel):
+    note: str | None = None
+
+
+class RepoRebaselineRequest(BaseModel):
+    snapshot_id: int
+    rationale: str
 
 
 class BillingHandoffActivationRequest(BaseModel):
@@ -610,6 +625,14 @@ def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) ->
     if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
         raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
     return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+
+
+def _dashboard_actor_login(request: Request) -> str | None:
+    if not _control_plane_active():
+        return None
+    identity_context = _require_github_identity(request)
+    identity = identity_context.get("identity")
+    return identity.github_login if identity is not None else None
 
 
 def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
@@ -1674,6 +1697,71 @@ async def promote_artifact_baseline(request: Request, repo_full: str, artifact_p
             "dashboard": asdict(dashboard),
         }
     )
+
+
+@app.get("/api/repos/{repo_full:path}/baseline/pending")
+def pending_repo_baselines(request: Request, repo_full: str):
+    _require_repo_dashboard_read_access(request, repo_full)
+    panel = build_repo_baseline_review_panel(AUDIT_DB_PATH, repo_full)
+    if panel is None:
+        raise HTTPException(status_code=404, detail="Repository onboarding was not found.")
+    return JSONResponse(asdict(panel))
+
+
+@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
+async def approve_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baseline = approve_repo_baseline_artifact(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            artifact_path=artifact_path,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
+async def reject_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baseline = reject_repo_baseline_artifact(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            artifact_path=artifact_path,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
+async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = rebaseline_repo_from_snapshot(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            snapshot_id=payload.snapshot_id,
+            rationale=payload.rationale,
+            actor_login=_dashboard_actor_login(request),
+            github_app_id=GITHUB_APP_ID,
+            github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+            generate_jwt_fn=generate_jwt,
+            get_installation_token_fn=get_installation_token,
+            fetch_file_content_fn=fetch_file_content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
 
 
 async def verify_signature(request: Request) -> bool:

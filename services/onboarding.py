@@ -188,7 +188,7 @@ def onboard_repository(
         repo_full=repo_full,
         installation_id=installation_id,
         default_branch=default_branch,
-        status="completed",
+        status="pending_baseline_approval",
         discovered_artifacts=discovered,
         extract_signal_terms_fn=extract_signal_terms_from_text,
         build_profile_fn=build_attribute_profile,

@@ -111,6 +111,7 @@ def test_build_repo_journey_materializes_meaningful_snapshots(tmp_path):
     snapshots = build_repo_journey(db_path, "doria90/dummyAI")
 
     assert snapshots[0].snapshot_type == "baseline_approved"
+    assert snapshots[0].input_summary["baseline_verified"] is False
     assert snapshots[-1].snapshot_type == "current"
     assert any(snapshot.snapshot_type == "historical_commit" for snapshot in snapshots)
     assert any(snapshot.snapshot_type == "merge" for snapshot in snapshots)
@@ -136,6 +137,7 @@ def test_onboarding_and_backfill_persist_repo_journey_without_read_trigger(tmp_p
 
     snapshots_after_onboarding = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
     assert [snapshot.snapshot_type for snapshot in snapshots_after_onboarding] == ["baseline_approved", "current"]
+    assert all(snapshot.input_summary["baseline_verified"] is False for snapshot in snapshots_after_onboarding)
 
     plan_repository_history_backfill(
         db_path,

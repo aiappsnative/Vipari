@@ -448,6 +448,17 @@ function issueHeadline(repo) {
     return `Model divergence in '${artifact}'`;
 }
 
+function onboardingStatusBadge(repo) {
+    const status = String(repo.onboarding_status || "").toLowerCase();
+    if (status === "baseline_approved") {
+        return '<span class="baseline-status-badge baseline-status-approved">Baseline approved</span>';
+    }
+    if (status === "pending_baseline_approval") {
+        return '<span class="baseline-status-badge baseline-status-pending">Awaiting baseline approval</span>';
+    }
+    return "";
+}
+
 function renderUrgentRow(repo, index) {
     const severity = severityForPriority(repo.highest_priority);
     return `
@@ -457,6 +468,7 @@ function renderUrgentRow(repo, index) {
                 <span class="urgent-headline">${escapeHtml(issueHeadline(repo))}</span>
                 <span class="urgent-subline">in ${escapeHtml(repo.repo_full)}</span>
             </span>
+            ${onboardingStatusBadge(repo)}
             <span class="urgent-severity ${severity.className}">${escapeHtml(severity.label)}</span>
         </button>
     `;
@@ -548,7 +560,7 @@ function bindUrgentRows(items, repos) {
 }
 
 function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos) {
-    const approvedBaselineRepos = attentionRepos.filter((repo) => (repo.highest_baseline_label || "").includes("Approved")).length;
+    const approvedBaselineRepos = repos.filter((repo) => String(repo.onboarding_status || "") === "baseline_approved").length;
     setText("stat-needs-review", String(payload.risk_state?.review_now_repo_count || 0));
     setText("stat-high-risk", String(highestRiskItems.length));
     setText("stat-approved", String(approvedBaselineRepos));

@@ -340,6 +340,194 @@ strong {
     font-weight: 700;
 }
 
+.baseline-status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--color-border-strong);
+}
+
+.baseline-status-approved {
+    color: var(--color-low);
+    background: rgba(109, 170, 69, 0.12);
+}
+
+.baseline-status-pending {
+    color: var(--color-medium);
+    background: rgba(224, 145, 74, 0.12);
+}
+
+.baseline-status-rejected {
+    color: var(--color-high);
+    background: rgba(224, 92, 92, 0.12);
+}
+
+.baseline-review-panel {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding: 18px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--color-primary-soft), var(--color-surface-2));
+}
+
+.baseline-review-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.baseline-review-list {
+    display: grid;
+    gap: 12px;
+}
+
+.baseline-review-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border-radius: 10px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+}
+
+.baseline-review-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.baseline-review-metrics {
+    display: grid;
+    gap: 8px;
+}
+
+.baseline-metric-row {
+    display: grid;
+    grid-template-columns: 100px minmax(0, 1fr) 42px;
+    gap: 10px;
+    align-items: center;
+}
+
+.baseline-metric-label,
+.baseline-metric-value {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.baseline-metric-track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--color-surface-offset);
+    overflow: hidden;
+}
+
+.baseline-metric-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--color-primary), var(--color-gap));
+}
+
+.baseline-review-note,
+.modal-textarea {
+    width: 100%;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    padding: 10px 12px;
+    resize: vertical;
+}
+
+.baseline-review-actions,
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.baseline-action-approve,
+.modal-primary,
+.journey-action-button {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--color-primary);
+    color: #fff;
+    cursor: pointer;
+}
+
+.baseline-action-reject,
+.modal-secondary {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--color-surface-offset);
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.journey-action-button {
+    margin-top: 10px;
+    justify-self: flex-start;
+}
+
+.journey-card-muted {
+    opacity: 0.72;
+    border-style: dashed;
+}
+
+.modal-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.48);
+}
+
+.modal-card {
+    position: relative;
+    z-index: 1;
+    width: min(560px, calc(100vw - 32px));
+    display: grid;
+    gap: 14px;
+    padding: 20px;
+    border-radius: 14px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+}
+
+.modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.modal-close {
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    background: var(--color-surface-offset);
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.modal-field {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
 .posture-stat-urgent {
     color: var(--color-high);
 }

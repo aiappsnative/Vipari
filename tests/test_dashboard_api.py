@@ -5,6 +5,7 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 import main
 from services.audit_jobs import init_db
@@ -122,7 +123,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["attention_repos"][0]["highest_evidence_label"] == "history only"
     assert overview_payload["attention_repos"][0]["highest_evidence_summary"] == "Only merged-history evidence is available right now; start with commit sha-2."
-    assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Approved")
+    assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Pending approval")
     assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
@@ -135,12 +136,14 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     payload = repo_response.json()
     assert payload["repo_full"] == "doria90/dummyAI"
     assert payload["onboarding"]["default_branch"] == "main"
+    assert payload["onboarding"]["status"] == "pending_baseline_approval"
+    assert payload["baseline_review"]["is_pending_review"] is True
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
     assert payload["insights"][0]["evidence_label"] == "history only"
     assert payload["insights"][0]["evidence_summary"] == "Only merged-history evidence is available right now; start with commit sha-2."
-    assert payload["insights"][0]["baseline_label"].startswith("Baseline: Approved")
+    assert payload["insights"][0]["baseline_label"].startswith("Baseline: Pending approval")
     assert payload["insights"][0]["review_target"] == "commit sha-2"
     assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert payload["insights"][0]["supporting_review_target"] is None
@@ -159,6 +162,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_cues"][0]["label"]
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
+    assert payload["design_profiles"][0]["baseline_provenance"]["is_authoritative"] is False
     assert payload["design_profiles"][0]["provenance"]["label"] == "Historical backfill"
     assert payload["design_profiles"][0]["provenance"]["source_ref"] == "commit sha-2"
     assert payload["design_profiles"][0]["provenance"]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
@@ -195,14 +199,16 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_timelines"][0]["points"][-1]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert payload["history_timelines"][0]["points"][-1]["review_context"] == "Historical snapshot from backfill"
     assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
+    assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["is_authoritative"] is False
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
+    assert payload["journey_snapshots"][0]["input_summary"]["baseline_verified"] is False
     assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
     assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
 
 
-def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
+def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
@@ -230,27 +236,46 @@ def test_dashboard_api_can_promote_current_source_to_baseline(tmp_path):
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
     )
-    before_snapshots = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
-    before_current = next(snapshot for snapshot in before_snapshots if snapshot.snapshot_type == "current")
-    assert before_current.distance_from_baseline > 0
-
     with TestClient(main.app) as client:
-        response = client.post("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline")
+        pending_response = client.get("/api/repos/doria90/dummyAI/baseline/pending")
+        approve_response = client.post(
+            "/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline/approve",
+            json={"note": "Approved for live posture tracking."},
+        )
         journey_response = client.get("/api/repos/doria90/dummyAI/journey")
 
-    assert response.status_code == 200
-    payload = response.json()
+    assert pending_response.status_code == 200
+    pending_payload = pending_response.json()
+    assert pending_payload["is_pending_review"] is True
+    assert pending_payload["approved_count"] == 0
+    assert pending_payload["artifact_count"] == 1
+
+    assert approve_response.status_code == 200
+    payload = approve_response.json()
     assert payload["artifact_path"] == "prompts/refund.txt"
-    assert payload["baseline"]["artifact_path"] == "prompts/refund.txt"
-    assert payload["baseline"]["content_text"] == PROMPT_CURRENT
-    assert payload["dashboard"]["baseline_version_count"] == 2
-    assert payload["dashboard"]["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
-    assert payload["dashboard"]["journey_snapshots"][-1]["snapshot_type"] == "current"
-    assert payload["dashboard"]["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
-    assert payload["dashboard"]["journey_comparison"]["drift_summary"]["right_distance_from_baseline"] == 0
+    assert payload["baseline"]["approval_status"] == "approved"
+    assert payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
+    assert payload["dashboard"]["baseline_review"]["is_pending_review"] is False
+    assert payload["dashboard"]["journey_snapshots"][0]["input_summary"]["baseline_verified"] is True
     assert journey_response.status_code == 200
     current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
-    assert current_snapshot["distance_from_baseline"] == 0
+    assert current_snapshot["input_summary"]["baseline_verified"] is True
+
+    current_snapshot_id = current_snapshot["id"]
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.fetch_file_content", return_value=PROMPT_CURRENT), TestClient(main.app) as client:
+        rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/rebaseline",
+            json={"snapshot_id": current_snapshot_id, "rationale": "Refresh the approved anchor after landed changes."},
+        )
+
+    assert rebaseline_response.status_code == 200
+    rebaseline_payload = rebaseline_response.json()
+    assert rebaseline_payload["created_baseline_count"] == 1
+    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "pending_baseline_approval"
+    assert rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is True
+    assert rebaseline_payload["dashboard"]["baseline_version_count"] == 2
 
 
 def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):

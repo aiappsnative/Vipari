@@ -16,6 +16,7 @@ from .baseline_provenance import (
     historical_fallback_provenance,
     no_baseline_provenance,
 )
+from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel
 
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
@@ -82,6 +83,12 @@ def _cache_set(cache: dict[tuple[Any, ...], Any], key: tuple[Any, ...], value: A
             oldest_key = next(iter(cache))
             cache.pop(oldest_key, None)
     return value
+
+
+def invalidate_dashboard_caches() -> None:
+    with _DASHBOARD_CACHE_LOCK:
+        _OVERVIEW_VIEW_CACHE.clear()
+        _REPO_VIEW_CACHE.clear()
 
 
 @dataclass(frozen=True)
@@ -424,6 +431,7 @@ class RepoArtifactDesignProfile:
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
+    baseline_review: RepoBaselineReviewPanel | None
     backfill: RepoDashboardBackfillSummary
     pull_request_audit_count: int
     baseline_version_count: int
@@ -612,6 +620,7 @@ def _build_repo_dashboard_view_uncached(
     include_detail_sections: bool = True,
 ) -> RepoDashboardView:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    baseline_review = build_repo_baseline_review_panel(db_path, repo_full)
     drift_summary = get_repo_static_drift_summary(db_path, repo_full)
     top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
     pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
@@ -624,6 +633,7 @@ def _build_repo_dashboard_view_uncached(
         return RepoDashboardView(
             repo_full=repo_full,
             onboarding=None,
+            baseline_review=None,
             backfill=RepoDashboardBackfillSummary(
                 job_count=0,
                 planned_job_count=0,
@@ -727,6 +737,7 @@ def _build_repo_dashboard_view_uncached(
     return RepoDashboardView(
         repo_full=repo_full,
         onboarding=onboarding,
+        baseline_review=baseline_review,
         backfill=RepoDashboardBackfillSummary(
             job_count=len(jobs),
             planned_job_count=sum(1 for job in jobs if job.status == "planned"),
@@ -821,6 +832,10 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                         signal_terms=json.loads(row["signal_terms_json"]),
                         line_count=int(row["line_count"]),
                         profile=_profile_from_json(str(row["profile_json"])),
+                        approval_status=str(row["approval_status"]) if "approval_status" in row.keys() else "pending",
+                        approved_by=(str(row["approved_by"]) if row["approved_by"] is not None else None) if "approved_by" in row.keys() else None,
+                        approved_at=float(row["approved_at"]) if "approved_at" in row.keys() and row["approved_at"] is not None else None,
+                        approval_note=(str(row["approval_note"]) if row["approval_note"] is not None else None) if "approval_note" in row.keys() else None,
                         created_at=float(row["created_at"]),
                         content_text=row["content_text"],
                     )
@@ -901,6 +916,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
             RepoDashboardView(
                 repo_full=repo.repo_full,
                 onboarding=onboarding,
+                baseline_review=None,
                 backfill=backfill_summaries.get(repo.repo_full, _empty_backfill_summary()),
                 pull_request_audit_count=pull_request_audit_counts.get(repo.repo_full, 0),
                 baseline_version_count=len(baseline_versions),
@@ -1202,6 +1218,7 @@ def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
     return RepoDashboardView(
         repo_full=repo_full,
         onboarding=None,
+        baseline_review=None,
         backfill=_empty_backfill_summary(),
         pull_request_audit_count=0,
         baseline_version_count=0,
@@ -1716,13 +1733,28 @@ def _baseline_label(baseline, evidence_bundle: _RepoArtifactEvidenceBundle | Non
     context = _preferred_profile_context(evidence_bundle)
     provenance = context.baseline_provenance if context is not None else None
     if provenance is None and baseline is not None:
-        provenance = approved_onboarding_provenance(baseline.id)
+        provenance = approved_onboarding_provenance(
+            baseline.id,
+            is_authoritative=baseline.approval_status == "approved",
+            approval_status=baseline.approval_status,
+            approved_by=baseline.approved_by,
+            approved_at=baseline.approved_at,
+            approval_note=baseline.approval_note,
+        )
     if provenance is None:
         return "Baseline: none yet"
     if provenance.is_authoritative:
         source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
         suffix = f" #{source_id}" if source_id is not None else ""
         return f"Baseline: Approved{suffix}"
+    if provenance.source_type == "approved_baseline" and provenance.approval_status == "rejected":
+        source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
+        suffix = f" #{source_id}" if source_id is not None else ""
+        return f"Baseline: Rejected candidate{suffix}"
+    if provenance.source_type == "approved_baseline":
+        source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
+        suffix = f" #{source_id}" if source_id is not None else ""
+        return f"Baseline: Pending approval{suffix}"
     if provenance.source_type == "historical_reference":
         return "Baseline: Auto-baseline (historical fallback)"
     if provenance.source_type == "previous_pr_reference":
@@ -3169,7 +3201,14 @@ def _build_repo_design_profiles(
             continue
 
         context = _preferred_profile_context(profile_context_by_path.get(artifact_path))
-        baseline_provenance = approved_onboarding_provenance(baseline.id)
+        baseline_provenance = approved_onboarding_provenance(
+            baseline.id,
+            is_authoritative=baseline.approval_status == "approved",
+            approval_status=baseline.approval_status,
+            approved_by=baseline.approved_by,
+            approved_at=baseline.approved_at,
+            approval_note=baseline.approval_note,
+        )
         baseline_profile = _profile_vector(baseline.profile)
         if context is None:
             current_profile = baseline_profile
