@@ -412,7 +412,49 @@ function drawDriftRing(percent) {
     context.stroke();
 }
 
-function radarVectors(repo) {
+function radarVectors(repo, repoPayload = null) {
+    // If the server provided an authoritative payload with journey snapshots,
+    // prefer those attribute vectors and coverage numbers so baseline/current
+    // polygons are drawn from the same source the rest of the UI uses.
+    if (repoPayload && Array.isArray(repoPayload.journey_snapshots) && repoPayload.journey_snapshots.length) {
+        const snapshots = repoPayload.journey_snapshots;
+        const selectedBaselineId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
+        const baselineSnapshot = (selectedBaselineId
+            ? snapshots.find((s) => Number(s.id) === selectedBaselineId)
+            : null) || snapshots.find((s) => s.snapshot_type === "baseline_approved") || snapshots[0];
+        const currentSnapshot = snapshots.find((s) => s.snapshot_type === "current") || snapshots[snapshots.length - 1];
+
+        const mapAttr = (snap) => {
+            const vec = snap?.attribute_vector || {};
+            const input = snap?.input_summary || {};
+            return [
+                Number(vec.governance || 0),
+                Number(vec.change_velocity || 0),
+                Number((Number(input.coverage_percent || 0) / 100) || 0),
+                Number(vec.autonomy || 0),
+                Number(vec.capability || 0),
+                Number(vec.guardrails || 0),
+            ];
+        };
+
+        return {
+            labels: ["Compliance", "Stability", "Coverage", "Efficiency", "Performance", "Security"],
+            series: [
+                {
+                    color: "rgba(78, 103, 255, 0.28)",
+                    stroke: "rgba(79, 106, 255, 0.9)",
+                    values: mapAttr(baselineSnapshot),
+                },
+                {
+                    color: "rgba(73, 223, 217, 0.22)",
+                    stroke: "rgba(85, 230, 222, 0.92)",
+                    values: mapAttr(currentSnapshot),
+                },
+            ],
+        };
+    }
+
+    // Fallback to the legacy behavior derived from matched risk entries
     const entries = profileEntries(repo);
     if (!entries.length) {
         return null;
@@ -449,7 +491,7 @@ function radarVectors(repo) {
     };
 }
 
-function drawRadar(repo) {
+function drawRadar(repo, repoPayload = null) {
     const canvas = document.getElementById("repo-posture-radar");
     if (!canvas) {
         return;
@@ -458,7 +500,7 @@ function drawRadar(repo) {
     if (!context) {
         return;
     }
-    const vectors = radarVectors(repo);
+    const vectors = radarVectors(repo, repoPayload);
     context.clearRect(0, 0, canvas.width, canvas.height);
     if (!vectors) {
         return;
@@ -655,7 +697,7 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     setText("repo-journey-note", repoStoryNote);
     setSectionHtml("coverage-bars", renderCoverageBars(repo, repos, repoPayload));
     setText("coverage-note", `${Number(repo.discovered_artifact_count || 0)} tracked artifacts · ${repoScopeLabel(repo)}`);
-    drawRadar(repo);
+    drawRadar(repo, repoPayload);
     const drift = driftPercentFromPayload(repo, repoPayload);
     drawDriftRing(drift);
     setText("drift-ring-value", `${drift}%`);
