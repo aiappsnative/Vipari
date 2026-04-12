@@ -200,6 +200,7 @@ strong {
     padding: 0 10px;
     width: 100%;
     text-align: left;
+    color: var(--color-text);
 }
 
 /* Caret icon next to toggles - smaller and subtle */
@@ -210,6 +211,7 @@ strong {
     opacity: 0.85;
     transform: rotate(0deg);
     transition: transform var(--transition), opacity var(--transition);
+    color: var(--color-text);
 }
 .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret {
     transform: rotate(180deg);
@@ -233,7 +235,7 @@ strong {
 .sidebar-subitem {
     display: block;
     padding: 6px 10px;
-    color: var(--color-text-muted);
+    color: var(--color-text);
     text-decoration: none;
     font-size: 13px;
     border-radius: 6px;
