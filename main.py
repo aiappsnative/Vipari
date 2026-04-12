@@ -24,6 +24,16 @@ from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_acc
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_worker import AuditWorker, WorkerSettings
+from services.baseline_approval_service import (
+    approve_repo_baseline,
+    approve_repo_baseline_artifact,
+    build_repo_baseline_review_panel,
+    reject_repo_baseline,
+    rebaseline_repo_from_snapshot,
+    reject_repo_baseline_artifact,
+)
+from services.branch_scan_jobs import create_branch_scan_job
+from services.branch_scan_worker import BranchScanWorker, BranchScanWorkerSettings
 from services.auth_service import (
     GithubOAuthToken,
     GithubUserProfile,
@@ -50,9 +60,10 @@ from services.control_plane_frontend import (
     render_control_plane_profile_page,
     render_control_plane_pricing_page,
     render_control_plane_repo_setup_page,
+    render_repo_inventory_cards,
+    render_repo_onboarded_summary_cards,
+    render_repo_onboarding_metrics,
     render_control_plane_workspace_new_page,
-    render_repo_allocation_cards,
-    render_repo_connection_cards,
 )
 from services.control_plane_records import (
     activate_billing_handoff_claim,
@@ -100,7 +111,7 @@ from services.control_plane_records import (
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
-from services.github_integration import fetch_commit_pair_diff, fetch_pr_diff, generate_jwt, get_installation_token
+from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
@@ -136,11 +147,12 @@ SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
 worker: AuditWorker | None = None
+branch_scan_worker: BranchScanWorker | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global worker
+    global worker, branch_scan_worker
     init_db(AUDIT_DB_PATH)
     if AUDIT_WORKER_ENABLED:
         assert client is not None
@@ -159,9 +171,25 @@ async def lifespan(_: FastAPI):
             )
         )
         worker.start()
+    if settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET:
+        branch_scan_worker = BranchScanWorker(
+            BranchScanWorkerSettings(
+                db_path=AUDIT_DB_PATH,
+                github_app_id=GITHUB_APP_ID,
+                github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+                github_app_private_key=settings.resolved_github_private_key,
+                max_attempts=AUDIT_MAX_ATTEMPTS,
+                max_retry_window_seconds=AUDIT_MAX_RETRY_WINDOW_SECONDS,
+                poll_interval_seconds=AUDIT_WORKER_POLL_SECONDS,
+            )
+        )
+        branch_scan_worker.start()
     try:
         yield
     finally:
+        if branch_scan_worker is not None:
+            branch_scan_worker.stop()
+            branch_scan_worker = None
         if worker is not None:
             worker.stop()
             worker = None
@@ -180,6 +208,15 @@ class RepositoryOnboardingRequest(BaseModel):
 
 class RepositoryBackfillRequest(BaseModel):
     installation_id: int
+
+
+class BaselineDecisionRequest(BaseModel):
+    note: str | None = None
+
+
+class RepoRebaselineRequest(BaseModel):
+    snapshot_id: int
+    rationale: str | None = None
 
 
 class BillingHandoffActivationRequest(BaseModel):
@@ -588,9 +625,17 @@ def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) ->
         return access_context
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
-    if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
-        raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
-    return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+    if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
+        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+    raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+
+
+def _dashboard_actor_login(request: Request) -> str | None:
+    if not _control_plane_active():
+        return None
+    identity_context = _current_authenticated_identity_context(request)
+    identity = identity_context.get("identity")
+    return identity.github_login if identity is not None else None
 
 
 def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
@@ -805,7 +850,7 @@ async def github_auth_callback(
                 installation_id=int(pending_install["installation_id"]),
             )
             destination = _path_with_flow_context(
-                f"/app/setup/repos?installation_linked=1&setup_action={pending_install.get('setup_action') or 'install'}",
+                f"/app/repos?installation_linked=1&setup_action={pending_install.get('setup_action') or 'install'}",
                 flow_context,
             )
         except Exception:
@@ -844,8 +889,8 @@ async def control_plane_app_page_route(request: Request, state: str | None = Non
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing",
         "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/setup/repos",
-        "active_comments_only": "/app/setup/repos",
+        "awaiting_repo_onboarding": "/app/repos",
+        "active_comments_only": "/app/repos",
         "canceled_active_until_period_end": "/app/billing",
         "expired_read_only": "/app/billing",
         "forbidden": "/dashboard",
@@ -978,7 +1023,7 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
                 workspace_id=workspace.id,
                 installation_id=int(pending_install["installation_id"]),
             )
-            response = RedirectResponse(_path_with_flow_context("/app/setup/repos?installation_linked=1", flow_context), status_code=303)
+            response = RedirectResponse(_path_with_flow_context("/app/repos?installation_linked=1", flow_context), status_code=303)
             response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
             return response
         except Exception:
@@ -1246,7 +1291,7 @@ async def install_callback(
     _link_installation_to_workspace(workspace_id=access_context["workspace"].id, installation_id=installation_id_int)
     response = RedirectResponse(
         _path_with_flow_context(
-            f"/app/setup/repos?installation_linked=1&setup_action={setup_action or 'install'}",
+            f"/app/repos?installation_linked=1&setup_action={setup_action or 'install'}",
             _flow_context_from_request(request),
         ),
         status_code=303,
@@ -1278,15 +1323,28 @@ async def install_link(
         account_type=account_type,
         repo_fulls=repo_fulls,
     )
-    return RedirectResponse("/app/setup/repos", status_code=303)
+    return RedirectResponse("/app/repos", status_code=303)
 
 
-@app.get("/app/setup/repos", response_class=HTMLResponse)
+@app.get("/app/repos", response_class=HTMLResponse)
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    allocation_status_by_full = {
+        str(item["repo_full"]): str(item["allocation_status"])
+        for item in allocations
+    }
+    visible_repo_fulls = {str(item["repo_full"]) for item in connections} | {str(item["repo_full"]) for item in allocations}
+    onboarded_summaries = [
+        asdict(item)
+        for item in list_repo_dashboard_index(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visible_repo_fulls,
+            allocation_status_by_full=allocation_status_by_full,
+        )
+    ]
     audit_repo_full = (
         (allocations[0]["repo_full"] if allocations else None)
         or (connections[0]["repo_full"] if connections else None)
@@ -1295,14 +1353,20 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
-            repo_cards=render_repo_connection_cards(connections, csrf_token=access_context["session"].csrf_secret),
-            allocation_cards=render_repo_allocation_cards(allocations),
+            inventory_cards=render_repo_inventory_cards(
+                connections,
+                allocations,
+                onboarded_summaries,
+                csrf_token=access_context["session"].csrf_secret,
+            ),
+            onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
+            onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
         )
     )
 
 
-@app.post("/app/setup/repos/allocate")
+@app.post("/app/repos/allocate")
 async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
     _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
@@ -1657,6 +1721,115 @@ async def promote_artifact_baseline(request: Request, repo_full: str, artifact_p
     )
 
 
+@app.get("/api/repos/{repo_full:path}/baseline/pending")
+def pending_repo_baselines(request: Request, repo_full: str):
+    _require_repo_dashboard_read_access(request, repo_full)
+    panel = build_repo_baseline_review_panel(AUDIT_DB_PATH, repo_full)
+    if panel is None:
+        raise HTTPException(status_code=404, detail="Repository onboarding was not found.")
+    return JSONResponse(asdict(panel))
+
+
+@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
+async def approve_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baseline = approve_repo_baseline_artifact(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            artifact_path=artifact_path,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
+async def reject_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baseline = reject_repo_baseline_artifact(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            artifact_path=artifact_path,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/approve")
+async def approve_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = approve_repo_baseline(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "approved_baseline_count": len(baselines),
+            "dashboard": asdict(dashboard),
+        }
+    )
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/reject")
+async def reject_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = reject_repo_baseline(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            actor_login=_dashboard_actor_login(request),
+            approval_note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse(
+        {
+            "repo_full": repo_full,
+            "rejected_baseline_count": len(baselines),
+            "dashboard": asdict(dashboard),
+        }
+    )
+
+
+@app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
+async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        baselines = rebaseline_repo_from_snapshot(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            snapshot_id=payload.snapshot_id,
+            rationale=payload.rationale,
+            actor_login=_dashboard_actor_login(request),
+            github_app_id=GITHUB_APP_ID,
+            github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+            generate_jwt_fn=generate_jwt,
+            get_installation_token_fn=get_installation_token,
+            fetch_file_content_fn=fetch_file_content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+
 async def verify_signature(request: Request) -> bool:
     signature = request.headers.get("X-Hub-Signature-256")
     if signature is None:
@@ -1826,10 +1999,47 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event = request.headers.get("X-GitHub-Event", "")
-    if event != "pull_request":
+    if event not in {"pull_request", "push"}:
         return JSONResponse({"message": "ignored"})
 
     payload = await request.json()
+    if event == "push":
+        installation_id = payload.get("installation", {}).get("id")
+        repo_full = payload.get("repository", {}).get("full_name")
+        branch_ref = payload.get("ref")
+        default_branch = payload.get("repository", {}).get("default_branch")
+        commit_sha = payload.get("head_commit", {}).get("id")
+
+        if not all([installation_id, repo_full, branch_ref, default_branch, commit_sha]):
+            raise HTTPException(status_code=400, detail="Missing payload data")
+
+        if branch_ref != f"refs/heads/{default_branch}":
+            return JSONResponse({"message": "ignored"})
+
+        managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
+        if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
+            allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
+            if allocation is None:
+                return JSONResponse({"message": "ignored: repo not allocated"})
+
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
+            if entitlement is None or not entitlement.dashboard_enabled:
+                return JSONResponse({"message": "ignored: workspace not entitled"})
+
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
+        if onboarding is None:
+            return JSONResponse({"message": "ignored: repo not onboarded"})
+
+        job = create_branch_scan_job(
+            AUDIT_DB_PATH,
+            repo_full=str(repo_full),
+            installation_id=int(installation_id),
+            commit_sha=str(commit_sha),
+            branch_ref=str(branch_ref),
+            triggered_by="push_webhook",
+        )
+        return JSONResponse({"message": "branch scan queued", "job_id": job.id})
+
     action = payload.get("action")
     if action not in ("opened", "synchronize", "closed", "reopened"):
         return JSONResponse({"message": "ignored"})

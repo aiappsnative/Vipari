@@ -21,11 +21,15 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
                     <span>Dashboard</span>
                 </a>
-                <a href="/dashboard" class="sidebar-nav-item" aria-label="Audit Logs" id="audit-logs-link">
+                <button type="button" class="sidebar-nav-item sidebar-nav-item-toggle" aria-label="Audit Logs" id="audit-logs-toggle" aria-expanded="false">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
                     <span>Audit Logs</span>
-                </a>
-                <a href="/app/setup/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div id="audit-logs-list" class="sidebar-sublist" hidden>
+                    <div class="muted">Loading repositories...</div>
+                </div>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
@@ -80,24 +84,42 @@
                         </article>
                     </section>
 
-                    <aside class="dashboard-card radar-card" id="radar-section">
-                        <header class="card-heading radar-heading">
-                            <div>
-                                <h2>Repo Posture Radar</h2>
-                                <div class="radar-repo-title" id="repo-radar-title">Selected repo posture</div>
+                    <aside class="dashboard-column dashboard-column-right">
+                        <article class="dashboard-card repo-atlas-card" id="repo-atlas-section">
+                            <header class="card-heading">
+                                <div>
+                                    <h2>Repository Atlas</h2>
+                                    <div class="muted">Hover any repo to inspect its posture, even if it is not in the urgent queue.</div>
+                                </div>
+                            </header>
+                            <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell muted">Loading repositories...</div>
+                        </article>
+
+                        <article class="dashboard-card radar-card" id="radar-section">
+                            <header class="card-heading radar-heading">
+                                <div>
+                                    <h2>Repo Posture Radar</h2>
+                                    <div class="radar-repo-title" id="repo-radar-title">Selected repo posture</div>
+                                </div>
+                            </header>
+                            <div class="radar-wrap">
+                                <div class="radar-visual-shell">
+                                    <canvas id="repo-posture-radar" width="420" height="320"></canvas>
+                                </div>
+                                <div class="radar-legend" aria-hidden="true">
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(78, 103, 255, 0.9); border: 1px solid rgba(79, 106, 255, 0.9);"></span><span>Approved baseline</span></div>
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(85, 230, 222, 0.92); border: 1px solid rgba(73, 223, 217, 0.92);"></span><span>Current posture</span></div>
+                                </div>
                             </div>
-                        </header>
-                        <div class="radar-visual-shell">
-                            <canvas id="repo-posture-radar" width="420" height="320"></canvas>
-                        </div>
-                        <div class="radar-axis-caption" id="repo-radar-meta">Compliance, stability, coverage, efficiency, performance, and security posture.</div>
-                        <section class="coverage-section" id="coverage-section">
-                            <div class="coverage-header-row">
-                                <h3>Coverage</h3>
-                                <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
-                            </div>
-                            <div class="coverage-bars" id="coverage-bars">Loading coverage bars...</div>
-                        </section>
+                            <div class="radar-axis-caption" id="repo-radar-meta">Compliance, stability, coverage, efficiency, performance, and security posture.</div>
+                            <section class="coverage-section" id="coverage-section">
+                                <div class="coverage-header-row">
+                                    <h3>Coverage</h3>
+                                    <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
+                                </div>
+                                <div class="coverage-bars" id="coverage-bars">Loading coverage bars...</div>
+                            </section>
+                        </article>
                     </aside>
                 </section>
 
@@ -106,6 +128,27 @@
                     <span id="stat-needs-review">-</span>
                     <span id="stat-high-risk">-</span>
                     <span id="stat-approved">-</span>
+                </div>
+
+                <div id="overview-rebaseline-modal" class="modal-shell" hidden>
+                    <div class="modal-backdrop" data-close-overview-rebaseline="true"></div>
+                    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="overview-rebaseline-modal-title">
+                        <div class="modal-head">
+                            <strong id="overview-rebaseline-modal-title">Re-baseline from timeline</strong>
+                            <button type="button" class="modal-close" data-close-overview-rebaseline="true" aria-label="Close">×</button>
+                        </div>
+                        <div id="overview-rebaseline-modal-summary" class="modal-body muted">Select a checkpoint to make it the active baseline.</div>
+                        <label class="modal-field" for="overview-rebaseline-rationale">Rationale (optional)</label>
+                        <textarea id="overview-rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for this baseline switch if needed."></textarea>
+                        <div id="overview-rebaseline-progress" class="modal-progress" hidden>
+                            <span class="modal-spinner" aria-hidden="true"></span>
+                            <span id="overview-rebaseline-progress-text">Applying the selected checkpoint as the repo baseline...</span>
+                        </div>
+                        <div class="modal-actions">
+                            <button type="button" class="modal-secondary" data-close-overview-rebaseline="true">Cancel</button>
+                            <button type="button" class="modal-primary" id="overview-rebaseline-confirm-btn">Confirm</button>
+                        </div>
+                    </div>
                 </div>
             </main>
         </div>

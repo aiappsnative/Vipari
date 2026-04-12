@@ -22,11 +22,15 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
                     <span>Dashboard</span>
                 </a>
-                <a href="/dashboard/{{REPO_FULL}}" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Audit Logs">
+                <button type="button" class="sidebar-nav-item sidebar-nav-item-toggle sidebar-nav-item-active" aria-label="Audit Logs" id="audit-logs-toggle" aria-expanded="false">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
                     <span>Audit Logs</span>
-                </a>
-                <a href="/app/setup/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div id="audit-logs-list" class="sidebar-sublist" hidden>
+                    <div class="muted">Loading repositories...</div>
+                </div>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
@@ -204,6 +208,62 @@
                     </table>
                 </section>
             </main>
+        </div>
+        <script>
+            // Populate audit logs list for repo pages and bind toggle
+            (function(){
+                const toggle = document.getElementById('audit-logs-toggle');
+                const list = document.getElementById('audit-logs-list');
+                if (toggle && list) {
+                    toggle.addEventListener('click', async () => {
+                        const hidden = list.hasAttribute('hidden');
+                        if (hidden) {
+                            try {
+                                const resp = await fetch('/api/dashboard/overview');
+                                if (resp.ok) {
+                                    const payload = await resp.json();
+                                    const repos = Array.isArray(payload.repos) ? payload.repos : [];
+                                    if (repos.length === 0) {
+                                        list.innerHTML = '<div class="muted">No repositories available</div>';
+                                    } else {
+                                        list.innerHTML = '<nav class="sidebar-sublist-nav">' + repos.map(r => `<a class="sidebar-subitem" href="/dashboard/${encodeURIComponent(r.repo_full)}">${r.repo_full}</a>`).join('') + '</nav>';
+                                    }
+                                } else {
+                                    list.innerHTML = '<div class="muted">Unable to load repositories</div>';
+                                }
+                            } catch (e) {
+                                list.innerHTML = '<div class="muted">Unable to load repositories</div>';
+                            }
+                            list.removeAttribute('hidden');
+                            toggle.setAttribute('aria-expanded','true');
+                        } else {
+                            list.setAttribute('hidden','true');
+                            toggle.setAttribute('aria-expanded','false');
+                        }
+                    });
+                }
+            })();
+        </script>
+    </div>
+
+    <div id="rebaseline-modal" class="modal-shell" hidden>
+        <div class="modal-backdrop" data-close-rebaseline="true"></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rebaseline-modal-title">
+            <div class="modal-head">
+                <strong id="rebaseline-modal-title">Re-baseline from snapshot</strong>
+                <button type="button" class="modal-close" data-close-rebaseline="true" aria-label="Close">×</button>
+            </div>
+            <div id="rebaseline-modal-summary" class="modal-body muted">Select a snapshot to review its delta.</div>
+            <label class="modal-field" for="rebaseline-rationale">Rationale (optional)</label>
+            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for reviewers if needed."></textarea>
+            <div id="rebaseline-progress" class="modal-progress" hidden>
+                <span class="modal-spinner" aria-hidden="true"></span>
+                <span id="rebaseline-progress-text">Preparing a new baseline proposal...</span>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="modal-secondary" data-close-rebaseline="true">Cancel</button>
+                <button type="button" class="modal-primary" id="rebaseline-confirm-btn">Confirm</button>
+            </div>
         </div>
     </div>
 </body>

@@ -1203,7 +1203,12 @@ def _build_comment_attribute_profiles(
             continue
         current_profile = build_attribute_profile(snapshot_text)
         current_signal_terms = extract_signal_terms_from_text(snapshot_text)
-        baseline = get_latest_onboarding_baseline_for_repo_artifact(settings.db_path, job.repo_full, artifact.relevance.path)
+        baseline = get_latest_onboarding_baseline_for_repo_artifact(
+            settings.db_path,
+            job.repo_full,
+            artifact.relevance.path,
+            only_approved=True,
+        )
         if baseline is not None:
             drift_delta = compare_attribute_profiles(
                 baseline.profile,

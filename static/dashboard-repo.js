@@ -1,7 +1,34 @@
-const repoFull = document.querySelector('meta[name="driftguard-repo-full"]')?.getAttribute("content") || "";
+function resolveRepoFull() {
+    const metaRepoFull = document.querySelector('meta[name="driftguard-repo-full"]')?.getAttribute("content")?.trim();
+    if (metaRepoFull) {
+        return metaRepoFull;
+    }
+
+    const pathname = String(window.location.pathname || "");
+    const prefix = "/dashboard/";
+    if (!pathname.startsWith(prefix)) {
+        return "";
+    }
+
+    const encodedRepoFull = pathname.slice(prefix.length).replace(/^\/+|\/+$/g, "");
+    if (!encodedRepoFull) {
+        return "";
+    }
+
+    try {
+        return decodeURIComponent(encodedRepoFull);
+    } catch {
+        return encodedRepoFull;
+    }
+}
+
+const repoFull = resolveRepoFull();
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
+window.__journeySnapshots = [];
+window.__pendingRebaselineSnapshot = null;
+window.__rebaselineBusy = false;
 
 function asArray(value) {
     return Array.isArray(value) ? value : [];
@@ -55,6 +82,59 @@ function escapeHtml(value) {
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+}
+
+function profileMetricLabel(key) {
+    return {
+        guardrail_robustness: "Guardrails",
+        capability_risk: "Capability",
+        autonomy_level: "Autonomy",
+        stability_vs_creativity: "Stability",
+        governance_strength: "Governance",
+        change_frequency: "Velocity",
+        semantic_density: "Density",
+    }[key] || key.replaceAll("_", " ");
+}
+
+function renderProfileMetricBars(profile = {}) {
+    const keys = ["guardrail_robustness", "capability_risk", "autonomy_level", "stability_vs_creativity", "governance_strength", "change_frequency"];
+    return keys.map((key) => {
+        const value = clamp(Number(profile[key] || 0), 0, 1);
+        return `
+            <div class="baseline-metric-row">
+                <span class="baseline-metric-label">${escapeHtml(profileMetricLabel(key))}</span>
+                <div class="baseline-metric-track"><div class="baseline-metric-fill" style="width:${value * 100}%"></div></div>
+                <span class="baseline-metric-value">${value.toFixed(2)}</span>
+            </div>
+        `;
+    }).join("");
+}
+
+function baselineStatusBadge(status) {
+    const normalized = String(status || "pending").toLowerCase();
+    const className = normalized === "approved" ? "baseline-status-approved" : normalized === "rejected" ? "baseline-status-rejected" : "baseline-status-pending";
+    const label = normalized === "approved" ? "Approved" : normalized === "rejected" ? "Rejected" : "Pending";
+    return `<span class="baseline-status-badge ${className}">${label}</span>`;
+}
+
+function renderBaselineReviewPanel(panel) {
+    return "";
+}
+
+async function mutateRepoBaselineDecision(action, note) {
+    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/baseline/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+    });
+    if (!response.ok) {
+        throw new Error(`Baseline ${action} failed with ${response.status}`);
+    }
+    return response.json();
+}
+
+function bindBaselineReviewActions() {
+    return;
 }
 
 function clamp(value, min, max) {
@@ -542,25 +622,31 @@ function formatSigned(value, digits = 3) {
     return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}`;
 }
 
-function renderJourneySummary(snapshots = []) {
+function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId = null) {
     if (!snapshots.length) {
         return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
     }
-    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots[snapshots.length - 1];
-    const baseline = snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
+    const selectedBaseline = selectedBaselineSourceSnapshotId
+        ? snapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
+        : null;
+    const baseline = selectedBaseline || snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
     const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
     const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
+    const branchHeadCount = snapshots.filter((item) => item.snapshot_type === "branch_head").length;
     const riskLevel = current?.risk_summary?.risk_level || "low";
+    const baselineValue = baseline ? snapshotTypeLabel(selectedBaseline ? baseline.snapshot_type : "baseline_approved") : "No";
+    const baselineValueClass = baselineValue.length > 12 ? "journey-node-value journey-node-text" : "journey-node-value";
     return `
         <div class="journey-strip">
             <div class="journey-node journey-tone-primary">
                 <span class="journey-node-value">${snapshots.length}</span>
                 <span class="journey-node-label">Snapshots</span>
-                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical</span>
+                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live</span>
                 <span class="journey-node-link" aria-hidden="true"></span>
             </div>
             <div class="journey-node journey-tone-gap">
-                <span class="journey-node-value">${baseline ? "Yes" : "No"}</span>
+                <span class="${baselineValueClass}">${escapeHtml(baselineValue)}</span>
                 <span class="journey-node-label">Baseline</span>
                 <span class="journey-node-caption">${escapeHtml(baseline?.source_ref || "No approved baseline")}</span>
                 <span class="journey-node-link" aria-hidden="true"></span>
@@ -580,16 +666,26 @@ function renderJourneySummary(snapshots = []) {
     `;
 }
 
-function renderJourneyTimelineCard(snapshot) {
+function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null) {
+    const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
+    const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
     const source = snapshot.source_url
         ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
         : escapeHtml(snapshot.source_ref || "Stored checkpoint");
     const labels = asArray(snapshot.change_labels).slice(0, 3);
+    const baselineMeta = isSelectedBaseline
+        ? `<div class="detail-note">Current approved baseline checkpoint${snapshot?.input_summary?.approved_by ? ` · selected by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}` : ""}</div>`
+        : snapshot.snapshot_type === "baseline_approved" && snapshot?.input_summary?.approved_by
+            ? `<div class="detail-note">Approved by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}</div>`
+            : "";
+    const rebaselineButton = snapshot.commit_sha
+        ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Re-baseline from here</button>`
+        : "";
     return `
-        <div class="artifact-card journey-card">
+        <div class="artifact-card journey-card ${baselineVerified ? "" : "journey-card-muted"} ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}" ${baselineVerified ? "" : 'title="Baseline not yet approved — drift scores are estimates."'}>
             <div class="artifact-card-head">
                 <div>
-                    <strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong>
+                    <strong>${escapeHtml(isSelectedBaseline ? "Approved baseline" : snapshotTypeLabel(snapshot.snapshot_type))}</strong>
                     <div class="artifact-card-type">${escapeHtml(formatDateLabel(snapshot.created_at))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
                 </div>
                 <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
@@ -601,19 +697,193 @@ function renderJourneyTimelineCard(snapshot) {
             </div>
             ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="tag tag-muted">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
             <div class="artifact-card-reason">${escapeHtml(snapshot.change_summary?.changed_artifact_count ? `${snapshot.change_summary.changed_artifact_count} changed, ${snapshot.change_summary.added_artifact_count} added, ${snapshot.change_summary.removed_artifact_count} removed.` : "No material artifact changes recorded for this checkpoint.")}</div>
+            ${baselineMeta}
             <div class="storyline-episode-meta muted">
                 <span>${escapeHtml(snapshot.default_branch || "")}</span>
                 <span>${source}</span>
             </div>
+            ${rebaselineButton}
         </div>
     `;
 }
 
-function renderJourneyTimeline(snapshots = []) {
+function openRebaselineModal(snapshot) {
+    const modal = document.getElementById("rebaseline-modal");
+    const summary = document.getElementById("rebaseline-modal-summary");
+    const textarea = document.getElementById("rebaseline-rationale");
+    if (!modal || !summary || !textarea) {
+        return;
+    }
+    window.__pendingRebaselineSnapshot = snapshot;
+    summary.innerHTML = `
+        <div><strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong> · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this will create a candidate pending approval.`)}</div>
+    `;
+    textarea.value = "";
+    setRebaselineBusy(false);
+    modal.hidden = false;
+}
+
+function closeRebaselineModal(force = false) {
+    if (window.__rebaselineBusy && !force) {
+        return;
+    }
+    const modal = document.getElementById("rebaseline-modal");
+    if (modal) {
+        modal.hidden = true;
+    }
+    window.__pendingRebaselineSnapshot = null;
+}
+
+function setRebaselineBusy(isBusy) {
+    window.__rebaselineBusy = Boolean(isBusy);
+    const modal = document.getElementById("rebaseline-modal");
+    const card = modal?.querySelector(".modal-card");
+    const progress = document.getElementById("rebaseline-progress");
+    const progressText = document.getElementById("rebaseline-progress-text");
+    const textarea = document.getElementById("rebaseline-rationale");
+    const confirmButton = document.getElementById("rebaseline-confirm-btn");
+
+    if (card) {
+        card.classList.toggle("modal-card-busy", Boolean(isBusy));
+    }
+    if (progress) {
+        progress.hidden = !isBusy;
+    }
+    if (progressText) {
+        progressText.textContent = isBusy
+            ? "Creating a new baseline candidate for review. This can take a few seconds for large repositories..."
+            : "Preparing a new baseline candidate...";
+    }
+    if (textarea instanceof HTMLTextAreaElement) {
+        textarea.disabled = Boolean(isBusy);
+    }
+    if (confirmButton instanceof HTMLButtonElement) {
+        confirmButton.disabled = Boolean(isBusy);
+        confirmButton.textContent = isBusy ? "Working..." : "Confirm";
+    }
+    document.querySelectorAll("[data-close-rebaseline]").forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+            button.disabled = Boolean(isBusy);
+        }
+    });
+}
+
+function applyDashboardPayload(payload) {
+    const onboarding = payload.onboarding || null;
+    const insights = asArray(payload.insights);
+    const lowerConfidenceInsights = asArray(payload.lower_confidence_insights);
+    const controlSurfaces = asArray(payload.control_surface_groups);
+    const historyCues = asArray(payload.history_cues);
+    const artifacts = asArray(payload.artifacts);
+    const historyTimelines = asArray(payload.history_timelines);
+    const journeySnapshots = asArray(payload.journey_snapshots);
+    const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
+    const preferredArtifactPath = requestedArtifactPath();
+    window.__designProfiles = asArray(payload.design_profiles);
+    window.__journeySnapshots = journeySnapshots;
+    const comparison = payload.journey_comparison || null;
+
+    setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
+    setText("repo-stat-review", String(insights.length));
+    setText("repo-stat-baselines", String(asNumber(payload.baseline_version_count)));
+    setText("repo-stat-history", String(historyTimelines.reduce((sum, item) => sum + Number(item.point_count || 0), 0)));
+
+    setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
+    bindRepoRows(insights);
+    bindRepoFilters(insights, preferredArtifactPath);
+    autoSelectRepoRow(insights, preferredArtifactPath);
+
+    setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
+    setSectionHtml("history-cues", renderCueCards(historyCues));
+    setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
+    setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
+    setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
+    setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
+        ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
+        : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
+    setSectionHtml("artifacts-tbody", renderArtifactTable(artifacts));
+    bindCueCards();
+    bindRebaselineButtons(journeySnapshots);
+    bindOpenSourceChangeLinks(document);
+}
+
+async function submitRebaseline() {
+    const snapshot = window.__pendingRebaselineSnapshot;
+    const textarea = document.getElementById("rebaseline-rationale");
+    if (!snapshot || !(textarea instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    const rationale = textarea.value.trim();
+    setRebaselineBusy(true);
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/baseline/rebaseline`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ snapshot_id: snapshot.id, rationale: rationale || null }),
+        });
+        if (!response.ok) {
+            throw new Error(`Re-baseline request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        closeRebaselineModal(true);
+        if (payload?.dashboard) {
+            applyDashboardPayload(payload.dashboard);
+            return;
+        }
+        await loadDashboard();
+    } finally {
+        setRebaselineBusy(false);
+    }
+}
+
+function bindRebaselineButtons(snapshots = []) {
+    const snapshotById = new Map(asArray(snapshots).map((snapshot) => [String(snapshot.id), snapshot]));
+    document.querySelectorAll("[data-rebaseline-snapshot]").forEach((button) => {
+        if (button.dataset.boundRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundRebaseline = "true";
+        button.addEventListener("click", () => {
+            const snapshot = snapshotById.get(String(button.getAttribute("data-rebaseline-snapshot") || ""));
+            if (snapshot) {
+                openRebaselineModal(snapshot);
+            }
+        });
+    });
+}
+
+function bindRebaselineModal() {
+    document.querySelectorAll("[data-close-rebaseline]").forEach((button) => {
+        if (button.dataset.boundCloseRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundCloseRebaseline = "true";
+        button.addEventListener("click", closeRebaselineModal);
+    });
+    const confirmButton = document.getElementById("rebaseline-confirm-btn");
+    if (confirmButton && confirmButton.dataset.boundConfirmRebaseline !== "true") {
+        confirmButton.dataset.boundConfirmRebaseline = "true";
+        confirmButton.addEventListener("click", async () => {
+            try {
+                await submitRebaseline();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Unable to create a new baseline candidate.";
+                window.alert(message);
+            }
+        });
+    }
+}
+
+function renderJourneyTimeline(snapshots = [], selectedBaselineSourceSnapshotId = null) {
     if (!snapshots.length) {
         return '<div class="muted">No timeline is available yet.</div>';
     }
-    const timeline = snapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(snapshot)).join("");
+    const displaySnapshots = selectedBaselineSourceSnapshotId
+        ? snapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved")
+        : snapshots;
+    const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId)).join("");
     return `<div class="stack compact-stack">${timeline}</div>`;
 }
 
@@ -637,7 +907,7 @@ function renderJourneyCompare(comparison) {
                 <div class="journey-node journey-tone-primary">
                     <span class="journey-node-value">${formatSigned(comparison.drift_summary?.drift_delta)}</span>
                     <span class="journey-node-label">Drift delta</span>
-                    <span class="journey-node-caption">current ${asNumber(comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
+                    <span class="journey-node-caption">pair ${asNumber(comparison.drift_summary?.right_distance_from_selected_baseline ?? comparison.drift_summary?.pair_distance ?? comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
                     <span class="journey-node-link" aria-hidden="true"></span>
                 </div>
                 <div class="journey-node ${journeyToneForRisk(comparison.risk_summary?.risk_level)}">
@@ -668,47 +938,16 @@ function renderJourneyCompare(comparison) {
 
 async function loadDashboard() {
     try {
+        if (!repoFull) {
+            throw new Error("Repository context is missing from this page.");
+        }
         const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
         if (!dashboardResponse.ok) {
             throw new Error(`Repo dashboard request failed with ${dashboardResponse.status}`);
         }
 
         const payload = await dashboardResponse.json();
-        const onboarding = payload.onboarding || null;
-        const backfill = payload.backfill || {};
-        const insights = asArray(payload.insights);
-        const lowerConfidenceInsights = asArray(payload.lower_confidence_insights);
-        const controlSurfaces = asArray(payload.control_surface_groups);
-        const historyCues = asArray(payload.history_cues);
-        const artifacts = asArray(payload.artifacts);
-        const historyTimelines = asArray(payload.history_timelines);
-        const journeySnapshots = asArray(payload.journey_snapshots);
-        const preferredArtifactPath = requestedArtifactPath();
-        window.__designProfiles = asArray(payload.design_profiles);
-        const comparison = payload.journey_comparison || null;
-
-        setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
-        setText("repo-stat-review", String(insights.length));
-        setText("repo-stat-baselines", String(asNumber(payload.baseline_version_count)));
-        setText("repo-stat-history", String(historyTimelines.reduce((sum, item) => sum + Number(item.point_count || 0), 0)));
-
-        setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
-        bindRepoRows(insights);
-        bindRepoFilters(insights, preferredArtifactPath);
-        autoSelectRepoRow(insights, preferredArtifactPath);
-
-        setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
-        setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
-        setSectionHtml("history-cues", renderCueCards(historyCues));
-        setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots));
-        setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots));
-        setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
-        setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
-            ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
-            : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
-        setSectionHtml("artifacts-tbody", renderArtifactTable(artifacts));
-        bindCueCards();
-        bindOpenSourceChangeLinks(document);
+        applyDashboardPayload(payload);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
@@ -723,6 +962,7 @@ async function loadDashboard() {
         setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
         setSectionHtml("control-surfaces", fallback);
         setSectionHtml("history-cues", fallback);
+        setSectionHtml("baseline-review-panel", fallback);
         setSectionHtml("repo-journey-summary", fallback);
         setSectionHtml("repo-journey-timeline", fallback);
         setSectionHtml("repo-journey-compare", fallback);
@@ -739,4 +979,5 @@ async function loadDashboard() {
 }
 
 bindSidebarNavigation();
+bindRebaselineModal();
 loadDashboard();

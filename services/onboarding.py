@@ -29,6 +29,19 @@ from .onboarding_records import (
     update_historical_backfill_job_status,
 )
 from .repo_journey import materialize_repo_journey
+from engine.diff_parser import extract_signal_terms_from_text
+from engine.drift_profile import build_attribute_profile
+from .onboarding_records import (
+    add_onboarded_artifact,
+    delete_onboarded_artifact_by_path,
+    list_latest_onboarding_baseline_versions_for_onboarding,
+    refresh_onboarding_discovered_count,
+    get_latest_repository_onboarding,
+    list_onboarded_artifacts_for_onboarding,
+    create_onboarding_baseline_version,
+    update_repository_onboarding_approval_status,
+)
+import time
 
 
 DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".py", ".toml"}
@@ -188,7 +201,7 @@ def onboard_repository(
         repo_full=repo_full,
         installation_id=installation_id,
         default_branch=default_branch,
-        status="completed",
+        status="baseline_approved",
         discovered_artifacts=discovered,
         extract_signal_terms_fn=extract_signal_terms_from_text,
         build_profile_fn=build_attribute_profile,
@@ -327,3 +340,89 @@ def execute_repository_history_backfill(
         materialize_repo_journey(db_path, repo_full)
 
     return execution_results
+
+
+def sync_on_pr_merge_artifact_changes(
+    db_path: str,
+    *,
+    repo_full: str,
+    artifact_snapshots: dict[str, str] | None = None,
+    added_paths: set[str] | None = None,
+    removed_paths: set[str] | None = None,
+) -> None:
+    """
+    Sync added/removed artifact files from a merged PR into onboarding records.
+    - Adds newly discovered artifact paths as `onboarded_artifacts` and creates a pending baseline version using
+      the provided snapshot content when available.
+    - Removes artifacts that were deleted by the PR from `onboarded_artifacts`.
+    """
+    artifact_snapshots = artifact_snapshots or {}
+    added_paths = added_paths or set()
+    removed_paths = removed_paths or set()
+
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        return
+
+    existing = {a.artifact_path for a in list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)}
+
+    # Remove deleted artifacts
+    for path in sorted(removed_paths):
+        if path in existing:
+            delete_onboarded_artifact_by_path(db_path, onboarding.id, path)
+
+    # Add newly added artifacts
+    for path in sorted(added_paths):
+        if path in existing:
+            continue
+        content = artifact_snapshots.get(path)
+        # best-effort: classify type and reason
+        artifact_type = "unknown"
+        discovery_reason = "pr-merged"
+        confidence = 0.72
+        try:
+            added = add_onboarded_artifact(
+                db_path,
+                onboarding_id=onboarding.id,
+                repo_full=repo_full,
+                artifact_path=path,
+                artifact_type=artifact_type,
+                discovery_reason=discovery_reason,
+                confidence=confidence,
+            )
+            if content is not None:
+                # compute signal terms and profile
+                signal_terms = extract_signal_terms_from_text(content)
+                profile = build_attribute_profile(content)
+                create_onboarding_baseline_version(
+                    db_path,
+                    onboarding_id=onboarding.id,
+                    onboarded_artifact_id=added.id,
+                    repo_full=repo_full,
+                    artifact_path=path,
+                    artifact_type=artifact_type,
+                    content_text=content,
+                    profile=profile,
+                    signal_terms=signal_terms,
+                    approval_status="pending",
+                )
+        except Exception:
+            continue
+
+    latest_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    onboarded_paths = {
+        artifact.artifact_path for artifact in list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
+    }
+    approved_paths = {
+        baseline.artifact_path for baseline in latest_versions if baseline.approval_status == "approved"
+    }
+    is_fully_approved = bool(onboarded_paths) and approved_paths == onboarded_paths
+    update_repository_onboarding_approval_status(
+        db_path,
+        onboarding_id=onboarding.id,
+        status=("baseline_approved" if is_fully_approved else "pending_baseline_approval"),
+        approved_by=(onboarding.approved_by if is_fully_approved else None),
+        approved_at=(onboarding.approved_at if is_fully_approved else None),
+    )
+    refresh_onboarding_discovered_count(db_path, onboarding.id)
+    materialize_repo_journey(db_path, repo_full)

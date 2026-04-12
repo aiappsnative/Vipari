@@ -111,6 +111,7 @@ def test_build_repo_journey_materializes_meaningful_snapshots(tmp_path):
     snapshots = build_repo_journey(db_path, "doria90/dummyAI")
 
     assert snapshots[0].snapshot_type == "baseline_approved"
+    assert snapshots[0].input_summary["baseline_verified"] is True
     assert snapshots[-1].snapshot_type == "current"
     assert any(snapshot.snapshot_type == "historical_commit" for snapshot in snapshots)
     assert any(snapshot.snapshot_type == "merge" for snapshot in snapshots)
@@ -136,6 +137,7 @@ def test_onboarding_and_backfill_persist_repo_journey_without_read_trigger(tmp_p
 
     snapshots_after_onboarding = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
     assert [snapshot.snapshot_type for snapshot in snapshots_after_onboarding] == ["baseline_approved", "current"]
+    assert all(snapshot.input_summary["baseline_verified"] is True for snapshot in snapshots_after_onboarding)
 
     plan_repository_history_backfill(
         db_path,
@@ -173,6 +175,8 @@ def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):
     assert comparison.vector_delta["capability"] > 0
     assert comparison.change_breakdown["critical_surfaces_changed"] >= 1
     assert comparison.drift_summary["drift_delta"] >= 0
+    assert comparison.drift_summary["pair_distance"] > 0
+    assert comparison.drift_summary["right_distance_from_selected_baseline"] == comparison.drift_summary["pair_distance"]
     assert comparison.risk_summary["risk_level"] in {"low", "medium", "high"}
     assert "capability_expanded" in comparison.change_labels
 

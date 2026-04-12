@@ -4,11 +4,14 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .audit_records import list_pull_request_audits_for_repo, list_static_profiles_for_repo_artifact
-from .baseline_provenance import BaselineProvenance
+from .baseline_provenance import BaselineProvenance, approved_onboarding_provenance
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     get_latest_repository_onboarding,
+    list_effective_onboarding_baseline_versions_for_onboarding,
     list_historical_static_profiles_for_repo_artifact,
+    list_latest_approved_onboarding_baseline_versions_for_onboarding,
+    list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
 )
@@ -24,7 +27,7 @@ from .repo_journey_records import (
 )
 
 
-REPO_JOURNEY_MATERIALIZER_VERSION = 1
+REPO_JOURNEY_MATERIALIZER_VERSION = 2
 
 
 def _repo_snapshot_key(repo_full: str, snapshot_key: str) -> str:
@@ -69,6 +72,8 @@ class _SnapshotEvent:
     artifact_type: str
     profile: dict[str, float]
     baseline_provenance: BaselineProvenance | None
+    branch_ref: str | None = None
+    triggered_by: str | None = None
 
 
 def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSnapshotRecord]:
@@ -80,7 +85,10 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
 
     onboarded_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+    latest_baseline_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    effective_baseline_versions = list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    latest_approved_baseline_versions = list_latest_approved_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    baseline_by_path = {baseline.artifact_path: baseline for baseline in effective_baseline_versions}
 
     merged_audits = {
         audit.id: audit
@@ -103,13 +111,34 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         artifact_types_by_path.setdefault(row["artifact_path"], row["artifact_type"])
 
     baseline_state: dict[str, _ArtifactState] = {}
-    for baseline in baseline_versions:
+    for baseline in effective_baseline_versions:
         baseline_state[baseline.artifact_path] = _artifact_state_from_baseline(baseline)
+
+    latest_paths = {artifact.artifact_path for artifact in onboarded_artifacts}
+    approved_latest_count = len(latest_approved_baseline_versions)
+    pending_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "pending")
+    rejected_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "rejected")
+    baseline_verified = bool(latest_paths) and approved_latest_count == len(latest_paths) and onboarding.status == "baseline_approved"
+    tracked_count = len(latest_paths)
+    # classify critical artifacts by artifact_type hints
+    def _is_critical_type(artifact_type: str) -> bool:
+        if artifact_type is None:
+            return False
+        lowered = artifact_type.lower()
+        for hint in ("prompt", "policy", "guard", "model", "config"):
+            if hint in lowered:
+                return True
+        return False
+    critical_artifact_count = sum(1 for p, t in artifact_types_by_path.items() if _is_critical_type(t))
+    approved_critical_count = sum(1 for b in latest_approved_baseline_versions if _is_critical_type(b.artifact_type))
+    coverage_percent = round((approved_latest_count / tracked_count) * 100.0, 2) if tracked_count else 0.0
+    critical_coverage_percent = round((approved_critical_count / critical_artifact_count) * 100.0, 2) if critical_artifact_count else 0.0
 
     snapshot_keys: set[str] = set()
     snapshots: list[RepoPostureSnapshotRecord] = []
     previous_snapshot: RepoPostureSnapshotRecord | None = None
     baseline_snapshot: RepoPostureSnapshotRecord | None = None
+    latest_branch_head_snapshot: RepoPostureSnapshotRecord | None = None
 
     if baseline_state:
         baseline_snapshot = _persist_snapshot(
@@ -127,11 +156,24 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             artifact_state=baseline_state,
             previous_snapshot=None,
             baseline_snapshot=None,
-            input_summary={
-                "baseline_artifact_count": len(baseline_versions),
-                "historical_event_count": 0,
-                "merged_event_count": 0,
-            },
+                input_summary={
+                    "baseline_artifact_count": len(baseline_versions),
+                    "historical_event_count": 0,
+                    "merged_event_count": 0,
+                    "baseline_verified": baseline_verified,
+                    "approved_baseline_count": approved_latest_count,
+                    "pending_baseline_count": pending_latest_count,
+                    "rejected_baseline_count": rejected_latest_count,
+                    "approved_by": onboarding.approved_by,
+                    "approved_at": onboarding.approved_at,
+                    "tracked_count": tracked_count,
+                    "coverage_percent": coverage_percent,
+                    "critical_artifact_count": critical_artifact_count,
+                    "approved_critical_count": approved_critical_count,
+                    "critical_coverage_percent": critical_coverage_percent,
+                    "drifting_artifact_count": 0,
+                    "last_baseline_at": onboarding.approved_at,
+                },
         )
         snapshot_keys.add(baseline_snapshot.snapshot_key)
         snapshots.append(baseline_snapshot)
@@ -145,12 +187,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 key,
                 {
                     "snapshot_key": key,
-                    "snapshot_type": "historical_commit",
+                    "snapshot_type": _historical_snapshot_type(profile, onboarding.default_branch),
                     "created_at": profile.created_at,
                     "commit_sha": profile.commit_sha,
                     "pr_number": None,
                     "author": None,
-                    "source_ref": f"commit {profile.commit_sha}",
+                    "source_ref": _historical_source_ref(profile, onboarding.default_branch),
                     "source_url": f"https://github.com/{repo_full}/commit/{profile.commit_sha}",
                     "events": [],
                     "historical_event_count": 0,
@@ -162,17 +204,19 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             bucket["events"].append(
                 _SnapshotEvent(
                     snapshot_key=key,
-                    snapshot_type="historical_commit",
+                    snapshot_type=_historical_snapshot_type(profile, onboarding.default_branch),
                     created_at=profile.created_at,
                     commit_sha=profile.commit_sha,
                     pr_number=None,
                     author=None,
-                    source_ref=f"commit {profile.commit_sha}",
+                    source_ref=_historical_source_ref(profile, onboarding.default_branch),
                     source_url=f"https://github.com/{repo_full}/commit/{profile.commit_sha}",
                     artifact_path=artifact_path,
                     artifact_type=artifact_type,
                     profile=_profile_dict(profile.profile),
                     baseline_provenance=profile.baseline_provenance,
+                    branch_ref=profile.branch_ref,
+                    triggered_by=profile.triggered_by,
                 )
             )
 
@@ -249,13 +293,28 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 "baseline_artifact_count": len(baseline_versions),
                 "historical_event_count": bucket["historical_event_count"],
                 "merged_event_count": bucket["merged_event_count"],
+                "baseline_verified": baseline_verified,
+                "approved_baseline_count": approved_latest_count,
+                "pending_baseline_count": pending_latest_count,
+                "rejected_baseline_count": rejected_latest_count,
+                "approved_by": onboarding.approved_by,
+                "approved_at": onboarding.approved_at,
+                "tracked_count": tracked_count,
+                "coverage_percent": coverage_percent,
+                "critical_artifact_count": critical_artifact_count,
+                "approved_critical_count": approved_critical_count,
+                "critical_coverage_percent": critical_coverage_percent,
+                "drifting_artifact_count": 0,
+                "last_baseline_at": onboarding.approved_at,
             },
         )
         snapshot_keys.add(snapshot.snapshot_key)
         snapshots.append(snapshot)
         previous_snapshot = snapshot
+        if snapshot.snapshot_type == "branch_head":
+            latest_branch_head_snapshot = snapshot
 
-    if current_state:
+    if current_state and latest_branch_head_snapshot is None:
         latest = previous_snapshot or baseline_snapshot
         if latest is not None:
             current_snapshot = _persist_snapshot(
@@ -277,6 +336,19 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                     "baseline_artifact_count": len(baseline_versions),
                     "historical_event_count": sum(bucket["historical_event_count"] for bucket in events_by_key.values()),
                     "merged_event_count": sum(bucket["merged_event_count"] for bucket in events_by_key.values()),
+                    "baseline_verified": baseline_verified,
+                    "approved_baseline_count": approved_latest_count,
+                    "pending_baseline_count": pending_latest_count,
+                    "rejected_baseline_count": rejected_latest_count,
+                    "approved_by": onboarding.approved_by,
+                    "approved_at": onboarding.approved_at,
+                    "tracked_count": tracked_count,
+                    "coverage_percent": coverage_percent,
+                    "critical_artifact_count": critical_artifact_count,
+                    "approved_critical_count": approved_critical_count,
+                    "critical_coverage_percent": critical_coverage_percent,
+                    "drifting_artifact_count": 0,
+                    "last_baseline_at": onboarding.approved_at,
                 },
             )
             snapshot_keys.add(current_snapshot.snapshot_key)
@@ -313,12 +385,15 @@ def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, 
         key: round(float(right.attribute_vector.get(key, 0.0)) - float(left.attribute_vector.get(key, 0.0)), 4)
         for key in sorted(set(left.attribute_vector) | set(right.attribute_vector))
     }
+    pair_distance = _vector_distance(left.attribute_vector, right.attribute_vector)
     change_breakdown = _build_change_breakdown(left.artifact_state, right.artifact_state)
     change_labels = _derive_change_labels(vector_delta, change_breakdown)
     drift_summary = {
         "left_distance_from_baseline": left.distance_from_baseline,
         "right_distance_from_baseline": right.distance_from_baseline,
         "drift_delta": round(right.distance_from_baseline - left.distance_from_baseline, 4),
+        "pair_distance": pair_distance,
+        "right_distance_from_selected_baseline": pair_distance,
     }
     risk_summary = _build_risk_summary(
         right.attribute_vector,
@@ -329,7 +404,9 @@ def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, 
     comparison_kind = "arbitrary"
     if left.snapshot_type == "baseline_approved" and right.snapshot_type == "current":
         comparison_kind = "baseline_vs_current"
-    elif right.snapshot_type == "current":
+    elif left.snapshot_type == "baseline_approved" and right.snapshot_type == "branch_head":
+        comparison_kind = "baseline_vs_current"
+    elif right.snapshot_type in {"current", "branch_head"}:
         comparison_kind = "previous_vs_current"
     return RepoJourneyComparison(
         repo_full=repo_full,
@@ -423,15 +500,37 @@ def _persist_snapshot(
 
 
 def _artifact_state_from_baseline(baseline: OnboardingBaselineVersionRecord) -> _ArtifactState:
+    provenance = approved_onboarding_provenance(
+        baseline.id,
+        is_authoritative=baseline.approval_status == "approved",
+        approval_status=baseline.approval_status,
+        approved_by=baseline.approved_by,
+        approved_at=baseline.approved_at,
+        approval_note=baseline.approval_note,
+    )
     return _ArtifactState(
         artifact_path=baseline.artifact_path,
         artifact_type=baseline.artifact_type,
         profile=_profile_dict(baseline.profile),
         source_type="baseline_approved",
-        source_ref=f"approved baseline @ {baseline.artifact_path}",
+        source_ref=(f"approved baseline @ {baseline.artifact_path}" if provenance.is_authoritative else f"baseline candidate @ {baseline.artifact_path}"),
         source_url=None,
-        baseline_provenance=None,
+        baseline_provenance=provenance,
     )
+
+
+def _historical_snapshot_type(profile, default_branch: str | None) -> str:
+    default_branch_ref = f"refs/heads/{default_branch}" if default_branch else None
+    if profile.triggered_by in {"push_webhook", "scheduled", "manual"} and profile.branch_ref == default_branch_ref:
+        return "branch_head"
+    return "historical_commit"
+
+
+def _historical_source_ref(profile, default_branch: str | None) -> str:
+    if _historical_snapshot_type(profile, default_branch) == "branch_head":
+        branch_name = (profile.branch_ref or "").removeprefix("refs/heads/") or (default_branch or "default")
+        return f"{branch_name} @ {profile.commit_sha[:7]}"
+    return f"commit {profile.commit_sha}"
 
 
 def _profile_dict(profile) -> dict[str, float]:
@@ -511,6 +610,8 @@ def _build_artifact_coverage(artifact_state: dict[str, _ArtifactState]) -> dict[
 def _build_baseline_authority(artifact_state: dict[str, _ArtifactState]) -> dict[str, object]:
     authority_counts = {
         "approved_baseline": 0,
+        "pending_baseline": 0,
+        "rejected_baseline": 0,
         "historical_fallback": 0,
         "none": 0,
     }
@@ -522,7 +623,12 @@ def _build_baseline_authority(artifact_state: dict[str, _ArtifactState]) -> dict
                 authority_counts["none"] += 1
             continue
         if provenance.source_type == "approved_baseline":
-            authority_counts["approved_baseline"] += 1
+            if provenance.is_authoritative:
+                authority_counts["approved_baseline"] += 1
+            elif provenance.approval_status == "rejected":
+                authority_counts["rejected_baseline"] += 1
+            else:
+                authority_counts["pending_baseline"] += 1
         elif provenance.source_type == "historical_fallback":
             authority_counts["historical_fallback"] += 1
         else:

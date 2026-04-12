@@ -630,7 +630,12 @@ def record_audit_result(
                     "semantic_density": 0.0,
                 }
                 narrative = ["No approved baseline available; stored current profile as a new baseline candidate."]
-                onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact.relevance.path)
+                onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(
+                    db_path,
+                    repo_full,
+                    artifact.relevance.path,
+                    only_approved=True,
+                )
 
                 if onboarding_baseline is not None:
                     baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
@@ -719,6 +724,30 @@ def record_audit_result(
                 )
         else:
             conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
+
+        # After recording audit artifacts and profiles, if this PR was merged, attempt to reconcile
+        # added/removed artifact paths into the repository onboarding so the 'current' state
+        # discovery metrics and baseline coverage reflect the merge.
+        try:
+            from .onboarding import sync_on_pr_merge_artifact_changes
+            added = set()
+            removed = set()
+            for art in deterministic_analysis.artifacts:
+                if getattr(art.change, 'added_count', 0) > 0:
+                    added.add(art.relevance.path)
+                if getattr(art.change, 'removed_count', 0) > 0:
+                    removed.add(art.relevance.path)
+            # artifact_snapshots maps path -> text content when available
+            sync_on_pr_merge_artifact_changes(
+                db_path,
+                repo_full=repo_full,
+                artifact_snapshots=artifact_snapshots or {},
+                added_paths=added,
+                removed_paths=removed,
+            )
+        except Exception:
+            # best-effort sync; do not fail the audit recording on sync errors
+            pass
 
         row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
 
@@ -956,7 +985,12 @@ def preview_static_drift_for_artifacts(
         artifact_type = artifact_types_by_path.get(artifact_path, "generic")
         signal_terms = extract_signal_terms_from_text(snapshot_text)
         profile = build_attribute_profile(snapshot_text)
-        onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact_path)
+        onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(
+            db_path,
+            repo_full,
+            artifact_path,
+            only_approved=True,
+        )
         baseline_profile = None if onboarding_baseline is not None else get_latest_static_profile_for_repo_artifact(db_path, repo_full, artifact_path)
 
         baseline_profile_id: int | None = None

@@ -16,6 +16,7 @@ from .baseline_provenance import (
     historical_fallback_provenance,
     no_baseline_provenance,
 )
+from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel
 
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
@@ -27,11 +28,14 @@ from .audit_records import (
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
+    get_latest_baseline_snapshot_id_for_onboarding,
     get_latest_repository_onboarding,
+    list_effective_onboarding_baseline_versions_for_onboarding,
     list_historical_backfill_jobs_for_repo,
     list_latest_repository_onboardings,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
+    select_effective_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
 
@@ -82,6 +86,12 @@ def _cache_set(cache: dict[tuple[Any, ...], Any], key: tuple[Any, ...], value: A
             oldest_key = next(iter(cache))
             cache.pop(oldest_key, None)
     return value
+
+
+def invalidate_dashboard_caches() -> None:
+    with _DASHBOARD_CACHE_LOCK:
+        _OVERVIEW_VIEW_CACHE.clear()
+        _REPO_VIEW_CACHE.clear()
 
 
 @dataclass(frozen=True)
@@ -424,6 +434,7 @@ class RepoArtifactDesignProfile:
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
+    baseline_review: RepoBaselineReviewPanel | None
     backfill: RepoDashboardBackfillSummary
     pull_request_audit_count: int
     baseline_version_count: int
@@ -439,6 +450,7 @@ class RepoDashboardView:
     artifacts: list[RepoDashboardArtifactEntry] = None
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
+    selected_baseline_source_snapshot_id: int | None = None
 
 
 def list_repo_dashboard_index(
@@ -612,18 +624,27 @@ def _build_repo_dashboard_view_uncached(
     include_detail_sections: bool = True,
 ) -> RepoDashboardView:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    baseline_review = build_repo_baseline_review_panel(db_path, repo_full)
     drift_summary = get_repo_static_drift_summary(db_path, repo_full)
     top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
     pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
+    selected_baseline_source_snapshot_id: int | None = None
+    if onboarding is not None:
+        selected_baseline_source_snapshot_id = get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id)
     if include_journey:
-        journey_snapshots, journey_comparison = _build_repo_journey_panel(db_path, repo_full)
+        journey_snapshots, journey_comparison = _build_repo_journey_panel(
+            db_path,
+            repo_full,
+            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+        )
 
     if onboarding is None:
         return RepoDashboardView(
             repo_full=repo_full,
             onboarding=None,
+            baseline_review=None,
             backfill=RepoDashboardBackfillSummary(
                 job_count=0,
                 planned_job_count=0,
@@ -647,11 +668,15 @@ def _build_repo_dashboard_view_uncached(
             artifacts=[],
             journey_snapshots=journey_snapshots,
             journey_comparison=journey_comparison,
+            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         )
 
     artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+    baseline_by_path = {
+        baseline.artifact_path: baseline
+        for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    }
     jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
     metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
@@ -727,6 +752,7 @@ def _build_repo_dashboard_view_uncached(
     return RepoDashboardView(
         repo_full=repo_full,
         onboarding=onboarding,
+        baseline_review=baseline_review,
         backfill=RepoDashboardBackfillSummary(
             job_count=len(jobs),
             planned_job_count=sum(1 for job in jobs if job.status == "planned"),
@@ -750,17 +776,32 @@ def _build_repo_dashboard_view_uncached(
         artifacts=artifact_entries,
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
+        selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
     )
 
 
-def _build_repo_journey_panel(db_path: str, repo_full: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+def _build_repo_journey_panel(
+    db_path: str,
+    repo_full: str,
+    *,
+    selected_baseline_source_snapshot_id: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     from .repo_journey import build_repo_journey, compare_repo_snapshots, snapshot_to_public_payload
 
     snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
-    baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
+    baseline_snapshot = None
+    if selected_baseline_source_snapshot_id is not None:
+        baseline_snapshot = next(
+            (snapshot for snapshot in snapshots if int(snapshot["id"]) == int(selected_baseline_source_snapshot_id)),
+            None,
+        )
+    if baseline_snapshot is None:
+        baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
     current_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "current"), None)
+    if current_snapshot is None:
+        current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
     comparison = None
-    if baseline_snapshot is not None and current_snapshot is not None and baseline_snapshot["id"] != current_snapshot["id"]:
+    if baseline_snapshot is not None and current_snapshot is not None:
         comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
     return snapshots, comparison
 
@@ -819,6 +860,10 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                         signal_terms=json.loads(row["signal_terms_json"]),
                         line_count=int(row["line_count"]),
                         profile=_profile_from_json(str(row["profile_json"])),
+                        approval_status=str(row["approval_status"]) if "approval_status" in row.keys() else "pending",
+                        approved_by=(str(row["approved_by"]) if row["approved_by"] is not None else None) if "approved_by" in row.keys() else None,
+                        approved_at=float(row["approved_at"]) if "approved_at" in row.keys() and row["approved_at"] is not None else None,
+                        approval_note=(str(row["approval_note"]) if row["approval_note"] is not None else None) if "approval_note" in row.keys() else None,
                         created_at=float(row["created_at"]),
                         content_text=row["content_text"],
                     )
@@ -842,7 +887,10 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
 
         artifact_rows = artifacts_by_repo.get(repo.repo_full, [])
         baseline_versions = baselines_by_repo.get(repo.repo_full, [])
-        baseline_by_path = {baseline.artifact_path: baseline for baseline in baseline_versions}
+        baseline_by_path = {
+            baseline.artifact_path: baseline
+            for baseline in select_effective_onboarding_baseline_versions(baseline_versions)
+        }
         leaderboard_entries = top_drifting_artifacts_by_repo.get(repo.repo_full, [])
         leaderboard_by_path = {entry.artifact_path: entry for entry in leaderboard_entries}
         metrics_by_path = metrics_by_repo.get(repo.repo_full, {})
@@ -899,6 +947,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
             RepoDashboardView(
                 repo_full=repo.repo_full,
                 onboarding=onboarding,
+                baseline_review=None,
                 backfill=backfill_summaries.get(repo.repo_full, _empty_backfill_summary()),
                 pull_request_audit_count=pull_request_audit_counts.get(repo.repo_full, 0),
                 baseline_version_count=len(baseline_versions),
@@ -914,6 +963,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 artifacts=artifact_entries,
                 journey_snapshots=[],
                 journey_comparison=None,
+                selected_baseline_source_snapshot_id=get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
             )
         )
 
@@ -989,6 +1039,8 @@ def _load_overview_batch_state(
             hsp.artifact_path,
             hsp.artifact_type,
             hsp.commit_sha,
+            hsp.branch_ref,
+            hsp.triggered_by,
             hsp.created_at,
             hsp.baseline_profile_id,
             hsp.baseline_provenance_json,
@@ -1030,13 +1082,19 @@ def _load_overview_batch_state(
         if baseline_provenance is None:
             baseline_provenance = no_baseline_provenance()
 
+        historical_source = _historical_source_context(
+            repo_full,
+            str(row["commit_sha"]),
+            row["branch_ref"],
+            row["triggered_by"],
+        )
         context = _RepoArtifactProfileContext(
             profile=_profile_from_json(str(row["profile_json"])),
-            source_type="historical",
-            label="Historical backfill",
-            source_ref=f"commit {str(row['commit_sha'])[:7]}",
-            source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-            review_context="Historical snapshot from backfill",
+            source_type=historical_source["source_type"],
+            label=historical_source["label"],
+            source_ref=historical_source["source_ref"],
+            source_url=historical_source["source_url"],
+            review_context=historical_source["review_context"],
             created_at=created_at,
             baseline_provenance=baseline_provenance,
             semantic_distance=semantic_distance,
@@ -1192,6 +1250,7 @@ def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
     return RepoDashboardView(
         repo_full=repo_full,
         onboarding=None,
+        baseline_review=None,
         backfill=_empty_backfill_summary(),
         pull_request_audit_count=0,
         baseline_version_count=0,
@@ -1304,7 +1363,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
         historical_rows = conn.execute(
             """
              SELECT hsp.artifact_path, hsp.commit_sha, hsp.created_at, hsp.baseline_profile_id, hsp.baseline_provenance_json,
-                 hsp.semantic_distance, hsp.profile_json, hsp.attribute_deltas_json, hsp.narrative_json, hsp.signal_terms_json,
+                 hsp.branch_ref, hsp.triggered_by, hsp.semantic_distance, hsp.profile_json, hsp.attribute_deltas_json, hsp.narrative_json, hsp.signal_terms_json,
                  hav.content_text AS content_text
              FROM historical_static_profiles hsp
              INNER JOIN historical_artifact_versions hav ON hav.id = hsp.historical_artifact_version_id
@@ -1320,13 +1379,19 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
                 baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             context = _RepoArtifactProfileContext(
                 profile=_profile_from_json(row["profile_json"]),
-                source_type="historical",
-                label="Historical backfill",
-                source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-                review_context="Historical snapshot from backfill",
+                source_type=historical_source["source_type"],
+                label=historical_source["label"],
+                source_ref=historical_source["source_ref"],
+                source_url=historical_source["source_url"],
+                review_context=historical_source["review_context"],
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
                 semantic_distance=float(row["semantic_distance"]),
@@ -1368,6 +1433,27 @@ def _github_pull_request_url(repo_full: str, pr_number: int) -> str:
 
 def _github_commit_url(repo_full: str, commit_sha: str) -> str:
     return f"https://github.com/{repo_full}/commit/{commit_sha}"
+
+
+def _historical_source_context(repo_full: str, commit_sha: str, branch_ref: object, triggered_by: object) -> dict[str, str]:
+    branch_ref_value = str(branch_ref or "")
+    triggered_by_value = str(triggered_by or "historical_backfill")
+    if triggered_by_value in {"push_webhook", "scheduled", "manual"} and branch_ref_value.startswith("refs/heads/"):
+        branch_name = branch_ref_value.removeprefix("refs/heads/")
+        return {
+            "source_type": "branch_head",
+            "label": "Default branch head",
+            "source_ref": f"{branch_name} @ {commit_sha[:7]}",
+            "source_url": _github_commit_url(repo_full, commit_sha),
+            "review_context": "Live default-branch scan",
+        }
+    return {
+        "source_type": "historical",
+        "label": "Historical backfill",
+        "source_ref": f"commit {commit_sha[:7]}",
+        "source_url": _github_commit_url(repo_full, commit_sha),
+        "review_context": "Historical snapshot from backfill",
+    }
 
 
 def _humanize_output_mode(output_mode: str) -> str:
@@ -1679,13 +1765,28 @@ def _baseline_label(baseline, evidence_bundle: _RepoArtifactEvidenceBundle | Non
     context = _preferred_profile_context(evidence_bundle)
     provenance = context.baseline_provenance if context is not None else None
     if provenance is None and baseline is not None:
-        provenance = approved_onboarding_provenance(baseline.id)
+        provenance = approved_onboarding_provenance(
+            baseline.id,
+            is_authoritative=baseline.approval_status == "approved",
+            approval_status=baseline.approval_status,
+            approved_by=baseline.approved_by,
+            approved_at=baseline.approved_at,
+            approval_note=baseline.approval_note,
+        )
     if provenance is None:
         return "Baseline: none yet"
     if provenance.is_authoritative:
         source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
         suffix = f" #{source_id}" if source_id is not None else ""
         return f"Baseline: Approved{suffix}"
+    if provenance.source_type == "approved_baseline" and provenance.approval_status == "rejected":
+        source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
+        suffix = f" #{source_id}" if source_id is not None else ""
+        return f"Baseline: Rejected candidate{suffix}"
+    if provenance.source_type == "approved_baseline":
+        source_id = provenance.source_version_id if provenance.source_version_id is not None else baseline.id if baseline is not None else None
+        suffix = f" #{source_id}" if source_id is not None else ""
+        return f"Baseline: Pending approval{suffix}"
     if provenance.source_type == "historical_reference":
         return "Baseline: Auto-baseline (historical fallback)"
     if provenance.source_type == "previous_pr_reference":
@@ -2575,7 +2676,7 @@ def _build_repo_history_timelines(
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT artifact_path, artifact_type, commit_sha, created_at, baseline_profile_id, baseline_provenance_json,
+                 SELECT artifact_path, artifact_type, commit_sha, branch_ref, triggered_by, created_at, baseline_profile_id, baseline_provenance_json,
                    semantic_distance, attribute_deltas_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ?
@@ -2594,13 +2695,19 @@ def _build_repo_history_timelines(
                 baseline_provenance = historical_fallback_provenance(row["baseline_profile_id"])
             if baseline_provenance is None:
                 baseline_provenance = no_baseline_provenance()
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             points_by_path[artifact_path].append(
                 RepoArtifactTimelinePoint(
-                    source="historical",
-                    label="Historical backfill",
-                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
-                    review_context="Historical snapshot from backfill",
+                    source=historical_source["source_type"],
+                    label=historical_source["label"],
+                    source_ref=historical_source["source_ref"],
+                    source_url=historical_source["source_url"],
+                    review_context=historical_source["review_context"],
                     created_at=float(row["created_at"]),
                     baseline_provenance=baseline_provenance,
                     semantic_distance=semantic_distance,
@@ -2697,7 +2804,7 @@ def build_repo_artifact_storyline(
     with _connect(db_path) as conn:
         historical_rows = conn.execute(
             """
-            SELECT commit_sha, created_at, semantic_distance, attribute_deltas_json
+            SELECT commit_sha, branch_ref, triggered_by, created_at, semantic_distance, attribute_deltas_json
             FROM historical_static_profiles
             WHERE normalized_artifact_id LIKE ? AND artifact_path = ?
             ORDER BY created_at ASC, id ASC
@@ -2709,13 +2816,19 @@ def build_repo_artifact_storyline(
             attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
             semantic_distance = float(row["semantic_distance"])
             drift_magnitude = _drift_magnitude(semantic_distance, attribute_deltas)
+            historical_source = _historical_source_context(
+                repo_full,
+                str(row["commit_sha"]),
+                row["branch_ref"],
+                row["triggered_by"],
+            )
             episodes.append(
                 DriftEpisode(
                     episode_timestamp=float(row["created_at"]),
-                    source_type="historical_backfill",
-                    source_label="Historical backfill",
-                    source_ref=f"commit {str(row['commit_sha'])[:7]}",
-                    source_url=_github_commit_url(repo_full, str(row["commit_sha"])),
+                    source_type=historical_source["source_type"],
+                    source_label=historical_source["label"],
+                    source_ref=historical_source["source_ref"],
+                    source_url=historical_source["source_url"],
                     episode_type=_episode_type(attribute_deltas),
                     top_attributes=_top_attribute_labels(attribute_deltas),
                     episode_summary=_episode_summary(attribute_deltas, drift_magnitude),
@@ -3120,7 +3233,14 @@ def _build_repo_design_profiles(
             continue
 
         context = _preferred_profile_context(profile_context_by_path.get(artifact_path))
-        baseline_provenance = approved_onboarding_provenance(baseline.id)
+        baseline_provenance = approved_onboarding_provenance(
+            baseline.id,
+            is_authoritative=baseline.approval_status == "approved",
+            approval_status=baseline.approval_status,
+            approved_by=baseline.approved_by,
+            approved_at=baseline.approved_at,
+            approval_note=baseline.approval_note,
+        )
         baseline_profile = _profile_vector(baseline.profile)
         if context is None:
             current_profile = baseline_profile

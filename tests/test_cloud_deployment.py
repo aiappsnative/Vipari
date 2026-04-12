@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from config import get_settings
 from engine.analysis import analyze_diff
 from services.audit_jobs import create_audit_job, init_db
+from services.branch_scan_jobs import claim_next_branch_scan_job
 from services.audit_records import record_audit_result
 from services.cloud_worker import _process_message
 from services.observability import configure_logging
@@ -145,6 +146,75 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert second.status_code == 202
     assert len(queue.messages) == 1
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
+def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-push.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    _reset_settings_cache()
+
+    queue = LocalSQLiteQueue(db_path)
+    app = create_webhook_app(queue)
+    payload = {
+        "ref": "refs/heads/main",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI", "default_branch": "main"},
+        "head_commit": {"id": "pushsha123"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+
+    with TestClient(app) as client:
+        headers = {
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "delivery-push-1",
+            "Content-Type": "application/json",
+        }
+        response = client.post("/webhook", content=body, headers=headers)
+
+    assert response.status_code == 202
+    messages = asyncio.run(queue.dequeue(10))
+    assert len(messages) == 1
+    assert messages[0].payload["event_type"] == "push"
+    assert messages[0].payload["commit_sha"] == "pushsha123"
+    assert messages[0].payload["branch_ref"] == "refs/heads/main"
+
+
+def test_worker_turns_push_message_into_branch_scan_job(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-push.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "/tmp/test-key.pem")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    queue = LocalSQLiteQueue(db_path)
+
+    async def exercise_worker():
+        await queue.enqueue(
+            {
+                "event_type": "push",
+                "installation_id": 123,
+                "repo_full": "doria90/dummyAI",
+                "commit_sha": "pushsha123",
+                "branch_ref": "refs/heads/main",
+                "triggered_by": "push_webhook",
+            }
+        )
+        message = (await queue.dequeue(1))[0]
+        await _process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock())
+        assert await queue.dequeue(1) == []
+
+    asyncio.run(exercise_worker())
+    created_job = claim_next_branch_scan_job(db_path)
+    assert created_job is not None
+    assert created_job.repo_full == "doria90/dummyAI"
+    assert created_job.commit_sha == "pushsha123"
 
 
 def test_stale_processing_delivery_can_be_reclaimed(tmp_path):

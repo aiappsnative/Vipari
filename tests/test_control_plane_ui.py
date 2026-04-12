@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 import main
 from services.billing_service import build_stripe_signature
@@ -24,6 +26,43 @@ def reset_test_client_cookies():
     client.cookies.clear()
     yield
     client.cookies.clear()
+
+
+def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "mutation-access.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    request = SimpleNamespace()
+    workspace = SimpleNamespace(id=7)
+    access_context = {"workspace": workspace}
+    connection = SimpleNamespace(status="available")
+    onboarding = SimpleNamespace(id=11)
+
+    with patch("main._require_dashboard_access", return_value=access_context), patch(
+        "main.get_repo_allocation_for_workspace", return_value=None
+    ), patch("main.get_repo_connection_for_workspace", return_value=connection), patch(
+        "main.get_latest_repository_onboarding", return_value=onboarding
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Repository is not allocated to this workspace."
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_actor_login_uses_authenticated_identity_context():
+    request = SimpleNamespace()
+    identity = SimpleNamespace(github_login="doria90")
+
+    with patch("main._control_plane_active", return_value=True), patch(
+        "main._current_authenticated_identity_context",
+        return_value={"identity": identity},
+    ):
+        actor_login = main._dashboard_actor_login(request)
+
+    assert actor_login == "doria90"
 
 
 def test_marketing_page_renders():
@@ -591,8 +630,8 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Version Journey" in dashboard_html
     assert "Repo Posture Radar" in dashboard_html
     assert "Coverage" in dashboard_html
-    assert 'href="/app/setup/repos"' in dashboard_html
-    assert 'id="audit-logs-link"' in dashboard_html
+    assert 'href="/app/repos"' in dashboard_html
+    assert 'id="audit-logs-toggle"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
 
@@ -600,8 +639,8 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'class="repo-audit-page"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
-    assert 'href="/dashboard/doria90/hermes-agent"' in repo_dashboard_html
-    assert 'href="/app/setup/repos"' in repo_dashboard_html
+    assert 'id="audit-logs-toggle"' in repo_dashboard_html
+    assert 'href="/app/repos"' in repo_dashboard_html
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1230,7 +1269,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     )
 
     assert install_response.status_code == 303
-    assert install_response.headers["location"] == "/app/setup/repos"
+    assert install_response.headers["location"] == "/app/repos"
 
     access_after_install = client.get(
         "/api/auth/session",
@@ -1244,7 +1283,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         "main.get_installation_token", return_value="installation-token"
     ), patch("main.onboard_repository", return_value=None):
         allocate_response = client.post(
-            "/app/setup/repos/allocate?repo_full=doria90/dummyAI",
+            "/app/repos/allocate?repo_full=doria90/dummyAI",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
@@ -1266,7 +1305,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     assert dashboard_response.status_code == 200
     assert "Urgent Items for Review" in dashboard_response.text
     assert "Repo Posture Radar" in dashboard_response.text
-    assert 'href="/app/setup/repos"' in dashboard_response.text
+    assert 'href="/app/repos"' in dashboard_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1484,7 +1523,7 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/setup/repos?installation_linked=1&setup_action=install"
+    assert response.headers["location"] == "/app/repos?installation_linked=1&setup_action=install"
 
     auth_payload = client.get(
         "/api/auth/session",
@@ -1493,15 +1532,18 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     assert auth_payload["access"]["state"] == "workspace_no_subscription"
 
     repo_setup_response = client.get(
-        "/app/setup/repos",
+        "/app/repos",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
     assert 'class="repo-setup-page"' in repo_setup_response.text
-    assert "Available Repositories" in repo_setup_response.text
+    assert "Repository Inventory" in repo_setup_response.text
+    assert "Onboarded Repository Snapshot" in repo_setup_response.text
+    assert 'data-repo-filter="available"' in repo_setup_response.text
+    assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
-    assert 'href="/app/setup/repos"' in repo_setup_response.text
+    assert 'href="/app/repos"' in repo_setup_response.text
     assert 'href="/dashboard/doria90%2FdummyAI"' in repo_setup_response.text
     assert "Open audit page" in repo_setup_response.text
 
@@ -1563,6 +1605,7 @@ def test_dashboard_api_endpoints_emit_server_timing_headers():
     repo_view = RepoDashboardView(
         repo_full="doria90/dummyAI",
         onboarding=None,
+        baseline_review=None,
         backfill=RepoDashboardBackfillSummary(
             job_count=0,
             planned_job_count=0,

@@ -1,5 +1,7 @@
 import os
 import sys
+from urllib.error import HTTPError
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -8,6 +10,9 @@ from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.branch_scan_jobs import create_branch_scan_job
+from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
+from services.repo_journey import build_repo_journey
 
 
 PROMPT_BASELINE = """# Refund Copilot
@@ -103,6 +108,10 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
 
     assert dashboard.repo_full == "doria90/dummyAI"
     assert dashboard.onboarding is not None
+    assert dashboard.onboarding.status == "baseline_approved"
+    assert dashboard.baseline_review is not None
+    assert dashboard.baseline_review.is_pending_review is False
+    assert dashboard.baseline_review.authoritative_artifact_count == 1
     assert dashboard.baseline_version_count == 1
     assert dashboard.backfill.completed_job_count == 1
     assert dashboard.backfill.total_historical_versions == 3
@@ -142,6 +151,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert len(dashboard.history_cues) >= 1
     assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
     assert dashboard.journey_snapshots[0]["snapshot_type"] == "baseline_approved"
+    assert dashboard.journey_snapshots[0]["input_summary"]["baseline_verified"] is True
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
     assert dashboard.journey_comparison is not None
     assert dashboard.journey_comparison["comparison_kind"] == "baseline_vs_current"
@@ -149,6 +159,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
     assert dashboard.design_profiles[0].baseline_provenance.source_type == "approved_baseline"
+    assert dashboard.design_profiles[0].baseline_provenance.is_authoritative is True
     assert dashboard.design_profiles[0].provenance is not None
     assert dashboard.design_profiles[0].provenance.source_type == "historical"
     assert dashboard.design_profiles[0].provenance.label == "Historical backfill"
@@ -183,6 +194,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.artifacts[0].pr_profile_count == 0
     assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
+    assert dashboard.history_timelines[0].points[-1].baseline_provenance.is_authoritative is True
     assert dashboard.history_timelines[0].points[0].label == "Historical backfill"
     assert dashboard.history_timelines[0].points[0].source_ref == "commit sha-1"
     assert dashboard.history_timelines[0].points[0].source_url == "https://github.com/doria90/dummyAI/commit/sha-1"
@@ -191,6 +203,105 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].points[-1].source_ref == "commit sha-3"
     assert dashboard.history_timelines[0].points[-1].source_url == "https://github.com/doria90/dummyAI/commit/sha-3"
     assert dashboard.history_timelines[0].points[-1].review_context == "Historical snapshot from backfill"
+
+
+def test_live_branch_head_scan_becomes_current_repo_journey_checkpoint(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead1",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch(
+        "services.branch_scan_worker.fetch_file_content", return_value=PROMPT_CURRENT
+    ):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+    assert snapshots[0].snapshot_type == "baseline_approved"
+    assert snapshots[-1].snapshot_type == "branch_head"
+    assert snapshots[-1].commit_sha == "livehead1"
+    assert snapshots[-1].input_summary["baseline_verified"] is True
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert dashboard.journey_snapshots[-1]["snapshot_type"] == "branch_head"
+    assert dashboard.journey_snapshots[-1]["source_ref"] == "main @ livehea"
+    assert dashboard.journey_comparison is not None
+
+
+def test_live_branch_head_scan_removes_deleted_artifacts(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-delete.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt", "config/policy.yml"],
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "prompts/refund.txt": PROMPT_BASELINE,
+            "config/policy.yml": "policy: strict\n",
+        }[path],
+    )
+
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-delete",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    def _fetch_content(repo, path, token, ref):
+        if path == "config/policy.yml":
+            raise HTTPError(f"https://example.test/{path}", 404, "Not Found", hdrs=None, fp=None)
+        return PROMPT_CURRENT
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", side_effect=_fetch_content):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert [artifact.artifact_path for artifact in dashboard.artifacts] == ["prompts/refund.txt"]
+    assert dashboard.onboarding is not None
+    assert dashboard.onboarding.discovered_artifact_count == 1
 
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):
@@ -459,6 +570,7 @@ def test_build_repo_dashboard_view_reuses_cached_result_for_same_db_signature(tm
         return RepoDashboardView(
             repo_full="doria90/dummyAI",
             onboarding=None,
+            baseline_review=None,
             backfill=RepoDashboardBackfillSummary(
                 job_count=0,
                 planned_job_count=0,

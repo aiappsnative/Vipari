@@ -11,9 +11,17 @@ from pydantic import BaseModel
 from config import get_settings
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
-from .github_integration import generate_jwt, get_installation_token
+from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from .baseline_approval_service import (
+    approve_repo_baseline,
+    approve_repo_baseline_artifact,
+    build_repo_baseline_review_panel,
+    reject_repo_baseline,
+    rebaseline_repo_from_snapshot,
+    reject_repo_baseline_artifact,
+)
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
@@ -30,6 +38,17 @@ class RepositoryOnboardingRequest(BaseModel):
 
 class RepositoryBackfillRequest(BaseModel):
     installation_id: int
+
+
+class BaselineDecisionRequest(BaseModel):
+    note: str | None = None
+    actor_login: str | None = None
+
+
+class RepoRebaselineRequest(BaseModel):
+    snapshot_id: int
+    rationale: str | None = None
+    actor_login: str | None = None
 
 
 def _require_admin_token(request: Request, settings) -> None:
@@ -212,5 +231,91 @@ def create_api_app() -> FastAPI:
                 "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
             }
         )
+
+    @app.get("/api/repos/{repo_full:path}/baseline/pending")
+    def pending_repo_baselines(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
+        panel = build_repo_baseline_review_panel(db_path, repo_full)
+        if panel is None:
+            raise HTTPException(status_code=404, detail="Repository onboarding was not found.")
+        return JSONResponse(asdict(panel))
+
+    @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
+    async def approve_artifact_baseline(repo_full: str, artifact_path: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baseline = approve_repo_baseline_artifact(
+                db_path,
+                repo_full=repo_full,
+                artifact_path=artifact_path,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
+    async def reject_artifact_baseline(repo_full: str, artifact_path: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baseline = reject_repo_baseline_artifact(
+                db_path,
+                repo_full=repo_full,
+                artifact_path=artifact_path,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/baseline/approve")
+    async def approve_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baselines = approve_repo_baseline(
+                db_path,
+                repo_full=repo_full,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "approved_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/baseline/reject")
+    async def reject_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baselines = reject_repo_baseline(
+                db_path,
+                repo_full=repo_full,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "rejected_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
+    async def rebaseline_repo(repo_full: str, payload: RepoRebaselineRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            baselines = rebaseline_repo_from_snapshot(
+                db_path,
+                repo_full=repo_full,
+                snapshot_id=payload.snapshot_id,
+                rationale=payload.rationale,
+                actor_login=payload.actor_login,
+                github_app_id=settings.github_app_id,
+                github_private_key_path=settings.github_private_key_path,
+                generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
+                get_installation_token_fn=get_installation_token,
+                fetch_file_content_fn=fetch_file_content,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
 
     return app

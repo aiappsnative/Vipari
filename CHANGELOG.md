@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-10 — Dashboard audit UX and performance slice merged to main
+
+### Added
+- a unified dashboard shell across the portfolio dashboard, repo audit page, and repo setup surface, including repo-level journey context and direct audit deep links from setup flows
+- fingerprint-aware static asset cache headers plus `Server-Timing` instrumentation on dashboard HTML and JSON routes
+- focused regression coverage for dashboard view caching, timing headers, audit-page navigation, and managed-installation webhook compatibility
+
+### Changed
+- the merged dashboard surface now prioritizes repo-level posture previews, faster hover hydration, and batched overview aggregation instead of per-repo materialization on first load
+- webhook allocation enforcement now applies only to managed active installations so legacy or unmanaged GitHub App flows still queue audits correctly
+- README status text now reflects the merged dashboard/audit/performance state on `main`
+
+### Verified
+- merged dashboard/control-plane/webhook regression slice passed locally (`55 passed`)
+
+### Product impact
+- the main dashboard experience now matches the current audit-focused product shell while loading materially faster on cold overview requests
+- managed customer workspaces keep repo-allocation enforcement without breaking unmanaged installation compatibility on the webhook path
+
 ## 2026-04-09 — Control-plane hardening merged to main
 
 ### Added
