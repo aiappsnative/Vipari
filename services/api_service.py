@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hmac
+import io
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import get_settings
@@ -22,6 +24,8 @@ from .baseline_approval_service import (
     rebaseline_repo_from_snapshot,
     reject_repo_baseline_artifact,
 )
+from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
+from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
@@ -49,6 +53,13 @@ class RepoRebaselineRequest(BaseModel):
     snapshot_id: int
     rationale: str | None = None
     actor_login: str | None = None
+
+
+class ComplianceExportRequest(BaseModel):
+    from_date: str  # YYYY-MM-DD
+    to_date: str    # YYYY-MM-DD
+    export_mode: str  # "compliance" | "compliance_plus_drift"
+    include_artifact_content: bool = False
 
 
 def _require_admin_token(request: Request, settings) -> None:
@@ -317,5 +328,69 @@ def create_api_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+
+    @app.post("/api/repos/{repo_full:path}/export/compliance")
+    async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
+        _require_admin_token(request, settings)
+        try:
+            from_ts = datetime.fromisoformat(payload.from_date).timestamp()
+            to_ts = datetime.fromisoformat(payload.to_date).timestamp()
+            if payload.export_mode not in ["compliance", "compliance_plus_drift"]:
+                raise HTTPException(status_code=400, detail="Invalid export_mode")
+            job = create_export_job(
+                db_path,
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=payload.export_mode,
+                include_artifact_content=payload.include_artifact_content,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"job_id": job.id})
+
+    @app.get("/api/export/{job_id}/status")
+    async def get_export_status(job_id: int, request: Request):
+        _require_admin_token(request, settings)
+        job = get_export_job(db_path, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Export job not found")
+        return JSONResponse({
+            "job_id": job.id,
+            "status": job.status,
+            "export_mode": job.export_mode,
+            "created_at": job.created_at,
+            "completed_at": job.completed_at,
+            "result_size_bytes": job.result_size_bytes,
+            "last_error": job.last_error,
+        })
+
+    @app.get("/api/export/{job_id}/download")
+    async def download_export(job_id: int, request: Request):
+        _require_admin_token(request, settings)
+        job = get_export_job(db_path, job_id)
+        if not job or job.status != "completed" or not job.download_token:
+            raise HTTPException(status_code=404, detail="Export not available")
+        # For now, generate on the fly. In production, store the ZIP.
+        try:
+            result = build_compliance_export(
+                db_path,
+                ComplianceExportServiceRequest(
+                    repo_full=job.repo_full,
+                    from_ts=job.from_ts,
+                    to_ts=job.to_ts,
+                    export_mode=job.export_mode,
+                    include_artifact_content=job.include_artifact_content,
+                    export_version=job.export_version,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        filename = f"promptdrift-{job.export_mode.replace('_', '-')}-export-{job.repo_full.replace('/', '-')}-{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+        return StreamingResponse(
+            io.BytesIO(result.zip_bytes),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
 
     return app

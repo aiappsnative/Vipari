@@ -42,6 +42,10 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
                     <span>Artifacts</span>
                 </a>
+                <a href="#repo-export-section" class="sidebar-nav-item" aria-label="Compliance Export">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+                    <span>Compliance Export</span>
+                </a>
                 <a href="/app/profile" class="sidebar-nav-item" aria-label="Settings">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
                     <span>Settings</span>
@@ -206,6 +210,57 @@
                             <tr><td colspan="5" class="muted">Loading artifact table...</td></tr>
                         </tbody>
                     </table>
+                </section>
+
+                <section class="repos-section" id="repo-export-section">
+                    <div class="repos-header">
+                        <span class="repos-title">Compliance Export</span>
+                    </div>
+                    <div class="export-panel">
+                        <form id="export-form" class="export-form">
+                            <div class="form-group">
+                                <label for="export-mode">Export Mode</label>
+                                <select id="export-mode" name="export_mode" required>
+                                    <option value="compliance">Compliance Evidence - Best for SOC 2 / ISO audit prep. Lean, auditor-friendly package.</option>
+                                    <option value="compliance_plus_drift">Compliance + Drift Intelligence - Includes posture and drift analysis. Best for internal governance.</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="from-date">From Date</label>
+                                <input type="date" id="from-date" name="from_date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="to-date">To Date</label>
+                                <input type="date" id="to-date" name="to_date" required>
+                            </div>
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="include-artifact-content" name="include_artifact_content">
+                                    Include raw artifact content (may contain sensitive prompt/policy text)
+                                </label>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Generate Export</button>
+                        </form>
+                        <div id="export-status" class="export-status" style="display: none;"></div>
+                        <div class="export-history">
+                            <h3>Export History</h3>
+                            <table id="export-history-table" class="repos-table">
+                                <thead>
+                                    <tr>
+                                        <th>Mode</th>
+                                        <th>Date Range</th>
+                                        <th>Status</th>
+                                        <th>Generated</th>
+                                        <th>Size</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="export-history-tbody">
+                                    <tr><td colspan="6" class="muted">Loading export history...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </section>
             </main>
         </div>

@@ -111,6 +111,8 @@ from services.control_plane_records import (
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
+from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo, update_export_job_status
+from services.compliance_export_service import build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -227,6 +229,15 @@ class BillingHandoffActivationRequest(BaseModel):
     billing_email: str | None = None
     source: str | None = None
     next_payment_at: float | str | None = None
+
+
+class ComplianceExportRequest(BaseModel):
+    from_ts: float | None = None
+    to_ts: float | None = None
+    from_date: str | None = None
+    to_date: str | None = None
+    export_mode: str
+    include_artifact_content: bool = False
 
 
 def _control_plane_active() -> bool:
@@ -1828,6 +1839,64 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/export/compliance")
+async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
+    _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        if payload.from_ts is not None and payload.to_ts is not None:
+            from_ts = payload.from_ts
+            to_ts = payload.to_ts
+        elif payload.from_date and payload.to_date:
+            from_ts = datetime.fromisoformat(payload.from_date).timestamp()
+            to_ts = datetime.fromisoformat(payload.to_date).timestamp()
+        else:
+            raise HTTPException(status_code=400, detail="Either from_ts/to_ts or from_date/to_date is required")
+        if payload.export_mode not in ["compliance", "compliance_plus_drift"]:
+            raise HTTPException(status_code=400, detail="Invalid export_mode")
+        job = create_export_job(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            export_mode=payload.export_mode,
+            include_artifact_content=payload.include_artifact_content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"job_id": job.id})
+
+
+@app.get("/api/export/{job_id}/status")
+async def get_export_status(job_id: int, request: Request):
+    try:
+        job = get_export_job(AUDIT_DB_PATH, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Export job not found")
+        _require_repo_dashboard_read_access(request, job.repo_full)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(asdict(job))
+
+
+@app.get("/api/export/{job_id}/download")
+async def download_export(job_id: int, request: Request):
+    try:
+        job = get_export_job(AUDIT_DB_PATH, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Export job not found")
+        _require_repo_dashboard_read_access(request, job.repo_full)
+        if job.status != "completed":
+            raise HTTPException(status_code=400, detail="Export job not completed")
+        if not job.result_size_bytes or not job.download_token:
+            raise HTTPException(status_code=400, detail="Export job missing download data")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    
+    # For now, return a placeholder. In a real implementation, you'd serve the actual file
+    # This would need to be implemented with proper file serving
+    raise HTTPException(status_code=501, detail="Download not implemented yet")
 
 
 async def verify_signature(request: Request) -> bool:

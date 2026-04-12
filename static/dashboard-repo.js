@@ -948,6 +948,7 @@ async function loadDashboard() {
 
         const payload = await dashboardResponse.json();
         applyDashboardPayload(payload);
+        loadExportHistory();
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
@@ -975,9 +976,81 @@ async function loadDashboard() {
         if (button) {
             button.disabled = true;
         }
+        loadExportHistory();  // Load export history even on error
     }
 }
 
 bindSidebarNavigation();
 bindRebaselineModal();
+bindExportForm();
 loadDashboard();
+
+function bindExportForm() {
+    const form = document.getElementById('export-form');
+    if (!form) return;
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        const data = {
+            from_date: formData.get('from_date'),
+            to_date: formData.get('to_date'),
+            export_mode: formData.get('export_mode'),
+            include_artifact_content: formData.has('include_artifact_content'),
+        };
+
+        const statusDiv = document.getElementById('export-status');
+        statusDiv.style.display = 'block';
+        statusDiv.textContent = 'Generating export...';
+
+        try {
+            const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/compliance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Export request failed: ${response.status}`);
+            }
+
+            const result = await response.json();
+            statusDiv.textContent = `Export job created with ID: ${result.job_id}. Check status below.`;
+            loadExportHistory();
+        } catch (error) {
+            statusDiv.textContent = `Error: ${error.message}`;
+        }
+    });
+}
+
+async function loadExportHistory() {
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
+        if (!response.ok) throw new Error('Failed to load dashboard');
+
+        const payload = await response.json();
+        const exportJobs = asArray(payload.export_jobs || []);
+
+        const tbody = document.getElementById('export-history-tbody');
+        if (exportJobs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="muted">No exports found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = exportJobs.map(job => `
+            <tr>
+                <td>${escapeHtml(job.export_mode)}</td>
+                <td>${new Date(job.from_ts * 1000).toLocaleDateString()} - ${new Date(job.to_ts * 1000).toLocaleDateString()}</td>
+                <td>${escapeHtml(job.status)}</td>
+                <td>${job.created_at ? new Date(job.created_at * 1000).toLocaleString() : '-'}</td>
+                <td>${job.result_size_bytes ? `${(job.result_size_bytes / 1024).toFixed(1)} KB` : '-'}</td>
+                <td>
+                    ${job.status === 'completed' ? `<a href="/api/export/${job.id}/download" class="btn btn-sm">Download</a>` : '-'}
+                </td>
+            </tr>
+        `).join('');
+    } catch (error) {
+        const tbody = document.getElementById('export-history-tbody');
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">Error loading export history</td></tr>';
+    }
+}

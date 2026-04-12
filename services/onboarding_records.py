@@ -754,6 +754,15 @@ def record_baseline_audit_log(
     return _row_to_baseline_audit_log(row)
 
 
+def list_baseline_audit_log_for_onboarding(db_path: str, onboarding_id: int) -> list[BaselineAuditLogRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM baseline_audit_log WHERE onboarding_id = ? ORDER BY created_at ASC",
+            (onboarding_id,),
+        ).fetchall()
+    return [_row_to_baseline_audit_log(row) for row in rows]
+
+
 def get_latest_baseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: int) -> int | None:
     with _connect(db_path) as conn:
         row = conn.execute(
