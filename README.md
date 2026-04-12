@@ -32,7 +32,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, dashboard audit/performance, and customer control-plane slices.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, dashboard audit/performance, live default-branch tracking, baseline approval workflow, and customer control-plane slices.
 
 In practical terms, DriftGuard currently provides:
 
@@ -43,6 +43,8 @@ In practical terms, DriftGuard currently provides:
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
 - a shared audit-focused dashboard shell across portfolio, repo audit, and repo setup surfaces, with repo-level journey context and direct audit navigation from repository setup
+- explicit repo and artifact baseline approval review, including pending candidate state, approval history, and snapshot-driven rebaseline proposals
+- live default-branch posture tracking driven by push-triggered branch scans so landed drift stays current between PRs
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
 - repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
@@ -72,7 +74,10 @@ In practical terms, DriftGuard currently provides:
 - Stripe webhook ownership hardening so paid-plan activation now resolves through stored Stripe customer/subscription bindings instead of trusting workspace metadata alone
 - worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
 
-Latest merge validation on 2026-04-10:
+Latest merge validation on 2026-04-12:
+
+- full automated suite passed locally after merge cleanup: `204 passed`
+- focused baseline/dashboard/journey regression slice passed locally: `71 passed`
 
 - merged dashboard/control-plane/webhook regression slice passed locally: `55 passed`
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-12 — Live default-branch tracking and baseline approval workflow merged to main
+
+### Added
+- repo-level baseline review and approval flows, including pending/approved/rejected candidate state, audit logging, and explicit repo or artifact approval actions
+- default-branch push ingestion plus branch-scan job processing so landed repository posture can refresh from live branch heads instead of waiting for the next PR event
+- focused regression coverage for branch-scan queueing, baseline approval and rebaseline flows, onboarding sync on merged artifact changes, and coverage summary payloads
+
+### Changed
+- baseline mutations are once again limited to repos allocated to the current workspace; connected-history visibility no longer implies baseline write access
+- rebaseline and merged-PR artifact sync now create pending candidates instead of silently auto-approving new authoritative baselines
+- branch-head scans now reconcile deleted tracked artifacts so dashboard posture and coverage stay aligned with the live default branch
+- dashboard overview and repo journey copy now describe re-baseline actions as creating approval candidates rather than immediately changing the active baseline
+
+### Verified
+- focused baseline/dashboard/journey regression slice passed locally (`71 passed`)
+- full automated suite passed locally after merge cleanup (`204 passed`)
+
+### Product impact
+- operators can review landed default-branch posture continuously without weakening baseline governance controls
+- baseline authority is explicit again: new checkpoints become candidates first, then become authoritative only after approval
+
 ## 2026-04-10 — Dashboard audit UX and performance slice merged to main
 
 ### Added
