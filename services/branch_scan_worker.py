@@ -17,6 +17,7 @@ from .branch_scan_jobs import (
     mark_branch_scan_job_retry,
 )
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
+from .onboarding import sync_on_pr_merge_artifact_changes
 from .onboarding_records import (
     HistoricalBackfillJobInput,
     HistoricalArtifactSnapshotInput,
@@ -60,6 +61,7 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
     token = get_installation_token(jwt_token, job.installation_id)
 
     created_any_profile = False
+    removed_paths: set[str] = set()
     for artifact in artifacts:
         history_job = create_historical_backfill_jobs(
             settings.db_path,
@@ -81,6 +83,7 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
             content = fetch_file_content(job.repo_full, artifact.artifact_path, token, ref=job.commit_sha)
         except HTTPError as exc:
             if exc.code == 404:
+                removed_paths.add(artifact.artifact_path)
                 update_historical_backfill_job_status(
                     settings.db_path,
                     job_id=history_job.id,
@@ -114,7 +117,14 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
             last_error=None,
         )
 
-    materialize_repo_journey(settings.db_path, job.repo_full)
+    if removed_paths:
+        sync_on_pr_merge_artifact_changes(
+            settings.db_path,
+            repo_full=job.repo_full,
+            removed_paths=removed_paths,
+        )
+    else:
+        materialize_repo_journey(settings.db_path, job.repo_full)
     mark_branch_scan_job_completed(settings.db_path, job.id)
     return "completed_with_updates" if created_any_profile else "completed"
 

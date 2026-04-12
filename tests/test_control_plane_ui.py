@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 import main
 from services.billing_service import build_stripe_signature
@@ -27,7 +28,7 @@ def reset_test_client_cookies():
     client.cookies.clear()
 
 
-def test_repo_dashboard_mutation_access_allows_connected_history_repo(tmp_path):
+def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "mutation-access.db")
     main.init_db(main.AUDIT_DB_PATH)
@@ -43,10 +44,11 @@ def test_repo_dashboard_mutation_access_allows_connected_history_repo(tmp_path):
     ), patch("main.get_repo_connection_for_workspace", return_value=connection), patch(
         "main.get_latest_repository_onboarding", return_value=onboarding
     ):
-        result = main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
+        with pytest.raises(HTTPException) as exc_info:
+            main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
 
-    assert result["dashboard_repo_scope"] == "connected_history"
-    assert result["dashboard_repo_allocation_status"] is None
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Repository is not allocated to this workspace."
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -629,7 +631,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Repo Posture Radar" in dashboard_html
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
-    assert 'id="audit-logs-link"' in dashboard_html
+    assert 'id="audit-logs-toggle"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
 
@@ -637,7 +639,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'class="repo-audit-page"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
-    assert 'href="/dashboard/doria90/hermes-agent"' in repo_dashboard_html
+    assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
 
     main.AUDIT_DB_PATH = original_db_path

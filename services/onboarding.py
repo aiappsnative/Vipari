@@ -34,10 +34,12 @@ from engine.drift_profile import build_attribute_profile
 from .onboarding_records import (
     add_onboarded_artifact,
     delete_onboarded_artifact_by_path,
+    list_latest_onboarding_baseline_versions_for_onboarding,
     refresh_onboarding_discovered_count,
     get_latest_repository_onboarding,
     list_onboarded_artifacts_for_onboarding,
     create_onboarding_baseline_version,
+    update_repository_onboarding_approval_status,
 )
 import time
 
@@ -402,11 +404,25 @@ def sync_on_pr_merge_artifact_changes(
                     content_text=content,
                     profile=profile,
                     signal_terms=signal_terms,
-                    approval_status="approved",
-                    approved_at=time.time(),
+                    approval_status="pending",
                 )
         except Exception:
             continue
 
+    latest_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    onboarded_paths = {
+        artifact.artifact_path for artifact in list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
+    }
+    approved_paths = {
+        baseline.artifact_path for baseline in latest_versions if baseline.approval_status == "approved"
+    }
+    is_fully_approved = bool(onboarded_paths) and approved_paths == onboarded_paths
+    update_repository_onboarding_approval_status(
+        db_path,
+        onboarding_id=onboarding.id,
+        status=("baseline_approved" if is_fully_approved else "pending_baseline_approval"),
+        approved_by=(onboarding.approved_by if is_fully_approved else None),
+        approved_at=(onboarding.approved_at if is_fully_approved else None),
+    )
     refresh_onboarding_discovered_count(db_path, onboarding.id)
     materialize_repo_journey(db_path, repo_full)

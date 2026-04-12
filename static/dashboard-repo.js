@@ -717,7 +717,7 @@ function openRebaselineModal(snapshot) {
     window.__pendingRebaselineSnapshot = snapshot;
     summary.innerHTML = `
         <div><strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong> · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
-        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)} from the current baseline candidate.`)}</div>
+        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this will create a candidate pending approval.`)}</div>
     `;
     textarea.value = "";
     setRebaselineBusy(false);
@@ -752,8 +752,8 @@ function setRebaselineBusy(isBusy) {
     }
     if (progressText) {
         progressText.textContent = isBusy
-            ? "Creating a new repo baseline proposal. This can take a few seconds for large repositories..."
-            : "Preparing a new baseline proposal...";
+            ? "Creating a new baseline candidate for review. This can take a few seconds for large repositories..."
+            : "Preparing a new baseline candidate...";
     }
     if (textarea instanceof HTMLTextAreaElement) {
         textarea.disabled = Boolean(isBusy);

@@ -627,11 +627,7 @@ def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) ->
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
         return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
-    connection = get_repo_connection_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
-    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
-    if connection is not None and connection.status == "available" and onboarding is not None:
-        return {**access_context, "dashboard_repo_scope": "connected_history", "dashboard_repo_allocation_status": None}
-    raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
+    raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
 
 
 def _dashboard_actor_login(request: Request) -> str | None:

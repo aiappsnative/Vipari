@@ -761,7 +761,7 @@ def get_latest_baseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: 
             SELECT snapshot_id
             FROM baseline_audit_log
             WHERE onboarding_id = ?
-                            AND action IN ('approve_repo_baseline', 'rebaseline')
+              AND action = 'approve_repo_baseline'
               AND snapshot_id IS NOT NULL
             ORDER BY created_at DESC, id DESC
             LIMIT 1

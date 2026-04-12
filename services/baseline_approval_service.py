@@ -402,9 +402,7 @@ def rebaseline_repo_from_snapshot(
                 content_text=content,
                 profile=profile,
                 signal_terms=signal_terms,
-                approval_status="approved",
-                approved_by=actor_login,
-                approved_at=approved_at,
+                approval_status="pending",
             )
         )
 
@@ -418,9 +416,9 @@ def rebaseline_repo_from_snapshot(
     update_repository_onboarding_approval_status(
         db_path,
         onboarding_id=onboarding.id,
-        status="baseline_approved",
-        approved_by=actor_login,
-        approved_at=approved_at,
+        status="pending_baseline_approval",
+        approved_by=None,
+        approved_at=None,
     )
     record_baseline_audit_log(
         db_path,

@@ -952,7 +952,7 @@ function openOverviewRebaselineModal(repo, snapshot) {
     summary.innerHTML = `
         <div><strong>${escapeHtml(repo.repo_full)}</strong></div>
         <div class="detail-note">${escapeHtml(snapshotTitle(snapshot))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key || "checkpoint")}</div>
-        <div class="detail-note">${escapeHtml(`${Number(snapshot.change_breakdown?.critical_surfaces_changed || 0)} critical surfaces changed · drift ${Number(snapshot.distance_from_baseline || 0).toFixed(3)} from the current baseline.`)}</div>
+        <div class="detail-note">${escapeHtml(`${Number(snapshot.change_breakdown?.critical_surfaces_changed || 0)} critical surfaces changed · this will create a candidate for approval.`)}</div>
     `;
     textarea.value = "";
     setOverviewRebaselineBusy(false);
@@ -987,8 +987,8 @@ function setOverviewRebaselineBusy(isBusy) {
     }
     if (progressText) {
         progressText.textContent = isBusy
-            ? "Applying the selected checkpoint as the active repo baseline..."
-            : "Applying the selected checkpoint as the repo baseline...";
+            ? "Creating a baseline candidate from the selected checkpoint..."
+            : "Creating a baseline candidate from the selected checkpoint...";
     }
     if (textarea instanceof HTMLTextAreaElement) {
         textarea.disabled = Boolean(isBusy);

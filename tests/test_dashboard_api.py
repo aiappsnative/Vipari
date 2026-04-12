@@ -276,10 +276,22 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert rebaseline_response.status_code == 200
     rebaseline_payload = rebaseline_response.json()
     assert rebaseline_payload["created_baseline_count"] == 1
-    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
-    assert rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is False
+    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "pending_baseline_approval"
+    assert rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is True
     assert rebaseline_payload["dashboard"]["baseline_version_count"] == 2
-    assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
+    assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] is None
+
+    with TestClient(main.app) as client:
+        approve_rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/approve",
+            json={"note": "Approve the candidate baseline."},
+        )
+
+    assert approve_rebaseline_response.status_code == 200
+    approved_rebaseline_payload = approve_rebaseline_response.json()
+    assert approved_rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
+    assert approved_rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is False
+    assert approved_rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
 
 
 def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(tmp_path):
@@ -343,7 +355,7 @@ def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(t
     assert rebaseline_response.status_code == 200
     rebaseline_payload = rebaseline_response.json()
     assert rebaseline_payload["created_baseline_count"] == 1
-    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
+    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "pending_baseline_approval"
 
 
 def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_source_snapshot(tmp_path):
@@ -404,7 +416,17 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
 
     assert rebaseline_response.status_code == 200
     rebaseline_payload = rebaseline_response.json()
-    assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == branch_head_snapshot["id"]
+    assert rebaseline_payload["dashboard"]["onboarding"]["status"] == "pending_baseline_approval"
+    assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] is None
+
+    with TestClient(main.app) as client:
+        approve_rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/approve",
+            json={"note": "Approve branch-head rebaseline."},
+        )
+        dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert approve_rebaseline_response.status_code == 200
 
     assert dashboard_response.status_code == 200
     dashboard_payload = dashboard_response.json()
@@ -467,10 +489,22 @@ def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
     assert rebaseline_response.status_code == 200
     assert dashboard_response.status_code == 200
     dashboard_payload = dashboard_response.json()
-    assert dashboard_payload["selected_baseline_source_snapshot_id"] == historical_snapshot["id"]
-    assert dashboard_payload["journey_comparison"]["left"]["id"] == historical_snapshot["id"]
-    assert dashboard_payload["journey_comparison"]["drift_summary"]["pair_distance"] > 0
-    assert dashboard_payload["journey_comparison"]["drift_summary"]["right_distance_from_selected_baseline"] > 0
+    assert dashboard_payload["selected_baseline_source_snapshot_id"] is None
+
+    with TestClient(main.app) as client:
+        approve_rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/approve",
+            json={"note": "Approve historical rebaseline."},
+        )
+        approved_dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert approve_rebaseline_response.status_code == 200
+    assert approved_dashboard_response.status_code == 200
+    approved_dashboard_payload = approved_dashboard_response.json()
+    assert approved_dashboard_payload["selected_baseline_source_snapshot_id"] == historical_snapshot["id"]
+    assert approved_dashboard_payload["journey_comparison"]["left"]["id"] == historical_snapshot["id"]
+    assert approved_dashboard_payload["journey_comparison"]["drift_summary"]["pair_distance"] > 0
+    assert approved_dashboard_payload["journey_comparison"]["drift_summary"]["right_distance_from_selected_baseline"] > 0
 
 
 def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):

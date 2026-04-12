@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -251,6 +252,56 @@ def test_live_branch_head_scan_becomes_current_repo_journey_checkpoint(tmp_path)
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "branch_head"
     assert dashboard.journey_snapshots[-1]["source_ref"] == "main @ livehea"
     assert dashboard.journey_comparison is not None
+
+
+def test_live_branch_head_scan_removes_deleted_artifacts(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-delete.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt", "config/policy.yml"],
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "prompts/refund.txt": PROMPT_BASELINE,
+            "config/policy.yml": "policy: strict\n",
+        }[path],
+    )
+
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-delete",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    def _fetch_content(repo, path, token, ref):
+        if path == "config/policy.yml":
+            raise HTTPError(f"https://example.test/{path}", 404, "Not Found", hdrs=None, fp=None)
+        return PROMPT_CURRENT
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", side_effect=_fetch_content):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert [artifact.artifact_path for artifact in dashboard.artifacts] == ["prompts/refund.txt"]
+    assert dashboard.onboarding is not None
+    assert dashboard.onboarding.discovered_artifact_count == 1
 
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):
