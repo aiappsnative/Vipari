@@ -631,10 +631,14 @@ def _build_repo_dashboard_view_uncached(
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
-    if include_journey:
-        journey_snapshots, journey_comparison = _build_repo_journey_panel(db_path, repo_full)
     if onboarding is not None:
         selected_baseline_source_snapshot_id = get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id)
+    if include_journey:
+        journey_snapshots, journey_comparison = _build_repo_journey_panel(
+            db_path,
+            repo_full,
+            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+        )
 
     if onboarding is None:
         return RepoDashboardView(
@@ -776,16 +780,28 @@ def _build_repo_dashboard_view_uncached(
     )
 
 
-def _build_repo_journey_panel(db_path: str, repo_full: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+def _build_repo_journey_panel(
+    db_path: str,
+    repo_full: str,
+    *,
+    selected_baseline_source_snapshot_id: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     from .repo_journey import build_repo_journey, compare_repo_snapshots, snapshot_to_public_payload
 
     snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
-    baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
+    baseline_snapshot = None
+    if selected_baseline_source_snapshot_id is not None:
+        baseline_snapshot = next(
+            (snapshot for snapshot in snapshots if int(snapshot["id"]) == int(selected_baseline_source_snapshot_id)),
+            None,
+        )
+    if baseline_snapshot is None:
+        baseline_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "baseline_approved"), None)
     current_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "current"), None)
     if current_snapshot is None:
         current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
     comparison = None
-    if baseline_snapshot is not None and current_snapshot is not None and baseline_snapshot["id"] != current_snapshot["id"]:
+    if baseline_snapshot is not None and current_snapshot is not None:
         comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
     return snapshots, comparison
 

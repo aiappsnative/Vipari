@@ -60,9 +60,10 @@ from services.control_plane_frontend import (
     render_control_plane_profile_page,
     render_control_plane_pricing_page,
     render_control_plane_repo_setup_page,
+    render_repo_inventory_cards,
+    render_repo_onboarded_summary_cards,
+    render_repo_onboarding_metrics,
     render_control_plane_workspace_new_page,
-    render_repo_allocation_cards,
-    render_repo_connection_cards,
 )
 from services.control_plane_records import (
     activate_billing_handoff_claim,
@@ -853,7 +854,7 @@ async def github_auth_callback(
                 installation_id=int(pending_install["installation_id"]),
             )
             destination = _path_with_flow_context(
-                f"/app/setup/repos?installation_linked=1&setup_action={pending_install.get('setup_action') or 'install'}",
+                f"/app/repos?installation_linked=1&setup_action={pending_install.get('setup_action') or 'install'}",
                 flow_context,
             )
         except Exception:
@@ -892,8 +893,8 @@ async def control_plane_app_page_route(request: Request, state: str | None = Non
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing",
         "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/setup/repos",
-        "active_comments_only": "/app/setup/repos",
+        "awaiting_repo_onboarding": "/app/repos",
+        "active_comments_only": "/app/repos",
         "canceled_active_until_period_end": "/app/billing",
         "expired_read_only": "/app/billing",
         "forbidden": "/dashboard",
@@ -1026,7 +1027,7 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
                 workspace_id=workspace.id,
                 installation_id=int(pending_install["installation_id"]),
             )
-            response = RedirectResponse(_path_with_flow_context("/app/setup/repos?installation_linked=1", flow_context), status_code=303)
+            response = RedirectResponse(_path_with_flow_context("/app/repos?installation_linked=1", flow_context), status_code=303)
             response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
             return response
         except Exception:
@@ -1294,7 +1295,7 @@ async def install_callback(
     _link_installation_to_workspace(workspace_id=access_context["workspace"].id, installation_id=installation_id_int)
     response = RedirectResponse(
         _path_with_flow_context(
-            f"/app/setup/repos?installation_linked=1&setup_action={setup_action or 'install'}",
+            f"/app/repos?installation_linked=1&setup_action={setup_action or 'install'}",
             _flow_context_from_request(request),
         ),
         status_code=303,
@@ -1326,15 +1327,28 @@ async def install_link(
         account_type=account_type,
         repo_fulls=repo_fulls,
     )
-    return RedirectResponse("/app/setup/repos", status_code=303)
+    return RedirectResponse("/app/repos", status_code=303)
 
 
-@app.get("/app/setup/repos", response_class=HTMLResponse)
+@app.get("/app/repos", response_class=HTMLResponse)
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    allocation_status_by_full = {
+        str(item["repo_full"]): str(item["allocation_status"])
+        for item in allocations
+    }
+    visible_repo_fulls = {str(item["repo_full"]) for item in connections} | {str(item["repo_full"]) for item in allocations}
+    onboarded_summaries = [
+        asdict(item)
+        for item in list_repo_dashboard_index(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visible_repo_fulls,
+            allocation_status_by_full=allocation_status_by_full,
+        )
+    ]
     audit_repo_full = (
         (allocations[0]["repo_full"] if allocations else None)
         or (connections[0]["repo_full"] if connections else None)
@@ -1343,14 +1357,20 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
-            repo_cards=render_repo_connection_cards(connections, csrf_token=access_context["session"].csrf_secret),
-            allocation_cards=render_repo_allocation_cards(allocations),
+            inventory_cards=render_repo_inventory_cards(
+                connections,
+                allocations,
+                onboarded_summaries,
+                csrf_token=access_context["session"].csrf_secret,
+            ),
+            onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
+            onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
         )
     )
 
 
-@app.post("/app/setup/repos/allocate")
+@app.post("/app/repos/allocate")
 async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
     _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)

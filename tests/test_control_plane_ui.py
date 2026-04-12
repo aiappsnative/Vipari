@@ -628,7 +628,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Version Journey" in dashboard_html
     assert "Repo Posture Radar" in dashboard_html
     assert "Coverage" in dashboard_html
-    assert 'href="/app/setup/repos"' in dashboard_html
+    assert 'href="/app/repos"' in dashboard_html
     assert 'id="audit-logs-link"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
@@ -638,7 +638,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
     assert 'href="/dashboard/doria90/hermes-agent"' in repo_dashboard_html
-    assert 'href="/app/setup/repos"' in repo_dashboard_html
+    assert 'href="/app/repos"' in repo_dashboard_html
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1267,7 +1267,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     )
 
     assert install_response.status_code == 303
-    assert install_response.headers["location"] == "/app/setup/repos"
+    assert install_response.headers["location"] == "/app/repos"
 
     access_after_install = client.get(
         "/api/auth/session",
@@ -1281,7 +1281,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         "main.get_installation_token", return_value="installation-token"
     ), patch("main.onboard_repository", return_value=None):
         allocate_response = client.post(
-            "/app/setup/repos/allocate?repo_full=doria90/dummyAI",
+            "/app/repos/allocate?repo_full=doria90/dummyAI",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
@@ -1303,7 +1303,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     assert dashboard_response.status_code == 200
     assert "Urgent Items for Review" in dashboard_response.text
     assert "Repo Posture Radar" in dashboard_response.text
-    assert 'href="/app/setup/repos"' in dashboard_response.text
+    assert 'href="/app/repos"' in dashboard_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1521,7 +1521,7 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/setup/repos?installation_linked=1&setup_action=install"
+    assert response.headers["location"] == "/app/repos?installation_linked=1&setup_action=install"
 
     auth_payload = client.get(
         "/api/auth/session",
@@ -1530,15 +1530,18 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     assert auth_payload["access"]["state"] == "workspace_no_subscription"
 
     repo_setup_response = client.get(
-        "/app/setup/repos",
+        "/app/repos",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
     assert 'class="repo-setup-page"' in repo_setup_response.text
-    assert "Available Repositories" in repo_setup_response.text
+    assert "Repository Inventory" in repo_setup_response.text
+    assert "Onboarded Repository Snapshot" in repo_setup_response.text
+    assert 'data-repo-filter="available"' in repo_setup_response.text
+    assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
-    assert 'href="/app/setup/repos"' in repo_setup_response.text
+    assert 'href="/app/repos"' in repo_setup_response.text
     assert 'href="/dashboard/doria90%2FdummyAI"' in repo_setup_response.text
     assert "Open audit page" in repo_setup_response.text
 

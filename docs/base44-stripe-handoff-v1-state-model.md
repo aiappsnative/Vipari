@@ -181,7 +181,7 @@ Implemented usages:
 - `/api/workspaces/current/access-state` exposes the same resolver directly for workspace-aware clients
 - `/dashboard` and `/dashboard/{owner/repo}` redirect to `/login` or `/app` when the workspace is not dashboard-eligible
 - dashboard JSON routes now apply the same gating when control-plane workspaces exist
-- `/app/billing/checkout`, `/app/billing/portal`, `/app/setup/install/link`, and `/app/setup/repos/allocate` enforce the owner/admin mutation rule documented above
+- `/app/billing/checkout`, `/app/billing/portal`, `/app/setup/install/link`, and `/app/repos/allocate` enforce the owner/admin mutation rule documented above
 - `/webhook` now refuses to queue PR audits/comments for installed repos that are not allocated or whose workspace lacks comment entitlement
 
 Validated transitions covered by focused tests:

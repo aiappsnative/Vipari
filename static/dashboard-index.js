@@ -7,6 +7,7 @@ const repoDashboardInflightCache = new Map();
 const previewState = {
     activeRepoFull: null,
     pendingRepoFull: null,
+    pinnedRepoFull: null,
 };
 window.__overviewPendingRebaseline = null;
 window.__overviewRebaselineBusy = false;
@@ -48,6 +49,29 @@ function averageNumeric(values) {
         return 0;
     }
     return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+}
+
+function scaleSeriesAgainstHistory(seriesValues, historyValues) {
+    const finiteHistory = historyValues.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    if (!finiteHistory.length) {
+        return seriesValues.map((value) => normalizeScore(value));
+    }
+
+    const minValue = Math.min(...finiteHistory);
+    const maxValue = Math.max(...finiteHistory);
+    const span = maxValue - minValue;
+    if (span < 0.0005) {
+        return seriesValues.map((value) => normalizeScore(value));
+    }
+
+    return seriesValues.map((value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            return 0;
+        }
+        const normalized = (numeric - minValue) / span;
+        return clamp(0.18 + (normalized * 0.74), 0.12, 0.94);
+    });
 }
 
 function escapeHtml(value) {
@@ -377,9 +401,9 @@ function renderRepoAtlasCard(repo, index) {
 function driftPercent(repo) {
     const raw = Number(repo.top_drift_magnitude || 0);
     if (!Number.isFinite(raw) || raw <= 0) {
-        return 14;
+        return 0;
     }
-    return clamp(Math.round(raw * 100), 8, 86);
+    return clamp(Math.round(raw * 100), 0, 100);
 }
 
 function drawDriftRing(percent) {
@@ -419,10 +443,21 @@ function radarVectors(repo, repoPayload = null) {
     if (repoPayload && Array.isArray(repoPayload.journey_snapshots) && repoPayload.journey_snapshots.length) {
         const snapshots = repoPayload.journey_snapshots;
         const selectedBaselineId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
-        const baselineSnapshot = (selectedBaselineId
+        let baselineSnapshot = (selectedBaselineId
             ? snapshots.find((s) => Number(s.id) === selectedBaselineId)
             : null) || snapshots.find((s) => s.snapshot_type === "baseline_approved") || snapshots[0];
         const currentSnapshot = snapshots.find((s) => s.snapshot_type === "current") || snapshots[snapshots.length - 1];
+
+        // If for any reason the baseline resolved to the same snapshot as the
+        // current (e.g. the selected id points at a non-baseline or snapshots
+        // are compacted), try to pick a nearby previous snapshot so the radar
+        // can show a meaningful difference instead of overlapping polygons.
+        if (baselineSnapshot && currentSnapshot && Number(baselineSnapshot.id) === Number(currentSnapshot.id)) {
+            const currentIndex = snapshots.findIndex((s) => Number(s.id) === Number(currentSnapshot.id));
+            if (currentIndex > 0) {
+                baselineSnapshot = snapshots[Math.max(0, currentIndex - 1)];
+            }
+        }
 
         const mapAttr = (snap) => {
             const vec = snap?.attribute_vector || {};
@@ -437,18 +472,24 @@ function radarVectors(repo, repoPayload = null) {
             ];
         };
 
+        const historyVectors = snapshots.map((snapshot) => mapAttr(snapshot));
+        const baselineValues = mapAttr(baselineSnapshot);
+        const currentValues = mapAttr(currentSnapshot);
+        const scaledBaselineValues = baselineValues.map((value, index) => scaleSeriesAgainstHistory([value], historyVectors.map((vector) => vector[index]))[0]);
+        const scaledCurrentValues = currentValues.map((value, index) => scaleSeriesAgainstHistory([value], historyVectors.map((vector) => vector[index]))[0]);
+
         return {
-            labels: ["Compliance", "Stability", "Coverage", "Efficiency", "Performance", "Security"],
+            labels: ["Governance", "Velocity", "Coverage", "Autonomy", "Capability", "Guardrails"],
             series: [
                 {
                     color: "rgba(78, 103, 255, 0.28)",
                     stroke: "rgba(79, 106, 255, 0.9)",
-                    values: mapAttr(baselineSnapshot),
+                    values: scaledBaselineValues,
                 },
                 {
                     color: "rgba(73, 223, 217, 0.22)",
                     stroke: "rgba(85, 230, 222, 0.92)",
-                    values: mapAttr(currentSnapshot),
+                    values: scaledCurrentValues,
                 },
             ],
         };
@@ -583,9 +624,23 @@ function coverageBars(repo, repos) {
 }
 
 function driftPercentFromPayload(repo, repoPayload) {
-    const payloadDistance = Number(repoPayload?.journey_comparison?.drift_summary?.right_distance_from_baseline);
+    const payloadDistance = Number(
+        repoPayload?.journey_comparison?.drift_summary?.right_distance_from_selected_baseline
+        ?? repoPayload?.journey_comparison?.drift_summary?.pair_distance
+        ?? repoPayload?.journey_comparison?.drift_summary?.right_distance_from_baseline
+    );
     if (Number.isFinite(payloadDistance) && payloadDistance >= 0) {
-        return clamp(Math.round(payloadDistance * 100), 8, 86);
+        return clamp(Math.round(payloadDistance * 100), 0, 100);
+    }
+    const leftVector = repoPayload?.journey_comparison?.left?.attribute_vector || null;
+    const rightVector = repoPayload?.journey_comparison?.right?.attribute_vector || null;
+    if (leftVector && rightVector) {
+        const vectorKeys = Array.from(new Set([...Object.keys(leftVector), ...Object.keys(rightVector)]));
+        const pairDistance = vectorKeys.reduce(
+            (sum, key) => sum + Math.abs(Number(rightVector[key] || 0) - Number(leftVector[key] || 0)),
+            0,
+        );
+        return clamp(Math.round(pairDistance * 100), 0, 100);
     }
     return driftPercent(repo);
 }
@@ -776,6 +831,39 @@ async function previewRepoSelection(repo, repos, rowIndex = null) {
     }
 }
 
+async function restorePinnedPreview(selectionItems, repos) {
+    const pinnedRepoFull = previewState.pinnedRepoFull;
+    if (!pinnedRepoFull) {
+        return;
+    }
+    previewState.pendingRepoFull = null;
+    const pinnedRepo = selectionItems.find((repo) => repo.repo_full === pinnedRepoFull);
+    if (!pinnedRepo) {
+        return;
+    }
+    const urgentIndex = selectionItems.findIndex((repo) => repo.repo_full === pinnedRepoFull);
+    if (urgentIndex >= 0) {
+        selectUrgentRow(urgentIndex);
+    }
+    const cachedPayload = repoDashboardCache.get(pinnedRepoFull) || null;
+    applyRepoPreview(pinnedRepo, repos, cachedPayload);
+    if (cachedPayload) {
+        return;
+    }
+    try {
+        const repoPayload = await fetchRepoDashboard(pinnedRepoFull);
+        if (previewState.pendingRepoFull !== null) {
+            return;
+        }
+        applyRepoPreview(pinnedRepo, repos, repoPayload);
+    } catch {
+        if (previewState.pendingRepoFull !== null) {
+            return;
+        }
+        applyRepoPreview(pinnedRepo, repos, null);
+    }
+}
+
 function bindUrgentRows(items, repos) {
     document.querySelectorAll(".urgent-item").forEach((button) => {
         const preview = async () => {
@@ -793,6 +881,11 @@ function bindUrgentRows(items, repos) {
         });
         button.addEventListener("mouseleave", () => {
             clearPreviewTimer(button);
+            void restorePinnedPreview(items, repos);
+        });
+        button.addEventListener("blur", () => {
+            clearPreviewTimer(button);
+            void restorePinnedPreview(items, repos);
         });
         button.addEventListener("focus", () => {
             clearPreviewTimer(button);
@@ -827,6 +920,11 @@ function bindRepoAtlasCards(items, repos) {
         });
         button.addEventListener("mouseleave", () => {
             clearPreviewTimer(button);
+            void restorePinnedPreview(items, repos);
+        });
+        button.addEventListener("blur", () => {
+            clearPreviewTimer(button);
+            void restorePinnedPreview(items, repos);
         });
         button.addEventListener("focus", () => {
             clearPreviewTimer(button);
@@ -1038,6 +1136,8 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
                 : -1;
             const selectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
             const selectedRepo = selectionItems[selectedIndex];
+            previewState.pinnedRepoFull = selectedRepo.repo_full;
+            previewState.pendingRepoFull = null;
             const urgentIndex = visibleSelectionItems.findIndex((repo) => repo.repo_full === selectedRepo.repo_full);
             if (urgentIndex >= 0) {
                 selectUrgentRow(urgentIndex);

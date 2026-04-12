@@ -200,7 +200,7 @@ strong {
     padding: 0 10px;
     width: 100%;
     text-align: left;
-    color: var(--color-text);
+    color: var(--color-text-muted);
 }
 
 /* Caret icon next to toggles - smaller and subtle */
@@ -211,7 +211,7 @@ strong {
     opacity: 0.85;
     transform: rotate(0deg);
     transition: transform var(--transition), opacity var(--transition);
-    color: var(--color-text);
+    color: var(--color-text-muted);
 }
 .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret {
     transform: rotate(180deg);
@@ -2105,6 +2105,17 @@ body.dashboard-index-page {
     display: none;
 }
 
+.dashboard-index-page .sidebar-nav-caret,
+.dashboard-index-page .sidebar-subitem {
+    color: rgba(239, 242, 245, 0.82);
+}
+
+.dashboard-index-page .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
+.dashboard-index-page .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
+.dashboard-index-page .sidebar-subitem:hover {
+    color: #f3ffff;
+}
+
 .dashboard-index-page .sidebar-nav-icon {
     width: 18px;
     height: 18px;
@@ -2960,6 +2971,11 @@ body.repo-setup-page {
 
 .repo-setup-page .repo-setup-section-head {
     margin-bottom: 18px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
 }
 
 .repo-setup-page .repo-setup-section-head h2 {
@@ -2967,10 +2983,84 @@ body.repo-setup-page {
     font-size: 22px;
 }
 
+.repo-setup-page .repo-setup-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.repo-setup-page .repo-setup-filter-button,
+.repo-setup-page .repo-setup-sort-select {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(239, 242, 245, 0.84);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.repo-setup-page .repo-setup-filter-button {
+    cursor: pointer;
+}
+
+.repo-setup-page .repo-setup-filter-button-active,
+.repo-setup-page .repo-setup-filter-button:hover,
+.repo-setup-page .repo-setup-sort-select:focus {
+    border-color: rgba(86, 239, 227, 0.34);
+    background: rgba(86, 239, 227, 0.10);
+    color: #f3ffff;
+    outline: none;
+}
+
+.repo-setup-page .repo-setup-sort-control {
+    display: grid;
+    gap: 8px;
+    justify-items: end;
+}
+
 .repo-setup-page .repo-setup-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 18px;
+}
+
+.repo-setup-page .repo-setup-grid-compact {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.repo-setup-page .repo-setup-summary-grid {
+    margin-top: 18px;
+}
+
+.repo-setup-page .repo-setup-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.repo-setup-page .repo-setup-metric-card {
+    display: grid;
+    gap: 10px;
+    padding: 18px 20px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: linear-gradient(180deg, rgba(34, 40, 44, 0.92), rgba(25, 29, 32, 0.9));
+}
+
+.repo-setup-page .repo-setup-metric-card strong {
+    color: #f4f8fb;
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.05em;
+}
+
+.repo-setup-page .repo-setup-metric-foot {
+    color: rgba(196, 203, 210, 0.68);
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 .repo-setup-page .repo-setup-card {
@@ -2985,6 +3075,15 @@ body.repo-setup-page {
 
 .repo-setup-page .repo-setup-card-strong {
     background: linear-gradient(180deg, rgba(38, 48, 54, 0.9), rgba(27, 33, 37, 0.92));
+}
+
+.repo-setup-page .repo-setup-card-compact {
+    min-height: 0;
+    gap: 12px;
+}
+
+.repo-setup-page .repo-setup-summary-card {
+    min-height: 0;
 }
 
 .repo-setup-page .repo-setup-card-empty {
@@ -3024,6 +3123,55 @@ body.repo-setup-page {
     color: #61eee4;
 }
 
+.repo-setup-page .repo-setup-chip-cool {
+    background: rgba(107, 215, 231, 0.12);
+    color: #7de2ef;
+}
+
+.repo-setup-page .repo-setup-chip-warm {
+    background: rgba(255, 207, 124, 0.12);
+    color: #ffd27e;
+}
+
+.repo-setup-page .repo-setup-status-stack {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.repo-setup-page .repo-setup-stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.repo-setup-page .repo-setup-stat-row-tight {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.repo-setup-page .repo-setup-stat {
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.repo-setup-page .repo-setup-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.repo-setup-page .repo-setup-card-note {
+    color: rgba(196, 203, 210, 0.68);
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .repo-setup-page .repo-setup-meta-value {
     color: rgba(240, 244, 248, 0.9);
     font-size: 13px;
@@ -3055,11 +3203,31 @@ body.repo-setup-page {
     .repo-setup-page .repo-setup-hero {
         grid-template-columns: 1fr;
     }
+
+    .repo-setup-page .repo-setup-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .repo-setup-page .repo-setup-section-head,
+    .repo-setup-page .repo-setup-sort-control {
+        justify-items: start;
+        align-items: start;
+    }
 }
 
 @media (max-width: 720px) {
     .repo-setup-page .repo-setup-grid {
         grid-template-columns: 1fr;
+    }
+
+    .repo-setup-page .repo-setup-metrics,
+    .repo-setup-page .repo-setup-stat-row,
+    .repo-setup-page .repo-setup-stat-row-tight {
+        grid-template-columns: 1fr;
+    }
+
+    .repo-setup-page .repo-setup-card-actions {
+        align-items: stretch;
     }
 }
 
@@ -3143,6 +3311,17 @@ body.repo-audit-page {
 
 .repo-audit-page .sidebar-nav-item::after {
     display: none;
+}
+
+.repo-audit-page .sidebar-nav-caret,
+.repo-audit-page .sidebar-subitem {
+    color: rgba(239, 242, 245, 0.82);
+}
+
+.repo-audit-page .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
+.repo-audit-page .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
+.repo-audit-page .sidebar-subitem:hover {
+    color: #f3ffff;
 }
 
 .repo-audit-page .sidebar-nav-icon {

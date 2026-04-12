@@ -162,7 +162,7 @@ def _state_primary_action_url(resolution: WorkspaceAccessResolution) -> str | No
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing",
         "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/setup/repos",
+        "awaiting_repo_onboarding": "/app/repos",
         "active_comments_only": "/app/billing?plan=starter",
         "active": "/dashboard",
         "canceled_active_until_period_end": "/app/billing",
@@ -176,7 +176,7 @@ def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | 
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing/portal",
         "awaiting_github_install": "/app/setup/install",
-        "active_comments_only": "/app/setup/repos",
+        "active_comments_only": "/app/repos",
         "canceled_active_until_period_end": "/app/billing",
         "expired_read_only": "/app/billing",
     }
@@ -191,8 +191,8 @@ def _state_next_action_url(resolution: WorkspaceAccessResolution) -> str | None:
         "billing_pending_confirmation": "/app/billing",
         "payment_failed": "/app/billing/portal",
         "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/setup/repos",
-        "active_comments_only": "/app/setup/repos",
+        "awaiting_repo_onboarding": "/app/repos",
+        "active_comments_only": "/app/repos",
         "active": "/dashboard",
         "canceled_active_until_period_end": "/dashboard",
         "expired_read_only": "/app/billing",
@@ -206,15 +206,15 @@ def _checklist_cta_links(resolution: WorkspaceAccessResolution) -> dict[str, str
         "workspace": "/app/workspaces/new",
         "github_login": "/login",
         "installation": "/app/setup/install",
-        "repo_allocation": "/app/setup/repos",
-        "first_scan": "/app/setup/repos",
+        "repo_allocation": "/app/repos",
+        "first_scan": "/app/repos",
     }
     if resolution.state == "active":
         links["repo_allocation"] = "/dashboard"
         links["first_scan"] = "/dashboard"
     if resolution.state == "active_comments_only":
-        links["repo_allocation"] = "/app/setup/repos"
-        links["first_scan"] = "/app/setup/repos"
+        links["repo_allocation"] = "/app/repos"
+        links["first_scan"] = "/app/repos"
     return links
 
 
@@ -385,65 +385,211 @@ def _repo_dashboard_href(repo_full: str) -> str:
     return f'/dashboard/{quote(repo_full, safe="")}'
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, repo_cards: str, allocation_cards: str, audit_href: str) -> str:
+def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str) -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
-        .replace("{{REPO_CARDS}}", repo_cards)
-        .replace("{{ALLOCATION_CARDS}}", allocation_cards)
+        .replace("{{INVENTORY_CARDS}}", inventory_cards)
+        .replace("{{ONBOARDING_METRICS}}", onboarding_metrics)
+        .replace("{{ONBOARDING_SUMMARY_CARDS}}", onboarding_summary_cards)
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
     )
 
 
-def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
-    if not connections:
-        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">No synced repositories</div><h3>Link an installation first</h3><p>No repository connections are available for allocation yet.</p></article>'
+def _repo_setup_state_label(connection: dict[str, object] | None, allocation: dict[str, object] | None, summary: dict[str, object] | None) -> tuple[str, str]:
+    if summary is not None:
+        onboarding_status = str(summary.get("onboarding_status") or "").lower()
+        if onboarding_status == "baseline_approved":
+            return "Onboarded", "repo-setup-chip-strong"
+        if onboarding_status == "pending_baseline_approval":
+            return "Baseline pending", "repo-setup-chip-warm"
+        return "Onboarding active", "repo-setup-chip-cool"
+    if allocation is not None:
+        return "Allocated", "repo-setup-chip-cool"
+    if connection is not None:
+        return "Available", "repo-setup-chip"
+    return "Unknown", "repo-setup-chip"
+
+
+def _repo_setup_inventory_copy(connection: dict[str, object] | None, allocation: dict[str, object] | None, summary: dict[str, object] | None) -> str:
+    if summary is not None:
+        onboarding_status = str(summary.get("onboarding_status") or "").lower()
+        if onboarding_status == "baseline_approved":
+            return "Baseline and onboarding are locked in, so this repository is already feeding posture, coverage, and version-history views."
+        if onboarding_status == "pending_baseline_approval":
+            return "The repository is onboarded, but its latest baseline still needs approval before DriftGuard treats it as the authoritative posture checkpoint."
+        return "The repository has been allocated and partially onboarded, so DriftGuard is collecting artifacts and building its first stable baseline."
+    if allocation is not None:
+        return "This repository is already attached to the workspace and ready for its next onboarding or baseline pass."
+    return "Allocate this repository to start onboarding, baseline capture, and repo-level journey tracking."
+
+
+def _repo_setup_summary_copy(summary: dict[str, object]) -> str:
+    onboarding_status = str(summary.get("onboarding_status") or "").lower()
+    if onboarding_status == "baseline_approved":
+        return "Stable baseline coverage is in place and the repo is contributing full posture tracking."
+    if onboarding_status == "pending_baseline_approval":
+        return "Artifact discovery is complete, but the baseline still needs approval before it becomes the reference posture."
+    return "DriftGuard has started collecting artifacts and history for this repo, but onboarding is still maturing."
+
+
+def _repo_setup_state_key(connection: dict[str, object] | None, allocation: dict[str, object] | None, summary: dict[str, object] | None) -> str:
+    if summary is not None:
+        onboarding_status = str(summary.get("onboarding_status") or "").lower()
+        if onboarding_status == "baseline_approved":
+            return "onboarded"
+        if onboarding_status == "pending_baseline_approval":
+            return "baseline_pending"
+        return "onboarding"
+    if allocation is not None:
+        return "allocated"
+    if connection is not None:
+        return "available"
+    return "unknown"
+
+
+def render_repo_inventory_cards(
+    connections: list[dict[str, object]],
+    allocations: list[dict[str, object]],
+    onboarded_summaries: list[dict[str, object]],
+    *,
+    csrf_token: str,
+) -> str:
+    connection_by_full = {str(connection["repo_full"]): connection for connection in connections}
+    allocation_by_full = {str(allocation["repo_full"]): allocation for allocation in allocations}
+    summary_by_full = {str(summary["repo_full"]): summary for summary in onboarded_summaries}
+
+    repo_fulls = set(connection_by_full) | set(allocation_by_full) | set(summary_by_full)
+    if not repo_fulls:
+        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>Link an installation first</h3><p>No repository connections are available for allocation yet.</p></article>'
+
+    def sort_key(repo_full: str) -> tuple[int, str]:
+        connection = connection_by_full.get(repo_full)
+        allocation = allocation_by_full.get(repo_full)
+        summary = summary_by_full.get(repo_full)
+        rank = 2
+        if summary is not None:
+            rank = 0
+        elif allocation is not None:
+            rank = 1
+        elif connection is not None:
+            rank = 2
+        return (rank, repo_full.lower())
+
     rendered: list[str] = []
-    for connection in connections:
-        visibility = "Private" if connection.get("is_private") else "Public"
-        rendered.append(
-            f'''
-            <article class="repo-setup-card">
-                <div class="repo-setup-card-top">
-                    <div class="repo-setup-card-label">Available repository</div>
-                    <span class="repo-setup-chip">{html_escape(visibility)}</span>
-                </div>
-                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(connection['repo_full']))}">{html_escape(connection["repo_full"])}</a></h3>
-                <div class="repo-setup-meta-row">
-                    <span class="repo-setup-meta-label">Default branch</span>
-                    <span class="repo-setup-meta-value">{html_escape(connection.get("default_branch") or "unknown")}</span>
-                </div>
-                <p>Allocate this repository to start onboarding, baseline capture, and repo-level journey tracking.</p>
-                <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(connection['repo_full']))}">Open audit page</a>
-                <form action="/app/setup/repos/allocate?repo_full={html_escape(connection['repo_full'])}" method="post">
+    for repo_full in sorted(repo_fulls, key=sort_key):
+        connection = connection_by_full.get(repo_full)
+        allocation = allocation_by_full.get(repo_full)
+        summary = summary_by_full.get(repo_full)
+        visibility = "Private" if connection and connection.get("is_private") else "Public"
+        default_branch = (
+            (summary.get("default_branch") if summary is not None else None)
+            or (connection.get("default_branch") if connection is not None else None)
+            or "unknown"
+        )
+        tracked_artifacts = int(summary.get("discovered_artifact_count") or 0) if summary is not None else 0
+        history_count = int(summary.get("historical_version_count") or 0) if summary is not None else 0
+        allocation_label = str(allocation.get("allocation_status") or "not_allocated").replace("_", " ") if allocation is not None else "not allocated"
+        state_label, state_class = _repo_setup_state_label(connection, allocation, summary)
+        state_key = _repo_setup_state_key(connection, allocation, summary)
+        primary_action = ""
+        if allocation is None and connection is not None:
+            primary_action = f'''
+                <form action="/app/repos/allocate?repo_full={html_escape(repo_full)}" method="post">
                     {_csrf_input(csrf_token)}
                     <button type="submit" class="repo-setup-button">Allocate and onboard</button>
                 </form>
+            '''
+        else:
+            primary_action = f'<div class="repo-setup-card-note">Workspace state: {html_escape(allocation_label)}</div>'
+
+        rendered.append(
+            f'''
+            <article class="repo-setup-card repo-setup-card-compact{' repo-setup-card-strong' if summary is not None else ''}" data-repo-inventory-card="true" data-status="{html_escape(state_key)}" data-repo-full="{html_escape(repo_full.lower())}">
+                <div class="repo-setup-card-top">
+                    <div class="repo-setup-card-label">Repository inventory</div>
+                    <div class="repo-setup-status-stack">
+                        <span class="repo-setup-chip {state_class}">{html_escape(state_label)}</span>
+                        <span class="repo-setup-chip">{html_escape(visibility)}</span>
+                    </div>
+                </div>
+                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(repo_full))}">{html_escape(repo_full)}</a></h3>
+                <div class="repo-setup-stat-row">
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Default branch</span><span class="repo-setup-meta-value">{html_escape(str(default_branch))}</span></div>
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Tracked artifacts</span><span class="repo-setup-meta-value">{tracked_artifacts}</span></div>
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">History</span><span class="repo-setup-meta-value">{history_count}</span></div>
+                </div>
+                <p>{html_escape(_repo_setup_inventory_copy(connection, allocation, summary))}</p>
+                <div class="repo-setup-card-actions">
+                    <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(repo_full))}">Open audit page</a>
+                    {primary_action}
+                </div>
             </article>
             '''
         )
     return "".join(rendered)
+
+
+def render_repo_onboarding_metrics(onboarded_summaries: list[dict[str, object]]) -> str:
+    onboarded_count = len(onboarded_summaries)
+    approved_count = sum(1 for summary in onboarded_summaries if str(summary.get("onboarding_status") or "").lower() == "baseline_approved")
+    tracked_artifacts = sum(int(summary.get("discovered_artifact_count") or 0) for summary in onboarded_summaries)
+    historical_checkpoints = sum(int(summary.get("historical_version_count") or 0) for summary in onboarded_summaries)
+    cards = [
+        ("Onboarded repos", onboarded_count, "Repositories with a stored onboarding record in this workspace."),
+        ("Baseline approved", approved_count, "Repos whose current onboarding baseline is already locked."),
+        ("Tracked artifacts", tracked_artifacts, "Control surfaces currently captured across onboarded repositories."),
+        ("History checkpoints", historical_checkpoints, "Historical snapshots materialized across onboarded repositories."),
+    ]
+    return "".join(
+        f'''
+        <article class="repo-setup-metric-card">
+            <span class="repo-setup-note-label">{html_escape(label)}</span>
+            <strong>{value}</strong>
+            <span class="repo-setup-metric-foot">{html_escape(detail)}</span>
+        </article>
+        '''
+        for label, value, detail in cards
+    )
+
+
+def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, object]]) -> str:
+    if not onboarded_summaries:
+        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Onboarded repo summaries</div><h3>No onboarded repositories yet</h3><p>Allocate a repository and finish the first onboarding pass to unlock rollout and posture summaries here.</p></article>'
+
+    rendered: list[str] = []
+    for summary in sorted(onboarded_summaries, key=lambda item: str(item.get("repo_full") or "").lower()):
+        state_label, state_class = _repo_setup_state_label(None, {"allocation_status": summary.get("allocation_status")}, summary)
+        state_key = _repo_setup_state_key(None, {"allocation_status": summary.get("allocation_status")}, summary)
+        last_onboarded_value = summary.get("last_onboarded_at") if isinstance(summary.get("last_onboarded_at"), (int, float)) else 0
+        rendered.append(
+            f'''
+            <article class="repo-setup-card repo-setup-card-strong repo-setup-summary-card" data-repo-summary-card="true" data-status="{html_escape(state_key)}" data-repo-full="{html_escape(str(summary['repo_full']).lower())}" data-artifacts="{int(summary.get('discovered_artifact_count') or 0)}" data-history="{int(summary.get('historical_version_count') or 0)}" data-last-onboarded="{last_onboarded_value}">
+                <div class="repo-setup-card-top">
+                    <div class="repo-setup-card-label">Onboarded repository</div>
+                    <span class="repo-setup-chip {state_class}">{html_escape(state_label)}</span>
+                </div>
+                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(str(summary['repo_full'])))}">{html_escape(str(summary['repo_full']))}</a></h3>
+                <div class="repo-setup-stat-row repo-setup-stat-row-tight">
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Default branch</span><span class="repo-setup-meta-value">{html_escape(str(summary.get('default_branch') or 'unknown'))}</span></div>
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Artifacts</span><span class="repo-setup-meta-value">{int(summary.get('discovered_artifact_count') or 0)}</span></div>
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">History</span><span class="repo-setup-meta-value">{int(summary.get('historical_version_count') or 0)}</span></div>
+                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Last onboarded</span><span class="repo-setup-meta-value">{html_escape(_format_timestamp(summary.get('last_onboarded_at') if isinstance(summary.get('last_onboarded_at'), (int, float)) else None))}</span></div>
+                </div>
+                <p>{html_escape(_repo_setup_summary_copy(summary))}</p>
+                <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(str(summary['repo_full'])))}">Open audit page</a>
+            </article>
+            '''
+        )
+    return "".join(rendered)
+
+
+def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
+    return render_repo_inventory_cards(connections, [], [], csrf_token=csrf_token)
 
 
 def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
-    if not allocations:
-        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Allocated repositories</div><h3>No allocations yet</h3><p>Allocated repositories will appear here as soon as a workspace starts onboarding.</p></article>'
-    rendered: list[str] = []
-    for allocation in allocations:
-        rendered.append(
-            f'''
-            <article class="repo-setup-card repo-setup-card-strong">
-                <div class="repo-setup-card-top">
-                    <div class="repo-setup-card-label">Allocated repository</div>
-                    <span class="repo-setup-chip repo-setup-chip-strong">{html_escape(allocation["allocation_status"].replace('_', ' '))}</span>
-                </div>
-                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(allocation['repo_full']))}">{html_escape(allocation["repo_full"])}</a></h3>
-                <p>This repository is already assigned to the workspace and contributes to dashboard posture and journey views.</p>
-                <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(allocation['repo_full']))}">Open audit page</a>
-            </article>
-            '''
-        )
-    return "".join(rendered)
+    return render_repo_onboarded_summary_cards(allocations)
 def render_control_plane_app_page(
     state: str | None = None,
     resolution: WorkspaceAccessResolution | None = None,

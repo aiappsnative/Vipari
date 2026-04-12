@@ -24,7 +24,7 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
                     <span>Audit Logs</span>
                 </a>
-                <a href="/app/setup/repos" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Repositories">
+                <a href="/app/repos" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
@@ -62,21 +62,115 @@
 
                 <section class="repo-setup-section">
                     <div class="repo-setup-section-head">
-                        <h2>Available Repositories</h2>
-                        <p>Repositories synced from the linked GitHub installation and ready for allocation.</p>
+                        <div>
+                            <h2>Repository Inventory</h2>
+                            <p>One compact inventory for every repository visible to this workspace, with clear status for available, allocated, and fully onboarded repos.</p>
+                        </div>
+                        <div class="repo-setup-controls" aria-label="Repository inventory filters">
+                            <button type="button" class="repo-setup-filter-button repo-setup-filter-button-active" data-repo-filter="all">All</button>
+                            <button type="button" class="repo-setup-filter-button" data-repo-filter="available">Available</button>
+                            <button type="button" class="repo-setup-filter-button" data-repo-filter="allocated">Allocated</button>
+                            <button type="button" class="repo-setup-filter-button" data-repo-filter="onboarding">Onboarding</button>
+                            <button type="button" class="repo-setup-filter-button" data-repo-filter="onboarded">Onboarded</button>
+                        </div>
                     </div>
-                    <section class="repo-setup-grid">{{REPO_CARDS}}</section>
+                    <section class="repo-setup-grid repo-setup-grid-compact">{{INVENTORY_CARDS}}</section>
                 </section>
 
                 <section class="repo-setup-section">
                     <div class="repo-setup-section-head">
-                        <h2>Allocated Repositories</h2>
-                        <p>Repositories already assigned to this workspace and moving through onboarding.</p>
+                        <div>
+                            <h2>Onboarded Repository Snapshot</h2>
+                            <p>Workspace-level rollout metrics plus a compact summary of coverage, baseline status, and history depth for each onboarded repository.</p>
+                        </div>
+                        <label class="repo-setup-sort-control">
+                            <span class="repo-setup-meta-label">Sort by</span>
+                            <select class="repo-setup-sort-select" data-repo-summary-sort>
+                                <option value="artifacts_desc">Most artifacts</option>
+                                <option value="history_desc">Most history</option>
+                                <option value="recent_desc">Recently onboarded</option>
+                                <option value="status">Baseline status</option>
+                                <option value="name_asc">Repository name</option>
+                            </select>
+                        </label>
                     </div>
-                    <section class="repo-setup-grid repo-setup-grid-strong">{{ALLOCATION_CARDS}}</section>
+                    <section class="repo-setup-metrics">{{ONBOARDING_METRICS}}</section>
+                    <section class="repo-setup-grid repo-setup-grid-strong repo-setup-summary-grid">{{ONBOARDING_SUMMARY_CARDS}}</section>
                 </section>
             </main>
         </div>
     </div>
+    <script>
+        (() => {
+            const filterButtons = Array.from(document.querySelectorAll('[data-repo-filter]'));
+            const inventoryCards = Array.from(document.querySelectorAll('[data-repo-inventory-card="true"]'));
+            const summarySort = document.querySelector('[data-repo-summary-sort]');
+            const summaryGrid = document.querySelector('.repo-setup-summary-grid');
+            const summaryCards = Array.from(document.querySelectorAll('[data-repo-summary-card="true"]'));
+
+            const filterCard = (selectedFilter) => {
+                inventoryCards.forEach((card) => {
+                    const status = String(card.getAttribute('data-status') || 'unknown');
+                    const show = selectedFilter === 'all'
+                        || status === selectedFilter
+                        || (selectedFilter === 'onboarding' && status === 'baseline_pending');
+                    card.hidden = !show;
+                });
+            };
+
+            filterButtons.forEach((button) => {
+                button.addEventListener('click', () => {
+                    filterButtons.forEach((candidate) => candidate.classList.remove('repo-setup-filter-button-active'));
+                    button.classList.add('repo-setup-filter-button-active');
+                    filterCard(String(button.getAttribute('data-repo-filter') || 'all'));
+                });
+            });
+
+            const statusRank = {
+                onboarded: 0,
+                baseline_pending: 1,
+                onboarding: 2,
+            };
+
+            const sortSummaryCards = (mode) => {
+                if (!summaryGrid || !summaryCards.length) {
+                    return;
+                }
+                const sorted = [...summaryCards].sort((left, right) => {
+                    const leftName = String(left.getAttribute('data-repo-full') || '');
+                    const rightName = String(right.getAttribute('data-repo-full') || '');
+                    const leftArtifacts = Number(left.getAttribute('data-artifacts') || '0');
+                    const rightArtifacts = Number(right.getAttribute('data-artifacts') || '0');
+                    const leftHistory = Number(left.getAttribute('data-history') || '0');
+                    const rightHistory = Number(right.getAttribute('data-history') || '0');
+                    const leftRecent = Number(left.getAttribute('data-last-onboarded') || '0');
+                    const rightRecent = Number(right.getAttribute('data-last-onboarded') || '0');
+                    const leftStatus = statusRank[String(left.getAttribute('data-status') || 'onboarding')] ?? 99;
+                    const rightStatus = statusRank[String(right.getAttribute('data-status') || 'onboarding')] ?? 99;
+
+                    if (mode === 'history_desc') {
+                        return (rightHistory - leftHistory) || leftName.localeCompare(rightName);
+                    }
+                    if (mode === 'recent_desc') {
+                        return (rightRecent - leftRecent) || leftName.localeCompare(rightName);
+                    }
+                    if (mode === 'status') {
+                        return (leftStatus - rightStatus) || leftName.localeCompare(rightName);
+                    }
+                    if (mode === 'name_asc') {
+                        return leftName.localeCompare(rightName);
+                    }
+                    return (rightArtifacts - leftArtifacts) || (rightHistory - leftHistory) || leftName.localeCompare(rightName);
+                });
+
+                sorted.forEach((card) => summaryGrid.appendChild(card));
+            };
+
+            if (summarySort instanceof HTMLSelectElement) {
+                summarySort.addEventListener('change', () => sortSummaryCards(summarySort.value));
+                sortSummaryCards(summarySort.value);
+            }
+        })();
+    </script>
 </body>
 </html>

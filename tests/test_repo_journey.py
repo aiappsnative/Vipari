@@ -175,6 +175,8 @@ def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):
     assert comparison.vector_delta["capability"] > 0
     assert comparison.change_breakdown["critical_surfaces_changed"] >= 1
     assert comparison.drift_summary["drift_delta"] >= 0
+    assert comparison.drift_summary["pair_distance"] > 0
+    assert comparison.drift_summary["right_distance_from_selected_baseline"] == comparison.drift_summary["pair_distance"]
     assert comparison.risk_summary["risk_level"] in {"low", "medium", "high"}
     assert "capability_expanded" in comparison.change_labels
 

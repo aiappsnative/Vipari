@@ -907,7 +907,7 @@ function renderJourneyCompare(comparison) {
                 <div class="journey-node journey-tone-primary">
                     <span class="journey-node-value">${formatSigned(comparison.drift_summary?.drift_delta)}</span>
                     <span class="journey-node-label">Drift delta</span>
-                    <span class="journey-node-caption">current ${asNumber(comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
+                    <span class="journey-node-caption">pair ${asNumber(comparison.drift_summary?.right_distance_from_selected_baseline ?? comparison.drift_summary?.pair_distance ?? comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
                     <span class="journey-node-link" aria-hidden="true"></span>
                 </div>
                 <div class="journey-node ${journeyToneForRisk(comparison.risk_summary?.risk_level)}">

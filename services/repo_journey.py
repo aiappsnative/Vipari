@@ -385,12 +385,15 @@ def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, 
         key: round(float(right.attribute_vector.get(key, 0.0)) - float(left.attribute_vector.get(key, 0.0)), 4)
         for key in sorted(set(left.attribute_vector) | set(right.attribute_vector))
     }
+    pair_distance = _vector_distance(left.attribute_vector, right.attribute_vector)
     change_breakdown = _build_change_breakdown(left.artifact_state, right.artifact_state)
     change_labels = _derive_change_labels(vector_delta, change_breakdown)
     drift_summary = {
         "left_distance_from_baseline": left.distance_from_baseline,
         "right_distance_from_baseline": right.distance_from_baseline,
         "drift_delta": round(right.distance_from_baseline - left.distance_from_baseline, 4),
+        "pair_distance": pair_distance,
+        "right_distance_from_selected_baseline": pair_distance,
     }
     risk_summary = _build_risk_summary(
         right.attribute_vector,
