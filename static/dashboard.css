@@ -194,6 +194,65 @@ strong {
     transition: color var(--transition), background var(--transition), border-color var(--transition);
 }
 
+/* Toggle variant for sidebar items that expand to show sublists */
+.sidebar-nav-item-toggle {
+    justify-content: space-between;
+    padding: 0 10px;
+    width: 100%;
+    text-align: left;
+}
+
+/* Caret icon next to toggles - smaller and subtle */
+.sidebar-nav-caret {
+    width: 12px;
+    height: 12px;
+    margin-left: 8px;
+    opacity: 0.85;
+    transform: rotate(0deg);
+    transition: transform var(--transition), opacity var(--transition);
+}
+.sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret {
+    transform: rotate(180deg);
+}
+
+/* Sublist container inside the sidebar when expanded */
+.sidebar-sublist {
+    width: 220px;
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: transparent;
+}
+
+.sidebar-sublist-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sidebar-subitem {
+    display: block;
+    padding: 6px 10px;
+    color: var(--color-text-muted);
+    text-decoration: none;
+    font-size: 13px;
+    border-radius: 6px;
+    transition: background var(--transition), color var(--transition);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sidebar-subitem:hover {
+    background: var(--color-surface-glass-2);
+    color: var(--color-text);
+}
+
+/* Make sure the toggle and sublist align to the left within the narrow sidebar */
+.sidebar-panel .sidebar-nav-item-toggle,
+.sidebar-panel .sidebar-sublist {
+    align-self: flex-start;
+}
+
 .sidebar-nav-item:hover,
 .sidebar-nav-item-active {
     color: var(--color-primary);
