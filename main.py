@@ -1,4 +1,5 @@
 import asyncio
+import io
 import base64
 import hashlib
 import hmac
@@ -13,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from github.GithubException import GithubException
 from openai import OpenAI
 from pydantic import BaseModel
@@ -112,7 +113,7 @@ from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_i
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo, update_export_job_status
-from services.compliance_export_service import build_compliance_export
+from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -1863,8 +1864,30 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             export_mode=payload.export_mode,
             include_artifact_content=payload.include_artifact_content,
         )
+        result = build_compliance_export(
+            AUDIT_DB_PATH,
+            ComplianceExportServiceRequest(
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=payload.export_mode,
+                include_artifact_content=payload.include_artifact_content,
+                export_version=job.export_version,
+            ),
+        )
+        update_export_job_status(
+            AUDIT_DB_PATH,
+            job.id,
+            "completed",
+            result_size_bytes=result.total_size_bytes,
+        )
+        job = get_export_job(AUDIT_DB_PATH, job.id) or job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        if 'job' in locals():
+            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return JSONResponse({"job_id": job.id})
 
 
@@ -1893,10 +1916,33 @@ async def download_export(job_id: int, request: Request):
             raise HTTPException(status_code=400, detail="Export job missing download data")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
-    # For now, return a placeholder. In a real implementation, you'd serve the actual file
-    # This would need to be implemented with proper file serving
-    raise HTTPException(status_code=501, detail="Download not implemented yet")
+
+    try:
+        result = build_compliance_export(
+            AUDIT_DB_PATH,
+            ComplianceExportServiceRequest(
+                repo_full=job.repo_full,
+                from_ts=job.from_ts,
+                to_ts=job.to_ts,
+                export_mode=job.export_mode,
+                include_artifact_content=job.include_artifact_content,
+                export_version=job.export_version,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    filename = (
+        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
+        f"{job.repo_full.replace('/', '-')}-"
+        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
+        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+    )
+    return StreamingResponse(
+        io.BytesIO(result.zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 async def verify_signature(request: Request) -> bool:
