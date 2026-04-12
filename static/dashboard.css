@@ -2612,6 +2612,21 @@ body.dashboard-index-page {
     box-shadow: 0 0 18px rgba(77, 232, 220, 0.22);
 }
 
+.dashboard-index-page .coverage-track {
+    position: relative;
+}
+
+.dashboard-index-page .coverage-fill-critical {
+    position: absolute;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(224,145,74,0.9), rgba(224,145,74,0.6));
+    box-shadow: 0 0 8px rgba(224,145,74,0.12);
+}
+
 .dashboard-index-page .dashboard-screenreader-stats {
     position: absolute;
     width: 1px;

@@ -548,15 +548,42 @@ function driftPercentFromPayload(repo, repoPayload) {
     return driftPercent(repo);
 }
 
-function renderCoverageBars(repo, repos) {
-    return coverageBars(repo, repos).map((item) => `
-        <div class="coverage-bar-row">
+function renderCoverageBars(repo, repos, repoPayload = null) {
+    // Prefer authoritative payload values when available
+    const snapshots = asArray(repoPayload?.journey_snapshots || []);
+    const baselineSnapshot = snapshots.find((s) => s.snapshot_type === 'baseline_approved') || snapshots[0] || null;
+    const input = baselineSnapshot?.input_summary || repo.input_summary || {};
+
+    const tracked = Number(input.tracked_count || repo.discovered_artifact_count || 0);
+    const approved = Number(input.approved_baseline_count || 0);
+    const coveragePercent = Number(input.coverage_percent || 0);
+    const criticalTotal = Number(input.critical_artifact_count || 0);
+    const approvedCritical = Number(input.approved_critical_count || 0);
+    const criticalPercent = Number(input.critical_coverage_percent || 0);
+
+    // Primary coverage bar and a thin overlay representing critical coverage
+    const rows = [
+        {
+            label: "Approved Baseline Coverage",
+            value: clamp(Math.round(coveragePercent), 0, 100),
+            meta: `${approved}/${tracked} approved`,
+        },
+        {
+            label: "Critical Surface Coverage",
+            value: clamp(Math.round(criticalPercent), 0, 100),
+            meta: `${approvedCritical}/${criticalTotal} critical`,
+        },
+    ];
+
+    return rows.map((item, idx) => `
+        <div class="coverage-bar-row" data-coverage-type="${idx === 0 ? 'primary' : 'critical'}">
             <div class="coverage-bar-meta">
                 <span>${escapeHtml(item.label)}</span>
-                <strong>${item.value}%</strong>
+                <strong>${escapeHtml(item.meta)} · ${item.value}%</strong>
             </div>
             <div class="coverage-track">
                 <div class="coverage-fill" style="width:${item.value}%"></div>
+                ${idx === 0 ? `<div class="coverage-fill-critical" style="width:${clamp(Math.round(criticalPercent),0,100)}%"></div>` : ''}
             </div>
         </div>
     `).join("");
@@ -626,7 +653,7 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     bindOverviewJourneyActions(repo, repoPayload);
     const repoStoryNote = repoPayload?.journey_comparison?.risk_summary?.headline || repoPayload?.featured_storyline?.summary || triageSummary(repo);
     setText("repo-journey-note", repoStoryNote);
-    setSectionHtml("coverage-bars", renderCoverageBars(repo, repos));
+    setSectionHtml("coverage-bars", renderCoverageBars(repo, repos, repoPayload));
     setText("coverage-note", `${Number(repo.discovered_artifact_count || 0)} tracked artifacts · ${repoScopeLabel(repo)}`);
     drawRadar(repo);
     const drift = driftPercentFromPayload(repo, repoPayload);

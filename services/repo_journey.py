@@ -119,6 +119,20 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     pending_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "pending")
     rejected_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "rejected")
     baseline_verified = bool(latest_paths) and approved_latest_count == len(latest_paths) and onboarding.status == "baseline_approved"
+    tracked_count = len(latest_paths)
+    # classify critical artifacts by artifact_type hints
+    def _is_critical_type(artifact_type: str) -> bool:
+        if artifact_type is None:
+            return False
+        lowered = artifact_type.lower()
+        for hint in ("prompt", "policy", "guard", "model", "config"):
+            if hint in lowered:
+                return True
+        return False
+    critical_artifact_count = sum(1 for p, t in artifact_types_by_path.items() if _is_critical_type(t))
+    approved_critical_count = sum(1 for b in latest_approved_baseline_versions if _is_critical_type(b.artifact_type))
+    coverage_percent = round((approved_latest_count / tracked_count) * 100.0, 2) if tracked_count else 0.0
+    critical_coverage_percent = round((approved_critical_count / critical_artifact_count) * 100.0, 2) if critical_artifact_count else 0.0
 
     snapshot_keys: set[str] = set()
     snapshots: list[RepoPostureSnapshotRecord] = []
@@ -142,17 +156,24 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             artifact_state=baseline_state,
             previous_snapshot=None,
             baseline_snapshot=None,
-            input_summary={
-                "baseline_artifact_count": len(baseline_versions),
-                "historical_event_count": 0,
-                "merged_event_count": 0,
-                "baseline_verified": baseline_verified,
-                "approved_baseline_count": approved_latest_count,
-                "pending_baseline_count": pending_latest_count,
-                "rejected_baseline_count": rejected_latest_count,
-                "approved_by": onboarding.approved_by,
-                "approved_at": onboarding.approved_at,
-            },
+                input_summary={
+                    "baseline_artifact_count": len(baseline_versions),
+                    "historical_event_count": 0,
+                    "merged_event_count": 0,
+                    "baseline_verified": baseline_verified,
+                    "approved_baseline_count": approved_latest_count,
+                    "pending_baseline_count": pending_latest_count,
+                    "rejected_baseline_count": rejected_latest_count,
+                    "approved_by": onboarding.approved_by,
+                    "approved_at": onboarding.approved_at,
+                    "tracked_count": tracked_count,
+                    "coverage_percent": coverage_percent,
+                    "critical_artifact_count": critical_artifact_count,
+                    "approved_critical_count": approved_critical_count,
+                    "critical_coverage_percent": critical_coverage_percent,
+                    "drifting_artifact_count": 0,
+                    "last_baseline_at": onboarding.approved_at,
+                },
         )
         snapshot_keys.add(baseline_snapshot.snapshot_key)
         snapshots.append(baseline_snapshot)
@@ -278,6 +299,13 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 "rejected_baseline_count": rejected_latest_count,
                 "approved_by": onboarding.approved_by,
                 "approved_at": onboarding.approved_at,
+                "tracked_count": tracked_count,
+                "coverage_percent": coverage_percent,
+                "critical_artifact_count": critical_artifact_count,
+                "approved_critical_count": approved_critical_count,
+                "critical_coverage_percent": critical_coverage_percent,
+                "drifting_artifact_count": 0,
+                "last_baseline_at": onboarding.approved_at,
             },
         )
         snapshot_keys.add(snapshot.snapshot_key)
@@ -314,6 +342,13 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                     "rejected_baseline_count": rejected_latest_count,
                     "approved_by": onboarding.approved_by,
                     "approved_at": onboarding.approved_at,
+                    "tracked_count": tracked_count,
+                    "coverage_percent": coverage_percent,
+                    "critical_artifact_count": critical_artifact_count,
+                    "approved_critical_count": approved_critical_count,
+                    "critical_coverage_percent": critical_coverage_percent,
+                    "drifting_artifact_count": 0,
+                    "last_baseline_at": onboarding.approved_at,
                 },
             )
             snapshot_keys.add(current_snapshot.snapshot_key)
