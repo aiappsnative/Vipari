@@ -39,6 +39,7 @@ from .onboarding_records import (
     list_onboarded_artifacts_for_onboarding,
     create_onboarding_baseline_version,
 )
+import time
 
 
 DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".py", ".toml"}
@@ -401,7 +402,8 @@ def sync_on_pr_merge_artifact_changes(
                     content_text=content,
                     profile=profile,
                     signal_terms=signal_terms,
-                    approval_status="pending",
+                    approval_status="approved",
+                    approved_at=time.time(),
                 )
         except Exception:
             continue
