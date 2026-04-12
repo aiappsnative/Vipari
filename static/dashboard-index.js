@@ -706,9 +706,9 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     if (detailLink) {
         detailLink.setAttribute("href", repoDetailUrl(repo));
     }
-    const auditLogsLink = document.getElementById("audit-logs-link");
-    if (auditLogsLink) {
-        auditLogsLink.setAttribute("href", repoDetailUrl(repo));
+    const auditToggle = document.getElementById("audit-logs-toggle");
+    if (auditToggle) {
+        auditToggle.dataset.defaultHref = repoDetailUrl(repo);
     }
 }
 
@@ -1015,6 +1015,23 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         bindUrgentRows(visibleSelectionItems, repos);
         bindRepoAtlasCards(repoAtlasItems, repos);
 
+        // Populate Audit Logs repo list (collapsible nav)
+        try {
+            const auditListEl = document.getElementById("audit-logs-list");
+            if (auditListEl) {
+                if (repos.length === 0) {
+                    setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
+                } else {
+                    const items = repos.map((r) => `
+                        <a class="sidebar-subitem" href="${repoDetailUrl(r)}">${escapeHtml(r.repo_full)}</a>
+                    `).join("");
+                    setSectionHtml("audit-logs-list", `<nav class=\"sidebar-sublist-nav\">${items}</nav>`);
+                }
+            }
+        } catch (e) {
+            // ignore failures populating nav
+        }
+
         if (selectionItems.length) {
             const preferredIndex = preferredRepoFull
                 ? selectionItems.findIndex((repo) => repo.repo_full === preferredRepoFull)
@@ -1071,3 +1088,24 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
 
     bindOverviewRebaselineModal();
 loadOverview();
+
+// Audit Logs toggle behavior: expand/collapse the repo list
+function bindAuditLogsToggle() {
+    const toggle = document.getElementById("audit-logs-toggle");
+    const list = document.getElementById("audit-logs-list");
+    if (!toggle || !list || toggle.dataset.boundToggle === "true") {
+        return;
+    }
+    toggle.dataset.boundToggle = "true";
+    toggle.addEventListener("click", () => {
+        const expanded = list.hasAttribute("hidden") ? false : true;
+        if (expanded) {
+            list.setAttribute("hidden", "true");
+            toggle.setAttribute("aria-expanded", "false");
+        } else {
+            list.removeAttribute("hidden");
+            toggle.setAttribute("aria-expanded", "true");
+        }
+    });
+}
+bindAuditLogsToggle();
