@@ -12,6 +12,20 @@
     --danger: #9a3431;
 }
 
+body[data-theme="dark"] {
+    --bg: #111210;
+    --panel: rgba(28, 27, 25, 0.94);
+    --panel-strong: #4f98a3;
+    --ink: #d8d4cf;
+    --muted: #8f8c88;
+    --line: rgba(255, 255, 255, 0.08);
+    --accent: #e0914a;
+    --accent-soft: rgba(224, 145, 74, 0.18);
+    --success: #6daa45;
+    --warning: #e0914a;
+    --danger: #e05c5c;
+}
+
 * {
     box-sizing: border-box;
 }
@@ -25,6 +39,13 @@ body {
         radial-gradient(circle at top left, rgba(160, 77, 42, 0.14), transparent 30%),
         radial-gradient(circle at right, rgba(31, 58, 55, 0.12), transparent 24%),
         linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+}
+
+body[data-theme="dark"] {
+    background:
+        radial-gradient(circle at top left, rgba(79, 152, 163, 0.1), transparent 34%),
+        radial-gradient(circle at right, rgba(224, 145, 74, 0.08), transparent 28%),
+        linear-gradient(180deg, #111210 0%, #151613 100%);
 }
 
 a {
@@ -338,4 +359,34 @@ button.button {
     .checklist-meta {
         text-align: left;
     }
+}
+
+.theme-toggle-shell {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 60;
+}
+
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.16);
+    cursor: pointer;
+}
+
+.theme-toggle-label {
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
+.theme-toggle-icon {
+    font-size: 0.95rem;
+    line-height: 1;
 }

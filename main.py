@@ -58,6 +58,7 @@ from services.control_plane_frontend import (
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
+    render_control_plane_placeholder_page,
     render_control_plane_profile_page,
     render_control_plane_settings_page,
     render_control_plane_pricing_page,
@@ -627,6 +628,59 @@ def _current_theme_preference(request: Request) -> str:
     return user.theme_preference if user else "dark"
 
 
+def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
+    connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace_id)
+    allocations = {
+        allocation.repo_full: allocation
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace_id)
+    }
+    rows: list[dict[str, object]] = []
+    seen_repo_fulls: set[str] = set()
+    for connection in connections:
+        allocation = allocations.get(connection.repo_full)
+        status = "Available"
+        if allocation is not None:
+            status = "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated"
+        rows.append(
+            {
+                "repo_full": connection.repo_full,
+                "status": status,
+                "branch": connection.default_branch or "unknown",
+                "visibility": "Private" if connection.is_private else "Public",
+                "href": f"/dashboard/{quote(connection.repo_full, safe='')}",
+            }
+        )
+        seen_repo_fulls.add(connection.repo_full)
+
+    for repo_full, allocation in allocations.items():
+        if repo_full in seen_repo_fulls:
+            continue
+        rows.append(
+            {
+                "repo_full": repo_full,
+                "status": "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated",
+                "branch": "unknown",
+                "visibility": "Unknown",
+                "href": f"/dashboard/{quote(repo_full, safe='')}",
+            }
+        )
+
+    return sorted(rows, key=lambda item: str(item["repo_full"]).lower())
+
+
+def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
+    rows = [row for row in list_admin_workspace_users(AUDIT_DB_PATH) if row.workspace_id == workspace_id]
+    return [
+        {
+            "display_name": row.user_display_name,
+            "github_login": row.github_login,
+            "role": row.membership_role,
+            "state": "Accepted",
+        }
+        for row in rows
+    ]
+
+
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
     access_context = _require_dashboard_access(request)
     if not access_context:
@@ -978,6 +1032,7 @@ async def profile_page(request: Request):
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
+    membership = access_context["membership"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     return HTMLResponse(
         render_control_plane_profile_page(
@@ -985,7 +1040,9 @@ async def profile_page(request: Request):
             theme_preference=user.theme_preference if user else "dark",
             github_login=identity.github_login if identity else "Unavailable",
             github_user_id=identity.github_user_id if identity else "Unavailable",
+            primary_email=user.primary_email if user else None,
             workspace_name=workspace.display_name,
+            workspace_role=membership.role if membership else "viewer",
             plan_label=get_plan_definition(plan_code).label,
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
@@ -1032,6 +1089,7 @@ async def settings_page(request: Request):
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     membership = access_context["membership"]
+    installation = access_context["installation"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     return HTMLResponse(
         render_control_plane_settings_page(
@@ -1045,6 +1103,15 @@ async def settings_page(request: Request):
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
             can_manage=bool(membership and membership.role in {"owner", "admin"}),
+            workspace_role=membership.role if membership else "viewer",
+            workspace_members=_workspace_member_rows(workspace.id),
+            repo_rows=_workspace_repo_rows(workspace.id),
+            next_payment_at=subscription.next_payment_at if subscription else None,
+            subscription_status=subscription.status if subscription else None,
+            setup_state=workspace.setup_state,
+            installation_account_login=installation.account_login if installation else None,
+            repo_limit=entitlement.repo_limit if entitlement else None,
+            seat_limit=entitlement.seat_limit if entitlement else None,
         )
     )
 
@@ -1067,6 +1134,52 @@ async def settings_update(request: Request, pr_comments_setting: str = Form(...)
         enabled=normalized_setting == "on",
     )
     return RedirectResponse("/app/settings?updated=1", status_code=303)
+
+
+@app.get("/app/policies", response_class=HTMLResponse)
+async def policies_page(request: Request):
+    access_context = _current_workspace_context(request)
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_placeholder_page(
+            page_title="Policies",
+            page_kicker="Workspace policy library",
+            page_copy="We are working on this page now. It will become the home for workspace guardrails, policy packs, and audit rules.",
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            active_nav="policies",
+        )
+    )
+
+
+@app.get("/app/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    access_context = _current_workspace_context(request)
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_placeholder_page(
+            page_title="Help",
+            page_kicker="Operator assistance",
+            page_copy="We are working on this page now. It will collect guided setup, troubleshooting, and operator playbooks for each workspace.",
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            active_nav="help",
+        )
+    )
 
 
 @app.get("/app/admin", response_class=HTMLResponse)
@@ -1448,6 +1561,7 @@ async def install_link(
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
+    user = access_context["user"]
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocation_status_by_full = {
@@ -1480,6 +1594,7 @@ async def repo_setup_page(request: Request):
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
+            theme_preference=user.theme_preference if user else "dark",
         )
     )
 

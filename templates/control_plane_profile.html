@@ -6,116 +6,143 @@
     <title>Profile | DriftGuard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body data-theme="{{THEME_PREFERENCE}}">
+<body class="control-page" data-theme="{{THEME_PREFERENCE}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
-                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                    <rect x="4" y="6" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5"/>
-                    <rect x="10" y="10" width="14" height="16" rx="2" stroke="#4f98a3" stroke-width="1.5" opacity="0.5"/>
-                    <circle cx="8" cy="10" r="1.5" fill="#4f98a3"/>
-                </svg>
+                <span class="sidebar-logo-mark">D</span>
             </a>
 
-            <div class="sidebar-nav-group">
-                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard" data-tooltip="Dashboard">
-                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.5-2.7 7.8-7 9-4.3-1.2-7-4.5-7-9V7l7-4z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
+                </a>
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+                    <span>Policies</span>
+                </a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
+                </a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
                 </a>
             </div>
 
-            <div class="sidebar-divider"></div>
-
-            <div class="sidebar-nav-group sidebar-nav-group-secondary">
-                {{ADMIN_NAV_ITEM}}
-            </div>
-
-            <div class="sidebar-avatar">
-                <a href="/app/profile" class="avatar-circle avatar-circle-active" aria-label="User profile">D</a>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link sidebar-profile-link-active" aria-label="User profile">D</a>
             </div>
         </nav>
 
         <div class="main-content">
-            <div class="posture-strip">
-                <div class="posture-strip-left">
-                    <span class="posture-title">Profile</span>
-                    <div class="filter-pills">
-                        <span class="filter-pill">{{WORKSPACE_NAME}}</span>
-                        <span class="filter-pill">{{PLAN_LABEL}}</span>
+            <main class="page-scroll control-page-shell" id="top">
+                <section class="control-page-hero">
+                    <div class="control-page-hero-copy">
+                        <p class="control-page-eyebrow">User settings</p>
+                        <h1>{{DISPLAY_NAME}}</h1>
+                        <p>{{STATUS_NOTE}}</p>
                     </div>
-                </div>
-                <div class="posture-strip-center">
-                    <span class="posture-disclaimer">{{STATUS_NOTE}}</span>
-                </div>
-                <div class="posture-strip-right">
-                    <div class="posture-stat posture-stat-ok"><span>{{NEXT_PAYMENT_AT}}</span> next payment</div>
-                </div>
-            </div>
+                    <div class="control-page-hero-note">
+                        <span class="control-page-note-label">Workspace permission</span>
+                        <span class="control-page-note-copy">{{WORKSPACE_PERMISSION}} access inside {{WORKSPACE_NAME}}. Theme preference is your default shell state for dashboard and control-plane pages.</span>
+                    </div>
+                </section>
 
-            <main class="page-scroll" id="top">
-                <section class="profile-dashboard-shell">
-                    <section class="profile-dashboard-grid">
-                        <article class="card-shell profile-panel">
-                            <div class="secondary-panel-title">Edit profile</div>
-                            <h1 class="profile-title">{{DISPLAY_NAME}}</h1>
-                            <p class="profile-copy">Update how your name appears inside DriftGuard and choose the dashboard shell theme. Your GitHub identity remains read-only.</p>
-                            <form method="post" action="/app/profile" class="profile-form">
+                <section class="control-page-stat-grid">
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Workspace</span>
+                        <strong>{{WORKSPACE_NAME}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Plan</span>
+                        <strong>{{PLAN_LABEL}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Permission</span>
+                        <strong>{{WORKSPACE_PERMISSION}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Next payment date</span>
+                        <strong>{{NEXT_PAYMENT_AT}}</strong>
+                    </article>
+                </section>
+
+                <section class="control-page-sections">
+                    <article class="control-page-section">
+                        <div class="secondary-panel-title">Profile details</div>
+                        <h2 class="control-page-section-title">Edit your preferences</h2>
+                        <p class="control-page-copy">Update how your name appears inside DriftGuard and set the default theme used when the workspace opens.</p>
+                        <form method="post" action="/app/profile" class="control-page-form">
                                 {{CSRF_INPUT}}
-                                <label class="profile-label" for="display-name">Display name</label>
-                                <input class="profile-input" id="display-name" name="display_name" value="{{DISPLAY_NAME}}" maxlength="120" />
-                                <fieldset class="theme-picker" aria-labelledby="theme-picker-title">
-                                    <legend class="profile-label" id="theme-picker-title">Theme</legend>
-                                    <div class="theme-choice-grid">
-                                        <label class="theme-choice">
+                                <label class="control-page-label" for="display-name">Display name</label>
+                                <input class="control-page-input" id="display-name" name="display_name" value="{{DISPLAY_NAME}}" maxlength="120" />
+                                <fieldset class="control-page-choice-group" aria-labelledby="theme-picker-title">
+                                    <legend class="control-page-label" id="theme-picker-title">Default theme</legend>
+                                    <div class="control-page-choice-grid">
+                                        <label class="control-page-choice">
                                             <input type="radio" name="theme_preference" value="dark" {{THEME_DARK_CHECKED}} />
-                                            <span class="theme-choice-card theme-choice-card-dark">
-                                                <span class="theme-choice-title">Dark</span>
-                                                <span class="theme-choice-copy">Current DriftGuard shell with deeper contrast.</span>
+                                            <span class="control-page-choice-card">
+                                                <span class="control-page-choice-title">Dark</span>
+                                                <span class="control-page-choice-copy">High-contrast review shell for dashboards, audit pages, and focused triage work.</span>
                                             </span>
                                         </label>
-                                        <label class="theme-choice">
+                                        <label class="control-page-choice">
                                             <input type="radio" name="theme_preference" value="light" {{THEME_LIGHT_CHECKED}} />
-                                            <span class="theme-choice-card theme-choice-card-light">
-                                                <span class="theme-choice-title">Light</span>
-                                                <span class="theme-choice-copy">Pastel surfaces with softer contrast for long sessions.</span>
+                                            <span class="control-page-choice-card">
+                                                <span class="control-page-choice-title">Light</span>
+                                                <span class="control-page-choice-copy">Softer shell for planning, note-taking, and longer workspace admin sessions.</span>
                                             </span>
                                         </label>
                                     </div>
                                 </fieldset>
-                                <button type="submit" class="profile-button">Save profile</button>
+                                <button type="submit" class="control-page-button">Save profile</button>
                             </form>
                         </article>
 
-                        <article class="card-shell profile-panel">
-                            <div class="secondary-panel-title">GitHub account</div>
-                            <div class="profile-meta-grid">
-                                <div class="profile-meta-block">
-                                    <span class="profile-meta-label">GitHub login</span>
+                        <article class="control-page-section">
+                            <div class="secondary-panel-title">Identity and access</div>
+                            <div class="control-page-meta-grid">
+                                <div class="control-page-meta-card">
+                                    <span class="control-page-meta-label">GitHub login</span>
                                     <strong>{{GITHUB_LOGIN}}</strong>
                                 </div>
-                                <div class="profile-meta-block">
-                                    <span class="profile-meta-label">GitHub user id</span>
+                                <div class="control-page-meta-card">
+                                    <span class="control-page-meta-label">GitHub user id</span>
                                     <strong>{{GITHUB_USER_ID}}</strong>
                                 </div>
-                                <div class="profile-meta-block">
-                                    <span class="profile-meta-label">Next payment date</span>
-                                    <strong>{{NEXT_PAYMENT_AT}}</strong>
+                                <div class="control-page-meta-card">
+                                    <span class="control-page-meta-label">Primary email</span>
+                                    <strong>{{PRIMARY_EMAIL}}</strong>
+                                </div>
+                                <div class="control-page-meta-card">
+                                    <span class="control-page-meta-label">Permission level</span>
+                                    <strong>{{WORKSPACE_PERMISSION}}</strong>
                                 </div>
                             </div>
+                            {{ADMIN_CONTROL}}
                         </article>
-                    </section>
-
-                    <section class="card-shell profile-panel">
-                        <div class="secondary-panel-title">Workspace readiness</div>
-                        <h2 class="profile-section-title">Setup checklist</h2>
-                        <p class="profile-copy">Current access and onboarding milestones for this workspace.</p>
-                        <ul class="profile-checklist">{{CHECKLIST_ITEMS}}</ul>
-                    </section>
                 </section>
             </main>
         </div>
+    </div>
+
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
     </div>
 </body>
 </html>

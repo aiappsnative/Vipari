@@ -27,6 +27,7 @@ def _load_template(name: str) -> str:
     return (
         template.replace("/static/control-plane.css", _asset_url("/static/control-plane.css"))
         .replace("/static/dashboard.css", _asset_url("/static/dashboard.css"))
+        .replace("/static/theme-toggle.js", _asset_url("/static/theme-toggle.js"))
     )
 
 
@@ -233,8 +234,6 @@ def _render_quick_links(*, profile_url: str | None = None, admin_url: str | None
     links = ['<a class="subtle-link" href="/app">Workspace</a>']
     if profile_url:
         links.append(f'<a class="subtle-link" href="{html_escape(profile_url)}">Profile</a>')
-    if admin_url:
-        links.append(f'<a class="subtle-link" href="{html_escape(admin_url)}">Admin</a>')
     return "".join(links)
 
 
@@ -253,6 +252,66 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> str:
         for row in rows
     )
     return f'<div class="table-shell"><table class="data-table"><thead><tr>{head_html}</tr></thead><tbody>{row_html}</tbody></table></div>'
+
+
+def _permission_label(role: str | None) -> str:
+    normalized = (role or "").strip().lower()
+    return {
+        "owner": "Owner",
+        "admin": "Edit",
+        "viewer": "Read",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _setup_state_label(setup_state: str | None) -> str:
+    normalized = (setup_state or "").strip().lower()
+    labels = {
+        "workspace_no_subscription": "Billing setup needed",
+        "billing_pending_confirmation": "Billing pending",
+        "payment_failed": "Billing issue",
+        "awaiting_github_install": "GitHub install needed",
+        "awaiting_repo_onboarding": "Repo onboarding needed",
+        "active_comments_only": "Comments only",
+        "active": "Active",
+        "canceled_active_until_period_end": "Active until period end",
+        "expired_read_only": "Read only",
+    }
+    return labels.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _render_workspace_members_table(workspace_members: list[dict[str, object]]) -> str:
+    rows = [
+        [
+            html_escape(str(member.get("display_name") or "Unknown")),
+            html_escape(str(member.get("github_login") or "Unavailable")),
+            html_escape(_permission_label(str(member.get("role") or ""))),
+            html_escape(str(member.get("state") or "Accepted")),
+        ]
+        for member in workspace_members
+    ]
+    return _render_table(["Member", "GitHub", "Permission", "Access"], rows)
+
+
+def _render_workspace_repos_table(repo_rows: list[dict[str, object]]) -> str:
+    rows = [
+        [
+            f'<a class="link" href="{html_escape(str(repo.get("href") or "#"))}">{html_escape(str(repo.get("repo_full") or "Unknown"))}</a>',
+            html_escape(str(repo.get("status") or "Unknown")),
+            html_escape(str(repo.get("branch") or "unknown")),
+            html_escape(str(repo.get("visibility") or "Private")),
+        ]
+        for repo in repo_rows
+    ]
+    return _render_table(["Repository", "Status", "Default branch", "Visibility"], rows)
+
+
+def _admin_sidebar_item(admin_url: str | None) -> str:
+    if not admin_url:
+        return ""
+    return f'''<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.5-2.7 7.8-7 9-4.3-1.2-7-4.5-7-9V7l7-4z"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>
+                    <span>Admin</span>
+                </a>'''
 
 
 def _render_state_links(active_state: str) -> str:
@@ -392,7 +451,7 @@ def _repo_dashboard_href(repo_full: str) -> str:
     return f'/dashboard/{quote(repo_full, safe="")}'
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str) -> str:
+def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark") -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -400,6 +459,7 @@ def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards
         .replace("{{ONBOARDING_METRICS}}", onboarding_metrics)
         .replace("{{ONBOARDING_SUMMARY_CARDS}}", onboarding_summary_cards)
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
     )
 
 
@@ -630,7 +690,9 @@ def render_control_plane_profile_page(
     theme_preference: str,
     github_login: str,
     github_user_id: str,
+    primary_email: str | None,
     workspace_name: str,
+    workspace_role: str,
     plan_label: str,
     next_payment_at: float | None,
     status_note: str | None,
@@ -639,9 +701,9 @@ def render_control_plane_profile_page(
     csrf_token: str,
 ) -> str:
     template = _load_template("control_plane_profile.html")
-    admin_nav_item = ""
+    admin_control = ""
     if admin_url:
-        admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     return (
         template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
@@ -652,10 +714,11 @@ def render_control_plane_profile_page(
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{GITHUB_LOGIN}}", html_escape(github_login))
         .replace("{{GITHUB_USER_ID}}", html_escape(github_user_id))
+        .replace("{{PRIMARY_EMAIL}}", html_escape(primary_email or "Unavailable"))
+        .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
-        .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
-        .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
-        .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+        .replace("{{STATUS_NOTE}}", html_escape(status_note or "User settings apply to your identity inside the current workspace. GitHub account details remain read-only."))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
     )
 
 
@@ -671,11 +734,17 @@ def render_control_plane_settings_page(
     pr_comments_allowed_by_plan: bool,
     pr_comments_setting_enabled: bool,
     can_manage: bool,
+    workspace_role: str,
+    workspace_members: list[dict[str, object]],
+    repo_rows: list[dict[str, object]],
+    next_payment_at: float | None,
+    subscription_status: str | None,
+    setup_state: str,
+    installation_account_login: str | None,
+    repo_limit: int | None,
+    seat_limit: int | None,
 ) -> str:
     template = _load_template("control_plane_settings.html")
-    admin_nav_item = ""
-    if admin_url:
-        admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
     effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
     status_copy = status_note or "Manage workspace-wide comment behavior for pull requests."
     if not pr_comments_allowed_by_plan:
@@ -687,7 +756,6 @@ def render_control_plane_settings_page(
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{STATUS_NOTE}}", html_escape(status_copy))
-        .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
         .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
         .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
@@ -696,6 +764,39 @@ def render_control_plane_settings_page(
         .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", "On" if pr_comments_setting_enabled else "Off")
         .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", "Active" if effective_status else "Paused")
         .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
+        .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
+        .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_table(workspace_members))
+        .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows))
+        .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
+        .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))
+        .replace("{{SETUP_STATE}}", html_escape(_setup_state_label(setup_state)))
+        .replace("{{INSTALLATION_ACCOUNT_LOGIN}}", html_escape(installation_account_login or "Not linked"))
+        .replace("{{REPO_LIMIT}}", html_escape(str(repo_limit or 0)))
+        .replace("{{SEAT_LIMIT}}", html_escape(str(seat_limit or 0)))
+    )
+
+
+def render_control_plane_placeholder_page(
+    *,
+    page_title: str,
+    page_kicker: str,
+    page_copy: str,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    active_nav: str,
+) -> str:
+    template = _load_template("control_plane_placeholder.html")
+    return (
+        template.replace("{{PAGE_TITLE}}", html_escape(page_title))
+        .replace("{{PAGE_KICKER}}", html_escape(page_kicker))
+        .replace("{{PAGE_COPY}}", html_escape(page_copy))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{POLICIES_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "policies" else "")
+        .replace("{{HELP_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "help" else "")
     )
 
 

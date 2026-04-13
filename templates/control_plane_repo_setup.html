@@ -8,8 +8,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body class="repo-setup-page">
+<body class="repo-setup-page" data-theme="{{THEME_PREFERENCE}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
@@ -28,7 +29,7 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
-                <a href="/app" class="sidebar-nav-item" aria-label="Policies">
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
                     <span>Policies</span>
                 </a>
@@ -36,7 +37,7 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
                     <span>Settings</span>
                 </a>
-                <a href="/app" class="sidebar-nav-item" aria-label="Help">
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
                     <span>Help</span>
                 </a>
@@ -99,6 +100,13 @@
                 </section>
             </main>
         </div>
+    </div>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
     </div>
     <script>
         (() => {

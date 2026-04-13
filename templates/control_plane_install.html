@@ -8,8 +8,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/control-plane.css" />
+    <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body>
+<body data-theme="dark">
     <main class="page-shell">
         <section class="page-header">
             <p class="eyebrow">GitHub install</p>
@@ -33,5 +34,12 @@
             </article>
         </section>
     </main>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
 </body>
 </html>

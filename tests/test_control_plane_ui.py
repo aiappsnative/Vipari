@@ -612,11 +612,14 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Starter User" in get_response.text
     assert "starter-user" in get_response.text
     assert "Next payment date" in get_response.text
-    assert "Setup checklist" in get_response.text
-    assert "Plan active" in get_response.text
+    assert "Setup checklist" not in get_response.text
+    assert "<span class=\"control-page-stat-label\">Plan</span>" in get_response.text
+    assert "Permission level" in get_response.text
     assert 'href="/dashboard"' in get_response.text
+    assert 'href="/app/admin"' not in get_response.text
     assert "sidebar" in get_response.text
     assert 'data-theme="dark"' in get_response.text
+    assert 'data-theme-toggle' in get_response.text
     assert 'value="dark" checked' in get_response.text
 
     workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
@@ -736,6 +739,9 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert "Workspace settings" in get_response.text
     assert "PR comments" in get_response.text
     assert "Effective status" in get_response.text
+    assert "Allowed users and permissions" in get_response.text
+    assert "Onboarded and allocated repositories" in get_response.text
+    assert 'data-theme-toggle' in get_response.text
     assert 'value="on" checked' in get_response.text
 
     post_response = client.post(
@@ -753,6 +759,81 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert updated_get_response.status_code == 200
     assert 'value="off" checked' in updated_get_response.text
     assert "Paused" in updated_get_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "placeholder-pages.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="933",
+        github_login="placeholder-owner",
+        display_name="Placeholder Owner",
+        primary_email="placeholder@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="placeholder-workspace",
+        display_name="Placeholder Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="placeholder-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-placeholder",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:placeholder-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    help_response = client.get("/app/help", cookies={main.settings.session_cookie_name: session.session_id})
+    policies_response = client.get("/app/policies", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert help_response.status_code == 200
+    assert policies_response.status_code == 200
+    assert "We are working on this" in help_response.text
+    assert "We are working on this" in policies_response.text
+    assert 'data-theme-toggle' in help_response.text
+    assert 'data-theme-toggle' in policies_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
