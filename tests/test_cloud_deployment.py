@@ -16,13 +16,14 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import create_audit_job, init_db
 from services.branch_scan_jobs import claim_next_branch_scan_job
 from services.audit_records import record_audit_result
-from services.cloud_worker import _process_message
+from services.cloud_worker import _message_still_authorized, _process_message
 from services.observability import configure_logging
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_workspace,
     init_control_plane_db,
     update_repo_allocation_status,
+    update_workspace_pr_comments_setting,
     upsert_entitlement,
     upsert_github_identity,
     upsert_github_installation,
@@ -102,6 +103,7 @@ def test_webhook_deduplication_only_enqueues_once(tmp_path, monkeypatch):
     assert messages[0].payload["delivery_id"] == "delivery-1"
 
 
+
 def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch):
     db_path = str(tmp_path / "webhook-retry.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -146,6 +148,66 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert second.status_code == 202
     assert len(queue.messages) == 1
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
+def test_message_authorization_respects_workspace_pr_comments_setting(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-settings.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+
+    init_control_plane_db(db_path)
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="1500",
+        github_login="worker-settings-owner",
+        display_name="Worker Settings Owner",
+        primary_email="worker-settings@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="worker-settings-workspace",
+        display_name="Worker Settings Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=888,
+        account_id="888",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=888,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "active")
+
+    settings = get_settings()
+    payload = {
+        "installation_id": 888,
+        "repo_full": "doria90/dummyAI",
+        "event_type": "pull_request",
+    }
+    assert _message_still_authorized(payload, settings) is True
+
+    update_workspace_pr_comments_setting(db_path, workspace.id, enabled=False)
+    assert _message_still_authorized(payload, settings) is False
 
 
 def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):

@@ -279,10 +279,17 @@ def render_control_plane_marketing_page() -> str:
     return _load_template("control_plane_marketing.html")
 
 
-def render_control_plane_login_page(*, auth_start_url: str, context_note: str | None = None) -> str:
+def render_control_plane_login_page(*, auth_start_url: str, context_note: str | None = None, auth_available: bool = True) -> str:
     template = _load_template("control_plane_login.html")
-    return template.replace("{{AUTH_START_URL}}", html_escape(auth_start_url)).replace(
-        "{{CONTEXT_NOTE}}", html_escape(context_note or "GitHub identity anchors workspace membership, install authority, and repository allocation.")
+    action_markup = (
+        f'<a class="button" href="{html_escape(auth_start_url)}">Sign in with GitHub</a>'
+        if auth_available
+        else '<span class="button button-disabled" aria-disabled="true">Sign in with GitHub</span>'
+    )
+    return (
+        template.replace("{{AUTH_ACTION}}", action_markup)
+        .replace("{{AUTH_START_URL}}", html_escape(auth_start_url))
+        .replace("{{CONTEXT_NOTE}}", html_escape(context_note or "GitHub identity anchors workspace membership, install authority, and repository allocation."))
     )
 
 
@@ -649,6 +656,46 @@ def render_control_plane_profile_page(
         .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
         .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+    )
+
+
+def render_control_plane_settings_page(
+    *,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    status_note: str | None,
+    resolution: WorkspaceAccessResolution,
+    admin_url: str | None,
+    csrf_token: str,
+    pr_comments_allowed_by_plan: bool,
+    pr_comments_setting_enabled: bool,
+    can_manage: bool,
+) -> str:
+    template = _load_template("control_plane_settings.html")
+    admin_nav_item = ""
+    if admin_url:
+        admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
+    effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
+    status_copy = status_note or "Manage workspace-wide comment behavior for pull requests."
+    if not pr_comments_allowed_by_plan:
+        status_copy = "Your current plan does not permit PR comments, so this setting will not take effect until comments are included in the workspace entitlement."
+    manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
+    return (
+        template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{STATUS_NOTE}}", html_escape(status_copy))
+        .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
+        .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+        .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
+        .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
+        .replace("{{PR_COMMENTS_DISABLED}}", "disabled" if not can_manage else "")
+        .replace("{{PLAN_PR_COMMENTS_STATUS}}", "Included" if pr_comments_allowed_by_plan else "Unavailable")
+        .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", "On" if pr_comments_setting_enabled else "Off")
+        .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", "Active" if effective_status else "Paused")
+        .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
     )
 
 

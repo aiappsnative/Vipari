@@ -62,6 +62,7 @@ class WorkspaceRecord:
     status: str
     billing_owner_user_id: int | None
     setup_state: str
+    pr_comments_setting_enabled: bool
     created_at: float
     updated_at: float
 
@@ -299,6 +300,7 @@ def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
         status=row["status"],
         billing_owner_user_id=row["billing_owner_user_id"],
         setup_state=row["setup_state"],
+        pr_comments_setting_enabled=bool(row["pr_comments_setting_enabled"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -642,6 +644,7 @@ def init_control_plane_db(db_path: str) -> None:
                 status TEXT NOT NULL DEFAULT 'active',
                 billing_owner_user_id INTEGER,
                 setup_state TEXT NOT NULL DEFAULT 'workspace_no_subscription',
+                pr_comments_setting_enabled INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY(billing_owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -859,6 +862,7 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "users", "profile_name_override", "TEXT")
         _ensure_column(conn, "users", "theme_preference", "TEXT NOT NULL DEFAULT 'dark'")
         _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
+        _ensure_column(conn, "workspaces", "pr_comments_setting_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
         _ensure_column(conn, "billing_customers", "billing_email", "TEXT")
@@ -1056,7 +1060,7 @@ def create_workspace(db_path: str, *, slug: str, display_name: str, billing_owne
     now = time.time()
     with _connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO workspaces (slug, display_name, status, billing_owner_user_id, setup_state, created_at, updated_at) VALUES (?, ?, 'active', ?, 'workspace_no_subscription', ?, ?)",
+            "INSERT INTO workspaces (slug, display_name, status, billing_owner_user_id, setup_state, pr_comments_setting_enabled, created_at, updated_at) VALUES (?, ?, 'active', ?, 'workspace_no_subscription', 1, ?, ?)",
             (slug, display_name, billing_owner_user_id, now, now),
         )
         workspace_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
@@ -1078,6 +1082,17 @@ def get_workspace_by_id(db_path: str, workspace_id: int) -> WorkspaceRecord | No
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
     return _row_to_workspace(row) if row else None
+
+
+def update_workspace_pr_comments_setting(db_path: str, workspace_id: int, *, enabled: bool) -> WorkspaceRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE workspaces SET pr_comments_setting_enabled = ?, updated_at = ? WHERE id = ?",
+            (int(bool(enabled)), now, workspace_id),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    return _row_to_workspace(row)
 
 
 def get_workspace_membership(db_path: str, workspace_id: int, user_id: int) -> WorkspaceMembershipRecord | None:

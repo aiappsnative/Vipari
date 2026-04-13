@@ -98,6 +98,15 @@ def test_login_page_preserves_handoff_context():
     assert "Resuming the Team plan handoff from base44." in response.text
 
 
+def test_login_page_explains_missing_oauth_configuration():
+    response = client.get("/login?login_error=oauth_not_configured")
+
+    assert response.status_code == 200
+    assert "GitHub sign-in is not configured for this deployment yet." in response.text
+    assert "/auth/github/start" in response.text
+    assert "{{AUTH_ACTION}}" not in response.text
+
+
 def test_app_page_redirects_to_login_when_unauthenticated():
     response = client.get("/app", follow_redirects=False)
 
@@ -162,14 +171,24 @@ def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_github_auth_start_requires_encryption_key_when_oauth_is_enabled():
+def test_github_auth_start_redirects_to_login_when_oauth_is_not_configured():
+    with patch.object(main.settings, "github_oauth_client_id", ""), patch.object(
+        main.settings, "github_oauth_client_secret", ""
+    ), patch.object(main.settings, "app_encryption_key", "very-secret"):
+        response = client.get("/auth/github/start?source=base44&plan=team", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?login_error=oauth_not_configured&source=base44&plan=team"
+
+
+def test_github_auth_start_redirects_to_login_when_encryption_key_is_missing():
     with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
         main.settings, "github_oauth_client_secret", "client-secret"
     ), patch.object(main.settings, "app_encryption_key", ""):
         response = client.get("/auth/github/start", follow_redirects=False)
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "APP_ENCRYPTION_KEY must be configured before GitHub OAuth can store user tokens."
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?login_error=encryption_not_configured"
 
 
 def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstrap(tmp_path):
@@ -641,6 +660,99 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Audit Queue" in repo_dashboard_html
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
+
+
+def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-paid.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        get_workspace_by_id,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="932",
+        github_login="settings-owner",
+        display_name="Settings Owner",
+        primary_email="settings@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-workspace",
+        display_name="Settings Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-settings",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:settings-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert get_response.status_code == 200
+    assert "Workspace settings" in get_response.text
+    assert "PR comments" in get_response.text
+    assert "Effective status" in get_response.text
+    assert 'value="on" checked' in get_response.text
+
+    post_response = client.post(
+        "/app/settings",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"pr_comments_setting": "off", "csrf_token": session.csrf_secret},
+        follow_redirects=False,
+    )
+
+    assert post_response.status_code == 303
+    assert post_response.headers["location"] == "/app/settings?updated=1"
+    assert get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id).pr_comments_setting_enabled is False
+
+    updated_get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert updated_get_response.status_code == 200
+    assert 'value="off" checked' in updated_get_response.text
+    assert "Paused" in updated_get_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

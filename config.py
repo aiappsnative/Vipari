@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
+PROJECT_ENV_PATH = Path(__file__).resolve().parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -67,7 +68,7 @@ class Settings(BaseSettings):
 
     worker_metrics_port: int = 8003
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(PROJECT_ENV_PATH), extra="ignore")
 
     @property
     def ai_api_key(self) -> str:

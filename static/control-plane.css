@@ -114,6 +114,13 @@ button.button {
     cursor: pointer;
 }
 
+.button.button-disabled {
+    background: rgba(68, 52, 44, 0.48);
+    color: rgba(255, 249, 241, 0.72);
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .subtle-link,
 .state-pill {
     border: 1px solid var(--line);

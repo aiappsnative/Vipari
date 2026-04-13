@@ -59,6 +59,7 @@ from services.control_plane_frontend import (
     render_control_plane_login_page,
     render_control_plane_marketing_page,
     render_control_plane_profile_page,
+    render_control_plane_settings_page,
     render_control_plane_pricing_page,
     render_control_plane_repo_setup_page,
     render_repo_inventory_cards,
@@ -103,6 +104,7 @@ from services.control_plane_records import (
     update_repo_allocation_status,
     update_session_workspace,
     update_user_profile_preferences,
+    update_workspace_pr_comments_setting,
     upsert_billing_customer,
     upsert_entitlement,
     upsert_github_identity,
@@ -383,6 +385,15 @@ def _normalize_theme_preference(value: str | None) -> str | None:
     if candidate in {"dark", "light"}:
         return candidate
     return None
+
+
+def _workspace_pr_comments_allowed_by_plan(access_context: dict[str, object]) -> bool:
+    entitlement = access_context.get("entitlement")
+    if entitlement is not None:
+        return bool(entitlement.pr_comments_enabled)
+    subscription = access_context.get("subscription")
+    subscription_status = (subscription.status if subscription else "").lower()
+    return subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES
 
 
 def _require_token_encryption_config() -> None:
@@ -745,6 +756,12 @@ def _has_profile_access(access_context: dict[str, object]) -> bool:
     return bool(access_context["resolution"].can_access_dashboard)
 
 
+def _has_settings_access(access_context: dict[str, object]) -> bool:
+    workspace = access_context.get("workspace")
+    membership = access_context.get("membership")
+    return workspace is not None and membership is not None and membership.invitation_state == "accepted"
+
+
 def _require_workspace_role(access_context: dict[str, object], *allowed_roles: str) -> None:
     membership = access_context.get("membership")
     if membership is None or membership.role not in allowed_roles:
@@ -792,7 +809,21 @@ async def login_page(request: Request):
         context_note = f"Resuming the {selected_plan.title()} plan handoff."
     elif source:
         context_note = f"Resuming the handoff from {source}."
-    return HTMLResponse(render_control_plane_login_page(auth_start_url=_auth_start_url(flow_context), context_note=context_note))
+    login_error = (request.query_params.get("login_error") or "").strip().lower()
+    if login_error == "oauth_not_configured":
+        context_note = "GitHub sign-in is not configured for this deployment yet. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET to enable login."
+    elif login_error == "encryption_not_configured":
+        context_note = "GitHub sign-in is blocked because APP_ENCRYPTION_KEY is not configured. Add it before storing OAuth tokens."
+    auth_available = settings.has_github_oauth_credentials and settings.has_encryption_key
+    if login_error in {"oauth_not_configured", "encryption_not_configured"}:
+        auth_available = False
+    return HTMLResponse(
+        render_control_plane_login_page(
+            auth_start_url=_auth_start_url(flow_context),
+            context_note=context_note,
+            auth_available=auth_available,
+        )
+    )
 
 
 @app.get("/auth/github/start")
@@ -802,8 +833,9 @@ async def github_auth_start(request: Request):
     if existing_session is not None:
         return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
     if not settings.has_github_oauth_credentials:
-        raise HTTPException(status_code=503, detail="GitHub OAuth is not configured.")
-    _require_token_encryption_config()
+        return RedirectResponse(_path_with_flow_context("/login?login_error=oauth_not_configured", flow_context), status_code=303)
+    if not settings.has_encryption_key:
+        return RedirectResponse(_path_with_flow_context("/login?login_error=encryption_not_configured", flow_context), status_code=303)
     state = generate_oauth_state()
     authorize_url = build_github_oauth_authorize_url(
         settings.github_oauth_client_id,
@@ -986,6 +1018,55 @@ async def profile_update(request: Request, display_name: str = Form(...), theme_
         theme_preference=normalized_theme or current_user.theme_preference,
     )
     return RedirectResponse("/app/profile?updated=1", status_code=303)
+
+
+@app.get("/app/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+
+    user = access_context["user"]
+    identity = access_context["identity"]
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    membership = access_context["membership"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_settings_page(
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            status_note="Settings updated." if request.query_params.get("updated") else None,
+            resolution=access_context["resolution"],
+            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            csrf_token=access_context["session"].csrf_secret,
+            pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
+            pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
+            can_manage=bool(membership and membership.role in {"owner", "admin"}),
+        )
+    )
+
+
+@app.post("/app/settings")
+async def settings_update(request: Request, pr_comments_setting: str = Form(...), csrf_token: str | None = Form(None)):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    normalized_setting = (pr_comments_setting or "").strip().lower()
+    if normalized_setting not in {"on", "off"}:
+        raise HTTPException(status_code=400, detail="PR comments setting must be on or off.")
+
+    update_workspace_pr_comments_setting(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        enabled=normalized_setting == "on",
+    )
+    return RedirectResponse("/app/settings?updated=1", status_code=303)
 
 
 @app.get("/app/admin", response_class=HTMLResponse)
@@ -1878,7 +1959,11 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
             actor_login=_dashboard_actor_login(request),
             github_app_id=GITHUB_APP_ID,
             github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
-            generate_jwt_fn=generate_jwt,
+            generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(
+                app_id,
+                private_key_path,
+                settings.resolved_github_private_key,
+            ),
             get_installation_token_fn=get_installation_token,
             fetch_file_content_fn=fetch_file_content,
         )
@@ -2245,6 +2330,9 @@ async def webhook(request: Request):
         entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
         if entitlement is None or not entitlement.pr_comments_enabled:
             return JSONResponse({"message": "ignored: workspace not entitled"})
+        workspace = get_workspace_by_id(AUDIT_DB_PATH, allocation.workspace_id)
+        if workspace is None or not workspace.pr_comments_setting_enabled:
+            return JSONResponse({"message": "ignored: PR comments disabled in settings"})
 
     if action in ("closed", "reopened"):
         update_job_pr_state(

@@ -1,9 +1,11 @@
 import os
 import sqlite3
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
+import config
 from config import Settings
 from services.audit_jobs import init_db
 from services.entitlements import derive_entitlement_payload, get_plan_definition, resolve_price_id
@@ -36,6 +38,12 @@ def test_price_resolution_prefers_enterprise_key_but_supports_legacy_business_ke
 
     legacy_only = Settings(stripe_price_business="price_business_legacy")
     assert resolve_price_id(legacy_only, "business") == "price_business_legacy"
+
+
+def test_settings_model_config_targets_project_env_file():
+    env_file = Path(Settings.model_config["env_file"]).resolve()
+
+    assert env_file == Path(config.__file__).resolve().parent / ".env"
 
 
 def test_init_db_creates_control_plane_tables(tmp_path):

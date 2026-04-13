@@ -51,29 +51,6 @@ function averageNumeric(values) {
     return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
 }
 
-function scaleSeriesAgainstHistory(seriesValues, historyValues) {
-    const finiteHistory = historyValues.map((value) => Number(value)).filter((value) => Number.isFinite(value));
-    if (!finiteHistory.length) {
-        return seriesValues.map((value) => normalizeScore(value));
-    }
-
-    const minValue = Math.min(...finiteHistory);
-    const maxValue = Math.max(...finiteHistory);
-    const span = maxValue - minValue;
-    if (span < 0.0005) {
-        return seriesValues.map((value) => normalizeScore(value));
-    }
-
-    return seriesValues.map((value) => {
-        const numeric = Number(value);
-        if (!Number.isFinite(numeric)) {
-            return 0;
-        }
-        const normalized = (numeric - minValue) / span;
-        return clamp(0.18 + (normalized * 0.74), 0.12, 0.94);
-    });
-}
-
 function escapeHtml(value) {
     return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -448,17 +425,6 @@ function radarVectors(repo, repoPayload = null) {
             : null) || snapshots.find((s) => s.snapshot_type === "baseline_approved") || snapshots[0];
         const currentSnapshot = snapshots.find((s) => s.snapshot_type === "current") || snapshots[snapshots.length - 1];
 
-        // If for any reason the baseline resolved to the same snapshot as the
-        // current (e.g. the selected id points at a non-baseline or snapshots
-        // are compacted), try to pick a nearby previous snapshot so the radar
-        // can show a meaningful difference instead of overlapping polygons.
-        if (baselineSnapshot && currentSnapshot && Number(baselineSnapshot.id) === Number(currentSnapshot.id)) {
-            const currentIndex = snapshots.findIndex((s) => Number(s.id) === Number(currentSnapshot.id));
-            if (currentIndex > 0) {
-                baselineSnapshot = snapshots[Math.max(0, currentIndex - 1)];
-            }
-        }
-
         const mapAttr = (snap) => {
             const vec = snap?.attribute_vector || {};
             const input = snap?.input_summary || {};
@@ -472,11 +438,8 @@ function radarVectors(repo, repoPayload = null) {
             ];
         };
 
-        const historyVectors = snapshots.map((snapshot) => mapAttr(snapshot));
-        const baselineValues = mapAttr(baselineSnapshot);
-        const currentValues = mapAttr(currentSnapshot);
-        const scaledBaselineValues = baselineValues.map((value, index) => scaleSeriesAgainstHistory([value], historyVectors.map((vector) => vector[index]))[0]);
-        const scaledCurrentValues = currentValues.map((value, index) => scaleSeriesAgainstHistory([value], historyVectors.map((vector) => vector[index]))[0]);
+        const baselineValues = mapAttr(baselineSnapshot).map((value) => normalizeScore(value));
+        const currentValues = mapAttr(currentSnapshot).map((value) => normalizeScore(value));
 
         return {
             labels: ["Governance", "Velocity", "Coverage", "Autonomy", "Capability", "Guardrails"],
@@ -484,12 +447,12 @@ function radarVectors(repo, repoPayload = null) {
                 {
                     color: "rgba(78, 103, 255, 0.28)",
                     stroke: "rgba(79, 106, 255, 0.9)",
-                    values: scaledBaselineValues,
+                    values: baselineValues,
                 },
                 {
                     color: "rgba(73, 223, 217, 0.22)",
                     stroke: "rgba(85, 230, 222, 0.92)",
-                    values: scaledCurrentValues,
+                    values: currentValues,
                 },
             ],
         };
@@ -744,6 +707,7 @@ function selectRepoAtlasCard(repoFull) {
 function applyRepoPreview(repo, repos, repoPayload = null) {
     previewState.activeRepoFull = repo.repo_full;
     setText("repo-radar-title", compactRepoLabel(repo.repo_full));
+    setText("journey-repo-title", compactRepoLabel(repo.repo_full));
     setText("journey-repo-name", repo.repo_full);
     setText("repo-radar-meta", triageSummary(repo));
     setSectionHtml("repo-journey-strip", renderJourney(repo, repoPayload));
@@ -812,6 +776,7 @@ function buildSelectionItems(repos, attentionRepos, highestRiskItems) {
 }
 
 async function previewRepoSelection(repo, repos, rowIndex = null) {
+    previewState.pinnedRepoFull = repo.repo_full;
     previewState.pendingRepoFull = repo.repo_full;
     if (Number.isFinite(rowIndex)) {
         selectUrgentRow(rowIndex);
@@ -828,39 +793,6 @@ async function previewRepoSelection(repo, repos, rowIndex = null) {
             return;
         }
         applyRepoPreview(repo, repos, null);
-    }
-}
-
-async function restorePinnedPreview(selectionItems, repos) {
-    const pinnedRepoFull = previewState.pinnedRepoFull;
-    if (!pinnedRepoFull) {
-        return;
-    }
-    previewState.pendingRepoFull = null;
-    const pinnedRepo = selectionItems.find((repo) => repo.repo_full === pinnedRepoFull);
-    if (!pinnedRepo) {
-        return;
-    }
-    const urgentIndex = selectionItems.findIndex((repo) => repo.repo_full === pinnedRepoFull);
-    if (urgentIndex >= 0) {
-        selectUrgentRow(urgentIndex);
-    }
-    const cachedPayload = repoDashboardCache.get(pinnedRepoFull) || null;
-    applyRepoPreview(pinnedRepo, repos, cachedPayload);
-    if (cachedPayload) {
-        return;
-    }
-    try {
-        const repoPayload = await fetchRepoDashboard(pinnedRepoFull);
-        if (previewState.pendingRepoFull !== null) {
-            return;
-        }
-        applyRepoPreview(pinnedRepo, repos, repoPayload);
-    } catch {
-        if (previewState.pendingRepoFull !== null) {
-            return;
-        }
-        applyRepoPreview(pinnedRepo, repos, null);
     }
 }
 
@@ -881,11 +813,11 @@ function bindUrgentRows(items, repos) {
         });
         button.addEventListener("mouseleave", () => {
             clearPreviewTimer(button);
-            void restorePinnedPreview(items, repos);
+            previewState.pendingRepoFull = null;
         });
         button.addEventListener("blur", () => {
             clearPreviewTimer(button);
-            void restorePinnedPreview(items, repos);
+            previewState.pendingRepoFull = null;
         });
         button.addEventListener("focus", () => {
             clearPreviewTimer(button);
@@ -920,11 +852,11 @@ function bindRepoAtlasCards(items, repos) {
         });
         button.addEventListener("mouseleave", () => {
             clearPreviewTimer(button);
-            void restorePinnedPreview(items, repos);
+            previewState.pendingRepoFull = null;
         });
         button.addEventListener("blur", () => {
             clearPreviewTimer(button);
-            void restorePinnedPreview(items, repos);
+            previewState.pendingRepoFull = null;
         });
         button.addEventListener("focus", () => {
             clearPreviewTimer(button);
@@ -1159,6 +1091,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             setSectionHtml("coverage-bars", '<div class="muted">No coverage data is available.</div>');
             setSectionHtml("repo-atlas-grid", '<div class="muted">No repositories are available for overview preview yet.</div>');
             setText("repo-radar-title", "No repository selected");
+            setText("journey-repo-title", "No repository selected");
             setText("journey-repo-name", "No repository selected");
             setText("repo-radar-meta", "Populate the workspace with onboarded repositories to see posture tracking.");
             setText("coverage-note", "Coverage summary unavailable");
@@ -1177,6 +1110,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         setSectionHtml("repo-journey-strip", fallback);
         setSectionHtml("coverage-bars", fallback);
         setText("repo-radar-title", "Overview unavailable");
+        setText("journey-repo-title", "Overview unavailable");
         setText("journey-repo-name", "Overview unavailable");
         setText("repo-radar-meta", message);
         setText("repo-journey-note", message);
