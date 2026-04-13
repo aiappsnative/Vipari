@@ -27,6 +27,10 @@ window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
 window.__journeySnapshots = [];
+window.__artifactEntries = [];
+window.__artifactTypeFilter = "all";
+window.__artifactQuery = "";
+window.__artifactsCollapsed = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 
@@ -569,6 +573,103 @@ function renderArtifactTable(items = []) {
     `).join("");
 }
 
+function artifactTypeLabel(value) {
+    if (!value || value === "all") {
+        return "All";
+    }
+    return String(value).replaceAll("_", " ");
+}
+
+function renderArtifactFilterChips(items = []) {
+    const types = [...new Set(items.map((item) => String(item.artifact_type || "unknown")).filter(Boolean))].sort();
+    const options = ["all", ...types];
+    return options.map((type) => {
+        const isActive = window.__artifactTypeFilter === type;
+        return `<button type="button" class="triage-filter-btn${isActive ? " active" : ""}" data-artifact-type-filter="${escapeHtml(type)}">${escapeHtml(artifactTypeLabel(type))}</button>`;
+    }).join("");
+}
+
+function filteredArtifactEntries(items = []) {
+    const query = String(window.__artifactQuery || "").trim().toLowerCase();
+    return items.filter((item) => {
+        const typeMatches = window.__artifactTypeFilter === "all" || String(item.artifact_type || "") === window.__artifactTypeFilter;
+        if (!typeMatches) {
+            return false;
+        }
+        if (!query) {
+            return true;
+        }
+        return String(item.artifact_path || "").toLowerCase().includes(query) || String(item.artifact_type || "").toLowerCase().includes(query);
+    });
+}
+
+function renderArtifactResultsSummary(totalCount, filteredCount) {
+    if (!totalCount) {
+        return "No artifacts tracked yet";
+    }
+    if (filteredCount === totalCount) {
+        return `${totalCount} artifact${totalCount === 1 ? "" : "s"}`;
+    }
+    return `${filteredCount} of ${totalCount} artifacts`;
+}
+
+function refreshArtifactsSection() {
+    const items = asArray(window.__artifactEntries);
+    const filtered = filteredArtifactEntries(items);
+    setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
+    const filterHost = document.getElementById("artifact-filter-chips");
+    if (filterHost) {
+        filterHost.innerHTML = renderArtifactFilterChips(items);
+    }
+    const summary = document.getElementById("artifact-results-summary");
+    if (summary) {
+        summary.textContent = renderArtifactResultsSummary(items.length, filtered.length);
+    }
+    const body = document.getElementById("artifacts-panel-body");
+    if (body) {
+        body.hidden = window.__artifactsCollapsed;
+    }
+    const toggle = document.getElementById("artifacts-collapse-toggle");
+    if (toggle) {
+        toggle.textContent = window.__artifactsCollapsed ? "Expand" : "Collapse";
+        toggle.setAttribute("aria-expanded", window.__artifactsCollapsed ? "false" : "true");
+    }
+    bindCueCards();
+}
+
+function bindArtifactControls() {
+    const searchInput = document.getElementById("artifact-search-input");
+    if (searchInput && searchInput.dataset.boundArtifactSearch !== "true") {
+        searchInput.dataset.boundArtifactSearch = "true";
+        searchInput.addEventListener("input", () => {
+            window.__artifactQuery = searchInput.value || "";
+            refreshArtifactsSection();
+        });
+    }
+
+    const collapseToggle = document.getElementById("artifacts-collapse-toggle");
+    if (collapseToggle && collapseToggle.dataset.boundArtifactToggle !== "true") {
+        collapseToggle.dataset.boundArtifactToggle = "true";
+        collapseToggle.addEventListener("click", () => {
+            window.__artifactsCollapsed = !window.__artifactsCollapsed;
+            refreshArtifactsSection();
+        });
+    }
+
+    const filterHost = document.getElementById("artifact-filter-chips");
+    if (filterHost && filterHost.dataset.boundArtifactFilters !== "true") {
+        filterHost.dataset.boundArtifactFilters = "true";
+        filterHost.addEventListener("click", (event) => {
+            const target = event.target instanceof HTMLElement ? event.target.closest("[data-artifact-type-filter]") : null;
+            if (!target) {
+                return;
+            }
+            window.__artifactTypeFilter = target.getAttribute("data-artifact-type-filter") || "all";
+            refreshArtifactsSection();
+        });
+    }
+}
+
 function bindOpenSourceChangeLinks(scope = document) {
     scope.querySelectorAll("[data-open-source-change]").forEach((link) => {
         if (link.dataset.boundOpenSourceChange === "true") {
@@ -803,8 +904,9 @@ function applyDashboardPayload(payload) {
     setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
-    setSectionHtml("artifacts-tbody", renderArtifactTable(artifacts));
-    bindCueCards();
+    window.__artifactEntries = artifacts;
+    refreshArtifactsSection();
+    bindArtifactControls();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
 }
