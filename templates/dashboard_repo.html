@@ -235,13 +235,23 @@
                             </div>
                         </div>
                         <form id="export-form" class="export-form">
-                            <div class="form-group export-form-group">
-                                <label for="export-mode">Export Mode</label>
-                                <select id="export-mode" name="export_mode" required>
-                                    <option value="compliance">Compliance Evidence - Best for SOC 2 / ISO audit prep. Lean, auditor-friendly package.</option>
-                                    <option value="compliance_plus_drift">Compliance + Drift Intelligence - Includes posture and drift analysis. Best for internal governance.</option>
-                                </select>
-                            </div>
+                            <fieldset class="export-mode-group export-form-group export-form-group-wide">
+                                <legend>Export Mode</legend>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="compliance" checked>
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Compliance Evidence</span>
+                                        <span class="export-mode-description">Lean, auditor-friendly package for SOC 2 and ISO review.</span>
+                                    </span>
+                                </label>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="compliance_plus_drift">
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Compliance + Drift Intelligence</span>
+                                        <span class="export-mode-description">Adds PromptDrift posture and drift context for internal governance.</span>
+                                    </span>
+                                </label>
+                            </fieldset>
                             <div class="form-group export-form-group">
                                 <label for="from-date">From Date</label>
                                 <input type="date" id="from-date" name="from_date" required>

@@ -6,7 +6,7 @@ import io
 import json
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from .audit_records import (
@@ -237,7 +237,7 @@ def _build_baseline_registry_csv(baseline_versions: list[OnboardingBaselineVersi
             "approved_by": bv.approved_by,
             "approved_at": _ts_to_iso(bv.approved_at) if bv.approved_at else "",
             "approval_note": bv.approval_note or "",
-            "approval_source": bv.approval_source,
+            "approval_source": "repo_baseline_review" if bv.approval_status == "approved" else "baseline_candidate",
             "approval_status": bv.approval_status,
         })
     return output.getvalue()

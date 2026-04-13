@@ -13,6 +13,54 @@ from services.compliance_export_service import (
 
 
 class TestComplianceExportService:
+    def test_build_baseline_registry_csv_uses_supported_baseline_fields(self):
+        from services.compliance_export_service import _build_baseline_registry_csv
+        from services.onboarding_records import OnboardingBaselineVersionRecord
+        from engine.drift_profile import AgentAttributeProfile, StaticSignals
+
+        baseline = OnboardingBaselineVersionRecord(
+            id=1,
+            onboarding_id=1,
+            onboarded_artifact_id=1,
+            normalized_artifact_id="artifact-1",
+            artifact_path="prompts/system.txt",
+            artifact_type="prompt",
+            version_hash="abc123",
+            signal_terms=["policy"],
+            line_count=12,
+            profile=AgentAttributeProfile(
+                guardrail_robustness=0.4,
+                capability_risk=0.3,
+                autonomy_level=0.2,
+                stability_vs_creativity=0.5,
+                governance_strength=0.8,
+                change_frequency=0.1,
+                semantic_density=0.6,
+                signals=StaticSignals(
+                    token_count=10,
+                    char_count=80,
+                    section_count=1,
+                    example_count=0,
+                    instruction_density=0.5,
+                    constraint_count=2,
+                    explicit_limit_count=1,
+                    ambiguity_count=0,
+                ),
+            ),
+            approval_status="approved",
+            approved_by="reviewer",
+            approved_at=1_700_000_000,
+            approval_note="Looks good",
+            created_at=1_700_000_000,
+            content_text=None,
+        )
+
+        csv_text = _build_baseline_registry_csv([baseline])
+
+        assert "approval_source" in csv_text
+        assert "repo_baseline_review" in csv_text
+        assert "approved" in csv_text
+
     def test_build_compliance_export_basic(self, tmp_path):
         """Test basic export generation with minimal data."""
         import sqlite3

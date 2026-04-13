@@ -1092,10 +1092,11 @@ strong {
 .export-intro {
     display: grid;
     gap: 12px;
-    padding: 12px;
+    padding: 14px;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: linear-gradient(180deg, var(--color-primary-soft), var(--color-surface-2));
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--color-primary-soft), var(--color-surface-2) 58%, var(--color-surface));
+    box-shadow: inset 0 1px 0 var(--color-surface-glass);
 }
 
 .export-kicker {
@@ -1136,6 +1137,13 @@ strong {
     gap: 12px;
 }
 
+.export-form label,
+.export-mode-group legend {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--color-text);
+}
+
 .export-form-group {
     display: grid;
     gap: 6px;
@@ -1148,6 +1156,88 @@ strong {
 .export-actions {
     display: flex;
     align-items: flex-end;
+}
+
+.export-mode-group {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    display: grid;
+    gap: 10px;
+}
+
+.export-mode-option {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    cursor: pointer;
+    transition: border-color var(--transition), background var(--transition), transform var(--transition);
+}
+
+.export-mode-option:hover {
+    border-color: var(--color-primary-outline);
+    background: var(--color-primary-soft);
+}
+
+.export-mode-option:has(input:checked) {
+    border-color: var(--color-primary-outline);
+    background: linear-gradient(180deg, var(--color-primary-soft-strong), var(--color-surface-2));
+    box-shadow: inset 0 0 0 1px rgba(79, 152, 163, 0.12);
+}
+
+.export-mode-option input {
+    margin: 2px 0 0;
+    accent-color: var(--color-primary);
+}
+
+.export-mode-copy {
+    display: grid;
+    gap: 4px;
+}
+
+.export-mode-title {
+    color: var(--color-text);
+    font-weight: 600;
+}
+
+.export-mode-description {
+    color: var(--color-text-muted);
+    line-height: 1.45;
+}
+
+.export-form input[type="date"] {
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+}
+
+.export-form input[type="date"]:focus {
+    outline: none;
+    border-color: var(--color-primary-outline);
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.export-form .checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+}
+
+.export-form .checkbox-label input {
+    accent-color: var(--color-primary);
 }
 
 .export-status {
@@ -1185,6 +1275,11 @@ strong {
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
+}
+
+.export-history-head h3 {
+    margin: 0;
+    font-size: var(--text-md);
 }
 
 .triage-header {
