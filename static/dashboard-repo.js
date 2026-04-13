@@ -991,6 +991,7 @@ function bindExportForm() {
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const submitButton = document.getElementById('export-submit-button');
         const formData = new FormData(form);
         const data = {
             from_date: formData.get('from_date'),
@@ -1000,8 +1001,13 @@ function bindExportForm() {
         };
 
         const statusDiv = document.getElementById('export-status');
-        statusDiv.style.display = 'block';
-        statusDiv.textContent = 'Generating export...';
+        statusDiv.hidden = false;
+        statusDiv.className = 'export-status export-status-progress';
+        statusDiv.textContent = 'Generating export package…';
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.textContent = 'Generating…';
+        }
 
         try {
             const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/compliance`, {
@@ -1011,25 +1017,45 @@ function bindExportForm() {
             });
 
             if (!response.ok) {
-                throw new Error(`Export request failed: ${response.status}`);
+                let detail = `Export request failed: ${response.status}`;
+                try {
+                    const errorPayload = await response.json();
+                    if (errorPayload && typeof errorPayload.detail === 'string') {
+                        detail = errorPayload.detail;
+                    }
+                } catch (error) {
+                }
+                throw new Error(detail);
             }
 
             const result = await response.json();
-            statusDiv.textContent = `Export job created with ID: ${result.job_id}. Check status below.`;
-            loadExportHistory();
+            statusDiv.className = 'export-status export-status-success';
+            if (result.download_url) {
+                statusDiv.innerHTML = `Export job <strong>#${escapeHtml(String(result.job_id))}</strong> is ready. <a class="link" href="${escapeHtml(result.download_url)}">Download ZIP</a>.`;
+            } else {
+                statusDiv.textContent = `Export job #${result.job_id} was created.`;
+            }
+            await loadExportHistory();
         } catch (error) {
-            statusDiv.textContent = `Error: ${error.message}`;
+            const message = error instanceof Error ? error.message : 'Unknown export error';
+            statusDiv.className = 'export-status export-status-error';
+            statusDiv.textContent = message;
+        } finally {
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Generate Export Package';
+            }
         }
     });
 }
 
 async function loadExportHistory() {
     try {
-        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
-        if (!response.ok) throw new Error('Failed to load dashboard');
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/history`);
+        if (!response.ok) throw new Error('Failed to load export history');
 
         const payload = await response.json();
-        const exportJobs = asArray(payload.export_jobs || []);
+        const exportJobs = asArray(payload.jobs || []);
 
         const tbody = document.getElementById('export-history-tbody');
         if (exportJobs.length === 0) {
@@ -1045,7 +1071,7 @@ async function loadExportHistory() {
                 <td>${job.created_at ? new Date(job.created_at * 1000).toLocaleString() : '-'}</td>
                 <td>${job.result_size_bytes ? `${(job.result_size_bytes / 1024).toFixed(1)} KB` : '-'}</td>
                 <td>
-                    ${job.status === 'completed' ? `<a href="/api/export/${job.id}/download" class="btn btn-sm">Download</a>` : '-'}
+                    ${job.status === 'completed' && job.download_url ? `<a href="${escapeHtml(job.download_url)}" class="btn btn-sm">Download</a>` : '-'}
                 </td>
             </tr>
         `).join('');

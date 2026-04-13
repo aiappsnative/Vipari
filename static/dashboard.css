@@ -1084,6 +1084,109 @@ strong {
     padding: 12px 14px;
 }
 
+.export-panel {
+    display: grid;
+    gap: 14px;
+}
+
+.export-intro {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, var(--color-primary-soft), var(--color-surface-2));
+}
+
+.export-kicker {
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-primary);
+}
+
+.export-summary {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.export-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.export-meta-card {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+}
+
+.export-meta-label {
+    font-size: var(--text-sm);
+    color: var(--color-text-faint);
+}
+
+.export-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+}
+
+.export-form-group {
+    display: grid;
+    gap: 6px;
+}
+
+.export-form-group-wide {
+    grid-column: 1 / -1;
+}
+
+.export-actions {
+    display: flex;
+    align-items: flex-end;
+}
+
+.export-status {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+}
+
+.export-status-progress {
+    color: var(--color-primary);
+    border-color: var(--color-primary-outline);
+    background: var(--color-primary-soft);
+}
+
+.export-status-success {
+    color: var(--color-low);
+    border-color: rgba(109, 170, 69, 0.2);
+    background: rgba(109, 170, 69, 0.08);
+}
+
+.export-status-error {
+    color: var(--color-high);
+    border-color: rgba(224, 92, 92, 0.2);
+    background: rgba(224, 92, 92, 0.08);
+}
+
+.export-history {
+    display: grid;
+    gap: 10px;
+}
+
+.export-history-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
 .triage-header {
     display: flex;
     align-items: center;

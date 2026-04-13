@@ -215,35 +215,57 @@
                 <section class="repos-section" id="repo-export-section">
                     <div class="repos-header">
                         <span class="repos-title">Compliance Export</span>
+                        <span class="repos-count">Build an auditor-facing evidence package for this repository without leaving the case file.</span>
                     </div>
                     <div class="export-panel">
+                        <div class="export-intro">
+                            <div class="export-intro-copy">
+                                <div class="export-kicker">Evidence Package</div>
+                                <p class="export-summary muted">Compliance Evidence keeps the package lean for external review. Compliance + Drift Intelligence adds PromptDrift posture context for internal governance.</p>
+                            </div>
+                            <div class="export-meta-grid">
+                                <div class="export-meta-card">
+                                    <span class="export-meta-label">Visibility</span>
+                                    <strong>Private to your workspace session</strong>
+                                </div>
+                                <div class="export-meta-card">
+                                    <span class="export-meta-label">Download guard</span>
+                                    <strong>Owner-scoped link</strong>
+                                </div>
+                            </div>
+                        </div>
                         <form id="export-form" class="export-form">
-                            <div class="form-group">
+                            <div class="form-group export-form-group">
                                 <label for="export-mode">Export Mode</label>
                                 <select id="export-mode" name="export_mode" required>
                                     <option value="compliance">Compliance Evidence - Best for SOC 2 / ISO audit prep. Lean, auditor-friendly package.</option>
                                     <option value="compliance_plus_drift">Compliance + Drift Intelligence - Includes posture and drift analysis. Best for internal governance.</option>
                                 </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group export-form-group">
                                 <label for="from-date">From Date</label>
                                 <input type="date" id="from-date" name="from_date" required>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group export-form-group">
                                 <label for="to-date">To Date</label>
                                 <input type="date" id="to-date" name="to_date" required>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group export-form-group export-form-group-wide">
                                 <label class="checkbox-label">
                                     <input type="checkbox" id="include-artifact-content" name="include_artifact_content">
                                     Include raw artifact content (may contain sensitive prompt/policy text)
                                 </label>
                             </div>
-                            <button type="submit" class="btn btn-primary">Generate Export</button>
+                            <div class="export-actions">
+                                <button type="submit" id="export-submit-button" class="btn btn-primary">Generate Export Package</button>
+                            </div>
                         </form>
-                        <div id="export-status" class="export-status" style="display: none;"></div>
+                        <div id="export-status" class="export-status muted" hidden>Preparing export status…</div>
                         <div class="export-history">
-                            <h3>Export History</h3>
+                            <div class="export-history-head">
+                                <h3>Recent Exports</h3>
+                                <span class="muted">Only your own export jobs appear here.</span>
+                            </div>
                             <table id="export-history-table" class="repos-table">
                                 <thead>
                                     <tr>

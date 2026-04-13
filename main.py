@@ -112,7 +112,7 @@ from services.control_plane_records import (
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
-from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo, update_export_job_status
+from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
@@ -648,6 +648,31 @@ def _dashboard_actor_login(request: Request) -> str | None:
     identity_context = _current_authenticated_identity_context(request)
     identity = identity_context.get("identity")
     return identity.github_login if identity is not None else None
+
+
+def _require_export_job_owner_access(request: Request, job) -> dict[str, object]:
+    access_context = _require_repo_dashboard_read_access(request, job.repo_full)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is None or session is None:
+        raise HTTPException(status_code=403, detail="Workspace context is required for export access.")
+    if not job.workspace_id or not job.requested_by_user_id:
+        raise HTTPException(status_code=404, detail="Export job ownership metadata is not available.")
+    if workspace.id != job.workspace_id or session.user_id != job.requested_by_user_id:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    return access_context
+
+
+def _export_download_url(job) -> str | None:
+    if not job.download_token:
+        return None
+    return f"/api/export/{job.id}/download?token={quote(job.download_token)}"
+
+
+def _export_job_payload(job) -> dict[str, object]:
+    payload = asdict(job)
+    payload["download_url"] = _export_download_url(job) if job.status == "completed" else None
+    return payload
 
 
 def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
@@ -1594,16 +1619,37 @@ def repo_dashboard(request: Request, repo_full: str):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    _require_repo_dashboard_read_access(request, repo_full)
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     build_started = time.perf_counter()
     repo_view = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    response = JSONResponse(asdict(repo_view))
+    payload = asdict(repo_view)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is not None and session is not None:
+        payload["export_jobs"] = [
+            _export_job_payload(job)
+            for job in list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
+        ]
+    else:
+        payload["export_jobs"] = []
+    response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
+
+
+@app.get("/api/repos/{repo_full:path}/export/history")
+def export_history(request: Request, repo_full: str):
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is None or session is None:
+        return JSONResponse({"repo_full": repo_full, "jobs": []})
+    jobs = list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
+    return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
@@ -1844,7 +1890,7 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
 
 @app.post("/api/repos/{repo_full:path}/export/compliance")
 async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
-    _require_repo_dashboard_mutation_access(request, repo_full)
+    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
     try:
         if payload.from_ts is not None and payload.to_ts is not None:
             from_ts = payload.from_ts
@@ -1854,8 +1900,12 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             to_ts = datetime.fromisoformat(payload.to_date).timestamp()
         else:
             raise HTTPException(status_code=400, detail="Either from_ts/to_ts or from_date/to_date is required")
+        if from_ts > to_ts:
+            raise HTTPException(status_code=400, detail="The export start date must be earlier than the end date.")
         if payload.export_mode not in ["compliance", "compliance_plus_drift"]:
             raise HTTPException(status_code=400, detail="Invalid export_mode")
+        workspace = access_context.get("workspace")
+        session = access_context.get("session")
         job = create_export_job(
             AUDIT_DB_PATH,
             repo_full=repo_full,
@@ -1863,6 +1913,9 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             to_ts=to_ts,
             export_mode=payload.export_mode,
             include_artifact_content=payload.include_artifact_content,
+            workspace_id=workspace.id if workspace is not None else None,
+            requested_by_user_id=session.user_id if session is not None else None,
+            requested_by_github_login=_dashboard_actor_login(request),
         )
         result = build_compliance_export(
             AUDIT_DB_PATH,
@@ -1884,11 +1937,17 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
         job = get_export_job(AUDIT_DB_PATH, job.id) or job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="An identical export request is already in progress. Change the date range or wait for it to finish.")
     except Exception as exc:
         if 'job' in locals():
             update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return JSONResponse({"job_id": job.id})
+    return JSONResponse({
+        "job_id": job.id,
+        "status": job.status,
+        "download_url": _export_download_url(job),
+    })
 
 
 @app.get("/api/export/{job_id}/status")
@@ -1897,19 +1956,21 @@ async def get_export_status(job_id: int, request: Request):
         job = get_export_job(AUDIT_DB_PATH, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Export job not found")
-        _require_repo_dashboard_read_access(request, job.repo_full)
+        _require_export_job_owner_access(request, job)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(asdict(job))
+    return JSONResponse(_export_job_payload(job))
 
 
 @app.get("/api/export/{job_id}/download")
-async def download_export(job_id: int, request: Request):
+async def download_export(job_id: int, request: Request, token: str | None = None):
     try:
         job = get_export_job(AUDIT_DB_PATH, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Export job not found")
-        _require_repo_dashboard_read_access(request, job.repo_full)
+        _require_export_job_owner_access(request, job)
+        if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
+            raise HTTPException(status_code=404, detail="Export job not found")
         if job.status != "completed":
             raise HTTPException(status_code=400, detail="Export job not completed")
         if not job.result_size_bytes or not job.download_token:

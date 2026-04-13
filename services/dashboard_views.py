@@ -25,7 +25,6 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
-from .export_jobs import list_export_jobs_for_repo
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
@@ -780,7 +779,7 @@ def _build_repo_dashboard_view_uncached(
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
-        export_jobs=[asdict(job) for job in list_export_jobs_for_repo(db_path, repo_full)],
+        export_jobs=[],
     )
 
 
