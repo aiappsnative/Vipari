@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import uvicorn
 
-from services.api_service import create_api_app
+from main import app
 
-
-app = create_api_app()
 
 
 if __name__ == "__main__":

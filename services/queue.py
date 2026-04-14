@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import boto3
+from redis.asyncio import Redis
 
 from .persistence import connect_sqlite
 
@@ -225,3 +226,121 @@ class SQSQueue:
 
     async def depth(self) -> int:
         return 0
+
+
+class RedisQueue:
+    def __init__(self, redis_url: str, *, visibility_timeout_seconds: int = DEFAULT_VISIBILITY_TIMEOUT_SECONDS, client: Redis | None = None):
+        self.redis_url = redis_url
+        self.visibility_timeout_seconds = visibility_timeout_seconds
+        self.client = client or Redis.from_url(redis_url, decode_responses=True)
+        self._ready_key = "driftguard:queue:ready"
+        self._processing_key = "driftguard:queue:processing"
+        self._dlq_key = "driftguard:queue:dlq"
+
+    def _message_key(self, message_id: str) -> str:
+        return f"driftguard:queue:message:{message_id}"
+
+    def _receipt_key(self, receipt_handle: str) -> str:
+        return f"driftguard:queue:receipt:{receipt_handle}"
+
+    async def _requeue_expired_processing(self) -> None:
+        now = time.time()
+        expired_receipts = await self.client.zrangebyscore(self._processing_key, "-inf", now)
+        for receipt_handle in expired_receipts:
+            message_id = await self.client.get(self._receipt_key(receipt_handle))
+            if not message_id:
+                await self.client.zrem(self._processing_key, receipt_handle)
+                continue
+            await self.client.zrem(self._processing_key, receipt_handle)
+            await self.client.delete(self._receipt_key(receipt_handle))
+            await self.client.hdel(self._message_key(message_id), "receipt_handle", "locked_until")
+            await self.client.zadd(self._ready_key, {message_id: now})
+
+    async def enqueue(self, message: dict[str, Any]) -> str:
+        message_id = str(uuid.uuid4())
+        now = time.time()
+        await self.client.hset(
+            self._message_key(message_id),
+            mapping={
+                "payload_json": json.dumps(message),
+                "attempt_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        await self.client.zadd(self._ready_key, {message_id: now})
+        return message_id
+
+    async def dequeue(self, batch_size: int) -> list[QueueMessage]:
+        await self._requeue_expired_processing()
+        now = time.time()
+        messages: list[QueueMessage] = []
+        while len(messages) < batch_size:
+            message_ids = await self.client.zrangebyscore(self._ready_key, "-inf", now, start=0, num=1)
+            if not message_ids:
+                break
+            message_id = message_ids[0]
+            if await self.client.zrem(self._ready_key, message_id) != 1:
+                continue
+            receipt_handle = str(uuid.uuid4())
+            locked_until = now + self.visibility_timeout_seconds
+            attempt_count = await self.client.hincrby(self._message_key(message_id), "attempt_count", 1)
+            await self.client.hset(
+                self._message_key(message_id),
+                mapping={
+                    "receipt_handle": receipt_handle,
+                    "locked_until": locked_until,
+                    "updated_at": now,
+                },
+            )
+            await self.client.set(self._receipt_key(receipt_handle), message_id)
+            await self.client.zadd(self._processing_key, {receipt_handle: locked_until})
+            payload_json = await self.client.hget(self._message_key(message_id), "payload_json")
+            if payload_json is None:
+                await self.move_to_dlq(receipt_handle)
+                continue
+            messages.append(
+                QueueMessage(
+                    message_id=message_id,
+                    receipt_handle=receipt_handle,
+                    payload=json.loads(payload_json),
+                    attempt_count=int(attempt_count),
+                )
+            )
+        return messages
+
+    async def ack(self, receipt_handle: str) -> None:
+        message_id = await self.client.get(self._receipt_key(receipt_handle))
+        if message_id:
+            await self.client.delete(self._message_key(message_id))
+        await self.client.delete(self._receipt_key(receipt_handle))
+        await self.client.zrem(self._processing_key, receipt_handle)
+
+    async def nack(self, receipt_handle: str, delay_seconds: int) -> None:
+        now = time.time()
+        message_id = await self.client.get(self._receipt_key(receipt_handle))
+        if not message_id:
+            return
+        await self.client.zrem(self._processing_key, receipt_handle)
+        await self.client.delete(self._receipt_key(receipt_handle))
+        await self.client.hdel(self._message_key(message_id), "receipt_handle", "locked_until")
+        await self.client.hset(self._message_key(message_id), mapping={"updated_at": now})
+        await self.client.zadd(self._ready_key, {message_id: now + delay_seconds})
+
+    async def move_to_dlq(self, receipt_handle: str) -> None:
+        now = time.time()
+        message_id = await self.client.get(self._receipt_key(receipt_handle))
+        if not message_id:
+            return
+        await self.client.zrem(self._processing_key, receipt_handle)
+        await self.client.delete(self._receipt_key(receipt_handle))
+        await self.client.hdel(self._message_key(message_id), "receipt_handle", "locked_until")
+        await self.client.hset(self._message_key(message_id), mapping={"updated_at": now, "in_dlq": 1})
+        await self.client.zadd(self._dlq_key, {message_id: now})
+
+    async def depth(self) -> int:
+        await self._requeue_expired_processing()
+        return int(await self.client.zcard(self._ready_key))
+
+    async def aclose(self) -> None:
+        await self.client.aclose()

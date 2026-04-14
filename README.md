@@ -242,9 +242,29 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 Important deployment rules for this split surface:
 
 - the webhook ingress should be the only internet-facing unauthenticated route surface
-- the split API service requires `API_ADMIN_TOKEN`; dashboard pages and JSON APIs are protected by that token
+- the public Railway `api` service should now run the real customer control-plane app from `main.py`, with `SERVICE_ROLE=api` so webhook ingress is not active there
+- the legacy split operator API in `services/api_service.py` still exists for local/operator scenarios, but it is not the preferred public launch surface
 - Prometheus metrics are disabled by default and only exposed when `ENABLE_METRICS=true`
-- SQLite remains the default local/shared-volume store in the scaffolding; PostgreSQL is still the longer-term production target
+- SQLite remains the default local/shared-volume store for local development only
+- production hardening now fails closed on unsafe settings such as SQLite persistence, insecure cookies, non-HTTPS base URLs, file-path private keys, or non-Redis queue settings for webhook/worker services
+
+### Railway launch note
+
+The repository now includes production guardrails and Railway-focused documentation, but there is still an important architectural truth:
+
+- the persistence layer is still SQLite-native in code today
+- production mode will now refuse to start on SQLite rather than pretending that Railway file-backed persistence is good enough
+- the remaining true launch blocker is the deeper PostgreSQL persistence migration
+
+Use the detailed plan in [docs/railway-launch-readiness-plan.md](docs/railway-launch-readiness-plan.md) and the operator guide in [docs/railway-deployment-guide.md](docs/railway-deployment-guide.md) before attempting a real launch
+
+Run the preflight helper before building Railway services:
+
+```bash
+python scripts/railway_preflight.py --service-role api --app-env production
+python scripts/railway_preflight.py --service-role webhook --app-env production
+python scripts/railway_preflight.py --service-role worker --app-env production
+```
 
 You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
 

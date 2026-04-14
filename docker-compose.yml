@@ -6,6 +6,8 @@ services:
     ports:
       - "8001:8001"
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: webhook
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
@@ -26,6 +28,8 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: worker
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
@@ -56,6 +60,8 @@ services:
     ports:
       - "8002:8002"
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: api
       API_ADMIN_TOKEN: ${API_ADMIN_TOKEN:?API_ADMIN_TOKEN must be set}
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}

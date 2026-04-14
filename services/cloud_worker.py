@@ -18,7 +18,8 @@ from .cloud_common import fetch_diff_with_retry, is_transient_error, needs_audit
 from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
 from .observability import configure_logging
-from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, SQSQueue
+from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue
+from .runtime_guardrails import validate_runtime_configuration
 from .token_cache import get_installation_token, set_installation_token
 from .webhook_deliveries import cleanup_webhook_deliveries
 
@@ -35,6 +36,8 @@ CHARS_PER_TOKEN_ESTIMATE = 4
 def build_queue_backend(settings: Settings) -> QueueBackend:
     if settings.queue_backend == "sqs":
         return SQSQueue(settings.sqs_queue_url, settings.sqs_dlq_url)
+    if settings.queue_backend == "redis":
+        return RedisQueue(settings.redis_url)
     return LocalSQLiteQueue(settings.resolved_db_path)
 
 
@@ -229,6 +232,7 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
 
 async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     settings = get_settings()
+    validate_runtime_configuration(settings)
     if not settings.ai_api_key:
         raise RuntimeError("OPENAI_API_KEY or FOUNDRY_API_KEY must be configured for the worker service.")
     logger = configure_logging("worker")

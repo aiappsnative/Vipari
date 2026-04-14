@@ -136,6 +136,7 @@ from services.onboarding import execute_repository_history_backfill, onboard_rep
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
+from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import encrypt_text
 from services.static_assets import FingerprintedStaticFiles
 
@@ -172,8 +173,9 @@ branch_scan_worker: BranchScanWorker | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global worker, branch_scan_worker
+    validate_runtime_configuration(settings)
     init_db(AUDIT_DB_PATH)
-    if AUDIT_WORKER_ENABLED:
+    if settings.service_role == "monolith" and AUDIT_WORKER_ENABLED:
         assert client is not None
         worker = AuditWorker(
             WorkerSettings(
@@ -190,7 +192,7 @@ async def lifespan(_: FastAPI):
             )
         )
         worker.start()
-    if settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET:
+    if settings.service_role == "monolith" and settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET:
         branch_scan_worker = BranchScanWorker(
             BranchScanWorkerSettings(
                 db_path=AUDIT_DB_PATH,
@@ -216,6 +218,16 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
+
+
+@app.get("/health")
+async def health_live():
+    return {"status": "ok", "service_role": settings.service_role}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    return readiness_json_response(await build_runtime_readiness(settings))
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -2742,6 +2754,8 @@ async def stripe_webhook(request: Request):
 
 @app.post("/webhook")
 async def webhook(request: Request):
+    if settings.service_role == "api":
+        raise HTTPException(status_code=404, detail="Webhook ingress is not enabled on the API service.")
     if not await verify_signature(request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 

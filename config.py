@@ -12,6 +12,8 @@ PROJECT_ENV_PATH = Path(__file__).resolve().parent / ".env"
 
 
 class Settings(BaseSettings):
+    app_env: Literal["local", "test", "production"] = "local"
+    service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
     app_base_url: str = "http://127.0.0.1:8000"
     session_cookie_name: str = "promptdrift_session"
     session_cookie_secure: bool = False
@@ -26,7 +28,7 @@ class Settings(BaseSettings):
     github_oauth_client_secret: str = ""
     github_oauth_callback_url: str = ""
 
-    queue_backend: Literal["sqlite", "sqs"] = "sqlite"
+    queue_backend: Literal["sqlite", "redis", "sqs"] = "sqlite"
     sqs_queue_url: str = ""
     sqs_dlq_url: str = ""
 
@@ -126,6 +128,14 @@ class Settings(BaseSettings):
     @property
     def has_owner_access_config(self) -> bool:
         return bool(self.owner_github_user_id.strip() or self.normalized_owner_github_login or self.normalized_owner_email)
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def uses_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite:///")
 
     @property
     def resolved_db_path(self) -> str:
