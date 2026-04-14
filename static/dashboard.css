@@ -3654,6 +3654,11 @@ body.repo-audit-page {
     color: #eef1f4;
 }
 
+body.repo-audit-page[data-theme="light"] {
+    --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.16), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.14), transparent 26%), linear-gradient(180deg, #eef1ea 0%, #f6f0e7 100%);
+    color: var(--color-text);
+}
+
 .repo-audit-page .app-shell {
     grid-template-columns: 192px minmax(0, 1fr);
     min-height: 100vh;
@@ -3673,6 +3678,12 @@ body.repo-audit-page {
     background: linear-gradient(180deg, rgba(25, 26, 31, 0.88), rgba(28, 29, 34, 0.8));
     box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 24px 50px rgba(0, 0, 0, 0.32);
     overflow: hidden;
+}
+
+.repo-audit-page[data-theme="light"] .sidebar {
+    border-color: rgba(112, 98, 84, 0.18);
+    background: linear-gradient(180deg, rgba(255, 250, 244, 0.96), rgba(244, 236, 225, 0.92));
+    box-shadow: inset 0 0 0 1px rgba(112, 98, 84, 0.04), 0 24px 50px rgba(91, 76, 59, 0.14);
 }
 
 .repo-audit-page .sidebar-logo {
@@ -3697,6 +3708,11 @@ body.repo-audit-page {
     letter-spacing: -0.08em;
 }
 
+.repo-audit-page[data-theme="light"] .sidebar-logo-mark {
+    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
+    color: var(--color-primary);
+}
+
 .repo-audit-page .sidebar-panel {
     display: grid;
     gap: 6px;
@@ -3718,11 +3734,22 @@ body.repo-audit-page {
     font-weight: 600;
 }
 
+.repo-audit-page[data-theme="light"] .sidebar-nav-item {
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .repo-audit-page .sidebar-nav-item:hover,
 .repo-audit-page .sidebar-nav-item-active {
     background: linear-gradient(90deg, rgba(86, 241, 230, 0.10), rgba(86, 241, 230, 0.02));
     border-left-color: #45ddd2;
     color: #f3ffff;
+}
+
+.repo-audit-page[data-theme="light"] .sidebar-nav-item:hover,
+.repo-audit-page[data-theme="light"] .sidebar-nav-item-active {
+    background: linear-gradient(90deg, rgba(59, 125, 134, 0.12), rgba(59, 125, 134, 0.03));
+    border-left-color: var(--color-primary);
+    color: var(--color-text);
 }
 
 .repo-audit-page .sidebar-nav-item::after {
@@ -3734,10 +3761,21 @@ body.repo-audit-page {
     color: rgba(239, 242, 245, 0.82);
 }
 
+.repo-audit-page[data-theme="light"] .sidebar-nav-caret,
+.repo-audit-page[data-theme="light"] .sidebar-subitem {
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .repo-audit-page .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
 .repo-audit-page .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
 .repo-audit-page .sidebar-subitem:hover {
     color: #f3ffff;
+}
+
+.repo-audit-page[data-theme="light"] .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
+.repo-audit-page[data-theme="light"] .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
+.repo-audit-page[data-theme="light"] .sidebar-subitem:hover {
+    color: var(--color-text);
 }
 
 .repo-audit-page .sidebar-nav-icon {
@@ -3772,6 +3810,12 @@ body.repo-audit-page {
     font-weight: 800;
 }
 
+.repo-audit-page[data-theme="light"] .sidebar-profile-link {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(112, 98, 84, 0.06);
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .repo-audit-page .page-scroll {
     overflow: visible;
     padding: 0;
@@ -3792,6 +3836,19 @@ body.repo-audit-page {
     box-shadow: 0 26px 60px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-hero,
+.repo-audit-page[data-theme="light"] .repo-audit-metrics,
+.repo-audit-page[data-theme="light"] .repo-audit-anchor-bar,
+.repo-audit-page[data-theme="light"] .triage-header,
+.repo-audit-page[data-theme="light"] .detail-panel > *,
+.repo-audit-page[data-theme="light"] .secondary-panel,
+.repo-audit-page[data-theme="light"] .repos-section,
+.repo-audit-page[data-theme="light"] #triage-list {
+    border-color: rgba(112, 98, 84, 0.16);
+    background: linear-gradient(180deg, rgba(255, 252, 247, 0.95), rgba(247, 241, 233, 0.94));
+    box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
 .repo-audit-page .repo-audit-hero {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
@@ -3809,6 +3866,10 @@ body.repo-audit-page {
     font-weight: 700;
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-eyebrow {
+    color: rgba(59, 125, 134, 0.72);
+}
+
 .repo-audit-page .repo-audit-hero h1 {
     margin: 0;
     font-size: clamp(2.2rem, 4vw, 3.4rem);
@@ -3817,11 +3878,27 @@ body.repo-audit-page {
     color: #f4f8fb;
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-hero h1,
+.repo-audit-page[data-theme="light"] .repo-audit-metric-card strong,
+.repo-audit-page[data-theme="light"] .secondary-panel-title,
+.repo-audit-page[data-theme="light"] .repos-title,
+.repo-audit-page[data-theme="light"] .triage-title,
+.repo-audit-page[data-theme="light"] .detail-artifact-name {
+    color: var(--color-text);
+}
+
 .repo-audit-page .repo-audit-hero p,
 .repo-audit-page .repo-audit-note-copy {
     color: rgba(196, 203, 210, 0.68);
     font-size: 0.98rem;
     line-height: 1.65;
+}
+
+.repo-audit-page[data-theme="light"] .repo-audit-hero p,
+.repo-audit-page[data-theme="light"] .repo-audit-note-copy,
+.repo-audit-page[data-theme="light"] .repo-audit-metric-foot,
+.repo-audit-page[data-theme="light"] .repos-count {
+    color: var(--color-text-muted);
 }
 
 .repo-audit-page .repo-audit-hero-note {
@@ -3834,6 +3911,18 @@ body.repo-audit-page {
     background: rgba(255, 255, 255, 0.04);
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-hero-note,
+.repo-audit-page[data-theme="light"] .repo-audit-metric-card,
+.repo-audit-page[data-theme="light"] .repo-audit-anchor,
+.repo-audit-page[data-theme="light"] .triage-header,
+.repo-audit-page[data-theme="light"] .detail-panel-header,
+.repo-audit-page[data-theme="light"] .detail-score-row,
+.repo-audit-page[data-theme="light"] .detail-panel .card-shell,
+.repo-audit-page[data-theme="light"] .detail-recommendation {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(255, 255, 255, 0.64);
+}
+
 .repo-audit-page .repo-audit-note-label,
 .repo-audit-page .repo-audit-metric-label,
 .repo-audit-page .repo-setup-secondary-link {
@@ -3842,6 +3931,12 @@ body.repo-audit-page {
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+.repo-audit-page[data-theme="light"] .repo-audit-note-label,
+.repo-audit-page[data-theme="light"] .repo-audit-metric-label,
+.repo-audit-page[data-theme="light"] .repo-setup-secondary-link {
+    color: var(--color-text-faint);
 }
 
 .repo-audit-page .repo-audit-metrics {
@@ -3875,12 +3970,24 @@ body.repo-audit-page {
     color: #ff8d7b;
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-metric-alert strong {
+    color: #b55f64;
+}
+
 .repo-audit-page .repo-audit-metric-warm strong {
     color: #ffcf7c;
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-metric-warm strong {
+    color: #9a5e17;
+}
+
 .repo-audit-page .repo-audit-metric-cool strong {
     color: #6bd7e7;
+}
+
+.repo-audit-page[data-theme="light"] .repo-audit-metric-cool strong {
+    color: #2e6d96;
 }
 
 .repo-audit-page .repo-audit-anchor-bar {
@@ -3905,9 +4012,20 @@ body.repo-audit-page {
     font-weight: 700;
 }
 
+.repo-audit-page[data-theme="light"] .repo-audit-anchor {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(112, 98, 84, 0.06);
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .repo-audit-page .repo-audit-anchor:hover {
     border-color: rgba(86, 239, 227, 0.34);
     color: #f3ffff;
+}
+
+.repo-audit-page[data-theme="light"] .repo-audit-anchor:hover {
+    border-color: var(--color-primary-outline);
+    color: var(--color-text);
 }
 
 .repo-audit-page .main-columns,
@@ -3949,6 +4067,19 @@ body.repo-audit-page {
     font-size: 20px;
     font-weight: 800;
     letter-spacing: -0.03em;
+}
+
+.repo-audit-page[data-theme="light"] .repo-setup-card-link {
+    color: var(--color-text);
+}
+
+.repo-audit-page[data-theme="light"] .repo-setup-card-link:hover,
+.repo-audit-page[data-theme="light"] .repo-setup-secondary-link:hover {
+    color: var(--color-primary);
+}
+
+.repo-audit-page[data-theme="light"] .repo-setup-secondary-link {
+    color: rgba(59, 125, 134, 0.88);
 }
 
 .repo-audit-page .detail-recommendation {

@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -659,10 +660,15 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
 
     repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'class="repo-audit-page"' in repo_dashboard_html
+    assert 'data-theme="light"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
+
+    dashboard_css = (Path(__file__).resolve().parent.parent / "static" / "dashboard.css").read_text(encoding="utf-8")
+    assert 'body.repo-audit-page[data-theme="light"]' in dashboard_css
+    assert '.repo-audit-page[data-theme="light"] .repo-audit-hero' in dashboard_css
 
 
 def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
