@@ -44,6 +44,7 @@ from services.auth_service import (
     generate_csrf_secret,
     generate_oauth_state,
     generate_session_id,
+    list_github_user_repositories,
 )
 from services.billing_service import (
     create_billing_portal_session,
@@ -123,7 +124,7 @@ from services.onboarding import execute_repository_history_backfill, onboard_rep
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
-from services.secure_store import encrypt_text
+from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
 
 settings = get_settings()
@@ -679,6 +680,37 @@ def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
         }
         for row in rows
     ]
+
+
+def _github_account_repo_inventory(access_context: dict[str, object]) -> list[dict[str, object]]:
+    identity = access_context.get("identity")
+    workspace = access_context.get("workspace")
+    if identity is None or workspace is None or not identity.access_token_encrypted:
+        return []
+
+    token = decrypt_text(identity.access_token_encrypted, settings.app_encryption_key)
+    try:
+        repositories = list_github_user_repositories(token)
+    except (HTTPError, OSError, RuntimeError, ValueError):
+        repositories = []
+
+    existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
+    existing_repo_fulls.update(allocation.repo_full for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id))
+
+    inventory: list[dict[str, object]] = []
+    for repository in repositories:
+        repo_full = repository.full_name.strip()
+        if not repo_full:
+            continue
+        inventory.append(
+            {
+                "repo_full": repo_full,
+                "is_onboarded": repo_full in existing_repo_fulls,
+                "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+            }
+        )
+
+    return inventory
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
@@ -1562,6 +1594,7 @@ async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     user = access_context["user"]
+    repo_inventory = _github_account_repo_inventory(access_context)
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocation_status_by_full = {
@@ -1585,12 +1618,7 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
-            inventory_cards=render_repo_inventory_cards(
-                connections,
-                allocations,
-                onboarded_summaries,
-                csrf_token=access_context["session"].csrf_secret,
-            ),
+            inventory_cards=render_repo_inventory_cards(repo_inventory),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,

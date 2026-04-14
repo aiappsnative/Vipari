@@ -10,6 +10,8 @@ from dataclasses import dataclass
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
+GITHUB_USER_REPOS_URL = "https://api.github.com/user/repos"
+GITHUB_OAUTH_SCOPE = "read:user user:email repo"
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,15 @@ class GithubUserProfile:
     display_name: str
     email: str | None
     avatar_url: str | None
+
+
+@dataclass(frozen=True)
+class GithubUserRepository:
+    github_repo_id: str
+    full_name: str
+    default_branch: str | None
+    is_private: bool
+    html_url: str | None
 
 
 def generate_oauth_state() -> str:
@@ -44,7 +55,7 @@ def build_github_oauth_authorize_url(client_id: str, redirect_uri: str, state: s
         {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
-            "scope": "read:user user:email",
+            "scope": GITHUB_OAUTH_SCOPE,
             "state": state,
         }
     )
@@ -95,3 +106,47 @@ def fetch_github_user_profile(access_token: str) -> GithubUserProfile:
         email=str(email) if email else None,
         avatar_url=str(avatar_url) if avatar_url else None,
     )
+
+
+def list_github_user_repositories(access_token: str) -> list[GithubUserRepository]:
+    repositories: list[GithubUserRepository] = []
+    page = 1
+    while True:
+        query = urllib.parse.urlencode(
+            {
+                "per_page": 100,
+                "page": page,
+                "affiliation": "owner,collaborator,organization_member",
+                "sort": "full_name",
+            }
+        )
+        request = urllib.request.Request(f"{GITHUB_USER_REPOS_URL}?{query}")
+        request.add_header("Authorization", f"Bearer {access_token}")
+        request.add_header("Accept", "application/vnd.github+json")
+        with urllib.request.urlopen(request) as response:
+            data = json.load(response)
+
+        if not isinstance(data, list) or not data:
+            break
+
+        for repo in data:
+            if not isinstance(repo, dict):
+                continue
+            full_name = str(repo.get("full_name") or "").strip()
+            if not full_name:
+                continue
+            repositories.append(
+                GithubUserRepository(
+                    github_repo_id=str(repo.get("id") or full_name),
+                    full_name=full_name,
+                    default_branch=str(repo.get("default_branch")) if repo.get("default_branch") else None,
+                    is_private=bool(repo.get("private", True)),
+                    html_url=str(repo.get("html_url")) if repo.get("html_url") else None,
+                )
+            )
+
+        if len(data) < 100:
+            break
+        page += 1
+
+    return repositories

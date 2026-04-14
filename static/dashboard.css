@@ -3274,13 +3274,6 @@ body.repo-setup-page {
     font-size: 22px;
 }
 
-.repo-setup-page .repo-setup-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.repo-setup-page .repo-setup-filter-button,
 .repo-setup-page .repo-setup-sort-select {
     min-height: 40px;
     padding: 0 14px;
@@ -3293,12 +3286,6 @@ body.repo-setup-page {
     font-weight: 700;
 }
 
-.repo-setup-page .repo-setup-filter-button {
-    cursor: pointer;
-}
-
-.repo-setup-page .repo-setup-filter-button-active,
-.repo-setup-page .repo-setup-filter-button:hover,
 .repo-setup-page .repo-setup-sort-select:focus {
     border-color: rgba(86, 239, 227, 0.34);
     background: rgba(86, 239, 227, 0.10);
@@ -3320,6 +3307,36 @@ body.repo-setup-page {
 
 .repo-setup-page .repo-setup-grid-compact {
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.repo-setup-page .repo-setup-inventory-list {
+    display: grid;
+    gap: 10px;
+}
+
+.repo-setup-page .repo-setup-inventory-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.repo-setup-page .repo-setup-inventory-name {
+    color: #f4f8fb;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.repo-setup-page .repo-setup-inventory-action {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
 }
 
 .repo-setup-page .repo-setup-summary-grid {
@@ -3485,6 +3502,10 @@ body.repo-setup-page {
     cursor: pointer;
 }
 
+.repo-setup-page .repo-setup-button-link {
+    text-decoration: none;
+}
+
 @media (max-width: 1120px) {
     .repo-setup-page .app-shell {
         grid-template-columns: 1fr;
@@ -3509,6 +3530,11 @@ body.repo-setup-page {
 @media (max-width: 720px) {
     .repo-setup-page .repo-setup-grid {
         grid-template-columns: 1fr;
+    }
+
+    .repo-setup-page .repo-setup-inventory-row {
+        align-items: stretch;
+        flex-direction: column;
     }
 
     .repo-setup-page .repo-setup-metrics,

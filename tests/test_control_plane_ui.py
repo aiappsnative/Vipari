@@ -1674,6 +1674,7 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     main.init_db(main.AUDIT_DB_PATH)
 
     from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+    from services.auth_service import GithubUserRepository
 
     owner, _identity = upsert_github_identity(
         main.AUDIT_DB_PATH,
@@ -1708,11 +1709,34 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
             {"target_type": "Organization", "account": {"login": "doria90", "type": "Organization", "id": 77}},
             [{"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"}],
         ),
+    ), patch(
+        "main.list_github_user_repositories",
+        return_value=[
+            GithubUserRepository(
+                github_repo_id="1",
+                full_name="doria90/dummyAI",
+                default_branch="main",
+                is_private=True,
+                html_url="https://github.com/doria90/dummyAI",
+            ),
+            GithubUserRepository(
+                github_repo_id="2",
+                full_name="doria90/PromptDrift",
+                default_branch="main",
+                is_private=True,
+                html_url="https://github.com/doria90/PromptDrift",
+            ),
+        ],
     ):
         response = client.get(
             f"/app/setup/install/callback?installation_id=12345&setup_action=install&state={workspace.id}",
             cookies={main.settings.session_cookie_name: session.session_id},
             follow_redirects=False,
+        )
+
+        repo_setup_response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert response.status_code == 303
@@ -1724,21 +1748,18 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     ).json()
     assert auth_payload["access"]["state"] == "workspace_no_subscription"
 
-    repo_setup_response = client.get(
-        "/app/repos",
-        cookies={main.settings.session_cookie_name: session.session_id},
-    )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
+    assert "doria90/PromptDrift" in repo_setup_response.text
     assert 'class="repo-setup-page"' in repo_setup_response.text
     assert "Repository Inventory" in repo_setup_response.text
     assert "Onboarded Repository Snapshot" in repo_setup_response.text
-    assert 'data-repo-filter="available"' in repo_setup_response.text
+    assert 'class="repo-setup-inventory-list"' in repo_setup_response.text
     assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
     assert 'href="/app/repos"' in repo_setup_response.text
-    assert 'href="/dashboard/doria90%2FdummyAI"' in repo_setup_response.text
-    assert "Open audit page" in repo_setup_response.text
+    assert 'href="https://github.com/doria90/PromptDrift/settings/installations"' in repo_setup_response.text
+    assert "Already there" in repo_setup_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

@@ -65,17 +65,10 @@
                     <div class="repo-setup-section-head">
                         <div>
                             <h2>Repository Inventory</h2>
-                            <p>One compact inventory for every repository visible to this workspace, with clear status for available, allocated, and fully onboarded repos.</p>
-                        </div>
-                        <div class="repo-setup-controls" aria-label="Repository inventory filters">
-                            <button type="button" class="repo-setup-filter-button repo-setup-filter-button-active" data-repo-filter="all">All</button>
-                            <button type="button" class="repo-setup-filter-button" data-repo-filter="available">Available</button>
-                            <button type="button" class="repo-setup-filter-button" data-repo-filter="allocated">Allocated</button>
-                            <button type="button" class="repo-setup-filter-button" data-repo-filter="onboarding">Onboarding</button>
-                            <button type="button" class="repo-setup-filter-button" data-repo-filter="onboarded">Onboarded</button>
+                            <p>Every repository visible to the signed-in GitHub account. Use onboard to open the GitHub App installation page for that repository, or confirm that it is already there.</p>
                         </div>
                     </div>
-                    <section class="repo-setup-grid repo-setup-grid-compact">{{INVENTORY_CARDS}}</section>
+                    <section class="repo-setup-inventory-list">{{INVENTORY_CARDS}}</section>
                 </section>
 
                 <section class="repo-setup-section">
@@ -110,29 +103,9 @@
     </div>
     <script>
         (() => {
-            const filterButtons = Array.from(document.querySelectorAll('[data-repo-filter]'));
-            const inventoryCards = Array.from(document.querySelectorAll('[data-repo-inventory-card="true"]'));
             const summarySort = document.querySelector('[data-repo-summary-sort]');
             const summaryGrid = document.querySelector('.repo-setup-summary-grid');
             const summaryCards = Array.from(document.querySelectorAll('[data-repo-summary-card="true"]'));
-
-            const filterCard = (selectedFilter) => {
-                inventoryCards.forEach((card) => {
-                    const status = String(card.getAttribute('data-status') || 'unknown');
-                    const show = selectedFilter === 'all'
-                        || status === selectedFilter
-                        || (selectedFilter === 'onboarding' && status === 'baseline_pending');
-                    card.hidden = !show;
-                });
-            };
-
-            filterButtons.forEach((button) => {
-                button.addEventListener('click', () => {
-                    filterButtons.forEach((candidate) => candidate.classList.remove('repo-setup-filter-button-active'));
-                    button.classList.add('repo-setup-filter-button-active');
-                    filterCard(String(button.getAttribute('data-repo-filter') || 'all'));
-                });
-            });
 
             const statusRank = {
                 onboarded: 0,
