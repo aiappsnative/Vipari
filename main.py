@@ -1,4 +1,5 @@
 import asyncio
+import io
 import base64
 import hashlib
 import hmac
@@ -13,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from github.GithubException import GithubException
 from openai import OpenAI
 from pydantic import BaseModel
@@ -57,7 +58,9 @@ from services.control_plane_frontend import (
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
+    render_control_plane_placeholder_page,
     render_control_plane_profile_page,
+    render_control_plane_settings_page,
     render_control_plane_pricing_page,
     render_control_plane_repo_setup_page,
     render_repo_inventory_cards,
@@ -68,12 +71,17 @@ from services.control_plane_frontend import (
 from services.control_plane_records import (
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
+    create_control_plane_audit_log,
     get_billing_customer_by_stripe_customer_id,
     count_workspace_repo_allocations,
     count_workspaces,
     create_billing_handoff_claim,
+    create_user,
     create_user_session,
     create_workspace,
+    delete_user,
+    delete_workspace,
+    delete_workspace_membership,
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
     get_github_installation_by_installation_id,
@@ -92,16 +100,25 @@ from services.control_plane_records import (
     has_processed_webhook_event,
     list_admin_workspace_users,
     list_billing_handoff_claims,
+    list_recent_control_plane_audit_logs,
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
     list_unclaimed_installations,
+    list_workspace_invites_for_workspace,
     list_workspace_memberships_for_user,
     record_webhook_event,
     replace_repo_connections,
     revoke_user_session,
+    accept_workspace_invites_for_github_login,
     update_repo_allocation_status,
     update_session_workspace,
+    update_user_admin_fields,
     update_user_profile_preferences,
+    update_workspace_admin_fields,
+    update_workspace_display_name,
+    update_workspace_pr_comments_setting,
+    upsert_workspace_membership,
+    upsert_workspace_invite,
     upsert_billing_customer,
     upsert_entitlement,
     upsert_github_identity,
@@ -111,6 +128,8 @@ from services.control_plane_records import (
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
+from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
+from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -227,6 +246,15 @@ class BillingHandoffActivationRequest(BaseModel):
     billing_email: str | None = None
     source: str | None = None
     next_payment_at: float | str | None = None
+
+
+class ComplianceExportRequest(BaseModel):
+    from_ts: float | None = None
+    to_ts: float | None = None
+    from_date: str | None = None
+    to_date: str | None = None
+    export_mode: str
+    include_artifact_content: bool = False
 
 
 def _control_plane_active() -> bool:
@@ -371,6 +399,15 @@ def _normalize_theme_preference(value: str | None) -> str | None:
     if candidate in {"dark", "light"}:
         return candidate
     return None
+
+
+def _workspace_pr_comments_allowed_by_plan(access_context: dict[str, object]) -> bool:
+    entitlement = access_context.get("entitlement")
+    if entitlement is not None:
+        return bool(entitlement.pr_comments_enabled)
+    subscription = access_context.get("subscription")
+    subscription_status = (subscription.status if subscription else "").lower()
+    return subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES
 
 
 def _require_token_encryption_config() -> None:
@@ -558,6 +595,32 @@ def _workspace_slug_candidates(name: str) -> list[str]:
     return [base, f"{base}-{int(time.time())}"]
 
 
+def _admin_redirect(status: str) -> RedirectResponse:
+    return RedirectResponse(f"/app/admin?updated={quote(status)}", status_code=303)
+
+
+def _normalize_nonempty_text(value: str | None, *, field_name: str, max_length: int) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be empty.")
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be {max_length} characters or fewer.")
+    return normalized
+
+
+def _normalize_optional_email(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def _normalize_workspace_slug(value: str | None, display_name: str) -> str:
+    base = value if value and value.strip() else display_name
+    normalized = re.sub(r"[^a-z0-9]+", "-", base.strip().lower()).strip("-") or "workspace"
+    if len(normalized) > 120:
+        raise HTTPException(status_code=400, detail="Workspace slug must be 120 characters or fewer.")
+    return normalized
+
+
 def _github_oauth_callback_url(request: Request) -> str:
     if settings.github_oauth_callback_url:
         return settings.github_oauth_callback_url
@@ -604,6 +667,111 @@ def _current_theme_preference(request: Request) -> str:
     return user.theme_preference if user else "dark"
 
 
+def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
+    connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace_id)
+    allocations = {
+        allocation.repo_full: allocation
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace_id)
+    }
+    rows: list[dict[str, object]] = []
+    seen_repo_fulls: set[str] = set()
+    for connection in connections:
+        allocation = allocations.get(connection.repo_full)
+        status = "Available"
+        if allocation is not None:
+            status = "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated"
+        rows.append(
+            {
+                "repo_full": connection.repo_full,
+                "status": status,
+                "branch": connection.default_branch or "unknown",
+                "visibility": "Private" if connection.is_private else "Public",
+                "href": f"/dashboard/{quote(connection.repo_full, safe='')}",
+            }
+        )
+        seen_repo_fulls.add(connection.repo_full)
+
+    for repo_full, allocation in allocations.items():
+        if repo_full in seen_repo_fulls:
+            continue
+        rows.append(
+            {
+                "repo_full": repo_full,
+                "status": "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated",
+                "branch": "unknown",
+                "visibility": "Unknown",
+                "href": f"/dashboard/{quote(repo_full, safe='')}",
+            }
+        )
+
+    return sorted(rows, key=lambda item: str(item["repo_full"]).lower())
+
+
+def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
+    rows = [row for row in list_admin_workspace_users(AUDIT_DB_PATH) if row.workspace_id == workspace_id]
+    member_rows = [
+        {
+            "display_name": row.user_display_name,
+            "github_login": row.github_login,
+            "role": row.membership_role,
+            "state": "Accepted",
+        }
+        for row in rows
+    ]
+    for invite in list_workspace_invites_for_workspace(AUDIT_DB_PATH, workspace_id):
+        member_rows.append(
+            {
+                "display_name": "Pending invite",
+                "github_login": invite.invited_github_login,
+                "role": invite.role,
+                "state": "Pending",
+            }
+        )
+    return sorted(member_rows, key=lambda item: (str(item["state"]).lower(), str(item["github_login"]).lower()))
+
+
+def _github_account_repo_inventory(access_context: dict[str, object]) -> list[dict[str, object]]:
+    workspace = access_context.get("workspace")
+    installation = access_context.get("installation")
+    if workspace is None:
+        return []
+
+    if installation is not None and settings.has_github_app_credentials:
+        try:
+            _installation_payload, repositories = sync_installation_repositories(
+                app_id=settings.github_app_id,
+                private_key_path=settings.github_private_key_path,
+                private_key=settings.resolved_github_private_key,
+                installation_id=installation.installation_id,
+            )
+            replace_repo_connections(
+                AUDIT_DB_PATH,
+                workspace_id=workspace.id,
+                installation_id=installation.installation_id,
+                repositories=repositories,
+            )
+        except (HTTPError, OSError, RuntimeError, ValueError):
+            pass
+
+    existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
+    existing_repo_fulls.update(allocation.repo_full for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id))
+
+    inventory: list[dict[str, object]] = []
+    for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id):
+        repo_full = connection.repo_full.strip()
+        if not repo_full:
+            continue
+        inventory.append(
+            {
+                "repo_full": repo_full,
+                "is_onboarded": repo_full in existing_repo_fulls,
+                "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+            }
+        )
+
+    return inventory
+
+
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
     access_context = _require_dashboard_access(request)
     if not access_context:
@@ -636,6 +804,52 @@ def _dashboard_actor_login(request: Request) -> str | None:
     identity_context = _current_authenticated_identity_context(request)
     identity = identity_context.get("identity")
     return identity.github_login if identity is not None else None
+
+
+def _require_export_job_owner_access(request: Request, job) -> dict[str, object]:
+    access_context = _require_repo_dashboard_read_access(request, job.repo_full)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is None or session is None:
+        raise HTTPException(status_code=403, detail="Workspace context is required for export access.")
+    if not job.workspace_id or not job.requested_by_user_id:
+        raise HTTPException(status_code=404, detail="Export job ownership metadata is not available.")
+    if workspace.id != job.workspace_id or session.user_id != job.requested_by_user_id:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    return access_context
+
+
+def _export_download_url(job) -> str | None:
+    if not job.download_token:
+        return None
+    return f"/api/export/{job.id}/download?token={quote(job.download_token)}"
+
+
+def _export_job_payload(job) -> dict[str, object]:
+    payload = {
+        "id": job.id,
+        "repo_full": job.repo_full,
+        "from_ts": job.from_ts,
+        "to_ts": job.to_ts,
+        "workspace_id": job.workspace_id,
+        "requested_by_user_id": job.requested_by_user_id,
+        "requested_by_github_login": job.requested_by_github_login,
+        "export_mode": job.export_mode,
+        "include_artifact_content": job.include_artifact_content,
+        "export_version": job.export_version,
+        "status": job.status,
+        "attempt_count": job.attempt_count,
+        "next_attempt_at": job.next_attempt_at,
+        "last_error": job.last_error,
+        "download_token": job.download_token,
+        "result_size_bytes": job.result_size_bytes,
+        "result_sha256": job.result_sha256,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "completed_at": job.completed_at,
+    }
+    payload["download_url"] = _export_download_url(job) if job.status == "completed" and job.result_blob else None
+    return payload
 
 
 def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
@@ -684,20 +898,23 @@ def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | N
     return hmac.compare_digest(expected, signature_header.strip())
 
 
-def _is_admin_identity(user, identity) -> bool:
-    if not settings.has_admin_access_config:
+def _is_owner_identity(user, identity) -> bool:
+    if not settings.has_owner_access_config:
         return False
-    if identity.github_user_id in settings.admin_github_user_id_set:
-        return True
-    if identity.github_login.lower() in settings.admin_github_login_set:
-        return True
-    return bool(user.primary_email and user.primary_email.lower() in settings.admin_email_set)
+    checks: list[bool] = []
+    if settings.owner_github_user_id.strip():
+        checks.append(identity.github_user_id == settings.owner_github_user_id.strip())
+    if settings.normalized_owner_github_login:
+        checks.append(identity.github_login.lower() == settings.normalized_owner_github_login)
+    if settings.normalized_owner_email:
+        checks.append(bool(user.primary_email and user.primary_email.lower() == settings.normalized_owner_email))
+    return bool(checks) and all(checks)
 
 
-def _require_admin_access(request: Request) -> dict[str, object]:
+def _require_owner_access(request: Request) -> dict[str, object]:
     context = _current_authenticated_identity_context(request)
-    if not _is_admin_identity(context["user"], context["identity"]):
-        raise HTTPException(status_code=403, detail="Admin access is not enabled for this GitHub identity.")
+    if not _is_owner_identity(context["user"], context["identity"]):
+        raise HTTPException(status_code=403, detail="System owner access is not enabled for this GitHub identity.")
     return context
 
 
@@ -706,6 +923,12 @@ def _has_profile_access(access_context: dict[str, object]) -> bool:
     if entitlement is not None and entitlement.dashboard_enabled:
         return True
     return bool(access_context["resolution"].can_access_dashboard)
+
+
+def _has_settings_access(access_context: dict[str, object]) -> bool:
+    workspace = access_context.get("workspace")
+    membership = access_context.get("membership")
+    return workspace is not None and membership is not None and membership.invitation_state == "accepted"
 
 
 def _require_workspace_role(access_context: dict[str, object], *allowed_roles: str) -> None:
@@ -755,7 +978,21 @@ async def login_page(request: Request):
         context_note = f"Resuming the {selected_plan.title()} plan handoff."
     elif source:
         context_note = f"Resuming the handoff from {source}."
-    return HTMLResponse(render_control_plane_login_page(auth_start_url=_auth_start_url(flow_context), context_note=context_note))
+    login_error = (request.query_params.get("login_error") or "").strip().lower()
+    if login_error == "oauth_not_configured":
+        context_note = "GitHub sign-in is not configured for this deployment yet. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET to enable login."
+    elif login_error == "encryption_not_configured":
+        context_note = "GitHub sign-in is blocked because APP_ENCRYPTION_KEY is not configured. Add it before storing OAuth tokens."
+    auth_available = settings.has_github_oauth_credentials and settings.has_encryption_key
+    if login_error in {"oauth_not_configured", "encryption_not_configured"}:
+        auth_available = False
+    return HTMLResponse(
+        render_control_plane_login_page(
+            auth_start_url=_auth_start_url(flow_context),
+            context_note=context_note,
+            auth_available=auth_available,
+        )
+    )
 
 
 @app.get("/auth/github/start")
@@ -765,8 +1002,9 @@ async def github_auth_start(request: Request):
     if existing_session is not None:
         return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
     if not settings.has_github_oauth_credentials:
-        raise HTTPException(status_code=503, detail="GitHub OAuth is not configured.")
-    _require_token_encryption_config()
+        return RedirectResponse(_path_with_flow_context("/login?login_error=oauth_not_configured", flow_context), status_code=303)
+    if not settings.has_encryption_key:
+        return RedirectResponse(_path_with_flow_context("/login?login_error=encryption_not_configured", flow_context), status_code=303)
     state = generate_oauth_state()
     authorize_url = build_github_oauth_authorize_url(
         settings.github_oauth_client_id,
@@ -826,9 +1064,16 @@ async def github_auth_callback(
         display_name=profile.display_name,
         primary_email=profile.email,
         avatar_url=profile.avatar_url,
+        profile_url=profile.profile_url,
+        company=profile.company,
+        blog=profile.blog,
+        location=profile.location,
+        bio=profile.bio,
+        twitter_username=profile.twitter_username,
         granted_scopes=token.granted_scopes,
         access_token_encrypted=encrypted_token,
     )
+    accept_workspace_invites_for_github_login(AUDIT_DB_PATH, user_id=user.id, github_login=profile.login)
     memberships = list_workspace_memberships_for_user(AUDIT_DB_PATH, user.id)
     workspace_id = memberships[0].workspace_id if memberships else None
     session = create_user_session(
@@ -909,6 +1154,7 @@ async def profile_page(request: Request):
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
+    membership = access_context["membership"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     return HTMLResponse(
         render_control_plane_profile_page(
@@ -916,12 +1162,14 @@ async def profile_page(request: Request):
             theme_preference=user.theme_preference if user else "dark",
             github_login=identity.github_login if identity else "Unavailable",
             github_user_id=identity.github_user_id if identity else "Unavailable",
+            primary_email=user.primary_email if user else None,
             workspace_name=workspace.display_name,
+            workspace_role=membership.role if membership else "viewer",
             plan_label=get_plan_definition(plan_code).label,
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
             csrf_token=access_context["session"].csrf_secret,
         )
     )
@@ -951,17 +1199,377 @@ async def profile_update(request: Request, display_name: str = Form(...), theme_
     return RedirectResponse("/app/profile?updated=1", status_code=303)
 
 
-@app.get("/app/admin", response_class=HTMLResponse)
+@app.get("/app/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+
+    user = access_context["user"]
+    identity = access_context["identity"]
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    membership = access_context["membership"]
+    installation = access_context["installation"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_settings_page(
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            status_note=(
+                "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
+            ),
+            resolution=access_context["resolution"],
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            csrf_token=access_context["session"].csrf_secret,
+            pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
+            pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
+            can_manage=bool(membership and membership.role in {"owner", "admin"}),
+            workspace_role=membership.role if membership else "viewer",
+            workspace_members=_workspace_member_rows(workspace.id),
+            repo_rows=_workspace_repo_rows(workspace.id),
+            next_payment_at=subscription.next_payment_at if subscription else None,
+            subscription_status=subscription.status if subscription else None,
+            setup_state=workspace.setup_state,
+            installation_account_login=installation.account_login if installation else None,
+            repo_limit=entitlement.repo_limit if entitlement else None,
+            seat_limit=entitlement.seat_limit if entitlement else None,
+            invite_enabled=bool(membership and membership.role in {"owner", "admin"}),
+        )
+    )
+
+
+@app.post("/app/settings")
+async def settings_update(
+    request: Request,
+    pr_comments_setting: str = Form(...),
+    workspace_name: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    normalized_setting = (pr_comments_setting or "").strip().lower()
+    if normalized_setting not in {"on", "off"}:
+        raise HTTPException(status_code=400, detail="PR comments setting must be on or off.")
+
+    normalized_workspace_name = (workspace_name or "").strip()
+    if not normalized_workspace_name:
+        raise HTTPException(status_code=400, detail="Workspace name cannot be empty.")
+    if len(normalized_workspace_name) > 120:
+        raise HTTPException(status_code=400, detail="Workspace name must be 120 characters or fewer.")
+
+    update_workspace_pr_comments_setting(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        enabled=normalized_setting == "on",
+    )
+    update_workspace_display_name(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        display_name=normalized_workspace_name,
+    )
+    return RedirectResponse("/app/settings?updated=1", status_code=303)
+
+
+@app.post("/app/settings/invite")
+async def settings_invite_user(
+    request: Request,
+    github_login: str = Form(...),
+    role: str = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    normalized_login = github_login.strip().lstrip("@").lower()
+    if not normalized_login:
+        raise HTTPException(status_code=400, detail="GitHub login is required.")
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?", normalized_login):
+        raise HTTPException(status_code=400, detail="GitHub login format is invalid.")
+    normalized_role = (role or "").strip().lower()
+    if normalized_role not in {"admin", "viewer"}:
+        raise HTTPException(status_code=400, detail="Invited role must be edit or read.")
+
+    identity = access_context.get("identity")
+    if identity is not None and identity.github_login.lower() == normalized_login:
+        raise HTTPException(status_code=400, detail="You are already in this workspace.")
+
+    upsert_workspace_invite(
+        AUDIT_DB_PATH,
+        workspace_id=access_context["workspace"].id,
+        invited_github_login=normalized_login,
+        role=normalized_role,
+        invited_by_user_id=access_context["session"].user_id,
+    )
+    return RedirectResponse("/app/settings?invite_added=1", status_code=303)
+
+
+@app.get("/app/policies", response_class=HTMLResponse)
+async def policies_page(request: Request):
+    access_context = _current_workspace_context(request)
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_placeholder_page(
+            page_title="Policies",
+            page_kicker="Workspace policy library",
+            page_copy="We are working on this page now. It will become the home for workspace guardrails, policy packs, and audit rules.",
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            active_nav="policies",
+        )
+    )
+
+
+@app.get("/app/help", response_class=HTMLResponse)
+async def help_page(request: Request):
+    access_context = _current_workspace_context(request)
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    return HTMLResponse(
+        render_control_plane_placeholder_page(
+            page_title="Help",
+            page_kicker="Operator assistance",
+            page_copy="We are working on this page now. It will collect guided setup, troubleshooting, and operator playbooks for each workspace.",
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            active_nav="help",
+        )
+    )
+
+
+@app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_page(request: Request):
-    admin_context = _require_admin_access(request)
+    admin_context = _require_owner_access(request)
     return HTMLResponse(
         render_control_plane_admin_page(
             actor_github_login=admin_context["identity"].github_login,
             admin_rows=[asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)],
             unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
             billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
+            audit_logs=[asdict(row) for row in list_recent_control_plane_audit_logs(AUDIT_DB_PATH)],
+            csrf_token=admin_context["session"].csrf_secret,
+            status_note=(request.query_params.get("updated") or "").replace("_", " ").strip().capitalize() or None,
         )
     )
+
+
+@app.post("/app/admin/users/create", include_in_schema=False)
+async def admin_create_user(request: Request, display_name: str = Form(...), primary_email: str | None = Form(default=None), csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Display name", max_length=120)
+    user = create_user(AUDIT_DB_PATH, display_name=normalized_name, primary_email=_normalize_optional_email(primary_email), active=True)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_created",
+        subject_type="user",
+        subject_id=str(user.id),
+        payload={"display_name": user.display_name, "primary_email": user.primary_email},
+    )
+    return _admin_redirect("user_created")
+
+
+@app.post("/app/admin/users/{user_id}/update", include_in_schema=False)
+async def admin_update_user(
+    request: Request,
+    user_id: int,
+    display_name: str = Form(...),
+    primary_email: str | None = Form(default=None),
+    active: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Display name", max_length=120)
+    user = update_user_admin_fields(
+        AUDIT_DB_PATH,
+        user_id,
+        display_name=normalized_name,
+        primary_email=_normalize_optional_email(primary_email),
+        active=bool(active),
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_updated",
+        subject_type="user",
+        subject_id=str(user.id),
+        payload={"display_name": user.display_name, "primary_email": user.primary_email, "active": user.active},
+    )
+    return _admin_redirect("user_updated")
+
+
+@app.post("/app/admin/users/{user_id}/delete", include_in_schema=False)
+async def admin_delete_user(request: Request, user_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    user = get_user_by_id(AUDIT_DB_PATH, user_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_deleted",
+        subject_type="user",
+        subject_id=str(user_id),
+        payload={"display_name": user.display_name if user else None, "primary_email": user.primary_email if user else None},
+    )
+    delete_user(AUDIT_DB_PATH, user_id)
+    return _admin_redirect("user_deleted")
+
+
+@app.post("/app/admin/workspaces/create", include_in_schema=False)
+async def admin_create_workspace(
+    request: Request,
+    display_name: str = Form(...),
+    slug: str | None = Form(default=None),
+    billing_owner_user_id: int = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Workspace name", max_length=120)
+    normalized_slug = _normalize_workspace_slug(slug, normalized_name)
+    try:
+        workspace = create_workspace(
+            AUDIT_DB_PATH,
+            slug=normalized_slug,
+            display_name=normalized_name,
+            billing_owner_user_id=billing_owner_user_id,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Workspace slug must be unique.") from exc
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_created",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"slug": workspace.slug, "display_name": workspace.display_name, "billing_owner_user_id": billing_owner_user_id},
+    )
+    return _admin_redirect("workspace_created")
+
+
+@app.post("/app/admin/workspaces/{workspace_id}/update", include_in_schema=False)
+async def admin_update_workspace(
+    request: Request,
+    workspace_id: int,
+    display_name: str = Form(...),
+    slug: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Workspace name", max_length=120)
+    normalized_slug = _normalize_workspace_slug(slug, normalized_name)
+    try:
+        workspace = update_workspace_admin_fields(AUDIT_DB_PATH, workspace_id, slug=normalized_slug, display_name=normalized_name)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Workspace slug must be unique.") from exc
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_updated",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"slug": workspace.slug, "display_name": workspace.display_name},
+    )
+    return _admin_redirect("workspace_updated")
+
+
+@app.post("/app/admin/workspaces/{workspace_id}/delete", include_in_schema=False)
+async def admin_delete_workspace(request: Request, workspace_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, workspace_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_deleted",
+        subject_type="workspace",
+        subject_id=str(workspace_id),
+        payload={"slug": workspace.slug if workspace else None, "display_name": workspace.display_name if workspace else None},
+    )
+    delete_workspace(AUDIT_DB_PATH, workspace_id)
+    return _admin_redirect("workspace_deleted")
+
+
+@app.post("/app/admin/memberships/upsert", include_in_schema=False)
+async def admin_upsert_membership(
+    request: Request,
+    workspace_id: int = Form(...),
+    user_id: int = Form(...),
+    role: str = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_role = (role or "").strip().lower()
+    if normalized_role not in {"owner", "admin", "viewer"}:
+        raise HTTPException(status_code=400, detail="Membership role must be owner, edit, or read.")
+    membership = upsert_workspace_membership(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=normalized_role,
+        invitation_state="accepted",
+        invited_by_user_id=admin_context["session"].user_id,
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_membership_saved",
+        subject_type="workspace_membership",
+        subject_id=f"{workspace_id}:{user_id}",
+        payload={"role": membership.role, "invitation_state": membership.invitation_state},
+    )
+    return _admin_redirect("membership_saved")
+
+
+@app.post("/app/admin/memberships/{workspace_id}/{user_id}/delete", include_in_schema=False)
+async def admin_delete_membership(request: Request, workspace_id: int, user_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    membership = get_workspace_membership(AUDIT_DB_PATH, workspace_id, user_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_membership_deleted",
+        subject_type="workspace_membership",
+        subject_id=f"{workspace_id}:{user_id}",
+        payload={"role": membership.role if membership else None},
+    )
+    delete_workspace_membership(AUDIT_DB_PATH, workspace_id=workspace_id, user_id=user_id)
+    return _admin_redirect("membership_deleted")
 
 
 @app.get("/app/workspaces/new", response_class=HTMLResponse)
@@ -1330,8 +1938,14 @@ async def install_link(
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
+    user = access_context["user"]
+    entitlement = access_context["entitlement"]
+    subscription = access_context["subscription"]
+    repo_inventory = _github_account_repo_inventory(access_context)
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    repo_limit = entitlement.repo_limit if entitlement else get_plan_definition(plan_code).repo_limit
     allocation_status_by_full = {
         str(item["repo_full"]): str(item["allocation_status"])
         for item in allocations
@@ -1345,6 +1959,12 @@ async def repo_setup_page(request: Request):
             allocation_status_by_full=allocation_status_by_full,
         )
     ]
+    consumed_repo_slots = len(
+        {str(item["repo_full"]) for item in allocations if str(item.get("allocation_status") or "") in {"active", "onboarded"}}
+        | {str(item["repo_full"]) for item in onboarded_summaries}
+    )
+    remaining_repo_slots = max(repo_limit - consumed_repo_slots, 0)
+    inventory_summary = f"{remaining_repo_slots} of {repo_limit} repository slots available on this plan."
     audit_repo_full = (
         (allocations[0]["repo_full"] if allocations else None)
         or (connections[0]["repo_full"] if connections else None)
@@ -1353,15 +1973,12 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
-            inventory_cards=render_repo_inventory_cards(
-                connections,
-                allocations,
-                onboarded_summaries,
-                csrf_token=access_context["session"].csrf_secret,
-            ),
+            inventory_summary=inventory_summary,
+            inventory_cards=render_repo_inventory_cards(repo_inventory),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
+            theme_preference=user.theme_preference if user else "dark",
         )
     )
 
@@ -1582,16 +2199,37 @@ def repo_dashboard(request: Request, repo_full: str):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    _require_repo_dashboard_read_access(request, repo_full)
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     build_started = time.perf_counter()
     repo_view = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    response = JSONResponse(asdict(repo_view))
+    payload = asdict(repo_view)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is not None and session is not None:
+        payload["export_jobs"] = [
+            _export_job_payload(job)
+            for job in list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
+        ]
+    else:
+        payload["export_jobs"] = []
+    response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
+
+
+@app.get("/api/repos/{repo_full:path}/export/history")
+def export_history(request: Request, repo_full: str):
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
+    workspace = access_context.get("workspace")
+    session = access_context.get("session")
+    if workspace is None or session is None:
+        return JSONResponse({"repo_full": repo_full, "jobs": []})
+    jobs = list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
+    return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
 
 
 @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
@@ -1820,7 +2458,11 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
             actor_login=_dashboard_actor_login(request),
             github_app_id=GITHUB_APP_ID,
             github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
-            generate_jwt_fn=generate_jwt,
+            generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(
+                app_id,
+                private_key_path,
+                settings.resolved_github_private_key,
+            ),
             get_installation_token_fn=get_installation_token,
             fetch_file_content_fn=fetch_file_content,
         )
@@ -1828,6 +2470,111 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+
+@app.post("/api/repos/{repo_full:path}/export/compliance")
+async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
+    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
+    try:
+        if payload.from_ts is not None and payload.to_ts is not None:
+            from_ts = payload.from_ts
+            to_ts = payload.to_ts
+        elif payload.from_date and payload.to_date:
+            from_ts = datetime.fromisoformat(payload.from_date).timestamp()
+            to_ts = datetime.fromisoformat(payload.to_date).timestamp()
+        else:
+            raise HTTPException(status_code=400, detail="Either from_ts/to_ts or from_date/to_date is required")
+        if from_ts > to_ts:
+            raise HTTPException(status_code=400, detail="The export start date must be earlier than the end date.")
+        if payload.export_mode not in ["compliance", "compliance_plus_drift"]:
+            raise HTTPException(status_code=400, detail="Invalid export_mode")
+        workspace = access_context.get("workspace")
+        session = access_context.get("session")
+        job = create_export_job(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            export_mode=payload.export_mode,
+            include_artifact_content=payload.include_artifact_content,
+            workspace_id=workspace.id if workspace is not None else None,
+            requested_by_user_id=session.user_id if session is not None else None,
+            requested_by_github_login=_dashboard_actor_login(request),
+        )
+        result = build_compliance_export(
+            AUDIT_DB_PATH,
+            ComplianceExportServiceRequest(
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=payload.export_mode,
+                include_artifact_content=payload.include_artifact_content,
+                export_version=job.export_version,
+            ),
+        )
+        update_export_job_status(
+            AUDIT_DB_PATH,
+            job.id,
+            "completed",
+            result_size_bytes=result.total_size_bytes,
+            result_sha256=hashlib.sha256(result.zip_bytes).hexdigest(),
+            result_blob=result.zip_bytes,
+        )
+        job = get_export_job(AUDIT_DB_PATH, job.id) or job
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="An identical export request is already in progress. Change the date range or wait for it to finish.")
+    except Exception as exc:
+        if 'job' in locals():
+            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse({
+        "job_id": job.id,
+        "status": job.status,
+        "download_url": _export_download_url(job),
+    })
+
+
+@app.get("/api/export/{job_id}/status")
+async def get_export_status(job_id: int, request: Request):
+    try:
+        job = get_export_job(AUDIT_DB_PATH, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Export job not found")
+        _require_export_job_owner_access(request, job)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(_export_job_payload(job))
+
+
+@app.get("/api/export/{job_id}/download")
+async def download_export(job_id: int, request: Request, token: str | None = None):
+    try:
+        job = get_export_job(AUDIT_DB_PATH, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Export job not found")
+        _require_export_job_owner_access(request, job)
+        if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
+            raise HTTPException(status_code=404, detail="Export job not found")
+        if job.status != "completed":
+            raise HTTPException(status_code=400, detail="Export job not completed")
+        if not job.result_size_bytes or not job.download_token or not job.result_blob:
+            raise HTTPException(status_code=400, detail="Export job missing download data")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filename = (
+        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
+        f"{job.repo_full.replace('/', '-')}-"
+        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
+        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+    )
+    return StreamingResponse(
+        io.BytesIO(job.result_blob),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 async def verify_signature(request: Request) -> bool:
@@ -2069,6 +2816,9 @@ async def webhook(request: Request):
         entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
         if entitlement is None or not entitlement.pr_comments_enabled:
             return JSONResponse({"message": "ignored: workspace not entitled"})
+        workspace = get_workspace_by_id(AUDIT_DB_PATH, allocation.workspace_id)
+        if workspace is None or not workspace.pr_comments_setting_enabled:
+            return JSONResponse({"message": "ignored: PR comments disabled in settings"})
 
     if action in ("closed", "reopened"):
         update_job_pr_state(

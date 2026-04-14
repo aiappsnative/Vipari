@@ -51,7 +51,7 @@ def test_exchange_code_for_access_token_parses_github_response(monkeypatch):
             return False
 
         def read(self):
-            return json.dumps({"access_token": "token-123", "scope": "read:user,user:email"}).encode("utf-8")
+            return json.dumps({"access_token": "token-123", "scope": "read:user,user:email,repo"}).encode("utf-8")
 
     def fake_urlopen(request):
         captured["url"] = request.full_url
@@ -72,7 +72,7 @@ def test_exchange_code_for_access_token_parses_github_response(monkeypatch):
     assert captured["headers"]["Accept"] == "application/json"
     assert "client_id=client-123" in captured["body"]
     assert token.access_token == "token-123"
-    assert token.granted_scopes == ["read:user", "user:email"]
+    assert token.granted_scopes == ["read:user", "user:email", "repo"]
 
 
 def test_fetch_github_user_profile_parses_required_fields(monkeypatch):
@@ -103,3 +103,40 @@ def test_fetch_github_user_profile_parses_required_fields(monkeypatch):
     assert profile.display_name == "Doria"
     assert profile.email == "doria@example.com"
     assert profile.avatar_url == "https://avatars.example.com/doria90"
+
+
+def test_list_github_user_repositories_parses_repository_inventory(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                [
+                    {
+                        "id": 1,
+                        "full_name": "doria90/PromptDrift",
+                        "default_branch": "main",
+                        "private": True,
+                        "html_url": "https://github.com/doria90/PromptDrift",
+                    },
+                    {
+                        "id": 2,
+                        "full_name": "doria90/dummyAI",
+                        "default_branch": "main",
+                        "private": False,
+                        "html_url": "https://github.com/doria90/dummyAI",
+                    },
+                ]
+            ).encode("utf-8")
+
+    monkeypatch.setattr(auth_service.urllib.request, "urlopen", lambda request: FakeResponse())
+
+    repositories = auth_service.list_github_user_repositories("oauth-token")
+
+    assert [repository.full_name for repository in repositories] == ["doria90/PromptDrift", "doria90/dummyAI"]
+    assert repositories[0].is_private is True
+    assert repositories[1].html_url == "https://github.com/doria90/dummyAI"

@@ -27,6 +27,7 @@ def _load_template(name: str) -> str:
     return (
         template.replace("/static/control-plane.css", _asset_url("/static/control-plane.css"))
         .replace("/static/dashboard.css", _asset_url("/static/dashboard.css"))
+        .replace("/static/theme-toggle.js", _asset_url("/static/theme-toggle.js"))
     )
 
 
@@ -233,8 +234,6 @@ def _render_quick_links(*, profile_url: str | None = None, admin_url: str | None
     links = ['<a class="subtle-link" href="/app">Workspace</a>']
     if profile_url:
         links.append(f'<a class="subtle-link" href="{html_escape(profile_url)}">Profile</a>')
-    if admin_url:
-        links.append(f'<a class="subtle-link" href="{html_escape(admin_url)}">Admin</a>')
     return "".join(links)
 
 
@@ -242,6 +241,11 @@ def _format_timestamp(value: float | None) -> str:
     if value is None:
         return "Unavailable"
     return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _slugify_value(value: str) -> str:
+    normalized = "-".join(part for part in "".join(char.lower() if char.isalnum() else "-" for char in value).split("-") if part)
+    return normalized or "workspace"
 
 
 def _render_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -253,6 +257,125 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> str:
         for row in rows
     )
     return f'<div class="table-shell"><table class="data-table"><thead><tr>{head_html}</tr></thead><tbody>{row_html}</tbody></table></div>'
+
+
+def _permission_label(role: str | None) -> str:
+    normalized = (role or "").strip().lower()
+    return {
+        "owner": "Owner",
+        "admin": "Edit",
+        "viewer": "Read",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _setup_state_label(setup_state: str | None) -> str:
+    normalized = (setup_state or "").strip().lower()
+    labels = {
+        "workspace_no_subscription": "Billing setup needed",
+        "billing_pending_confirmation": "Billing pending",
+        "payment_failed": "Billing issue",
+        "awaiting_github_install": "GitHub install needed",
+        "awaiting_repo_onboarding": "Repo onboarding needed",
+        "active_comments_only": "Comments only",
+        "active": "Active",
+        "canceled_active_until_period_end": "Active until period end",
+        "expired_read_only": "Read only",
+    }
+    return labels.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _member_state_badge_label(state: str | None) -> str:
+    normalized = (state or "accepted").strip().lower()
+    return {
+        "accepted": "Active",
+        "pending": "Pending",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _member_state_badge_class(state: str | None) -> str:
+    normalized = (state or "accepted").strip().lower()
+    return "member-badge-pending" if normalized == "pending" else "member-badge-active"
+
+
+def _render_workspace_members_list(workspace_members: list[dict[str, object]]) -> str:
+    if not workspace_members:
+        return '<div class="control-page-empty">No workspace members yet.</div>'
+    items = []
+    for member in workspace_members:
+        display_name = html_escape(str(member.get("display_name") or "Unknown"))
+        github_login = html_escape(str(member.get("github_login") or "Unavailable"))
+        permission = html_escape(_permission_label(str(member.get("role") or "")))
+        state = str(member.get("state") or "Accepted")
+        state_label = html_escape(_member_state_badge_label(state))
+        items.append(
+            f'''
+            <div class="member-row member-row-{html_escape(state.strip().lower() or "accepted")}">
+                <div class="member-row-identity">
+                    <div class="member-row-avatar" aria-hidden="true">{display_name[:1] or "?"}</div>
+                    <div class="member-row-copy">
+                        <strong>{display_name}</strong>
+                        <span>@{github_login}</span>
+                    </div>
+                </div>
+                <div class="member-row-meta">
+                    <span class="member-badge member-badge-permission">{permission}</span>
+                    <span class="member-badge {_member_state_badge_class(state)}">{state_label}</span>
+                </div>
+            </div>
+            '''
+        )
+    return '<div class="member-list">' + "".join(items) + "</div>"
+
+
+def _render_workspace_invite_role_options() -> str:
+    return (
+        '<option value="admin">Edit</option>'
+        '<option value="viewer">Read</option>'
+    )
+
+
+def _render_workspace_member_invite_form(*, csrf_token: str, invite_enabled: bool) -> str:
+    note = (
+        '<span class="member-toolbar-note">Invite by GitHub login. They join automatically after their next GitHub sign-in.</span>'
+        if invite_enabled
+        else '<span class="member-toolbar-note">Only workspace owners and admins can add users.</span>'
+    )
+    disabled = "disabled" if not invite_enabled else ""
+    return f'''
+        <div class="member-toolbar">
+            <form method="post" action="/app/settings/invite" class="member-toolbar-form">
+                {_csrf_input(csrf_token)}
+                <input class="control-page-input member-toolbar-input" name="github_login" placeholder="GitHub login" maxlength="39" {disabled} />
+                <select class="control-page-select member-toolbar-select" name="role" {disabled}>
+                    {_render_workspace_invite_role_options()}
+                </select>
+                <button type="submit" class="control-page-icon-button member-toolbar-button" aria-label="Add user" {disabled}>+</button>
+            </form>
+            {note}
+        </div>
+    '''
+
+
+def _render_workspace_repos_table(repo_rows: list[dict[str, object]]) -> str:
+    rows = [
+        [
+            f'<a class="link" href="{html_escape(str(repo.get("href") or "#"))}">{html_escape(str(repo.get("repo_full") or "Unknown"))}</a>',
+            html_escape(str(repo.get("status") or "Unknown")),
+            html_escape(str(repo.get("branch") or "unknown")),
+            html_escape(str(repo.get("visibility") or "Private")),
+        ]
+        for repo in repo_rows
+    ]
+    return _render_table(["Repository", "Status", "Default branch", "Visibility"], rows)
+
+
+def _admin_sidebar_item(admin_url: str | None) -> str:
+    if not admin_url:
+        return ""
+    return f'''<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.5-2.7 7.8-7 9-4.3-1.2-7-4.5-7-9V7l7-4z"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>
+                    <span>Admin</span>
+                </a>'''
 
 
 def _render_state_links(active_state: str) -> str:
@@ -279,10 +402,17 @@ def render_control_plane_marketing_page() -> str:
     return _load_template("control_plane_marketing.html")
 
 
-def render_control_plane_login_page(*, auth_start_url: str, context_note: str | None = None) -> str:
+def render_control_plane_login_page(*, auth_start_url: str, context_note: str | None = None, auth_available: bool = True) -> str:
     template = _load_template("control_plane_login.html")
-    return template.replace("{{AUTH_START_URL}}", html_escape(auth_start_url)).replace(
-        "{{CONTEXT_NOTE}}", html_escape(context_note or "GitHub identity anchors workspace membership, install authority, and repository allocation.")
+    action_markup = (
+        f'<a class="button" href="{html_escape(auth_start_url)}">Sign in with GitHub</a>'
+        if auth_available
+        else '<span class="button button-disabled" aria-disabled="true">Sign in with GitHub</span>'
+    )
+    return (
+        template.replace("{{AUTH_ACTION}}", action_markup)
+        .replace("{{AUTH_START_URL}}", html_escape(auth_start_url))
+        .replace("{{CONTEXT_NOTE}}", html_escape(context_note or "GitHub identity anchors workspace membership, install authority, and repository allocation."))
     )
 
 
@@ -385,14 +515,20 @@ def _repo_dashboard_href(repo_full: str) -> str:
     return f'/dashboard/{quote(repo_full, safe="")}'
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str) -> str:
+def _repo_github_installation_href(repo_full: str) -> str:
+    return f'https://github.com/{quote(repo_full, safe="/")}/settings/installations'
+
+
+def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark") -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{INVENTORY_SUMMARY}}", html_escape(inventory_summary))
         .replace("{{INVENTORY_CARDS}}", inventory_cards)
         .replace("{{ONBOARDING_METRICS}}", onboarding_metrics)
         .replace("{{ONBOARDING_SUMMARY_CARDS}}", onboarding_summary_cards)
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
     )
 
 
@@ -448,82 +584,26 @@ def _repo_setup_state_key(connection: dict[str, object] | None, allocation: dict
     return "unknown"
 
 
-def render_repo_inventory_cards(
-    connections: list[dict[str, object]],
-    allocations: list[dict[str, object]],
-    onboarded_summaries: list[dict[str, object]],
-    *,
-    csrf_token: str,
-) -> str:
-    connection_by_full = {str(connection["repo_full"]): connection for connection in connections}
-    allocation_by_full = {str(allocation["repo_full"]): allocation for allocation in allocations}
-    summary_by_full = {str(summary["repo_full"]): summary for summary in onboarded_summaries}
-
-    repo_fulls = set(connection_by_full) | set(allocation_by_full) | set(summary_by_full)
-    if not repo_fulls:
-        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>Link an installation first</h3><p>No repository connections are available for allocation yet.</p></article>'
-
-    def sort_key(repo_full: str) -> tuple[int, str]:
-        connection = connection_by_full.get(repo_full)
-        allocation = allocation_by_full.get(repo_full)
-        summary = summary_by_full.get(repo_full)
-        rank = 2
-        if summary is not None:
-            rank = 0
-        elif allocation is not None:
-            rank = 1
-        elif connection is not None:
-            rank = 2
-        return (rank, repo_full.lower())
+def render_repo_inventory_cards(repositories: list[dict[str, object]]) -> str:
+    if not repositories:
+        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>No repositories available yet</h3><p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p></article>'
 
     rendered: list[str] = []
-    for repo_full in sorted(repo_fulls, key=sort_key):
-        connection = connection_by_full.get(repo_full)
-        allocation = allocation_by_full.get(repo_full)
-        summary = summary_by_full.get(repo_full)
-        visibility = "Private" if connection and connection.get("is_private") else "Public"
-        default_branch = (
-            (summary.get("default_branch") if summary is not None else None)
-            or (connection.get("default_branch") if connection is not None else None)
-            or "unknown"
+    for repository in sorted(repositories, key=lambda item: str(item.get("repo_full") or "").lower()):
+        repo_full = str(repository.get("repo_full") or "")
+        if not repo_full:
+            continue
+        is_onboarded = bool(repository.get("is_onboarded"))
+        action = (
+            '<span class="repo-setup-chip repo-setup-chip-strong">Already there</span>'
+            if is_onboarded
+            else f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(str(repository.get("install_href") or _repo_github_installation_href(repo_full)))}" target="_blank" rel="noreferrer">Onboard</a>'
         )
-        tracked_artifacts = int(summary.get("discovered_artifact_count") or 0) if summary is not None else 0
-        history_count = int(summary.get("historical_version_count") or 0) if summary is not None else 0
-        allocation_label = str(allocation.get("allocation_status") or "not_allocated").replace("_", " ") if allocation is not None else "not allocated"
-        state_label, state_class = _repo_setup_state_label(connection, allocation, summary)
-        state_key = _repo_setup_state_key(connection, allocation, summary)
-        primary_action = ""
-        if allocation is None and connection is not None:
-            primary_action = f'''
-                <form action="/app/repos/allocate?repo_full={html_escape(repo_full)}" method="post">
-                    {_csrf_input(csrf_token)}
-                    <button type="submit" class="repo-setup-button">Allocate and onboard</button>
-                </form>
-            '''
-        else:
-            primary_action = f'<div class="repo-setup-card-note">Workspace state: {html_escape(allocation_label)}</div>'
-
         rendered.append(
             f'''
-            <article class="repo-setup-card repo-setup-card-compact{' repo-setup-card-strong' if summary is not None else ''}" data-repo-inventory-card="true" data-status="{html_escape(state_key)}" data-repo-full="{html_escape(repo_full.lower())}">
-                <div class="repo-setup-card-top">
-                    <div class="repo-setup-card-label">Repository inventory</div>
-                    <div class="repo-setup-status-stack">
-                        <span class="repo-setup-chip {state_class}">{html_escape(state_label)}</span>
-                        <span class="repo-setup-chip">{html_escape(visibility)}</span>
-                    </div>
-                </div>
-                <h3><a class="repo-setup-card-link" href="{html_escape(_repo_dashboard_href(repo_full))}">{html_escape(repo_full)}</a></h3>
-                <div class="repo-setup-stat-row">
-                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Default branch</span><span class="repo-setup-meta-value">{html_escape(str(default_branch))}</span></div>
-                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">Tracked artifacts</span><span class="repo-setup-meta-value">{tracked_artifacts}</span></div>
-                    <div class="repo-setup-stat"><span class="repo-setup-meta-label">History</span><span class="repo-setup-meta-value">{history_count}</span></div>
-                </div>
-                <p>{html_escape(_repo_setup_inventory_copy(connection, allocation, summary))}</p>
-                <div class="repo-setup-card-actions">
-                    <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(repo_full))}">Open audit page</a>
-                    {primary_action}
-                </div>
+            <article class="repo-setup-inventory-row" data-repo-inventory-card="true" data-status="{'onboarded' if is_onboarded else 'available'}" data-repo-full="{html_escape(repo_full.lower())}">
+                <span class="repo-setup-inventory-name">{html_escape(repo_full)}</span>
+                <span class="repo-setup-inventory-action">{action}</span>
             </article>
             '''
         )
@@ -585,7 +665,7 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
-    return render_repo_inventory_cards(connections, [], [], csrf_token=csrf_token)
+    return render_repo_inventory_cards(connections)
 
 
 def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
@@ -623,7 +703,9 @@ def render_control_plane_profile_page(
     theme_preference: str,
     github_login: str,
     github_user_id: str,
+    primary_email: str | None,
     workspace_name: str,
+    workspace_role: str,
     plan_label: str,
     next_payment_at: float | None,
     status_note: str | None,
@@ -632,9 +714,9 @@ def render_control_plane_profile_page(
     csrf_token: str,
 ) -> str:
     template = _load_template("control_plane_profile.html")
-    admin_nav_item = ""
+    admin_control = ""
     if admin_url:
-        admin_nav_item = f'<a href="{html_escape(admin_url)}" class="sidebar-nav-item" aria-label="Admin" data-tooltip="Admin">A</a>'
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     return (
         template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
@@ -645,10 +727,92 @@ def render_control_plane_profile_page(
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{GITHUB_LOGIN}}", html_escape(github_login))
         .replace("{{GITHUB_USER_ID}}", html_escape(github_user_id))
+        .replace("{{PRIMARY_EMAIL}}", html_escape(primary_email or "Unavailable"))
+        .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
-        .replace("{{STATUS_NOTE}}", html_escape(status_note or "Update how your name appears inside the control plane. GitHub identity details remain read-only."))
-        .replace("{{ADMIN_NAV_ITEM}}", admin_nav_item)
+        .replace("{{STATUS_NOTE}}", html_escape(status_note or "User settings apply to your identity inside the current workspace. GitHub account details remain read-only."))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
+    )
+
+
+def render_control_plane_settings_page(
+    *,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    status_note: str | None,
+    resolution: WorkspaceAccessResolution,
+    admin_url: str | None,
+    csrf_token: str,
+    pr_comments_allowed_by_plan: bool,
+    pr_comments_setting_enabled: bool,
+    can_manage: bool,
+    workspace_role: str,
+    workspace_members: list[dict[str, object]],
+    repo_rows: list[dict[str, object]],
+    next_payment_at: float | None,
+    subscription_status: str | None,
+    setup_state: str,
+    installation_account_login: str | None,
+    repo_limit: int | None,
+    seat_limit: int | None,
+    invite_enabled: bool,
+) -> str:
+    template = _load_template("control_plane_settings.html")
+    effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
+    status_copy = status_note or "Manage workspace-wide comment behavior for pull requests."
+    if not pr_comments_allowed_by_plan:
+        status_copy = "Your current plan does not permit PR comments, so this setting will not take effect until comments are included in the workspace entitlement."
+    manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
+    return (
+        template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{STATUS_NOTE}}", html_escape(status_copy))
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+        .replace("{{WORKSPACE_NAME_INPUT}}", html_escape(workspace_name))
+        .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
+        .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
+        .replace("{{PR_COMMENTS_DISABLED}}", "disabled" if not can_manage else "")
+        .replace("{{PLAN_PR_COMMENTS_STATUS}}", "Included" if pr_comments_allowed_by_plan else "Unavailable")
+        .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", "On" if pr_comments_setting_enabled else "Off")
+        .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", "Active" if effective_status else "Paused")
+        .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
+        .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
+        .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
+        .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_list(workspace_members))
+        .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows))
+        .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
+        .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))
+        .replace("{{SETUP_STATE}}", html_escape(_setup_state_label(setup_state)))
+        .replace("{{INSTALLATION_ACCOUNT_LOGIN}}", html_escape(installation_account_login or "Not linked"))
+        .replace("{{REPO_LIMIT}}", html_escape(str(repo_limit or 0)))
+        .replace("{{SEAT_LIMIT}}", html_escape(str(seat_limit or 0)))
+    )
+
+
+def render_control_plane_placeholder_page(
+    *,
+    page_title: str,
+    page_kicker: str,
+    page_copy: str,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    active_nav: str,
+) -> str:
+    template = _load_template("control_plane_placeholder.html")
+    return (
+        template.replace("{{PAGE_TITLE}}", html_escape(page_title))
+        .replace("{{PAGE_KICKER}}", html_escape(page_kicker))
+        .replace("{{PAGE_COPY}}", html_escape(page_copy))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{POLICIES_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "policies" else "")
+        .replace("{{HELP_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "help" else "")
     )
 
 
@@ -658,8 +822,179 @@ def render_control_plane_admin_page(
     admin_rows: list[dict[str, object]],
     unclaimed_installations: list[dict[str, object]],
     billing_claims: list[dict[str, object]],
+    audit_logs: list[dict[str, object]],
+    csrf_token: str,
+    status_note: str | None = None,
 ) -> str:
     template = _load_template("control_plane_admin.html")
+
+    unique_users: list[dict[str, object]] = []
+    seen_user_ids: set[int] = set()
+    unique_workspaces: list[dict[str, object]] = []
+    seen_workspace_ids: set[int] = set()
+    for row in admin_rows:
+        user_id = row.get("user_id")
+        if isinstance(user_id, int) and user_id not in seen_user_ids:
+            seen_user_ids.add(user_id)
+            unique_users.append(row)
+        workspace_id = row.get("workspace_id")
+        if isinstance(workspace_id, int) and workspace_id not in seen_workspace_ids:
+            seen_workspace_ids.add(workspace_id)
+            unique_workspaces.append(row)
+
+    user_options = "".join(
+        f'<option value="{int(row.get("user_id") or 0)}">{html_escape(str(row.get("user_display_name") or "Unknown"))}#{int(row.get("user_id") or 0)}</option>'
+        for row in unique_users
+    ) or '<option value="">Create a user first</option>'
+    workspace_options = "".join(
+        f'<option value="{int(row.get("workspace_id") or 0)}">{html_escape(str(row.get("workspace_display_name") or "Workspace"))}</option>'
+        for row in unique_workspaces
+    ) or '<option value="">Create a workspace first</option>'
+    status_markup = f'<div class="admin-status-note">{html_escape(status_note)}</div>' if status_note else ""
+
+    add_toolbar = f'''
+        <div class="admin-toolbar">
+            <details class="admin-disclosure">
+                <summary>Add user</summary>
+                <form method="post" action="/app/admin/users/create" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" placeholder="Display name" />
+                    <input class="field-input" name="primary_email" maxlength="320" placeholder="Primary email" />
+                    <button type="submit" class="button">Create user</button>
+                </form>
+            </details>
+            <details class="admin-disclosure">
+                <summary>Add workspace</summary>
+                <form method="post" action="/app/admin/workspaces/create" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" placeholder="Workspace name" />
+                    <input class="field-input" name="slug" maxlength="120" placeholder="workspace-slug" />
+                    <select class="field-input" name="billing_owner_user_id">{user_options}</select>
+                    <button type="submit" class="button">Create workspace</button>
+                </form>
+            </details>
+            <details class="admin-disclosure">
+                <summary>Assign membership</summary>
+                <form method="post" action="/app/admin/memberships/upsert" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <select class="field-input" name="user_id">{user_options}</select>
+                    <select class="field-input" name="workspace_id">{workspace_options}</select>
+                    <select class="field-input" name="role">
+                        <option value="owner">Owner</option>
+                        <option value="admin">Edit</option>
+                        <option value="viewer">Read</option>
+                    </select>
+                    <button type="submit" class="button">Save membership</button>
+                </form>
+            </details>
+        </div>
+    '''
+
+    admin_table_rows = []
+    for row in admin_rows:
+        user_id = int(row.get("user_id") or 0)
+        workspace_id = int(row.get("workspace_id") or 0) if row.get("workspace_id") is not None else 0
+        workspace_name = str(row.get("workspace_display_name") or "Unassigned")
+        workspace_slug = str(row.get("workspace_slug") or _slugify_value(workspace_name))
+        profile_bits = []
+        if row.get("primary_email"):
+            profile_bits.append(html_escape(str(row.get("primary_email"))))
+        if row.get("github_company"):
+            profile_bits.append(html_escape(str(row.get("github_company"))))
+        if row.get("github_location"):
+            profile_bits.append(html_escape(str(row.get("github_location"))))
+        if row.get("github_blog"):
+            profile_bits.append(html_escape(str(row.get("github_blog"))))
+        if row.get("github_twitter_username"):
+            profile_bits.append(f'@{html_escape(str(row.get("github_twitter_username")))}')
+        if row.get("github_bio"):
+            profile_bits.append(html_escape(str(row.get("github_bio"))))
+        github_login = str(row.get("github_login") or "Unavailable")
+        github_profile_url = str(row.get("github_profile_url") or "").strip()
+        github_markup = (
+            f'<a class="subtle-link admin-inline-link" href="{html_escape(github_profile_url)}">@{html_escape(github_login)}</a>'
+            if github_profile_url and github_login != "Unavailable"
+            else html_escape(github_login)
+        )
+        counts_markup = (
+            f'Installs {html_escape(str(int(row.get("installation_count") or 0)))} · '
+            f'Connected {html_escape(str(int(row.get("connected_repo_count") or 0)))} · '
+            f'Onboarded {html_escape(str(int(row.get("onboarded_repo_count") or 0)))}'
+        )
+        user_edit = f'''
+            <details class="admin-row-disclosure">
+                <summary>Edit user</summary>
+                <form method="post" action="/app/admin/users/{user_id}/update" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" value="{html_escape(str(row.get('user_display_name') or ''))}" />
+                    <input class="field-input" name="primary_email" maxlength="320" value="{html_escape(str(row.get('primary_email') or ''))}" />
+                    <label class="admin-checkbox-row"><input type="checkbox" name="active" value="1" {'checked' if bool(row.get('user_active')) else ''} /> Active user</label>
+                    <button type="submit" class="button">Save user</button>
+                </form>
+            </details>
+        '''
+        workspace_edit = ""
+        membership_delete = ""
+        workspace_delete = ""
+        if workspace_id:
+            workspace_edit = f'''
+                <details class="admin-row-disclosure">
+                    <summary>Edit workspace</summary>
+                    <form method="post" action="/app/admin/workspaces/{workspace_id}/update" class="action-form admin-form-grid">
+                        {_csrf_input(csrf_token)}
+                        <input class="field-input" name="display_name" maxlength="120" value="{html_escape(workspace_name)}" />
+                        <input class="field-input" name="slug" maxlength="120" value="{html_escape(workspace_slug)}" />
+                        <button type="submit" class="button">Save workspace</button>
+                    </form>
+                </details>
+            '''
+            membership_delete = f'''
+                <form method="post" action="/app/admin/memberships/{workspace_id}/{user_id}/delete" class="action-form" onsubmit="return confirm('Remove this user from the workspace?');">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="button admin-danger-button">Remove member</button>
+                </form>
+            '''
+            workspace_delete = f'''
+                <form method="post" action="/app/admin/workspaces/{workspace_id}/delete" class="action-form" onsubmit="return confirm('Delete this workspace and all linked records?');">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="button admin-danger-button">Delete workspace</button>
+                </form>
+            '''
+        user_delete = f'''
+            <form method="post" action="/app/admin/users/{user_id}/delete" class="action-form" onsubmit="return confirm('Delete this user and any linked workspace memberships?');">
+                {_csrf_input(csrf_token)}
+                <button type="submit" class="button admin-danger-button">Delete user</button>
+            </form>
+        '''
+        actions_markup = f'<div class="admin-action-stack">{user_edit}{workspace_edit}{membership_delete}{workspace_delete}{user_delete}</div>'
+        admin_table_rows.append(
+            [
+                html_escape(workspace_name),
+                html_escape(str(row.get("user_display_name") or "Unknown")),
+                github_markup,
+                "<br />".join(profile_bits) if profile_bits else "<span class=\"page-note\">No extra profile data</span>",
+                html_escape(str(row.get("membership_role") or "none")),
+                html_escape(counts_markup),
+                html_escape(_setup_state_label(str(row.get("setup_state") or "none"))),
+                html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
+                actions_markup,
+            ]
+        )
+
+    audit_rows = _render_table(
+        ["When", "Event", "Subject", "Workspace", "Actor", "Details"],
+        [
+            [
+                html_escape(_format_timestamp(row.get("created_at") if isinstance(row.get("created_at"), (int, float)) else None)),
+                html_escape(str(row.get("event_type") or "")),
+                html_escape(f"{row.get('subject_type') or 'subject'}:{row.get('subject_id') or ''}"),
+                html_escape(str(row.get("workspace_id") or "Global")),
+                html_escape(str(row.get("actor_user_id") or "System")),
+                html_escape(str(row.get("payload_json") or "{}")),
+            ]
+            for row in audit_logs
+        ],
+    )
 
     def _render_installation_summary(row: dict[str, object]) -> str:
         installation_login = str(row.get("installation_account_login") or row.get("installation_id") or "none")
@@ -669,39 +1004,8 @@ def render_control_plane_admin_page(
         return installation_login
 
     user_rows = _render_table(
-        [
-            "Workspace",
-            "User",
-            "GitHub",
-            "Role",
-            "Plan",
-            "Dashboard",
-            "PR comments",
-            "Next payment",
-            "Installation",
-            "Connected repos",
-            "Onboarded repos",
-            "Setup",
-            "Last login",
-        ],
-        [
-            [
-                html_escape(str(row.get("workspace_display_name") or "Unassigned")),
-                html_escape(str(row.get("user_display_name") or "Unknown")),
-                html_escape(str(row.get("github_login") or "Unavailable")),
-                html_escape(str(row.get("membership_role") or "none")),
-                html_escape(str(row.get("plan_code") or "none")),
-                "yes" if bool(row.get("dashboard_enabled")) else "no",
-                "yes" if bool(row.get("pr_comments_enabled")) else "no",
-                html_escape(_format_timestamp(row.get("next_payment_at") if isinstance(row.get("next_payment_at"), (int, float)) else None)),
-                html_escape(_render_installation_summary(row)),
-                html_escape(str(int(row.get("connected_repo_count") or 0))),
-                html_escape(str(int(row.get("onboarded_repo_count") or 0))),
-                html_escape(str(row.get("setup_state") or "none")),
-                html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
-            ]
-            for row in admin_rows
-        ],
+        ["Workspace", "User", "GitHub", "Profile", "Role", "Counts", "Setup", "Last login", "Actions"],
+        admin_table_rows,
     )
     install_rows = _render_table(
         ["Installation id", "Account", "Type", "Status", "Repos", "Last sync", "Updated"],
@@ -738,7 +1042,10 @@ def render_control_plane_admin_page(
     return (
         template.replace("{{ACTOR_GITHUB_LOGIN}}", html_escape(actor_github_login))
         .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url="/app/admin"))
+        .replace("{{STATUS_NOTE}}", status_markup)
+        .replace("{{ADD_TOOLBAR}}", add_toolbar)
         .replace("{{USER_ROWS}}", user_rows)
+        .replace("{{AUDIT_ROWS}}", audit_rows)
         .replace("{{UNCLAIMED_INSTALL_ROWS}}", install_rows)
         .replace("{{CLAIM_ROWS}}", claim_rows)
     )

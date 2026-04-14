@@ -79,11 +79,13 @@ def init_db(db_path: str) -> None:
             conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_updated_at REAL")
     from .audit_records import init_audit_record_db
     from .control_plane_records import init_control_plane_db
+    from .export_jobs import init_export_job_db
     from .onboarding_records import init_onboarding_record_db
     from .repo_journey_records import init_repo_journey_db
 
     init_audit_record_db(db_path)
     init_branch_scan_job_db(db_path)
+    init_export_job_db(db_path)
     init_onboarding_record_db(db_path)
     init_control_plane_db(db_path)
     init_repo_journey_db(db_path)

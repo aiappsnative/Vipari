@@ -8,21 +8,37 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/control-plane.css" />
+    <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body>
+<body data-theme="dark">
     <main class="page-shell admin-shell">
         <section class="page-header">
             <p class="eyebrow">Admin</p>
             <h1>Control-plane oversight</h1>
-            <p>Signed in as {{ACTOR_GITHUB_LOGIN}}. This page is allowlist-protected and should only be exposed to explicitly configured GitHub identities.</p>
+            <p>Signed in as {{ACTOR_GITHUB_LOGIN}}. This page is owner-locked and only available to the configured system owner identity.</p>
             <div class="state-links">{{QUICK_LINKS}}</div>
+        </section>
+        {{STATUS_NOTE}}
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Mutations</p>
+                <h2>Manage the control plane</h2>
+            </div>
+            {{ADD_TOOLBAR}}
         </section>
         <section class="admin-section">
             <div class="section-heading">
                 <p class="eyebrow">Registered users and workspaces</p>
-                <h2>Workspace-linked accounts</h2>
+                <h2>Aggregated workspace accounts</h2>
             </div>
             {{USER_ROWS}}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Audit</p>
+                <h2>Recent admin activity</h2>
+            </div>
+            {{AUDIT_ROWS}}
         </section>
         <section class="admin-section">
             <div class="section-heading">
@@ -39,5 +55,12 @@
             {{CLAIM_ROWS}}
         </section>
     </main>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
 </body>
 </html>

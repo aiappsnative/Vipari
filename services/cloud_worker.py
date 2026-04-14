@@ -15,7 +15,7 @@ from .branch_scan_worker import BranchScanWorkerSettings, process_next_branch_sc
 from .audit_records import has_completed_audit
 from .audit_worker import WorkerSettings, process_job
 from .cloud_common import fetch_diff_with_retry, is_transient_error, needs_audit
-from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_entitlement
+from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, SQSQueue
@@ -88,6 +88,9 @@ def _message_still_authorized(payload: dict[str, object], settings: Settings) ->
     entitlement = get_workspace_entitlement(settings.resolved_db_path, allocation.workspace_id)
     if payload.get("event_type") == "push":
         return entitlement is not None and bool(entitlement.dashboard_enabled)
+    workspace = get_workspace_by_id(settings.resolved_db_path, allocation.workspace_id)
+    if workspace is None or not workspace.pr_comments_setting_enabled:
+        return False
     return entitlement is not None and bool(entitlement.pr_comments_enabled)
 
 

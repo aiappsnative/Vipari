@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import main
 from services.audit_jobs import init_db
@@ -434,6 +434,63 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
     assert any(
         snapshot["id"] == branch_head_snapshot["id"] and snapshot["snapshot_type"] == "branch_head"
         for snapshot in dashboard_payload["journey_snapshots"]
+    )
+
+
+def test_dashboard_api_rebaseline_route_uses_resolved_github_private_key(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-rebaseline-key.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
+    )
+
+    with TestClient(main.app) as client:
+        approve_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/approve",
+            json={"note": "Approve baseline before re-baselining."},
+        )
+        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+
+    assert approve_response.status_code == 200
+    current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
+
+    with patch.object(type(main.settings), "resolved_github_private_key", new_callable=PropertyMock, return_value="resolved-private-key"), patch(
+        "main.generate_jwt", return_value="jwt-token"
+    ) as generate_jwt_mock, patch("main.get_installation_token", return_value="installation-token"), patch(
+        "main.fetch_file_content", return_value=PROMPT_CURRENT
+    ), TestClient(main.app) as client:
+        rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/rebaseline",
+            json={"snapshot_id": current_snapshot["id"], "rationale": "Use current checkpoint."},
+        )
+
+    assert rebaseline_response.status_code == 200
+    generate_jwt_mock.assert_called_once_with(
+        main.GITHUB_APP_ID,
+        main.GITHUB_PRIVATE_KEY_PATH,
+        "resolved-private-key",
     )
 
 

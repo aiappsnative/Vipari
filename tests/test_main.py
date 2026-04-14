@@ -142,6 +142,100 @@ def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
     create_job.assert_called_once()
 
 
+def test_webhook_ignores_pr_when_workspace_settings_disable_comments(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-comments-disabled.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_workspace,
+        get_workspace_by_id,
+        update_workspace_pr_comments_setting,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1400",
+        github_login="settings-webhook-owner",
+        display_name="Settings Webhook Owner",
+        primary_email="settings-webhook@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-webhook-workspace",
+        display_name="Settings Webhook Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_workspace_pr_comments_setting(main.AUDIT_DB_PATH, workspace.id, enabled=False)
+    assert get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id).pr_comments_setting_enabled is False
+
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {
+            "number": 7,
+            "base": {"sha": "base-opened"},
+            "head": {"sha": "abc123"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "pull_request",
+        "Content-Type": "application/json",
+    }
+
+    response = client.post("/webhook", content=body, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "ignored: PR comments disabled in settings"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_webhook_retries_diff_fetch_after_transient_404():
     main.GITHUB_WEBHOOK_SECRET = "secret"
     payload = {

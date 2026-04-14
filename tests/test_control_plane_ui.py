@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -98,6 +99,15 @@ def test_login_page_preserves_handoff_context():
     assert "Resuming the Team plan handoff from base44." in response.text
 
 
+def test_login_page_explains_missing_oauth_configuration():
+    response = client.get("/login?login_error=oauth_not_configured")
+
+    assert response.status_code == 200
+    assert "GitHub sign-in is not configured for this deployment yet." in response.text
+    assert "/auth/github/start" in response.text
+    assert "{{AUTH_ACTION}}" not in response.text
+
+
 def test_app_page_redirects_to_login_when_unauthenticated():
     response = client.get("/app", follow_redirects=False)
 
@@ -162,14 +172,24 @@ def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_github_auth_start_requires_encryption_key_when_oauth_is_enabled():
+def test_github_auth_start_redirects_to_login_when_oauth_is_not_configured():
+    with patch.object(main.settings, "github_oauth_client_id", ""), patch.object(
+        main.settings, "github_oauth_client_secret", ""
+    ), patch.object(main.settings, "app_encryption_key", "very-secret"):
+        response = client.get("/auth/github/start?source=base44&plan=team", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?login_error=oauth_not_configured&source=base44&plan=team"
+
+
+def test_github_auth_start_redirects_to_login_when_encryption_key_is_missing():
     with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
         main.settings, "github_oauth_client_secret", "client-secret"
     ), patch.object(main.settings, "app_encryption_key", ""):
         response = client.get("/auth/github/start", follow_redirects=False)
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "APP_ENCRYPTION_KEY must be configured before GitHub OAuth can store user tokens."
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?login_error=encryption_not_configured"
 
 
 def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstrap(tmp_path):
@@ -593,11 +613,14 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Starter User" in get_response.text
     assert "starter-user" in get_response.text
     assert "Next payment date" in get_response.text
-    assert "Setup checklist" in get_response.text
-    assert "Plan active" in get_response.text
+    assert "Setup checklist" not in get_response.text
+    assert "<span class=\"control-page-stat-label\">Plan</span>" in get_response.text
+    assert "Permission level" in get_response.text
     assert 'href="/dashboard"' in get_response.text
+    assert 'href="/app/admin"' not in get_response.text
     assert "sidebar" in get_response.text
     assert 'data-theme="dark"' in get_response.text
+    assert 'data-theme-toggle' in get_response.text
     assert 'value="dark" checked' in get_response.text
 
     workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
@@ -637,24 +660,494 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
 
     repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'class="repo-audit-page"' in repo_dashboard_html
+    assert 'data-theme="light"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
 
+    dashboard_css = (Path(__file__).resolve().parent.parent / "static" / "dashboard.css").read_text(encoding="utf-8")
+    assert 'body.dashboard-index-page[data-theme="light"]' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .dashboard-card' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .sidebar' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .journey-arrow' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .journey-point-baseline .journey-pill' in dashboard_css
+    assert 'body.repo-audit-page[data-theme="light"]' in dashboard_css
+    assert '.repo-audit-page[data-theme="light"] .repo-audit-hero' in dashboard_css
+
+
+def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-paid.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        get_workspace_by_id,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="932",
+        github_login="settings-owner",
+        display_name="Settings Owner",
+        primary_email="settings@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-workspace",
+        display_name="Settings Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-settings",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:settings-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert get_response.status_code == 200
+    assert "Workspace settings" in get_response.text
+    assert 'value="Settings Workspace"' in get_response.text
+    assert "PR comments" in get_response.text
+    assert "Effective status" in get_response.text
+    assert "Allowed users and permissions" in get_response.text
+    assert 'aria-label="Add user"' in get_response.text
+    assert "Onboarded and allocated repositories" in get_response.text
+    assert 'data-theme-toggle' in get_response.text
+    assert 'value="on" checked' in get_response.text
+    assert "{{WORKSPACE_NAME_INPUT}}" not in get_response.text
+    assert "{{WORKSPACE_MEMBER_ACTIONS}}" not in get_response.text
+
+    post_response = client.post(
+        "/app/settings",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "workspace_name": "Renamed Settings Workspace",
+            "pr_comments_setting": "off",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert post_response.status_code == 303
+    assert post_response.headers["location"] == "/app/settings?updated=1"
+    updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id)
+    assert updated_workspace.pr_comments_setting_enabled is False
+    assert updated_workspace.display_name == "Renamed Settings Workspace"
+
+    updated_get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert updated_get_response.status_code == 200
+    assert 'value="off" checked' in updated_get_response.text
+    assert 'value="Renamed Settings Workspace"' in updated_get_response.text
+    assert "Paused" in updated_get_response.text
+
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_admin_page_requires_explicit_allowlist(tmp_path):
+def test_settings_page_can_queue_github_login_invite(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
-    original_logins = main.settings.admin_github_logins
-    original_ids = main.settings.admin_github_user_ids
-    original_emails = main.settings.admin_emails
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-invite.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        list_workspace_invites_for_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="934",
+        github_login="invite-owner",
+        display_name="Invite Owner",
+        primary_email="invite-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="invite-workspace",
+        display_name="Invite Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="invite-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-invite",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:invite-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    post_response = client.post(
+        "/app/settings/invite",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"github_login": "@new-teammate", "role": "admin", "csrf_token": session.csrf_secret},
+        follow_redirects=False,
+    )
+
+    assert post_response.status_code == 303
+    assert post_response.headers["location"] == "/app/settings?invite_added=1"
+
+    invites = list_workspace_invites_for_workspace(main.AUDIT_DB_PATH, workspace.id)
+    assert len(invites) == 1
+    assert invites[0].invited_github_login == "new-teammate"
+    assert invites[0].role == "admin"
+    assert invites[0].invitation_state == "pending"
+
+    get_response = client.get("/app/settings?invite_added=1", cookies={main.settings.session_cookie_name: session.session_id})
+    assert get_response.status_code == 200
+    assert "Invitation queued." in get_response.text
+    assert "new-teammate" in get_response.text
+    assert "Pending invite" in get_response.text
+    assert 'aria-label="Add user"' in get_response.text
+    assert "member-row-pending" in get_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_github_auth_callback_accepts_pending_workspace_invite(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "auth-invite.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        _connect,
+        create_workspace,
+        list_workspace_memberships_for_user,
+        upsert_github_identity,
+        upsert_workspace_invite,
+    )
+
+    owner, _owner_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="935",
+        github_login="invite-workspace-owner",
+        display_name="Invite Workspace Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="pending-invite-workspace",
+        display_name="Pending Invite Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    upsert_workspace_invite(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        invited_github_login="invited-user",
+        role="viewer",
+        invited_by_user_id=owner.id,
+    )
+
+    with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
+        main.settings, "github_oauth_client_secret", "client-secret"
+    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"), patch.object(
+        main.settings, "app_encryption_key", "very-secret"
+    ), patch(
+        "main.exchange_code_for_access_token",
+        return_value=GithubOAuthToken(access_token="oauth-token", granted_scopes=["read:user"]),
+    ), patch(
+        "main.fetch_github_user_profile",
+        return_value=GithubUserProfile(
+            github_user_id="936",
+            login="invited-user",
+            display_name="Invited User",
+            email="invited@example.com",
+            avatar_url="https://avatars.example.com/u/936",
+        ),
+    ):
+        start_response = client.get("/auth/github/start", follow_redirects=False)
+        state_cookie = start_response.cookies.get("promptdrift_oauth_state")
+        response = client.get(
+            f"/auth/github/callback?code=test-code&state={state_cookie}",
+            cookies={
+                "promptdrift_oauth_state": state_cookie,
+                "promptdrift_oauth_context": start_response.cookies.get("promptdrift_oauth_context"),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    session_cookie = response.cookies.get(main.settings.session_cookie_name)
+    assert session_cookie
+
+    auth_payload = client.get(
+        "/api/auth/session",
+        cookies={main.settings.session_cookie_name: session_cookie},
+    ).json()
+    assert auth_payload["authenticated"] is True
+    assert auth_payload["session"]["workspace_id"] == workspace.id
+
+    invited_memberships = list_workspace_memberships_for_user(main.AUDIT_DB_PATH, auth_payload["session"]["user_id"])
+    assert any(membership.workspace_id == workspace.id and membership.role == "viewer" for membership in invited_memberships)
+
+    with _connect(main.AUDIT_DB_PATH) as conn:
+        accepted_invite = conn.execute(
+            "SELECT invitation_state, accepted_user_id FROM workspace_invites WHERE workspace_id = ? AND invited_github_login = ?",
+            (workspace.id, "invited-user"),
+        ).fetchone()
+
+    assert accepted_invite is not None
+    assert accepted_invite["invitation_state"] == "accepted"
+    assert accepted_invite["accepted_user_id"] == auth_payload["session"]["user_id"]
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_github_auth_callback_applies_upgraded_role_for_existing_workspace_member(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "auth-invite-role-upgrade.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        _connect,
+        create_workspace,
+        get_workspace_membership,
+        upsert_github_identity,
+        upsert_workspace_invite,
+    )
+
+    owner, _owner_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="937",
+        github_login="role-upgrade-owner",
+        display_name="Role Upgrade Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    invited_user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="938",
+        github_login="existing-member",
+        display_name="Existing Member",
+        primary_email="member@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="role-upgrade-workspace",
+        display_name="Role Upgrade Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    with _connect(main.AUDIT_DB_PATH) as conn:
+        now = time.time()
+        conn.execute(
+            "INSERT INTO workspace_memberships (workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at) VALUES (?, ?, 'viewer', 'accepted', ?, ?, ?, ?)",
+            (workspace.id, invited_user.id, owner.id, now, now, now),
+        )
+    upsert_workspace_invite(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        invited_github_login="existing-member",
+        role="admin",
+        invited_by_user_id=owner.id,
+    )
+
+    with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
+        main.settings, "github_oauth_client_secret", "client-secret"
+    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"), patch.object(
+        main.settings, "app_encryption_key", "very-secret"
+    ), patch(
+        "main.exchange_code_for_access_token",
+        return_value=GithubOAuthToken(access_token="oauth-token", granted_scopes=["read:user"]),
+    ), patch(
+        "main.fetch_github_user_profile",
+        return_value=GithubUserProfile(
+            github_user_id="938",
+            login="existing-member",
+            display_name="Existing Member",
+            email="member@example.com",
+            avatar_url="https://avatars.example.com/u/938",
+        ),
+    ):
+        start_response = client.get("/auth/github/start", follow_redirects=False)
+        state_cookie = start_response.cookies.get("promptdrift_oauth_state")
+        response = client.get(
+            f"/auth/github/callback?code=test-code&state={state_cookie}",
+            cookies={
+                "promptdrift_oauth_state": state_cookie,
+                "promptdrift_oauth_context": start_response.cookies.get("promptdrift_oauth_context"),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    membership = get_workspace_membership(main.AUDIT_DB_PATH, workspace.id, invited_user.id)
+    assert membership is not None
+    assert membership.role == "admin"
+    assert membership.invitation_state == "accepted"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "placeholder-pages.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="933",
+        github_login="placeholder-owner",
+        display_name="Placeholder Owner",
+        primary_email="placeholder@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="placeholder-workspace",
+        display_name="Placeholder Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="placeholder-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-placeholder",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:placeholder-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    help_response = client.get("/app/help", cookies={main.settings.session_cookie_name: session.session_id})
+    policies_response = client.get("/app/policies", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert help_response.status_code == 200
+    assert policies_response.status_code == 200
+    assert "We are working on this" in help_response.text
+    assert "We are working on this" in policies_response.text
+    assert 'data-theme-toggle' in help_response.text
+    assert 'data-theme-toggle' in policies_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_requires_explicit_owner_identity(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-guard.db")
     main.init_db(main.AUDIT_DB_PATH)
-    main.settings.admin_github_logins = ""
-    main.settings.admin_github_user_ids = ""
-    main.settings.admin_emails = ""
+    main.settings.owner_github_login = ""
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import create_user_session, upsert_github_identity
 
@@ -680,20 +1173,20 @@ def test_admin_page_requires_explicit_allowlist(tmp_path):
     response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access is not enabled for this GitHub identity."
+    assert response.json()["detail"] == "System owner access is not enabled for this GitHub identity."
 
-    main.settings.admin_github_logins = original_logins
-    main.settings.admin_github_user_ids = original_ids
-    main.settings.admin_emails = original_emails
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
 def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
-    original_logins = main.settings.admin_github_logins
+    original_login = main.settings.owner_github_login
     main.AUDIT_DB_PATH = str(tmp_path / "admin-data.db")
     main.init_db(main.AUDIT_DB_PATH)
-    main.settings.admin_github_logins = "admin-user"
+    main.settings.owner_github_login = "admin-user"
 
     from services.control_plane_records import (
         create_billing_handoff_claim,
@@ -851,15 +1344,282 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
 
     assert response.status_code == 200
     assert "Control-plane oversight" in response.text
+    assert "Aggregated workspace accounts" in response.text
+    assert "Add user" in response.text
     assert "Free Installed User" in response.text
-    assert response.text.count("Free Installed Workspace") == 1
-    assert "free-install-org (2 installs)" in response.text
-    assert ">2<" in response.text
-    assert ">0<" in response.text
+    assert "Free Installed Workspace" in response.text
+    assert "Installs 1" in response.text
+    assert "Connected 2" in response.text
+    assert "Onboarded 0" in response.text
     assert "marketplace-org" in response.text
     assert "purchase-admin-1" in response.text
 
-    main.settings.admin_github_logins = original_logins
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_renders_github_profile_details(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-profile-data.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="970",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-profile-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-profile",
+        expires_at=time.time() + 3600,
+    )
+    upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="971",
+        github_login="profile-user",
+        display_name="Profile User",
+        primary_email="profile@example.com",
+        avatar_url="https://avatars.example.com/u/971",
+        profile_url="https://github.com/profile-user",
+        company="PromptDrift",
+        blog="https://example.com",
+        location="Berlin",
+        bio="Builds review pipelines.",
+        twitter_username="profile_user",
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "profile@example.com" in response.text
+    assert "PromptDrift" in response.text
+    assert "Berlin" in response.text
+    assert "Builds review pipelines." in response.text
+    assert "profile_user" in response.text
+    assert "https://github.com/profile-user" in response.text
+    assert "Recent admin activity" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_can_create_update_and_delete_users_workspaces_and_memberships(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-crud.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import (
+        create_user_session,
+        get_user_by_id,
+        get_workspace_by_id,
+        get_workspace_membership,
+        list_recent_control_plane_audit_logs,
+        list_admin_workspace_users,
+        upsert_github_identity,
+    )
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="980",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-crud-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-admin",
+        expires_at=time.time() + 3600,
+    )
+    cookie = {main.settings.session_cookie_name: session.session_id}
+
+    create_user_response = client.post(
+        "/app/admin/users/create",
+        data={"display_name": "Managed User", "primary_email": "managed@example.com", "csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert create_user_response.status_code == 303
+
+    managed_user_row = next(row for row in list_admin_workspace_users(main.AUDIT_DB_PATH) if row.primary_email == "managed@example.com")
+    managed_user_id = managed_user_row.user_id
+
+    create_workspace_response = client.post(
+        "/app/admin/workspaces/create",
+        data={
+            "display_name": "Managed Workspace",
+            "slug": "managed-workspace",
+            "billing_owner_user_id": str(managed_user_id),
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert create_workspace_response.status_code == 303
+
+    workspace_row = next(row for row in list_admin_workspace_users(main.AUDIT_DB_PATH) if row.workspace_slug == "managed-workspace")
+    workspace_id = int(workspace_row.workspace_id or 0)
+    assert workspace_id
+
+    membership_response = client.post(
+        "/app/admin/memberships/upsert",
+        data={
+            "workspace_id": str(workspace_id),
+            "user_id": str(admin_user.id),
+            "role": "admin",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert membership_response.status_code == 303
+    membership = get_workspace_membership(main.AUDIT_DB_PATH, workspace_id, admin_user.id)
+    assert membership is not None
+    assert membership.role == "admin"
+
+    update_user_response = client.post(
+        f"/app/admin/users/{managed_user_id}/update",
+        data={
+            "display_name": "Managed User Updated",
+            "primary_email": "managed.updated@example.com",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert update_user_response.status_code == 303
+    updated_user = get_user_by_id(main.AUDIT_DB_PATH, managed_user_id)
+    assert updated_user is not None
+    assert updated_user.display_name == "Managed User Updated"
+    assert updated_user.primary_email == "managed.updated@example.com"
+    assert updated_user.active is False
+
+    update_workspace_response = client.post(
+        f"/app/admin/workspaces/{workspace_id}/update",
+        data={
+            "display_name": "Managed Workspace Updated",
+            "slug": "managed-workspace-updated",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert update_workspace_response.status_code == 303
+    updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id)
+    assert updated_workspace is not None
+    assert updated_workspace.display_name == "Managed Workspace Updated"
+    assert updated_workspace.slug == "managed-workspace-updated"
+
+    delete_membership_response = client.post(
+        f"/app/admin/memberships/{workspace_id}/{admin_user.id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_membership_response.status_code == 303
+    assert get_workspace_membership(main.AUDIT_DB_PATH, workspace_id, admin_user.id) is None
+
+    delete_workspace_response = client.post(
+        f"/app/admin/workspaces/{workspace_id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_workspace_response.status_code == 303
+    assert get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id) is None
+
+    delete_user_response = client.post(
+        f"/app/admin/users/{managed_user_id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_user_response.status_code == 303
+    assert get_user_by_id(main.AUDIT_DB_PATH, managed_user_id) is None
+
+    audit_events = [entry.event_type for entry in list_recent_control_plane_audit_logs(main.AUDIT_DB_PATH, limit=10)]
+    assert "admin_user_created" in audit_events
+    assert "admin_workspace_created" in audit_events
+    assert "admin_membership_saved" in audit_events
+    assert "admin_user_deleted" in audit_events
+
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_delete_forms_include_confirmation_prompts(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-confirm.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="990",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    managed_user, _managed_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="991",
+        github_login="managed-user",
+        display_name="Managed User",
+        primary_email="managed@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="confirm-workspace",
+        display_name="Confirm Workspace",
+        billing_owner_user_id=managed_user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-confirm-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-confirm",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Delete this user and any linked workspace memberships?" in response.text
+    assert "Delete this workspace and all linked records?" in response.text
+    assert "Remove this user from the workspace?" in response.text
+
+    main.settings.owner_github_login = original_login
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -1522,6 +2282,11 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
             follow_redirects=False,
         )
 
+        repo_setup_response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
     assert response.status_code == 303
     assert response.headers["location"] == "/app/repos?installation_linked=1&setup_action=install"
 
@@ -1531,21 +2296,158 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     ).json()
     assert auth_payload["access"]["state"] == "workspace_no_subscription"
 
-    repo_setup_response = client.get(
-        "/app/repos",
-        cookies={main.settings.session_cookie_name: session.session_id},
-    )
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
     assert 'class="repo-setup-page"' in repo_setup_response.text
     assert "Repository Inventory" in repo_setup_response.text
+    assert "5 of 5 repository slots available on this plan." in repo_setup_response.text
     assert "Onboarded Repository Snapshot" in repo_setup_response.text
-    assert 'data-repo-filter="available"' in repo_setup_response.text
+    assert 'class="repo-setup-inventory-list"' in repo_setup_response.text
     assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
     assert 'href="/app/repos"' in repo_setup_response.text
-    assert 'href="/dashboard/doria90%2FdummyAI"' in repo_setup_response.text
-    assert "Open audit page" in repo_setup_response.text
+    assert "Already there" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_export_download_serves_completed_artifact_without_rebuild(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "export-download-immutable.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.compliance_export_service import ComplianceExportResult
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="960",
+        github_login="export-owner",
+        display_name="Export Owner",
+        primary_email="export-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="export-workspace",
+        display_name="Export Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="export-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_export_owner",
+        stripe_price_id="price_export_owner",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        account_id="9600",
+        account_login="export-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        repositories=[
+            {
+                "repo_github_id": "export-org/repo-one",
+                "repo_full": "export-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        repo_github_id="export-org/repo-one",
+        repo_full="export-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    created_result = ComplianceExportResult(
+        zip_bytes=b"immutable-export-zip",
+        manifest={"version": "1"},
+        file_count=2,
+        total_size_bytes=len(b"immutable-export-zip"),
+    )
+    with patch("main.build_compliance_export", return_value=created_result):
+        create_response = client.post(
+            "/api/repos/export-org/repo-one/export/compliance",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            json={
+                "from_ts": 1700000000,
+                "to_ts": 1700086400,
+                "export_mode": "compliance",
+                "include_artifact_content": False,
+            },
+        )
+
+    assert create_response.status_code == 200
+    download_url = create_response.json()["download_url"]
+    assert download_url
+
+    with patch("main.build_compliance_export", side_effect=AssertionError("download should use stored artifact")):
+        download_response = client.get(
+            download_url,
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert download_response.status_code == 200
+    assert download_response.content == b"immutable-export-zip"
+    assert download_response.headers["content-type"] == "application/zip"
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1753,4 +2655,99 @@ def test_billing_checkout_rejects_unknown_plan(tmp_path):
     )
 
     assert response.status_code == 400
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_slot_summary_counts_onboarded_repos_shown_on_page(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-slot-summary.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.auth_service import GithubUserRepository
+    from services.control_plane_records import create_user_session, create_workspace, replace_repo_connections, upsert_entitlement, upsert_github_identity, upsert_github_installation
+    from services.dashboard_views import RepoDashboardIndexEntry
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="821",
+        github_login="team-owner",
+        display_name="Team Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="team-repo-slot-workspace",
+        display_name="Team Repo Slot Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="team-repo-slot-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 1,
+            "seat_limit": 20,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/repo-one", "default_branch": "main", "is_private": True, "status": "available"},
+            {"repo_github_id": "2", "repo_full": "doria90/repo-two", "default_branch": "main", "is_private": True, "status": "available"},
+            {"repo_github_id": "3", "repo_full": "doria90/repo-three", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+
+    with patch(
+        "main.list_github_user_repositories",
+        return_value=[
+            GithubUserRepository("1", "doria90/repo-one", "main", True, "https://github.com/doria90/repo-one"),
+            GithubUserRepository("2", "doria90/repo-two", "main", True, "https://github.com/doria90/repo-two"),
+            GithubUserRepository("3", "doria90/repo-three", "main", True, "https://github.com/doria90/repo-three"),
+        ],
+    ), patch(
+        "main.list_repo_dashboard_index",
+        return_value=[
+            RepoDashboardIndexEntry("doria90/repo-one", "main", "baseline_approved", 5, time.time()),
+            RepoDashboardIndexEntry("doria90/repo-two", "main", "baseline_approved", 4, time.time()),
+            RepoDashboardIndexEntry("doria90/repo-three", "main", "baseline_approved", 3, time.time()),
+        ],
+    ):
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "17 of 20 repository slots available on this plan." in response.text
+
     main.AUDIT_DB_PATH = original_db_path
