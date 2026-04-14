@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     billing_handoff_secret: str = ""
     billing_handoff_ttl_seconds: int = 86400
     base44_checkout_url: str = ""
+    owner_github_login: str = ""
+    owner_github_user_id: str = ""
+    owner_email: str = ""
     admin_github_logins: str = ""
     admin_github_user_ids: str = ""
     admin_emails: str = ""
@@ -111,6 +114,18 @@ class Settings(BaseSettings):
     @property
     def has_admin_access_config(self) -> bool:
         return bool(self.admin_github_login_set or self.admin_github_user_id_set or self.admin_email_set)
+
+    @property
+    def normalized_owner_github_login(self) -> str:
+        return self.owner_github_login.strip().lower()
+
+    @property
+    def normalized_owner_email(self) -> str:
+        return self.owner_email.strip().lower()
+
+    @property
+    def has_owner_access_config(self) -> bool:
+        return bool(self.owner_github_user_id.strip() or self.normalized_owner_github_login or self.normalized_owner_email)
 
     @property
     def resolved_db_path(self) -> str:

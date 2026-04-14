@@ -243,6 +243,11 @@ def _format_timestamp(value: float | None) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _slugify_value(value: str) -> str:
+    normalized = "-".join(part for part in "".join(char.lower() if char.isalnum() else "-" for char in value).split("-") if part)
+    return normalized or "workspace"
+
+
 def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     if not rows:
         return '<div class="empty-state">No records yet.</div>'
@@ -817,8 +822,179 @@ def render_control_plane_admin_page(
     admin_rows: list[dict[str, object]],
     unclaimed_installations: list[dict[str, object]],
     billing_claims: list[dict[str, object]],
+    audit_logs: list[dict[str, object]],
+    csrf_token: str,
+    status_note: str | None = None,
 ) -> str:
     template = _load_template("control_plane_admin.html")
+
+    unique_users: list[dict[str, object]] = []
+    seen_user_ids: set[int] = set()
+    unique_workspaces: list[dict[str, object]] = []
+    seen_workspace_ids: set[int] = set()
+    for row in admin_rows:
+        user_id = row.get("user_id")
+        if isinstance(user_id, int) and user_id not in seen_user_ids:
+            seen_user_ids.add(user_id)
+            unique_users.append(row)
+        workspace_id = row.get("workspace_id")
+        if isinstance(workspace_id, int) and workspace_id not in seen_workspace_ids:
+            seen_workspace_ids.add(workspace_id)
+            unique_workspaces.append(row)
+
+    user_options = "".join(
+        f'<option value="{int(row.get("user_id") or 0)}">{html_escape(str(row.get("user_display_name") or "Unknown"))}#{int(row.get("user_id") or 0)}</option>'
+        for row in unique_users
+    ) or '<option value="">Create a user first</option>'
+    workspace_options = "".join(
+        f'<option value="{int(row.get("workspace_id") or 0)}">{html_escape(str(row.get("workspace_display_name") or "Workspace"))}</option>'
+        for row in unique_workspaces
+    ) or '<option value="">Create a workspace first</option>'
+    status_markup = f'<div class="admin-status-note">{html_escape(status_note)}</div>' if status_note else ""
+
+    add_toolbar = f'''
+        <div class="admin-toolbar">
+            <details class="admin-disclosure">
+                <summary>Add user</summary>
+                <form method="post" action="/app/admin/users/create" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" placeholder="Display name" />
+                    <input class="field-input" name="primary_email" maxlength="320" placeholder="Primary email" />
+                    <button type="submit" class="button">Create user</button>
+                </form>
+            </details>
+            <details class="admin-disclosure">
+                <summary>Add workspace</summary>
+                <form method="post" action="/app/admin/workspaces/create" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" placeholder="Workspace name" />
+                    <input class="field-input" name="slug" maxlength="120" placeholder="workspace-slug" />
+                    <select class="field-input" name="billing_owner_user_id">{user_options}</select>
+                    <button type="submit" class="button">Create workspace</button>
+                </form>
+            </details>
+            <details class="admin-disclosure">
+                <summary>Assign membership</summary>
+                <form method="post" action="/app/admin/memberships/upsert" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <select class="field-input" name="user_id">{user_options}</select>
+                    <select class="field-input" name="workspace_id">{workspace_options}</select>
+                    <select class="field-input" name="role">
+                        <option value="owner">Owner</option>
+                        <option value="admin">Edit</option>
+                        <option value="viewer">Read</option>
+                    </select>
+                    <button type="submit" class="button">Save membership</button>
+                </form>
+            </details>
+        </div>
+    '''
+
+    admin_table_rows = []
+    for row in admin_rows:
+        user_id = int(row.get("user_id") or 0)
+        workspace_id = int(row.get("workspace_id") or 0) if row.get("workspace_id") is not None else 0
+        workspace_name = str(row.get("workspace_display_name") or "Unassigned")
+        workspace_slug = str(row.get("workspace_slug") or _slugify_value(workspace_name))
+        profile_bits = []
+        if row.get("primary_email"):
+            profile_bits.append(html_escape(str(row.get("primary_email"))))
+        if row.get("github_company"):
+            profile_bits.append(html_escape(str(row.get("github_company"))))
+        if row.get("github_location"):
+            profile_bits.append(html_escape(str(row.get("github_location"))))
+        if row.get("github_blog"):
+            profile_bits.append(html_escape(str(row.get("github_blog"))))
+        if row.get("github_twitter_username"):
+            profile_bits.append(f'@{html_escape(str(row.get("github_twitter_username")))}')
+        if row.get("github_bio"):
+            profile_bits.append(html_escape(str(row.get("github_bio"))))
+        github_login = str(row.get("github_login") or "Unavailable")
+        github_profile_url = str(row.get("github_profile_url") or "").strip()
+        github_markup = (
+            f'<a class="subtle-link admin-inline-link" href="{html_escape(github_profile_url)}">@{html_escape(github_login)}</a>'
+            if github_profile_url and github_login != "Unavailable"
+            else html_escape(github_login)
+        )
+        counts_markup = (
+            f'Installs {html_escape(str(int(row.get("installation_count") or 0)))} · '
+            f'Connected {html_escape(str(int(row.get("connected_repo_count") or 0)))} · '
+            f'Onboarded {html_escape(str(int(row.get("onboarded_repo_count") or 0)))}'
+        )
+        user_edit = f'''
+            <details class="admin-row-disclosure">
+                <summary>Edit user</summary>
+                <form method="post" action="/app/admin/users/{user_id}/update" class="action-form admin-form-grid">
+                    {_csrf_input(csrf_token)}
+                    <input class="field-input" name="display_name" maxlength="120" value="{html_escape(str(row.get('user_display_name') or ''))}" />
+                    <input class="field-input" name="primary_email" maxlength="320" value="{html_escape(str(row.get('primary_email') or ''))}" />
+                    <label class="admin-checkbox-row"><input type="checkbox" name="active" value="1" {'checked' if bool(row.get('user_active')) else ''} /> Active user</label>
+                    <button type="submit" class="button">Save user</button>
+                </form>
+            </details>
+        '''
+        workspace_edit = ""
+        membership_delete = ""
+        workspace_delete = ""
+        if workspace_id:
+            workspace_edit = f'''
+                <details class="admin-row-disclosure">
+                    <summary>Edit workspace</summary>
+                    <form method="post" action="/app/admin/workspaces/{workspace_id}/update" class="action-form admin-form-grid">
+                        {_csrf_input(csrf_token)}
+                        <input class="field-input" name="display_name" maxlength="120" value="{html_escape(workspace_name)}" />
+                        <input class="field-input" name="slug" maxlength="120" value="{html_escape(workspace_slug)}" />
+                        <button type="submit" class="button">Save workspace</button>
+                    </form>
+                </details>
+            '''
+            membership_delete = f'''
+                <form method="post" action="/app/admin/memberships/{workspace_id}/{user_id}/delete" class="action-form" onsubmit="return confirm('Remove this user from the workspace?');">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="button admin-danger-button">Remove member</button>
+                </form>
+            '''
+            workspace_delete = f'''
+                <form method="post" action="/app/admin/workspaces/{workspace_id}/delete" class="action-form" onsubmit="return confirm('Delete this workspace and all linked records?');">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="button admin-danger-button">Delete workspace</button>
+                </form>
+            '''
+        user_delete = f'''
+            <form method="post" action="/app/admin/users/{user_id}/delete" class="action-form" onsubmit="return confirm('Delete this user and any linked workspace memberships?');">
+                {_csrf_input(csrf_token)}
+                <button type="submit" class="button admin-danger-button">Delete user</button>
+            </form>
+        '''
+        actions_markup = f'<div class="admin-action-stack">{user_edit}{workspace_edit}{membership_delete}{workspace_delete}{user_delete}</div>'
+        admin_table_rows.append(
+            [
+                html_escape(workspace_name),
+                html_escape(str(row.get("user_display_name") or "Unknown")),
+                github_markup,
+                "<br />".join(profile_bits) if profile_bits else "<span class=\"page-note\">No extra profile data</span>",
+                html_escape(str(row.get("membership_role") or "none")),
+                html_escape(counts_markup),
+                html_escape(_setup_state_label(str(row.get("setup_state") or "none"))),
+                html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
+                actions_markup,
+            ]
+        )
+
+    audit_rows = _render_table(
+        ["When", "Event", "Subject", "Workspace", "Actor", "Details"],
+        [
+            [
+                html_escape(_format_timestamp(row.get("created_at") if isinstance(row.get("created_at"), (int, float)) else None)),
+                html_escape(str(row.get("event_type") or "")),
+                html_escape(f"{row.get('subject_type') or 'subject'}:{row.get('subject_id') or ''}"),
+                html_escape(str(row.get("workspace_id") or "Global")),
+                html_escape(str(row.get("actor_user_id") or "System")),
+                html_escape(str(row.get("payload_json") or "{}")),
+            ]
+            for row in audit_logs
+        ],
+    )
 
     def _render_installation_summary(row: dict[str, object]) -> str:
         installation_login = str(row.get("installation_account_login") or row.get("installation_id") or "none")
@@ -828,39 +1004,8 @@ def render_control_plane_admin_page(
         return installation_login
 
     user_rows = _render_table(
-        [
-            "Workspace",
-            "User",
-            "GitHub",
-            "Role",
-            "Plan",
-            "Dashboard",
-            "PR comments",
-            "Next payment",
-            "Installation",
-            "Connected repos",
-            "Onboarded repos",
-            "Setup",
-            "Last login",
-        ],
-        [
-            [
-                html_escape(str(row.get("workspace_display_name") or "Unassigned")),
-                html_escape(str(row.get("user_display_name") or "Unknown")),
-                html_escape(str(row.get("github_login") or "Unavailable")),
-                html_escape(str(row.get("membership_role") or "none")),
-                html_escape(str(row.get("plan_code") or "none")),
-                "yes" if bool(row.get("dashboard_enabled")) else "no",
-                "yes" if bool(row.get("pr_comments_enabled")) else "no",
-                html_escape(_format_timestamp(row.get("next_payment_at") if isinstance(row.get("next_payment_at"), (int, float)) else None)),
-                html_escape(_render_installation_summary(row)),
-                html_escape(str(int(row.get("connected_repo_count") or 0))),
-                html_escape(str(int(row.get("onboarded_repo_count") or 0))),
-                html_escape(str(row.get("setup_state") or "none")),
-                html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
-            ]
-            for row in admin_rows
-        ],
+        ["Workspace", "User", "GitHub", "Profile", "Role", "Counts", "Setup", "Last login", "Actions"],
+        admin_table_rows,
     )
     install_rows = _render_table(
         ["Installation id", "Account", "Type", "Status", "Repos", "Last sync", "Updated"],
@@ -897,7 +1042,10 @@ def render_control_plane_admin_page(
     return (
         template.replace("{{ACTOR_GITHUB_LOGIN}}", html_escape(actor_github_login))
         .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url="/app/admin"))
+        .replace("{{STATUS_NOTE}}", status_markup)
+        .replace("{{ADD_TOOLBAR}}", add_toolbar)
         .replace("{{USER_ROWS}}", user_rows)
+        .replace("{{AUDIT_ROWS}}", audit_rows)
         .replace("{{UNCLAIMED_INSTALL_ROWS}}", install_rows)
         .replace("{{CLAIM_ROWS}}", claim_rows)
     )

@@ -72,12 +72,17 @@ from services.control_plane_frontend import (
 from services.control_plane_records import (
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
+    create_control_plane_audit_log,
     get_billing_customer_by_stripe_customer_id,
     count_workspace_repo_allocations,
     count_workspaces,
     create_billing_handoff_claim,
+    create_user,
     create_user_session,
     create_workspace,
+    delete_user,
+    delete_workspace,
+    delete_workspace_membership,
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
     get_github_installation_by_installation_id,
@@ -96,6 +101,7 @@ from services.control_plane_records import (
     has_processed_webhook_event,
     list_admin_workspace_users,
     list_billing_handoff_claims,
+    list_recent_control_plane_audit_logs,
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
     list_unclaimed_installations,
@@ -107,9 +113,12 @@ from services.control_plane_records import (
     accept_workspace_invites_for_github_login,
     update_repo_allocation_status,
     update_session_workspace,
+    update_user_admin_fields,
     update_user_profile_preferences,
+    update_workspace_admin_fields,
     update_workspace_display_name,
     update_workspace_pr_comments_setting,
+    upsert_workspace_membership,
     upsert_workspace_invite,
     upsert_billing_customer,
     upsert_entitlement,
@@ -587,6 +596,32 @@ def _workspace_slug_candidates(name: str) -> list[str]:
     return [base, f"{base}-{int(time.time())}"]
 
 
+def _admin_redirect(status: str) -> RedirectResponse:
+    return RedirectResponse(f"/app/admin?updated={quote(status)}", status_code=303)
+
+
+def _normalize_nonempty_text(value: str | None, *, field_name: str, max_length: int) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be empty.")
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be {max_length} characters or fewer.")
+    return normalized
+
+
+def _normalize_optional_email(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def _normalize_workspace_slug(value: str | None, display_name: str) -> str:
+    base = value if value and value.strip() else display_name
+    normalized = re.sub(r"[^a-z0-9]+", "-", base.strip().lower()).strip("-") or "workspace"
+    if len(normalized) > 120:
+        raise HTTPException(status_code=400, detail="Workspace slug must be 120 characters or fewer.")
+    return normalized
+
+
 def _github_oauth_callback_url(request: Request) -> str:
     if settings.github_oauth_callback_url:
         return settings.github_oauth_callback_url
@@ -832,20 +867,23 @@ def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | N
     return hmac.compare_digest(expected, signature_header.strip())
 
 
-def _is_admin_identity(user, identity) -> bool:
-    if not settings.has_admin_access_config:
+def _is_owner_identity(user, identity) -> bool:
+    if not settings.has_owner_access_config:
         return False
-    if identity.github_user_id in settings.admin_github_user_id_set:
-        return True
-    if identity.github_login.lower() in settings.admin_github_login_set:
-        return True
-    return bool(user.primary_email and user.primary_email.lower() in settings.admin_email_set)
+    checks: list[bool] = []
+    if settings.owner_github_user_id.strip():
+        checks.append(identity.github_user_id == settings.owner_github_user_id.strip())
+    if settings.normalized_owner_github_login:
+        checks.append(identity.github_login.lower() == settings.normalized_owner_github_login)
+    if settings.normalized_owner_email:
+        checks.append(bool(user.primary_email and user.primary_email.lower() == settings.normalized_owner_email))
+    return bool(checks) and all(checks)
 
 
-def _require_admin_access(request: Request) -> dict[str, object]:
+def _require_owner_access(request: Request) -> dict[str, object]:
     context = _current_authenticated_identity_context(request)
-    if not _is_admin_identity(context["user"], context["identity"]):
-        raise HTTPException(status_code=403, detail="Admin access is not enabled for this GitHub identity.")
+    if not _is_owner_identity(context["user"], context["identity"]):
+        raise HTTPException(status_code=403, detail="System owner access is not enabled for this GitHub identity.")
     return context
 
 
@@ -995,6 +1033,12 @@ async def github_auth_callback(
         display_name=profile.display_name,
         primary_email=profile.email,
         avatar_url=profile.avatar_url,
+        profile_url=profile.profile_url,
+        company=profile.company,
+        blog=profile.blog,
+        location=profile.location,
+        bio=profile.bio,
+        twitter_username=profile.twitter_username,
         granted_scopes=token.granted_scopes,
         access_token_encrypted=encrypted_token,
     )
@@ -1094,7 +1138,7 @@ async def profile_page(request: Request):
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
             csrf_token=access_context["session"].csrf_secret,
         )
     )
@@ -1147,7 +1191,7 @@ async def settings_page(request: Request):
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
@@ -1255,7 +1299,7 @@ async def policies_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
             active_nav="policies",
         )
     )
@@ -1278,23 +1322,223 @@ async def help_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
+            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
             active_nav="help",
         )
     )
 
 
-@app.get("/app/admin", response_class=HTMLResponse)
+@app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_page(request: Request):
-    admin_context = _require_admin_access(request)
+    admin_context = _require_owner_access(request)
     return HTMLResponse(
         render_control_plane_admin_page(
             actor_github_login=admin_context["identity"].github_login,
             admin_rows=[asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)],
             unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
             billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
+            audit_logs=[asdict(row) for row in list_recent_control_plane_audit_logs(AUDIT_DB_PATH)],
+            csrf_token=admin_context["session"].csrf_secret,
+            status_note=(request.query_params.get("updated") or "").replace("_", " ").strip().capitalize() or None,
         )
     )
+
+
+@app.post("/app/admin/users/create", include_in_schema=False)
+async def admin_create_user(request: Request, display_name: str = Form(...), primary_email: str | None = Form(default=None), csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Display name", max_length=120)
+    user = create_user(AUDIT_DB_PATH, display_name=normalized_name, primary_email=_normalize_optional_email(primary_email), active=True)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_created",
+        subject_type="user",
+        subject_id=str(user.id),
+        payload={"display_name": user.display_name, "primary_email": user.primary_email},
+    )
+    return _admin_redirect("user_created")
+
+
+@app.post("/app/admin/users/{user_id}/update", include_in_schema=False)
+async def admin_update_user(
+    request: Request,
+    user_id: int,
+    display_name: str = Form(...),
+    primary_email: str | None = Form(default=None),
+    active: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Display name", max_length=120)
+    user = update_user_admin_fields(
+        AUDIT_DB_PATH,
+        user_id,
+        display_name=normalized_name,
+        primary_email=_normalize_optional_email(primary_email),
+        active=bool(active),
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_updated",
+        subject_type="user",
+        subject_id=str(user.id),
+        payload={"display_name": user.display_name, "primary_email": user.primary_email, "active": user.active},
+    )
+    return _admin_redirect("user_updated")
+
+
+@app.post("/app/admin/users/{user_id}/delete", include_in_schema=False)
+async def admin_delete_user(request: Request, user_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    user = get_user_by_id(AUDIT_DB_PATH, user_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=None,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_user_deleted",
+        subject_type="user",
+        subject_id=str(user_id),
+        payload={"display_name": user.display_name if user else None, "primary_email": user.primary_email if user else None},
+    )
+    delete_user(AUDIT_DB_PATH, user_id)
+    return _admin_redirect("user_deleted")
+
+
+@app.post("/app/admin/workspaces/create", include_in_schema=False)
+async def admin_create_workspace(
+    request: Request,
+    display_name: str = Form(...),
+    slug: str | None = Form(default=None),
+    billing_owner_user_id: int = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Workspace name", max_length=120)
+    normalized_slug = _normalize_workspace_slug(slug, normalized_name)
+    try:
+        workspace = create_workspace(
+            AUDIT_DB_PATH,
+            slug=normalized_slug,
+            display_name=normalized_name,
+            billing_owner_user_id=billing_owner_user_id,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Workspace slug must be unique.") from exc
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_created",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"slug": workspace.slug, "display_name": workspace.display_name, "billing_owner_user_id": billing_owner_user_id},
+    )
+    return _admin_redirect("workspace_created")
+
+
+@app.post("/app/admin/workspaces/{workspace_id}/update", include_in_schema=False)
+async def admin_update_workspace(
+    request: Request,
+    workspace_id: int,
+    display_name: str = Form(...),
+    slug: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_name = _normalize_nonempty_text(display_name, field_name="Workspace name", max_length=120)
+    normalized_slug = _normalize_workspace_slug(slug, normalized_name)
+    try:
+        workspace = update_workspace_admin_fields(AUDIT_DB_PATH, workspace_id, slug=normalized_slug, display_name=normalized_name)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Workspace slug must be unique.") from exc
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_updated",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"slug": workspace.slug, "display_name": workspace.display_name},
+    )
+    return _admin_redirect("workspace_updated")
+
+
+@app.post("/app/admin/workspaces/{workspace_id}/delete", include_in_schema=False)
+async def admin_delete_workspace(request: Request, workspace_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, workspace_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_workspace_deleted",
+        subject_type="workspace",
+        subject_id=str(workspace_id),
+        payload={"slug": workspace.slug if workspace else None, "display_name": workspace.display_name if workspace else None},
+    )
+    delete_workspace(AUDIT_DB_PATH, workspace_id)
+    return _admin_redirect("workspace_deleted")
+
+
+@app.post("/app/admin/memberships/upsert", include_in_schema=False)
+async def admin_upsert_membership(
+    request: Request,
+    workspace_id: int = Form(...),
+    user_id: int = Form(...),
+    role: str = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    normalized_role = (role or "").strip().lower()
+    if normalized_role not in {"owner", "admin", "viewer"}:
+        raise HTTPException(status_code=400, detail="Membership role must be owner, edit, or read.")
+    membership = upsert_workspace_membership(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=normalized_role,
+        invitation_state="accepted",
+        invited_by_user_id=admin_context["session"].user_id,
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_membership_saved",
+        subject_type="workspace_membership",
+        subject_id=f"{workspace_id}:{user_id}",
+        payload={"role": membership.role, "invitation_state": membership.invitation_state},
+    )
+    return _admin_redirect("membership_saved")
+
+
+@app.post("/app/admin/memberships/{workspace_id}/{user_id}/delete", include_in_schema=False)
+async def admin_delete_membership(request: Request, workspace_id: int, user_id: int, csrf_token: str | None = Form(None)):
+    admin_context = _require_owner_access(request)
+    _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
+    membership = get_workspace_membership(AUDIT_DB_PATH, workspace_id, user_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        actor_user_id=admin_context["session"].user_id,
+        event_type="admin_membership_deleted",
+        subject_type="workspace_membership",
+        subject_id=f"{workspace_id}:{user_id}",
+        payload={"role": membership.role if membership else None},
+    )
+    delete_workspace_membership(AUDIT_DB_PATH, workspace_id=workspace_id, user_id=user_id)
+    return _admin_redirect("membership_deleted")
 
 
 @app.get("/app/workspaces/new", response_class=HTMLResponse)

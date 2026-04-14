@@ -1048,16 +1048,16 @@ def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_admin_page_requires_explicit_allowlist(tmp_path):
+def test_admin_page_requires_explicit_owner_identity(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
-    original_logins = main.settings.admin_github_logins
-    original_ids = main.settings.admin_github_user_ids
-    original_emails = main.settings.admin_emails
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-guard.db")
     main.init_db(main.AUDIT_DB_PATH)
-    main.settings.admin_github_logins = ""
-    main.settings.admin_github_user_ids = ""
-    main.settings.admin_emails = ""
+    main.settings.owner_github_login = ""
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import create_user_session, upsert_github_identity
 
@@ -1083,20 +1083,20 @@ def test_admin_page_requires_explicit_allowlist(tmp_path):
     response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access is not enabled for this GitHub identity."
+    assert response.json()["detail"] == "System owner access is not enabled for this GitHub identity."
 
-    main.settings.admin_github_logins = original_logins
-    main.settings.admin_github_user_ids = original_ids
-    main.settings.admin_emails = original_emails
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
 def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
-    original_logins = main.settings.admin_github_logins
+    original_login = main.settings.owner_github_login
     main.AUDIT_DB_PATH = str(tmp_path / "admin-data.db")
     main.init_db(main.AUDIT_DB_PATH)
-    main.settings.admin_github_logins = "admin-user"
+    main.settings.owner_github_login = "admin-user"
 
     from services.control_plane_records import (
         create_billing_handoff_claim,
@@ -1254,15 +1254,282 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
 
     assert response.status_code == 200
     assert "Control-plane oversight" in response.text
+    assert "Aggregated workspace accounts" in response.text
+    assert "Add user" in response.text
     assert "Free Installed User" in response.text
-    assert response.text.count("Free Installed Workspace") == 1
-    assert "free-install-org (2 installs)" in response.text
-    assert ">2<" in response.text
-    assert ">0<" in response.text
+    assert "Free Installed Workspace" in response.text
+    assert "Installs 1" in response.text
+    assert "Connected 2" in response.text
+    assert "Onboarded 0" in response.text
     assert "marketplace-org" in response.text
     assert "purchase-admin-1" in response.text
 
-    main.settings.admin_github_logins = original_logins
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_renders_github_profile_details(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-profile-data.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="970",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-profile-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-profile",
+        expires_at=time.time() + 3600,
+    )
+    upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="971",
+        github_login="profile-user",
+        display_name="Profile User",
+        primary_email="profile@example.com",
+        avatar_url="https://avatars.example.com/u/971",
+        profile_url="https://github.com/profile-user",
+        company="PromptDrift",
+        blog="https://example.com",
+        location="Berlin",
+        bio="Builds review pipelines.",
+        twitter_username="profile_user",
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "profile@example.com" in response.text
+    assert "PromptDrift" in response.text
+    assert "Berlin" in response.text
+    assert "Builds review pipelines." in response.text
+    assert "profile_user" in response.text
+    assert "https://github.com/profile-user" in response.text
+    assert "Recent admin activity" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_can_create_update_and_delete_users_workspaces_and_memberships(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-crud.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import (
+        create_user_session,
+        get_user_by_id,
+        get_workspace_by_id,
+        get_workspace_membership,
+        list_recent_control_plane_audit_logs,
+        list_admin_workspace_users,
+        upsert_github_identity,
+    )
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="980",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-crud-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-admin",
+        expires_at=time.time() + 3600,
+    )
+    cookie = {main.settings.session_cookie_name: session.session_id}
+
+    create_user_response = client.post(
+        "/app/admin/users/create",
+        data={"display_name": "Managed User", "primary_email": "managed@example.com", "csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert create_user_response.status_code == 303
+
+    managed_user_row = next(row for row in list_admin_workspace_users(main.AUDIT_DB_PATH) if row.primary_email == "managed@example.com")
+    managed_user_id = managed_user_row.user_id
+
+    create_workspace_response = client.post(
+        "/app/admin/workspaces/create",
+        data={
+            "display_name": "Managed Workspace",
+            "slug": "managed-workspace",
+            "billing_owner_user_id": str(managed_user_id),
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert create_workspace_response.status_code == 303
+
+    workspace_row = next(row for row in list_admin_workspace_users(main.AUDIT_DB_PATH) if row.workspace_slug == "managed-workspace")
+    workspace_id = int(workspace_row.workspace_id or 0)
+    assert workspace_id
+
+    membership_response = client.post(
+        "/app/admin/memberships/upsert",
+        data={
+            "workspace_id": str(workspace_id),
+            "user_id": str(admin_user.id),
+            "role": "admin",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert membership_response.status_code == 303
+    membership = get_workspace_membership(main.AUDIT_DB_PATH, workspace_id, admin_user.id)
+    assert membership is not None
+    assert membership.role == "admin"
+
+    update_user_response = client.post(
+        f"/app/admin/users/{managed_user_id}/update",
+        data={
+            "display_name": "Managed User Updated",
+            "primary_email": "managed.updated@example.com",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert update_user_response.status_code == 303
+    updated_user = get_user_by_id(main.AUDIT_DB_PATH, managed_user_id)
+    assert updated_user is not None
+    assert updated_user.display_name == "Managed User Updated"
+    assert updated_user.primary_email == "managed.updated@example.com"
+    assert updated_user.active is False
+
+    update_workspace_response = client.post(
+        f"/app/admin/workspaces/{workspace_id}/update",
+        data={
+            "display_name": "Managed Workspace Updated",
+            "slug": "managed-workspace-updated",
+            "csrf_token": session.csrf_secret,
+        },
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert update_workspace_response.status_code == 303
+    updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id)
+    assert updated_workspace is not None
+    assert updated_workspace.display_name == "Managed Workspace Updated"
+    assert updated_workspace.slug == "managed-workspace-updated"
+
+    delete_membership_response = client.post(
+        f"/app/admin/memberships/{workspace_id}/{admin_user.id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_membership_response.status_code == 303
+    assert get_workspace_membership(main.AUDIT_DB_PATH, workspace_id, admin_user.id) is None
+
+    delete_workspace_response = client.post(
+        f"/app/admin/workspaces/{workspace_id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_workspace_response.status_code == 303
+    assert get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id) is None
+
+    delete_user_response = client.post(
+        f"/app/admin/users/{managed_user_id}/delete",
+        data={"csrf_token": session.csrf_secret},
+        cookies=cookie,
+        follow_redirects=False,
+    )
+    assert delete_user_response.status_code == 303
+    assert get_user_by_id(main.AUDIT_DB_PATH, managed_user_id) is None
+
+    audit_events = [entry.event_type for entry in list_recent_control_plane_audit_logs(main.AUDIT_DB_PATH, limit=10)]
+    assert "admin_user_created" in audit_events
+    assert "admin_workspace_created" in audit_events
+    assert "admin_membership_saved" in audit_events
+    assert "admin_user_deleted" in audit_events
+
+    main.settings.owner_github_login = original_login
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_page_delete_forms_include_confirmation_prompts(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-confirm.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="990",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    managed_user, _managed_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="991",
+        github_login="managed-user",
+        display_name="Managed User",
+        primary_email="managed@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="confirm-workspace",
+        display_name="Confirm Workspace",
+        billing_owner_user_id=managed_user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-confirm-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-confirm",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Delete this user and any linked workspace memberships?" in response.text
+    assert "Delete this workspace and all linked records?" in response.text
+    assert "Remove this user from the workspace?" in response.text
+
+    main.settings.owner_github_login = original_login
     main.AUDIT_DB_PATH = original_db_path
 
 

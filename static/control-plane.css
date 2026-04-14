@@ -290,6 +290,165 @@ button.button {
     margin-top: 28px;
 }
 
+.admin-management-grid {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.admin-toolbar {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.admin-disclosure,
+.admin-row-disclosure {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.admin-disclosure {
+    min-width: 220px;
+    padding: 10px 12px;
+}
+
+.admin-row-disclosure {
+    padding: 8px 10px;
+}
+
+.admin-disclosure summary,
+.admin-row-disclosure summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.admin-disclosure[open],
+.admin-row-disclosure[open] {
+    box-shadow: 0 12px 24px rgba(31, 58, 55, 0.08);
+}
+
+.admin-card {
+    display: grid;
+    gap: 14px;
+}
+
+.admin-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.admin-form-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.admin-form-grid .field-input {
+    margin-bottom: 0;
+}
+
+.admin-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.admin-inline-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.admin-action-stack {
+    display: grid;
+    gap: 8px;
+    min-width: 220px;
+}
+
+.admin-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 0.94rem;
+}
+
+.admin-inline-link {
+    padding: 6px 10px;
+}
+
+.admin-checkbox-row {
+    color: var(--muted);
+    font-size: 0.94rem;
+}
+
+.admin-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border: 1px solid var(--line);
+}
+
+.admin-badge-active {
+    color: var(--success);
+    background: rgba(43, 107, 84, 0.12);
+}
+
+.admin-badge-inactive {
+    color: var(--danger);
+    background: rgba(154, 52, 49, 0.1);
+}
+
+.admin-badge-setup {
+    color: var(--panel-strong);
+    background: rgba(31, 58, 55, 0.08);
+}
+
+.admin-membership-list {
+    display: grid;
+    gap: 10px;
+}
+
+.admin-membership-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+.admin-membership-row span {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.admin-status-note {
+    margin: 0 0 18px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(43, 107, 84, 0.18);
+    background: rgba(43, 107, 84, 0.1);
+    color: var(--ink);
+}
+
+.admin-danger-button {
+    background: var(--danger);
+}
+
+.data-table td:last-child {
+    min-width: 250px;
+}
+
 .section-heading {
     margin-bottom: 14px;
 }
@@ -358,6 +517,16 @@ button.button {
 
     .checklist-meta {
         text-align: left;
+    }
+
+    .admin-card-header,
+    .admin-membership-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .admin-toolbar {
+        flex-direction: column;
     }
 }
 

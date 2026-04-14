@@ -46,6 +46,12 @@ class GithubIdentityRecord:
     github_user_id: str
     github_login: str
     avatar_url: str | None
+    profile_url: str | None
+    company: str | None
+    blog: str | None
+    location: str | None
+    bio: str | None
+    twitter_username: str | None
     granted_scopes: list[str]
     access_token_encrypted: str | None
     refresh_token_encrypted: str | None
@@ -225,13 +231,24 @@ class AdminWorkspaceUserRecord:
     workspace_id: int | None
     workspace_slug: str | None
     workspace_display_name: str | None
+    workspace_status: str | None
+    workspace_billing_owner_user_id: int | None
     setup_state: str | None
     user_id: int
     user_display_name: str
+    user_active: bool
     github_login: str | None
     github_user_id: str | None
     primary_email: str | None
+    avatar_url: str | None
+    github_profile_url: str | None
+    github_company: str | None
+    github_blog: str | None
+    github_location: str | None
+    github_bio: str | None
+    github_twitter_username: str | None
     membership_role: str | None
+    membership_state: str | None
     plan_code: str | None
     subscription_status: str | None
     dashboard_enabled: bool
@@ -277,6 +294,18 @@ class AdminBillingClaimRecord:
     updated_at: float
 
 
+@dataclass(frozen=True)
+class ControlPlaneAuditLogRecord:
+    id: int
+    workspace_id: int | None
+    actor_user_id: int | None
+    event_type: str
+    subject_type: str
+    subject_id: str
+    payload_json: str
+    created_at: float
+
+
 def _row_to_user(row: sqlite3.Row) -> UserRecord:
     return UserRecord(
         id=row["id"],
@@ -297,6 +326,12 @@ def _row_to_github_identity(row: sqlite3.Row) -> GithubIdentityRecord:
         github_user_id=row["github_user_id"],
         github_login=row["github_login"],
         avatar_url=row["avatar_url"],
+        profile_url=row["profile_url"],
+        company=row["company"],
+        blog=row["blog"],
+        location=row["location"],
+        bio=row["bio"],
+        twitter_username=row["twitter_username"],
         granted_scopes=json.loads(row["granted_scopes_json"] or "[]"),
         access_token_encrypted=row["access_token_encrypted"],
         refresh_token_encrypted=row["refresh_token_encrypted"],
@@ -483,6 +518,19 @@ def _row_to_billing_handoff_claim(row: sqlite3.Row) -> BillingHandoffClaimRecord
     )
 
 
+def _row_to_control_plane_audit_log(row: sqlite3.Row) -> ControlPlaneAuditLogRecord:
+    return ControlPlaneAuditLogRecord(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        actor_user_id=row["actor_user_id"],
+        event_type=row["event_type"],
+        subject_type=row["subject_type"],
+        subject_id=row["subject_id"],
+        payload_json=row["payload_json"],
+        created_at=row["created_at"],
+    )
+
+
 def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path, foreign_keys=True)
 
@@ -654,6 +702,12 @@ def init_control_plane_db(db_path: str) -> None:
                 github_user_id TEXT NOT NULL UNIQUE,
                 github_login TEXT NOT NULL,
                 avatar_url TEXT,
+                profile_url TEXT,
+                company TEXT,
+                blog TEXT,
+                location TEXT,
+                bio TEXT,
+                twitter_username TEXT,
                 granted_scopes_json TEXT NOT NULL DEFAULT '[]',
                 access_token_encrypted TEXT,
                 refresh_token_encrypted TEXT,
@@ -925,6 +979,12 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "entitlements", "feature_flags_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "entitlements", "pr_comments_enabled", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "billing_handoff_claims", "next_payment_at", "REAL")
+        _ensure_column(conn, "github_identities", "profile_url", "TEXT")
+        _ensure_column(conn, "github_identities", "company", "TEXT")
+        _ensure_column(conn, "github_identities", "blog", "TEXT")
+        _ensure_column(conn, "github_identities", "location", "TEXT")
+        _ensure_column(conn, "github_identities", "bio", "TEXT")
+        _ensure_column(conn, "github_identities", "twitter_username", "TEXT")
         _ensure_column(conn, "github_installations", "workspace_id", "INTEGER")
         _ensure_column(conn, "github_installations", "target_type", "TEXT NOT NULL DEFAULT 'Organization'")
         _ensure_column(conn, "github_installations", "status", "TEXT NOT NULL DEFAULT 'active'")
@@ -952,6 +1012,12 @@ def upsert_github_identity(
     display_name: str,
     primary_email: str | None,
     avatar_url: str | None,
+    profile_url: str | None = None,
+    company: str | None = None,
+    blog: str | None = None,
+    location: str | None = None,
+    bio: str | None = None,
+    twitter_username: str | None = None,
     granted_scopes: list[str],
     access_token_encrypted: str | None,
 ) -> tuple[UserRecord, GithubIdentityRecord]:
@@ -970,15 +1036,21 @@ def upsert_github_identity(
             conn.execute(
                 """
                 INSERT INTO github_identities (
-                    user_id, github_user_id, github_login, avatar_url, granted_scopes_json,
+                    user_id, github_user_id, github_login, avatar_url, profile_url, company, blog, location, bio, twitter_username, granted_scopes_json,
                     access_token_encrypted, refresh_token_encrypted, token_expires_at, last_login_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     user_id,
                     github_user_id,
                     github_login,
                     avatar_url,
+                    profile_url,
+                    company,
+                    blog,
+                    location,
+                    bio,
+                    twitter_username,
                     json.dumps(granted_scopes),
                     access_token_encrypted,
                     now,
@@ -995,12 +1067,18 @@ def upsert_github_identity(
             conn.execute(
                 """
                 UPDATE github_identities
-                SET github_login = ?, avatar_url = ?, granted_scopes_json = ?, access_token_encrypted = ?, last_login_at = ?, updated_at = ?
+                SET github_login = ?, avatar_url = ?, profile_url = ?, company = ?, blog = ?, location = ?, bio = ?, twitter_username = ?, granted_scopes_json = ?, access_token_encrypted = ?, last_login_at = ?, updated_at = ?
                 WHERE github_user_id = ?
                 """,
                 (
                     github_login,
                     avatar_url,
+                    profile_url,
+                    company,
+                    blog,
+                    location,
+                    bio,
+                    twitter_username,
                     json.dumps(granted_scopes),
                     access_token_encrypted,
                     now,
@@ -1014,6 +1092,42 @@ def upsert_github_identity(
             conn.execute("SELECT * FROM github_identities WHERE github_user_id = ?", (github_user_id,)).fetchone()
         )
     return user, identity
+
+
+def create_user(db_path: str, *, display_name: str, primary_email: str | None, active: bool = True) -> UserRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO users (display_name, profile_name_override, primary_email, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (display_name, display_name, primary_email, int(bool(active)), now, now),
+        )
+        row = conn.execute("SELECT * FROM users WHERE id = last_insert_rowid()").fetchone()
+    return _row_to_user(row)
+
+
+def update_user_admin_fields(
+    db_path: str,
+    user_id: int,
+    *,
+    display_name: str,
+    primary_email: str | None,
+    active: bool,
+) -> UserRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE users SET display_name = ?, profile_name_override = ?, primary_email = ?, active = ?, updated_at = ? WHERE id = ?",
+            (display_name, display_name, primary_email, int(bool(active)), now, user_id),
+        )
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise ValueError("User not found.")
+    return _row_to_user(row)
+
+
+def delete_user(db_path: str, user_id: int) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
 def create_user_session(
@@ -1156,6 +1270,24 @@ def update_workspace_display_name(db_path: str, workspace_id: int, *, display_na
     return _row_to_workspace(row)
 
 
+def update_workspace_admin_fields(db_path: str, workspace_id: int, *, slug: str, display_name: str) -> WorkspaceRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE workspaces SET slug = ?, display_name = ?, updated_at = ? WHERE id = ?",
+            (slug, display_name, now, workspace_id),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    if row is None:
+        raise ValueError("Workspace not found.")
+    return _row_to_workspace(row)
+
+
+def delete_workspace(db_path: str, workspace_id: int) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+
+
 def get_workspace_membership(db_path: str, workspace_id: int, user_id: int) -> WorkspaceMembershipRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1163,6 +1295,50 @@ def get_workspace_membership(db_path: str, workspace_id: int, user_id: int) -> W
             (workspace_id, user_id),
         ).fetchone()
     return _row_to_membership(row) if row else None
+
+
+def upsert_workspace_membership(
+    db_path: str,
+    *,
+    workspace_id: int,
+    user_id: int,
+    role: str,
+    invitation_state: str = "accepted",
+    invited_by_user_id: int | None = None,
+) -> WorkspaceMembershipRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO workspace_memberships (
+                workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, user_id) DO UPDATE SET
+                role = excluded.role,
+                invitation_state = excluded.invitation_state,
+                invited_by_user_id = excluded.invited_by_user_id,
+                joined_at = excluded.joined_at,
+                updated_at = excluded.updated_at
+            """,
+            (workspace_id, user_id, role, invitation_state, invited_by_user_id, now, now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+            (workspace_id, user_id),
+        ).fetchone()
+        _refresh_workspace_setup_state(conn, workspace_id)
+    if row is None:
+        raise ValueError("Workspace membership was not saved.")
+    return _row_to_membership(row)
+
+
+def delete_workspace_membership(db_path: str, *, workspace_id: int, user_id: int) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+            (workspace_id, user_id),
+        )
+        _refresh_workspace_setup_state(conn, workspace_id)
 
 
 def list_workspace_invites_for_workspace(db_path: str, workspace_id: int) -> list[WorkspaceInviteRecord]:
@@ -1680,6 +1856,30 @@ def record_webhook_event(
         )
 
 
+def create_control_plane_audit_log(
+    db_path: str,
+    *,
+    workspace_id: int | None,
+    actor_user_id: int | None,
+    event_type: str,
+    subject_type: str,
+    subject_id: str,
+    payload: dict[str, object] | None = None,
+) -> ControlPlaneAuditLogRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO control_plane_audit_logs (
+                workspace_id, actor_user_id, event_type, subject_type, subject_id, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (workspace_id, actor_user_id, event_type, subject_type, subject_id, json.dumps(payload or {}, sort_keys=True), now),
+        )
+        row = conn.execute("SELECT * FROM control_plane_audit_logs WHERE id = last_insert_rowid()").fetchone()
+    return _row_to_control_plane_audit_log(row)
+
+
 def upsert_github_installation(
     db_path: str,
     *,
@@ -1750,13 +1950,24 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
                 w.id AS workspace_id,
                 w.slug AS workspace_slug,
                 w.display_name AS workspace_display_name,
+                w.status AS workspace_status,
+                w.billing_owner_user_id AS workspace_billing_owner_user_id,
                 w.setup_state AS setup_state,
                 u.id AS user_id,
                 COALESCE(u.profile_name_override, u.display_name) AS user_display_name,
+                COALESCE(u.active, 1) AS user_active,
                 gi.github_login AS github_login,
                 gi.github_user_id AS github_user_id,
                 u.primary_email AS primary_email,
+                gi.avatar_url AS avatar_url,
+                gi.profile_url AS github_profile_url,
+                gi.company AS github_company,
+                gi.blog AS github_blog,
+                gi.location AS github_location,
+                gi.bio AS github_bio,
+                gi.twitter_username AS github_twitter_username,
                 wm.role AS membership_role,
+                wm.invitation_state AS membership_state,
                 e.plan_code AS plan_code,
                 e.subscription_status AS subscription_status,
                 COALESCE(e.dashboard_enabled, 0) AS dashboard_enabled,
@@ -1777,13 +1988,16 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
             LEFT JOIN subscriptions s ON s.workspace_id = w.id
             LEFT JOIN (
                 SELECT
-                    workspace_id,
-                    MAX(installation_id) AS installation_id,
-                    MIN(account_login) AS account_login,
-                    COUNT(*) AS installation_count
-                FROM github_installations
-                WHERE workspace_id IS NOT NULL AND status = 'active'
-                GROUP BY workspace_id
+                    gi.workspace_id AS workspace_id,
+                    MAX(CASE WHEN rc.installation_id IS NOT NULL THEN gi.installation_id ELSE NULL END) AS installation_id,
+                    MIN(CASE WHEN rc.installation_id IS NOT NULL THEN gi.account_login ELSE NULL END) AS account_login,
+                    COUNT(DISTINCT rc.installation_id) AS installation_count
+                FROM github_installations gi
+                LEFT JOIN repo_connections rc
+                    ON rc.workspace_id = gi.workspace_id
+                    AND rc.installation_id = gi.installation_id
+                WHERE gi.workspace_id IS NOT NULL AND gi.status = 'active'
+                GROUP BY gi.workspace_id
             ) inst ON inst.workspace_id = w.id
             LEFT JOIN (
                 SELECT
@@ -1809,13 +2023,24 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
             workspace_id=row["workspace_id"],
             workspace_slug=row["workspace_slug"],
             workspace_display_name=row["workspace_display_name"],
+            workspace_status=row["workspace_status"],
+            workspace_billing_owner_user_id=row["workspace_billing_owner_user_id"],
             setup_state=row["setup_state"],
             user_id=row["user_id"],
             user_display_name=row["user_display_name"],
+            user_active=bool(row["user_active"]),
             github_login=row["github_login"],
             github_user_id=row["github_user_id"],
             primary_email=row["primary_email"],
+            avatar_url=row["avatar_url"],
+            github_profile_url=row["github_profile_url"],
+            github_company=row["github_company"],
+            github_blog=row["github_blog"],
+            github_location=row["github_location"],
+            github_bio=row["github_bio"],
+            github_twitter_username=row["github_twitter_username"],
             membership_role=row["membership_role"],
+            membership_state=row["membership_state"],
             plan_code=row["plan_code"],
             subscription_status=row["subscription_status"],
             dashboard_enabled=bool(row["dashboard_enabled"]),
@@ -1831,6 +2056,15 @@ def list_admin_workspace_users(db_path: str) -> list[AdminWorkspaceUserRecord]:
         )
         for row in rows
     ]
+
+
+def list_recent_control_plane_audit_logs(db_path: str, *, limit: int = 20) -> list[ControlPlaneAuditLogRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM control_plane_audit_logs ORDER BY created_at DESC, id DESC LIMIT ?",
+            (max(int(limit), 1),),
+        ).fetchall()
+    return [_row_to_control_plane_audit_log(row) for row in rows]
 
 
 def list_unclaimed_installations(db_path: str) -> list[AdminInstallationRecord]:
