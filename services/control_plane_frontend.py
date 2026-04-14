@@ -279,17 +279,76 @@ def _setup_state_label(setup_state: str | None) -> str:
     return labels.get(normalized, normalized.replace("_", " ").title() or "Unknown")
 
 
-def _render_workspace_members_table(workspace_members: list[dict[str, object]]) -> str:
-    rows = [
-        [
-            html_escape(str(member.get("display_name") or "Unknown")),
-            html_escape(str(member.get("github_login") or "Unavailable")),
-            html_escape(_permission_label(str(member.get("role") or ""))),
-            html_escape(str(member.get("state") or "Accepted")),
-        ]
-        for member in workspace_members
-    ]
-    return _render_table(["Member", "GitHub", "Permission", "Access"], rows)
+def _member_state_badge_label(state: str | None) -> str:
+    normalized = (state or "accepted").strip().lower()
+    return {
+        "accepted": "Active",
+        "pending": "Pending",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _member_state_badge_class(state: str | None) -> str:
+    normalized = (state or "accepted").strip().lower()
+    return "member-badge-pending" if normalized == "pending" else "member-badge-active"
+
+
+def _render_workspace_members_list(workspace_members: list[dict[str, object]]) -> str:
+    if not workspace_members:
+        return '<div class="control-page-empty">No workspace members yet.</div>'
+    items = []
+    for member in workspace_members:
+        display_name = html_escape(str(member.get("display_name") or "Unknown"))
+        github_login = html_escape(str(member.get("github_login") or "Unavailable"))
+        permission = html_escape(_permission_label(str(member.get("role") or "")))
+        state = str(member.get("state") or "Accepted")
+        state_label = html_escape(_member_state_badge_label(state))
+        items.append(
+            f'''
+            <div class="member-row member-row-{html_escape(state.strip().lower() or "accepted")}">
+                <div class="member-row-identity">
+                    <div class="member-row-avatar" aria-hidden="true">{display_name[:1] or "?"}</div>
+                    <div class="member-row-copy">
+                        <strong>{display_name}</strong>
+                        <span>@{github_login}</span>
+                    </div>
+                </div>
+                <div class="member-row-meta">
+                    <span class="member-badge member-badge-permission">{permission}</span>
+                    <span class="member-badge {_member_state_badge_class(state)}">{state_label}</span>
+                </div>
+            </div>
+            '''
+        )
+    return '<div class="member-list">' + "".join(items) + "</div>"
+
+
+def _render_workspace_invite_role_options() -> str:
+    return (
+        '<option value="admin">Edit</option>'
+        '<option value="viewer">Read</option>'
+    )
+
+
+def _render_workspace_member_invite_form(*, csrf_token: str, invite_enabled: bool) -> str:
+    note = (
+        '<span class="member-toolbar-note">Invite by GitHub login. They join automatically after their next GitHub sign-in.</span>'
+        if invite_enabled
+        else '<span class="member-toolbar-note">Only workspace owners and admins can add users.</span>'
+    )
+    disabled = "disabled" if not invite_enabled else ""
+    return f'''
+        <div class="member-toolbar">
+            <form method="post" action="/app/settings/invite" class="member-toolbar-form">
+                {_csrf_input(csrf_token)}
+                <input class="control-page-input member-toolbar-input" name="github_login" placeholder="GitHub login" maxlength="39" {disabled} />
+                <select class="control-page-select member-toolbar-select" name="role" {disabled}>
+                    {_render_workspace_invite_role_options()}
+                </select>
+                <button type="submit" class="control-page-icon-button member-toolbar-button" aria-label="Add user" {disabled}>+</button>
+            </form>
+            {note}
+        </div>
+    '''
 
 
 def _render_workspace_repos_table(repo_rows: list[dict[str, object]]) -> str:
@@ -455,10 +514,11 @@ def _repo_github_installation_href(repo_full: str) -> str:
     return f'https://github.com/{quote(repo_full, safe="/")}/settings/installations'
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark") -> str:
+def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark") -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{INVENTORY_SUMMARY}}", html_escape(inventory_summary))
         .replace("{{INVENTORY_CARDS}}", inventory_cards)
         .replace("{{ONBOARDING_METRICS}}", onboarding_metrics)
         .replace("{{ONBOARDING_SUMMARY_CARDS}}", onboarding_summary_cards)
@@ -691,6 +751,7 @@ def render_control_plane_settings_page(
     installation_account_login: str | None,
     repo_limit: int | None,
     seat_limit: int | None,
+    invite_enabled: bool,
 ) -> str:
     template = _load_template("control_plane_settings.html")
     effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
@@ -705,6 +766,7 @@ def render_control_plane_settings_page(
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{STATUS_NOTE}}", html_escape(status_copy))
         .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+        .replace("{{WORKSPACE_NAME_INPUT}}", html_escape(workspace_name))
         .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
         .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
         .replace("{{PR_COMMENTS_DISABLED}}", "disabled" if not can_manage else "")
@@ -713,7 +775,8 @@ def render_control_plane_settings_page(
         .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", "Active" if effective_status else "Paused")
         .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
         .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
-        .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_table(workspace_members))
+        .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
+        .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_list(workspace_members))
         .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))

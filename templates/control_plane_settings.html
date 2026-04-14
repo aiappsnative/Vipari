@@ -80,11 +80,17 @@
 
                 <section class="control-page-sections">
                     <article class="control-page-section">
-                        <div class="secondary-panel-title">Workspace controls</div>
-                        <h2 class="control-page-section-title">PR comments</h2>
-                        <p class="control-page-copy">Control whether DriftGuard posts PR review comments for repositories allocated to this workspace. Turning this off pauses new PR comment activity without changing your billing plan.</p>
+                        <div class="secondary-panel-title">Workspace identity</div>
+                        <h2 class="control-page-section-title">Workspace settings</h2>
+                        <p class="control-page-copy">Owners and edit users can rename the workspace and manage repository comment behavior from one place.</p>
                         <form method="post" action="/app/settings" class="control-page-form">
                             {{CSRF_INPUT}}
+                            <label class="control-page-label" for="workspace-name">Workspace name</label>
+                            <input class="control-page-input" id="workspace-name" name="workspace_name" value="{{WORKSPACE_NAME_INPUT}}" maxlength="120" />
+                            <div class="control-page-form-divider"></div>
+                            <div class="secondary-panel-title">Workspace controls</div>
+                            <h2 class="control-page-section-title">PR comments</h2>
+                            <p class="control-page-copy">Control whether DriftGuard posts PR review comments for repositories allocated to this workspace. Turning this off pauses new PR comment activity without changing your billing plan.</p>
                             <fieldset class="control-page-choice-group" aria-labelledby="pr-comments-picker-title">
                                 <legend class="control-page-label" id="pr-comments-picker-title">PR comments</legend>
                                 <div class="control-page-choice-grid">
@@ -111,6 +117,8 @@
 
                     <article class="control-page-section">
                         <div class="secondary-panel-title">Current status</div>
+                        <h2 class="control-page-section-title">Control status</h2>
+                        <p class="control-page-copy">Plan support, workspace toggles, and the linked installation determine how the workspace behaves right now.</p>
                         <div class="control-page-meta-grid">
                             <div class="control-page-meta-card">
                                 <span class="control-page-meta-label">Plan support</span>
@@ -135,6 +143,7 @@
                         <div class="secondary-panel-title">Workspace members</div>
                         <h2 class="control-page-section-title">Allowed users and permissions</h2>
                         <p class="control-page-copy">Workspace membership is shown in the product language users actually feel: owner, edit, and read access.</p>
+                        {{WORKSPACE_MEMBER_ACTIONS}}
                         {{WORKSPACE_MEMBERS}}
                     </article>
 

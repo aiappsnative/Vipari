@@ -99,14 +99,18 @@ from services.control_plane_records import (
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
     list_unclaimed_installations,
+    list_workspace_invites_for_workspace,
     list_workspace_memberships_for_user,
     record_webhook_event,
     replace_repo_connections,
     revoke_user_session,
+    accept_workspace_invites_for_github_login,
     update_repo_allocation_status,
     update_session_workspace,
     update_user_profile_preferences,
+    update_workspace_display_name,
     update_workspace_pr_comments_setting,
+    upsert_workspace_invite,
     upsert_billing_customer,
     upsert_entitlement,
     upsert_github_identity,
@@ -671,7 +675,7 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
 
 def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
     rows = [row for row in list_admin_workspace_users(AUDIT_DB_PATH) if row.workspace_id == workspace_id]
-    return [
+    member_rows = [
         {
             "display_name": row.user_display_name,
             "github_login": row.github_login,
@@ -680,6 +684,16 @@ def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
         }
         for row in rows
     ]
+    for invite in list_workspace_invites_for_workspace(AUDIT_DB_PATH, workspace_id):
+        member_rows.append(
+            {
+                "display_name": "Pending invite",
+                "github_login": invite.invited_github_login,
+                "role": invite.role,
+                "state": "Pending",
+            }
+        )
+    return sorted(member_rows, key=lambda item: (str(item["state"]).lower(), str(item["github_login"]).lower()))
 
 
 def _github_account_repo_inventory(access_context: dict[str, object]) -> list[dict[str, object]]:
@@ -984,6 +998,7 @@ async def github_auth_callback(
         granted_scopes=token.granted_scopes,
         access_token_encrypted=encrypted_token,
     )
+    accept_workspace_invites_for_github_login(AUDIT_DB_PATH, user_id=user.id, github_login=profile.login)
     memberships = list_workspace_memberships_for_user(AUDIT_DB_PATH, user.id)
     workspace_id = memberships[0].workspace_id if memberships else None
     session = create_user_session(
@@ -1128,7 +1143,9 @@ async def settings_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            status_note="Settings updated." if request.query_params.get("updated") else None,
+            status_note=(
+                "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
+            ),
             resolution=access_context["resolution"],
             admin_url="/app/admin" if identity and user and _is_admin_identity(user, identity) else None,
             csrf_token=access_context["session"].csrf_secret,
@@ -1144,12 +1161,18 @@ async def settings_page(request: Request):
             installation_account_login=installation.account_login if installation else None,
             repo_limit=entitlement.repo_limit if entitlement else None,
             seat_limit=entitlement.seat_limit if entitlement else None,
+            invite_enabled=bool(membership and membership.role in {"owner", "admin"}),
         )
     )
 
 
 @app.post("/app/settings")
-async def settings_update(request: Request, pr_comments_setting: str = Form(...), csrf_token: str | None = Form(None)):
+async def settings_update(
+    request: Request,
+    pr_comments_setting: str = Form(...),
+    workspace_name: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
     access_context = _current_workspace_context(request)
     if not _has_settings_access(access_context):
         raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
@@ -1160,12 +1183,59 @@ async def settings_update(request: Request, pr_comments_setting: str = Form(...)
     if normalized_setting not in {"on", "off"}:
         raise HTTPException(status_code=400, detail="PR comments setting must be on or off.")
 
+    normalized_workspace_name = (workspace_name or "").strip()
+    if not normalized_workspace_name:
+        raise HTTPException(status_code=400, detail="Workspace name cannot be empty.")
+    if len(normalized_workspace_name) > 120:
+        raise HTTPException(status_code=400, detail="Workspace name must be 120 characters or fewer.")
+
     update_workspace_pr_comments_setting(
         AUDIT_DB_PATH,
         access_context["workspace"].id,
         enabled=normalized_setting == "on",
     )
+    update_workspace_display_name(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        display_name=normalized_workspace_name,
+    )
     return RedirectResponse("/app/settings?updated=1", status_code=303)
+
+
+@app.post("/app/settings/invite")
+async def settings_invite_user(
+    request: Request,
+    github_login: str = Form(...),
+    role: str = Form(...),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    normalized_login = github_login.strip().lstrip("@").lower()
+    if not normalized_login:
+        raise HTTPException(status_code=400, detail="GitHub login is required.")
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?", normalized_login):
+        raise HTTPException(status_code=400, detail="GitHub login format is invalid.")
+    normalized_role = (role or "").strip().lower()
+    if normalized_role not in {"admin", "viewer"}:
+        raise HTTPException(status_code=400, detail="Invited role must be edit or read.")
+
+    identity = access_context.get("identity")
+    if identity is not None and identity.github_login.lower() == normalized_login:
+        raise HTTPException(status_code=400, detail="You are already in this workspace.")
+
+    upsert_workspace_invite(
+        AUDIT_DB_PATH,
+        workspace_id=access_context["workspace"].id,
+        invited_github_login=normalized_login,
+        role=normalized_role,
+        invited_by_user_id=access_context["session"].user_id,
+    )
+    return RedirectResponse("/app/settings?invite_added=1", status_code=303)
 
 
 @app.get("/app/policies", response_class=HTMLResponse)
@@ -1594,9 +1664,13 @@ async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     user = access_context["user"]
+    entitlement = access_context["entitlement"]
+    subscription = access_context["subscription"]
     repo_inventory = _github_account_repo_inventory(access_context)
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    repo_limit = entitlement.repo_limit if entitlement else get_plan_definition(plan_code).repo_limit
     allocation_status_by_full = {
         str(item["repo_full"]): str(item["allocation_status"])
         for item in allocations
@@ -1610,6 +1684,12 @@ async def repo_setup_page(request: Request):
             allocation_status_by_full=allocation_status_by_full,
         )
     ]
+    consumed_repo_slots = len(
+        {str(item["repo_full"]) for item in allocations if str(item.get("allocation_status") or "") in {"active", "onboarded"}}
+        | {str(item["repo_full"]) for item in onboarded_summaries}
+    )
+    remaining_repo_slots = max(repo_limit - consumed_repo_slots, 0)
+    inventory_summary = f"{remaining_repo_slots} of {repo_limit} repository slots available on this plan."
     audit_repo_full = (
         (allocations[0]["repo_full"] if allocations else None)
         or (connections[0]["repo_full"] if connections else None)
@@ -1618,6 +1698,7 @@ async def repo_setup_page(request: Request):
     return HTMLResponse(
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
+            inventory_summary=inventory_summary,
             inventory_cards=render_repo_inventory_cards(repo_inventory),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),

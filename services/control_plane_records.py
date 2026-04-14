@@ -14,6 +14,7 @@ CONTROL_PLANE_TABLES = (
     "user_sessions",
     "workspaces",
     "workspace_memberships",
+    "workspace_invites",
     "billing_customers",
     "subscriptions",
     "entitlements",
@@ -76,6 +77,20 @@ class WorkspaceMembershipRecord:
     invitation_state: str
     invited_by_user_id: int | None
     joined_at: float | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class WorkspaceInviteRecord:
+    id: int
+    workspace_id: int
+    invited_github_login: str
+    role: str
+    invitation_state: str
+    invited_by_user_id: int | None
+    accepted_user_id: int | None
+    accepted_at: float | None
     created_at: float
     updated_at: float
 
@@ -315,6 +330,21 @@ def _row_to_membership(row: sqlite3.Row) -> WorkspaceMembershipRecord:
         invitation_state=row["invitation_state"],
         invited_by_user_id=row["invited_by_user_id"],
         joined_at=row["joined_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_workspace_invite(row: sqlite3.Row) -> WorkspaceInviteRecord:
+    return WorkspaceInviteRecord(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        invited_github_login=row["invited_github_login"],
+        role=row["role"],
+        invitation_state=row["invitation_state"],
+        invited_by_user_id=row["invited_by_user_id"],
+        accepted_user_id=row["accepted_user_id"],
+        accepted_at=row["accepted_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -667,6 +697,26 @@ def init_control_plane_db(db_path: str) -> None:
                 FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(invited_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workspace_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                invited_github_login TEXT NOT NULL,
+                role TEXT NOT NULL,
+                invitation_state TEXT NOT NULL DEFAULT 'pending',
+                invited_by_user_id INTEGER,
+                accepted_user_id INTEGER,
+                accepted_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(workspace_id, invited_github_login),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY(invited_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY(accepted_user_id) REFERENCES users(id) ON DELETE SET NULL
             )
             """
         )
@@ -1095,6 +1145,17 @@ def update_workspace_pr_comments_setting(db_path: str, workspace_id: int, *, ena
     return _row_to_workspace(row)
 
 
+def update_workspace_display_name(db_path: str, workspace_id: int, *, display_name: str) -> WorkspaceRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE workspaces SET display_name = ?, updated_at = ? WHERE id = ?",
+            (display_name, now, workspace_id),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    return _row_to_workspace(row)
+
+
 def get_workspace_membership(db_path: str, workspace_id: int, user_id: int) -> WorkspaceMembershipRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1102,6 +1163,86 @@ def get_workspace_membership(db_path: str, workspace_id: int, user_id: int) -> W
             (workspace_id, user_id),
         ).fetchone()
     return _row_to_membership(row) if row else None
+
+
+def list_workspace_invites_for_workspace(db_path: str, workspace_id: int) -> list[WorkspaceInviteRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM workspace_invites WHERE workspace_id = ? AND invitation_state = 'pending' ORDER BY invited_github_login COLLATE NOCASE, id",
+            (workspace_id,),
+        ).fetchall()
+    return [_row_to_workspace_invite(row) for row in rows]
+
+
+def upsert_workspace_invite(
+    db_path: str,
+    *,
+    workspace_id: int,
+    invited_github_login: str,
+    role: str,
+    invited_by_user_id: int | None,
+) -> WorkspaceInviteRecord:
+    now = time.time()
+    normalized_login = invited_github_login.strip().lower()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO workspace_invites (
+                workspace_id, invited_github_login, role, invitation_state, invited_by_user_id, accepted_user_id, accepted_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, ?, ?)
+            ON CONFLICT(workspace_id, invited_github_login) DO UPDATE SET
+                role = excluded.role,
+                invitation_state = 'pending',
+                invited_by_user_id = excluded.invited_by_user_id,
+                accepted_user_id = NULL,
+                accepted_at = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (workspace_id, normalized_login, role, invited_by_user_id, now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM workspace_invites WHERE workspace_id = ? AND invited_github_login = ?",
+            (workspace_id, normalized_login),
+        ).fetchone()
+    return _row_to_workspace_invite(row)
+
+
+def accept_workspace_invites_for_github_login(db_path: str, *, user_id: int, github_login: str) -> list[WorkspaceMembershipRecord]:
+    now = time.time()
+    normalized_login = github_login.strip().lower()
+    accepted_memberships: list[WorkspaceMembershipRecord] = []
+    with _connect(db_path) as conn:
+        invite_rows = conn.execute(
+            "SELECT * FROM workspace_invites WHERE invited_github_login = ? AND invitation_state = 'pending'",
+            (normalized_login,),
+        ).fetchall()
+        for invite_row in invite_rows:
+            invite = _row_to_workspace_invite(invite_row)
+            membership_row = conn.execute(
+                "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+                (invite.workspace_id, user_id),
+            ).fetchone()
+            if membership_row is None:
+                conn.execute(
+                    """
+                    INSERT INTO workspace_memberships (
+                        workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'accepted', ?, ?, ?, ?)
+                    """,
+                    (invite.workspace_id, user_id, invite.role, invite.invited_by_user_id, now, now, now),
+                )
+                membership_row = conn.execute(
+                    "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+                    (invite.workspace_id, user_id),
+                ).fetchone()
+            conn.execute(
+                "UPDATE workspace_invites SET invitation_state = 'accepted', accepted_user_id = ?, accepted_at = ?, updated_at = ? WHERE id = ?",
+                (user_id, now, now, invite.id),
+            )
+            _refresh_workspace_setup_state(conn, invite.workspace_id)
+            if membership_row is not None:
+                accepted_memberships.append(_row_to_membership(membership_row))
+    return accepted_memberships
 
 
 def get_workspace_subscription(db_path: str, workspace_id: int) -> SubscriptionRecord | None:
