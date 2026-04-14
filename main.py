@@ -44,7 +44,6 @@ from services.auth_service import (
     generate_csrf_secret,
     generate_oauth_state,
     generate_session_id,
-    list_github_user_repositories,
 )
 from services.billing_service import (
     create_billing_portal_session,
@@ -137,7 +136,7 @@ from services.onboarding import execute_repository_history_backfill, onboard_rep
 from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
-from services.secure_store import decrypt_text, encrypt_text
+from services.secure_store import encrypt_text
 from services.static_assets import FingerprintedStaticFiles
 
 settings = get_settings()
@@ -732,23 +731,34 @@ def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
 
 
 def _github_account_repo_inventory(access_context: dict[str, object]) -> list[dict[str, object]]:
-    identity = access_context.get("identity")
     workspace = access_context.get("workspace")
-    if identity is None or workspace is None or not identity.access_token_encrypted:
+    installation = access_context.get("installation")
+    if workspace is None:
         return []
 
-    token = decrypt_text(identity.access_token_encrypted, settings.app_encryption_key)
-    try:
-        repositories = list_github_user_repositories(token)
-    except (HTTPError, OSError, RuntimeError, ValueError):
-        repositories = []
+    if installation is not None and settings.has_github_app_credentials:
+        try:
+            _installation_payload, repositories = sync_installation_repositories(
+                app_id=settings.github_app_id,
+                private_key_path=settings.github_private_key_path,
+                private_key=settings.resolved_github_private_key,
+                installation_id=installation.installation_id,
+            )
+            replace_repo_connections(
+                AUDIT_DB_PATH,
+                workspace_id=workspace.id,
+                installation_id=installation.installation_id,
+                repositories=repositories,
+            )
+        except (HTTPError, OSError, RuntimeError, ValueError):
+            pass
 
     existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
     existing_repo_fulls.update(allocation.repo_full for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id))
 
     inventory: list[dict[str, object]] = []
-    for repository in repositories:
-        repo_full = repository.full_name.strip()
+    for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id):
+        repo_full = connection.repo_full.strip()
         if not repo_full:
             continue
         inventory.append(
@@ -816,8 +826,29 @@ def _export_download_url(job) -> str | None:
 
 
 def _export_job_payload(job) -> dict[str, object]:
-    payload = asdict(job)
-    payload["download_url"] = _export_download_url(job) if job.status == "completed" else None
+    payload = {
+        "id": job.id,
+        "repo_full": job.repo_full,
+        "from_ts": job.from_ts,
+        "to_ts": job.to_ts,
+        "workspace_id": job.workspace_id,
+        "requested_by_user_id": job.requested_by_user_id,
+        "requested_by_github_login": job.requested_by_github_login,
+        "export_mode": job.export_mode,
+        "include_artifact_content": job.include_artifact_content,
+        "export_version": job.export_version,
+        "status": job.status,
+        "attempt_count": job.attempt_count,
+        "next_attempt_at": job.next_attempt_at,
+        "last_error": job.last_error,
+        "download_token": job.download_token,
+        "result_size_bytes": job.result_size_bytes,
+        "result_sha256": job.result_sha256,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "completed_at": job.completed_at,
+    }
+    payload["download_url"] = _export_download_url(job) if job.status == "completed" and job.result_blob else None
     return payload
 
 
@@ -2486,6 +2517,8 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             job.id,
             "completed",
             result_size_bytes=result.total_size_bytes,
+            result_sha256=hashlib.sha256(result.zip_bytes).hexdigest(),
+            result_blob=result.zip_bytes,
         )
         job = get_export_job(AUDIT_DB_PATH, job.id) or job
     except ValueError as exc:
@@ -2526,25 +2559,10 @@ async def download_export(job_id: int, request: Request, token: str | None = Non
             raise HTTPException(status_code=404, detail="Export job not found")
         if job.status != "completed":
             raise HTTPException(status_code=400, detail="Export job not completed")
-        if not job.result_size_bytes or not job.download_token:
+        if not job.result_size_bytes or not job.download_token or not job.result_blob:
             raise HTTPException(status_code=400, detail="Export job missing download data")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    try:
-        result = build_compliance_export(
-            AUDIT_DB_PATH,
-            ComplianceExportServiceRequest(
-                repo_full=job.repo_full,
-                from_ts=job.from_ts,
-                to_ts=job.to_ts,
-                export_mode=job.export_mode,
-                include_artifact_content=job.include_artifact_content,
-                export_version=job.export_version,
-            ),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     filename = (
         f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
@@ -2553,7 +2571,7 @@ async def download_export(job_id: int, request: Request, token: str | None = Non
         f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
     )
     return StreamingResponse(
-        io.BytesIO(result.zip_bytes),
+        io.BytesIO(job.result_blob),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

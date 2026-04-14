@@ -82,6 +82,35 @@ class TestExportJobs:
         assert updated.result_size_bytes == 1024
         assert updated.completed_at is not None
 
+    def test_completed_export_job_persists_download_artifact(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+
+        from services.audit_jobs import init_db
+        init_db(db_path)
+
+        job = create_export_job(
+            db_path=db_path,
+            repo_full="test/repo",
+            from_ts=time.time() - 86400,
+            to_ts=time.time(),
+            export_mode="compliance",
+            include_artifact_content=False,
+        )
+
+        update_export_job_status(
+            db_path=db_path,
+            job_id=job.id,
+            status="completed",
+            result_size_bytes=18,
+            result_sha256="abc123",
+            result_blob=b"stored-export-bytes",
+        )
+
+        updated = get_export_job(db_path, job.id)
+        assert updated.status == "completed"
+        assert updated.result_sha256 == "abc123"
+        assert updated.result_blob == b"stored-export-bytes"
+
     def test_list_export_jobs_for_repo(self, tmp_path):
         """Test listing jobs for a repo."""
         import sqlite3

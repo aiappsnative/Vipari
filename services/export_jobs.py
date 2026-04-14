@@ -26,6 +26,8 @@ class ExportJob:
     last_error: str | None = None
     download_token: str | None = None
     result_size_bytes: int | None = None
+    result_sha256: str | None = None
+    result_blob: bytes | None = None
     created_at: float = 0.0
     updated_at: float = 0.0
     completed_at: float | None = None
@@ -45,6 +47,8 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
     has_workspace_id = "workspace_id" in columns
     has_requested_by_user_id = "requested_by_user_id" in columns
     has_requested_by_github_login = "requested_by_github_login" in columns
+    has_result_sha256 = "result_sha256" in columns
+    has_result_blob = "result_blob" in columns
     conn.execute(
         """
         CREATE TABLE export_jobs_v2 (
@@ -64,6 +68,8 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             last_error TEXT,
             download_token TEXT,
             result_size_bytes INTEGER,
+            result_sha256 TEXT,
+            result_blob BLOB,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             completed_at REAL
@@ -89,6 +95,8 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             last_error,
             download_token,
             result_size_bytes,
+            result_sha256,
+            result_blob,
             created_at,
             updated_at,
             completed_at
@@ -110,6 +118,8 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             last_error,
             download_token,
             result_size_bytes,
+            {"result_sha256" if has_result_sha256 else 'NULL'},
+            {"result_blob" if has_result_blob else 'NULL'},
             created_at,
             updated_at,
             completed_at
@@ -141,6 +151,8 @@ def init_export_job_db(db_path: str) -> None:
                 last_error TEXT,
                 download_token TEXT,
                 result_size_bytes INTEGER,
+                result_sha256 TEXT,
+                result_blob BLOB,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 completed_at REAL
@@ -158,6 +170,10 @@ def init_export_job_db(db_path: str) -> None:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN requested_by_user_id INTEGER")
         if "requested_by_github_login" not in columns:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN requested_by_github_login TEXT")
+        if "result_sha256" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN result_sha256 TEXT")
+        if "result_blob" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN result_blob BLOB")
         if "UNIQUE(repo_full, from_ts, to_ts, export_mode, include_artifact_content)" in table_sql:
             _rebuild_export_jobs_table(conn)
 
@@ -180,6 +196,8 @@ def _row_to_job(row: sqlite3.Row) -> ExportJob:
         last_error=row["last_error"],
         download_token=row["download_token"],
         result_size_bytes=row["result_size_bytes"],
+        result_sha256=row["result_sha256"],
+        result_blob=row["result_blob"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
@@ -269,6 +287,8 @@ def update_export_job_status(
     status: str,
     last_error: str | None = None,
     result_size_bytes: int | None = None,
+    result_sha256: str | None = None,
+    result_blob: bytes | None = None,
 ) -> None:
     now = time.time()
     with _connect(db_path) as conn:
@@ -276,17 +296,17 @@ def update_export_job_status(
             conn.execute(
                 """
                 UPDATE export_jobs
-                SET status = ?, last_error = ?, result_size_bytes = ?, completed_at = ?, updated_at = ?
+                SET status = ?, last_error = ?, result_size_bytes = ?, result_sha256 = ?, result_blob = ?, completed_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (status, last_error, result_size_bytes, now, now, job_id),
+                (status, last_error, result_size_bytes, result_sha256, result_blob, now, now, job_id),
             )
         else:
             next_attempt_at = now + (2 ** (get_export_job(db_path, job_id).attempt_count)) * 60  # exponential backoff
             conn.execute(
                 """
                 UPDATE export_jobs
-                SET status = ?, last_error = ?, next_attempt_at = ?, updated_at = ?
+                SET status = ?, last_error = ?, next_attempt_at = ?, updated_at = ?, result_sha256 = NULL, result_blob = NULL
                 WHERE id = ?
                 """,
                 (status, last_error, next_attempt_at, now, job_id),

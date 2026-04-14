@@ -973,6 +973,96 @@ def test_github_auth_callback_accepts_pending_workspace_invite(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_github_auth_callback_applies_upgraded_role_for_existing_workspace_member(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "auth-invite-role-upgrade.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        _connect,
+        create_workspace,
+        get_workspace_membership,
+        upsert_github_identity,
+        upsert_workspace_invite,
+    )
+
+    owner, _owner_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="937",
+        github_login="role-upgrade-owner",
+        display_name="Role Upgrade Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    invited_user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="938",
+        github_login="existing-member",
+        display_name="Existing Member",
+        primary_email="member@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="role-upgrade-workspace",
+        display_name="Role Upgrade Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    with _connect(main.AUDIT_DB_PATH) as conn:
+        now = time.time()
+        conn.execute(
+            "INSERT INTO workspace_memberships (workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at) VALUES (?, ?, 'viewer', 'accepted', ?, ?, ?, ?)",
+            (workspace.id, invited_user.id, owner.id, now, now, now),
+        )
+    upsert_workspace_invite(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        invited_github_login="existing-member",
+        role="admin",
+        invited_by_user_id=owner.id,
+    )
+
+    with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
+        main.settings, "github_oauth_client_secret", "client-secret"
+    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"), patch.object(
+        main.settings, "app_encryption_key", "very-secret"
+    ), patch(
+        "main.exchange_code_for_access_token",
+        return_value=GithubOAuthToken(access_token="oauth-token", granted_scopes=["read:user"]),
+    ), patch(
+        "main.fetch_github_user_profile",
+        return_value=GithubUserProfile(
+            github_user_id="938",
+            login="existing-member",
+            display_name="Existing Member",
+            email="member@example.com",
+            avatar_url="https://avatars.example.com/u/938",
+        ),
+    ):
+        start_response = client.get("/auth/github/start", follow_redirects=False)
+        state_cookie = start_response.cookies.get("promptdrift_oauth_state")
+        response = client.get(
+            f"/auth/github/callback?code=test-code&state={state_cookie}",
+            cookies={
+                "promptdrift_oauth_state": state_cookie,
+                "promptdrift_oauth_context": start_response.cookies.get("promptdrift_oauth_context"),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    membership = get_workspace_membership(main.AUDIT_DB_PATH, workspace.id, invited_user.id)
+    assert membership is not None
+    assert membership.role == "admin"
+    assert membership.invitation_state == "accepted"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "placeholder-pages.db")
@@ -2151,7 +2241,6 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     main.init_db(main.AUDIT_DB_PATH)
 
     from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
-    from services.auth_service import GithubUserRepository
 
     owner, _identity = upsert_github_identity(
         main.AUDIT_DB_PATH,
@@ -2186,24 +2275,6 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
             {"target_type": "Organization", "account": {"login": "doria90", "type": "Organization", "id": 77}},
             [{"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"}],
         ),
-    ), patch(
-        "main.list_github_user_repositories",
-        return_value=[
-            GithubUserRepository(
-                github_repo_id="1",
-                full_name="doria90/dummyAI",
-                default_branch="main",
-                is_private=True,
-                html_url="https://github.com/doria90/dummyAI",
-            ),
-            GithubUserRepository(
-                github_repo_id="2",
-                full_name="doria90/PromptDrift",
-                default_branch="main",
-                is_private=True,
-                html_url="https://github.com/doria90/PromptDrift",
-            ),
-        ],
     ):
         response = client.get(
             f"/app/setup/install/callback?installation_id=12345&setup_action=install&state={workspace.id}",
@@ -2227,7 +2298,6 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
 
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
-    assert "doria90/PromptDrift" in repo_setup_response.text
     assert 'class="repo-setup-page"' in repo_setup_response.text
     assert "Repository Inventory" in repo_setup_response.text
     assert "5 of 5 repository slots available on this plan." in repo_setup_response.text
@@ -2236,8 +2306,148 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
     assert 'href="/app/repos"' in repo_setup_response.text
-    assert 'href="https://github.com/doria90/PromptDrift/settings/installations"' in repo_setup_response.text
     assert "Already there" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_export_download_serves_completed_artifact_without_rebuild(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "export-download-immutable.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.compliance_export_service import ComplianceExportResult
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="960",
+        github_login="export-owner",
+        display_name="Export Owner",
+        primary_email="export-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="export-workspace",
+        display_name="Export Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="export-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_export_owner",
+        stripe_price_id="price_export_owner",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        account_id="9600",
+        account_login="export-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        repositories=[
+            {
+                "repo_github_id": "export-org/repo-one",
+                "repo_full": "export-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9600,
+        repo_github_id="export-org/repo-one",
+        repo_full="export-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    created_result = ComplianceExportResult(
+        zip_bytes=b"immutable-export-zip",
+        manifest={"version": "1"},
+        file_count=2,
+        total_size_bytes=len(b"immutable-export-zip"),
+    )
+    with patch("main.build_compliance_export", return_value=created_result):
+        create_response = client.post(
+            "/api/repos/export-org/repo-one/export/compliance",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            json={
+                "from_ts": 1700000000,
+                "to_ts": 1700086400,
+                "export_mode": "compliance",
+                "include_artifact_content": False,
+            },
+        )
+
+    assert create_response.status_code == 200
+    download_url = create_response.json()["download_url"]
+    assert download_url
+
+    with patch("main.build_compliance_export", side_effect=AssertionError("download should use stored artifact")):
+        download_response = client.get(
+            download_url,
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert download_response.status_code == 200
+    assert download_response.content == b"immutable-export-zip"
+    assert download_response.headers["content-type"] == "application/zip"
 
     main.AUDIT_DB_PATH = original_db_path
 

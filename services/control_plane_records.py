@@ -1394,23 +1394,24 @@ def accept_workspace_invites_for_github_login(db_path: str, *, user_id: int, git
         ).fetchall()
         for invite_row in invite_rows:
             invite = _row_to_workspace_invite(invite_row)
+            conn.execute(
+                """
+                INSERT INTO workspace_memberships (
+                    workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 'accepted', ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, user_id) DO UPDATE SET
+                    role = excluded.role,
+                    invitation_state = 'accepted',
+                    invited_by_user_id = excluded.invited_by_user_id,
+                    joined_at = COALESCE(workspace_memberships.joined_at, excluded.joined_at),
+                    updated_at = excluded.updated_at
+                """,
+                (invite.workspace_id, user_id, invite.role, invite.invited_by_user_id, now, now, now),
+            )
             membership_row = conn.execute(
                 "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
                 (invite.workspace_id, user_id),
             ).fetchone()
-            if membership_row is None:
-                conn.execute(
-                    """
-                    INSERT INTO workspace_memberships (
-                        workspace_id, user_id, role, invitation_state, invited_by_user_id, joined_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, 'accepted', ?, ?, ?, ?)
-                    """,
-                    (invite.workspace_id, user_id, invite.role, invite.invited_by_user_id, now, now, now),
-                )
-                membership_row = conn.execute(
-                    "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
-                    (invite.workspace_id, user_id),
-                ).fetchone()
             conn.execute(
                 "UPDATE workspace_invites SET invitation_state = 'accepted', accepted_user_id = ?, accepted_at = ?, updated_at = ? WHERE id = ?",
                 (user_id, now, now, invite.id),
