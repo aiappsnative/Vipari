@@ -287,6 +287,16 @@ class TestComplianceExportService:
         with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
             assert "09-artifact-content.json" in zf.namelist()
 
+            readme_text = zf.read("README.txt").decode()
+            assert "supports control review and audit follow-up" in readme_text
+            assert "not a standalone certification statement" in readme_text
+            assert "Historical backfill content is intentionally not included" in readme_text
+
+            control_mapping_text = zf.read("08-control-mapping.md").decode()
+            assert "It does not claim that a control is fully satisfied by this package alone" in control_mapping_text
+            assert "Use `manifest.json` to verify file integrity" in control_mapping_text
+            assert "07-drift/* adds design-drift evidence" in control_mapping_text
+
             baseline_audit_rows = _read_csv_from_zip(zf, "02-baseline-audit-log.csv")
             assert baseline_audit_rows == [
                 {

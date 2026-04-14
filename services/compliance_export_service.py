@@ -542,7 +542,7 @@ def _build_artifact_content_payload(
 def _build_readme(export_mode: ExportMode, include_artifact_content: bool) -> str:
     return f"""# PromptDrift Compliance Export
 
-This export contains evidence for SOC 2 and ISO 27001 readiness from PromptDrift monitoring.
+This package contains repository-change evidence assembled from PromptDrift's persisted monitoring records for the requested export window.
 
 Export Mode: {export_mode}
 Generated: {_ts_to_iso(time.time())}
@@ -564,12 +564,26 @@ Generated: {_ts_to_iso(time.time())}
 
 All timestamps are in ISO 8601 UTC format.
 
+## Evidence scope
+
+- The package is limited to evidence already persisted by PromptDrift for this repository and date window.
+- Baseline evidence reflects the currently approved baseline inventory and recorded approval trail.
+- PR evidence reflects audits, findings, and posture snapshots recorded during the requested window.
+- Raw artifact content is excluded by default and, when enabled, is limited to approved baseline content plus in-window PR scan content.
+
 ## Interpreting the Data
 
 - Baseline files describe the currently approved artifact inventory and approval trail.
 - Version and PR scan history show when PromptDrift evaluated repository changes during the requested window.
 - Findings and risk events are derived from persisted scan and posture records; no synthetic placeholder rows are added.
 - Drift files, when present, summarize recorded static-profile deltas for artifacts scanned during the requested window.
+
+## Integrity and limitations
+
+- `manifest.json` contains a SHA-256 hash for each exported file so downstream recipients can verify package integrity.
+- This package supports control review and audit follow-up; it is not a standalone certification statement.
+- If a category of evidence was not persisted during the requested period, the corresponding export file may contain headers only.
+- Historical backfill content is intentionally not included in raw-content export output to avoid expanding the package beyond the requested review surface.
 """
 
 
@@ -617,36 +631,49 @@ def _extract_risk_reason(snapshot: RepoPostureSnapshotRecord) -> str:
 
 
 def _build_control_mapping_md(export_mode: ExportMode) -> str:
-    return """# Control Mapping
+    drift_note = (
+        "\n- 07-drift/* adds design-drift evidence derived from persisted static profile comparisons for the requested window"
+        if export_mode == "compliance_plus_drift"
+        else ""
+    )
+    return f"""# Control Mapping
 
-This document maps the contents of this export to specific SOC 2 and ISO 27001 controls.
+This document explains how the exported records can support review of selected SOC 2 and ISO 27001 control areas.
+
+It is intended as an evidence guide for auditors or internal reviewers. It does not claim that a control is fully satisfied by this package alone.
 
 ## SOC 2 CC6.1 - Logical and Physical Access Controls
 
-- 01-baseline-registry.csv demonstrates approved baselines
-- 02-baseline-audit-log.csv shows approval decisions
+- 01-baseline-registry.csv identifies the approved repository control-surface baseline under review.
+- 02-baseline-audit-log.csv records who approved or changed baseline decisions and when those actions were taken.
 
 ## SOC 2 CC7.2 - System Operations
 
-- 04-pr-scan-history.csv proves monitoring occurred
-- 05-findings.csv shows issues were detected
+- 04-pr-scan-history.csv shows that repository changes were monitored and audited during the requested period.
+- 05-findings.csv records issues detected by persisted analysis runs, including severity and rationale.
 
 ## SOC 2 CC8.1 - Change Management
 
-- 03-version-history.csv tracks changes over time
-- 06-risk-events.csv highlights significant changes
+- 03-version-history.csv provides a chronological record of repository posture snapshots across the requested period.
+- 06-risk-events.csv highlights higher-risk change events that may warrant reviewer or auditor follow-up.{drift_note}
 
 ## ISO 27001 A.5.36 - Compliance with Legal and Contractual Requirements
 
-- All files demonstrate compliance monitoring
+- The combined package provides dated evidence that AI-related repository changes were reviewed against an established monitoring process.
 
 ## ISO 27001 A.8.9 - Information Access Restriction
 
-- Baseline approvals restrict access to approved versions
+- Baseline approval records can support review of which prompt or configuration versions were treated as the approved reference state.
 
 ## ISO 27001 A.8.32 - Information Classification
 
-- Findings and risk events classify information risks
+- Findings and risk-event outputs can support review of how potentially significant AI-related changes were identified and categorized.
+
+## Reviewer notes
+
+- Use `manifest.json` to verify file integrity before relying on the package.
+- Treat header-only files as evidence that no persisted records matched that file's scope for the requested window.
+- When raw artifact content is included separately, it should be interpreted as supporting evidence for the exact versions referenced elsewhere in the package, not as a full repository export.
 """
 
 
