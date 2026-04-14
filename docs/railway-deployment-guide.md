@@ -9,11 +9,13 @@ Railway project services:
   Docker source: `Dockerfile.api`
   runtime entrypoint: `run_api.py`
   role: customer control plane, dashboard, auth, setup, billing, workspace app
+  bind: honors Railway `PORT`
 - `webhook`:
   public
   Docker source: `Dockerfile.webhook`
   runtime entrypoint: `run_webhook.py`
   role: GitHub App webhook ingress only
+  bind: honors Railway `PORT`
 - `worker`:
   private
   Docker source: `Dockerfile.worker`
@@ -84,6 +86,16 @@ Configure Railway health checks:
 - webhook readiness: `/health/ready`
 
 Use readiness for final deploy health if Railway supports it for your service type.
+
+## Resource assumptions for MVP
+
+Initial low-cost launch assumptions:
+
+- `api`: 512 MB RAM, 1 shared vCPU equivalent
+- `webhook`: 256-512 MB RAM, 1 shared vCPU equivalent
+- `worker`: 512 MB RAM, 1 shared vCPU equivalent
+
+These are starting values only; increase them once real job volume and latency are observed.
 
 ## Launch-day checklist
 
