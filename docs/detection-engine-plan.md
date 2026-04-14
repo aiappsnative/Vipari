@@ -90,6 +90,7 @@ Implemented today:
 - bounded OSS onboarding improvements through narrower discovery candidate selection and direct GitHub contents API reads for artifact content
 - persisted snapshot content for onboarding baselines, historical versions, and PR versions so later explanations can cite exact changed lines
 - persisted PR lifecycle metadata across audit jobs and durable PR audit records so close, reopen, and merge state stay queryable over time
+- compliance export package generation from persisted baseline, audit, finding, posture, artifact-version, and static-profile records, with per-file manifest hashes for downstream integrity checks
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
@@ -110,6 +111,18 @@ Still intentionally incomplete:
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
 - production-grade persistence/deployment posture beyond the current SQLite-first split-service scaffolding
+
+### Compliance export architecture note
+
+The compliance export surface should be treated as a read-side evidence package over persisted records, not as a second analysis pipeline.
+
+Current architecture rules for that surface:
+
+- export files are assembled from durable onboarding, audit, artifact-version, static-profile, and posture records already stored by the engine
+- export generation must not invent synthetic evidence rows when the underlying persisted model is empty or incomplete
+- optional raw artifact content must stay intentionally narrow so the package answers the compliance question without devolving into a full historical content dump
+- current raw-content scope is limited to approved baseline content plus PR-side artifact versions recorded during the requested window; historical backfill content is intentionally excluded
+- exact-value fixture coverage is part of the architecture contract for this surface because archive shape alone is not sufficient proof of correctness
 
 ### Merged control-plane architecture extension (2026-04-09)
 

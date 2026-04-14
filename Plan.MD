@@ -70,6 +70,17 @@ This framing should shape roadmap decisions:
 	- sparse-history repos degrade honestly without fabricating continuity
 	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
 
+### `feature/compliance-export-package`
+- Purpose: completed branch for turning the compliance export from a structural archive into a persisted-evidence package with explicit scope boundaries
+- Final status on this branch:
+	- compliance export rows now use persisted baseline, audit, artifact-version, static-profile, and posture data instead of placeholder blanks where source data already exists
+	- risk events and version-history rows now read the stored posture risk level consistently
+	- drift export files now emit real artifact drift history and leaderboard rows from persisted PR-side static profiles
+	- optional raw artifact content export is intentionally limited to approved baseline content plus in-range PR scan versions, excluding historical backfill noise
+	- exact-value regression coverage now validates export contents rather than only ZIP shape and file presence
+- Exit note:
+	- this slice is directionally complete for the current feature goal; remaining work should be separate product decisions such as broader control mapping, auditor-facing copy polish, or future export formats rather than more placeholder cleanup on this branch
+
 ### `feature/driftguard-base44-stripe-handoff-v1`
 - Purpose: completed integration branch for issue `#25`, now merged to `main`
 - Final status at merge:

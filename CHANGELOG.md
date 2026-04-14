@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-04-14 — Compliance export package hardening on feature branch
+
+### Added
+- exact-value regression coverage for compliance exports, including findings rows, risk events, drift summaries, and artifact-content inclusion or exclusion behavior
+- optional `09-artifact-content.json` export output for approved baseline content plus in-range PR scan artifact content when explicitly requested
+
+### Changed
+- compliance export files now resolve artifact paths, artifact types, drift rows, and posture summary metrics from persisted baseline, audit, artifact-version, and static-profile records instead of placeholder values
+- version-history and risk-event exports now use the stored posture risk level consistently, and risk events derive a concrete primary artifact plus readable reason text from the persisted snapshot payload
+- compliance export documentation now describes the intentionally limited raw-content scope so exports stay useful without becoming noisy historical dumps
+
+### Verified
+- focused compliance export regression slice passed locally (`4 passed`)
+
+### Product impact
+- exported compliance evidence is now materially closer to what operators and auditors expect: persisted facts, deterministic package contents, and a clear optional raw-content boundary
+
 ## 2026-04-12 — Live default-branch tracking and baseline approval workflow merged to main
 
 ### Added

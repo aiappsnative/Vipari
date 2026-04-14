@@ -112,6 +112,7 @@ The dashboard should now be read as two linked product surfaces:
 - persists historical artifact versions and static profile lineage for backfilled snapshots
 - exposes baseline provenance in dashboard and history read models so fallback vs approved authority is visible outside the PR comment
 - stores baseline, historical, and PR snapshot content so dashboard explanations can attach code-level evidence to posture drift
+- builds compliance export packages from persisted baseline, audit, posture, and drift records, with per-file manifest hashes and optional raw artifact content limited to approved baselines plus in-range PR scan versions
 - exposes JSON query APIs for repository listings and unified dashboard payloads
 - exposes an overview dashboard API at `GET /api/dashboard/overview`
 - exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`
@@ -129,6 +130,19 @@ The dashboard should now be read as two linked product surfaces:
 - **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
+
+## Compliance export package
+
+DriftGuard now supports a compliance export package built from persisted repository evidence rather than ad hoc rendering-time placeholders.
+
+Current export behavior:
+
+- core compliance files are generated from approved baseline records, baseline audit history, persisted PR audits, findings, and repo posture snapshots within the requested time window
+- drift-mode files are generated from persisted static artifact profiles and artifact versions recorded during PR audits in that same window
+- `manifest.json` includes a SHA-256 hash per exported file so package integrity can be checked downstream
+- optional raw content export is intentionally narrow: when enabled, `09-artifact-content.json` includes approved baseline content and in-window PR scan artifact content, but not historical backfill content
+
+This scope is deliberate. The export is meant to answer what baseline was approved, what changed in the requested period, and what evidence supported that conclusion, without becoming a noisy historical archive dump.
 
 ## Static drift profile model
 
