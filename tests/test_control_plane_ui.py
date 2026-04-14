@@ -667,6 +667,11 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'href="/app/repos"' in repo_dashboard_html
 
     dashboard_css = (Path(__file__).resolve().parent.parent / "static" / "dashboard.css").read_text(encoding="utf-8")
+    assert 'body.dashboard-index-page[data-theme="light"]' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .dashboard-card' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .sidebar' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .journey-arrow' in dashboard_css
+    assert '.dashboard-index-page[data-theme="light"] .journey-point-baseline .journey-pill' in dashboard_css
     assert 'body.repo-audit-page[data-theme="light"]' in dashboard_css
     assert '.repo-audit-page[data-theme="light"] .repo-audit-hero' in dashboard_css
 

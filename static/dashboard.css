@@ -2299,6 +2299,11 @@ body.dashboard-index-page {
     color: #eef1f4;
 }
 
+body.dashboard-index-page[data-theme="light"] {
+    --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.16), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.14), transparent 26%), linear-gradient(180deg, #eef1ea 0%, #f6f0e7 100%);
+    color: var(--color-text);
+}
+
 .dashboard-index-page .app-shell {
     grid-template-columns: 192px minmax(0, 1fr);
     min-height: 100vh;
@@ -2318,6 +2323,12 @@ body.dashboard-index-page {
     background: linear-gradient(180deg, rgba(25, 26, 31, 0.88), rgba(28, 29, 34, 0.8));
     box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 24px 50px rgba(0, 0, 0, 0.32);
     overflow: hidden;
+}
+
+.dashboard-index-page[data-theme="light"] .sidebar {
+    border-color: rgba(112, 98, 84, 0.18);
+    background: linear-gradient(180deg, rgba(255, 250, 244, 0.96), rgba(244, 236, 225, 0.92));
+    box-shadow: inset 0 0 0 1px rgba(112, 98, 84, 0.04), 0 24px 50px rgba(91, 76, 59, 0.14);
 }
 
 .dashboard-index-page .sidebar-logo {
@@ -2340,6 +2351,11 @@ body.dashboard-index-page {
     font-size: 30px;
     font-weight: 800;
     letter-spacing: -0.08em;
+}
+
+.dashboard-index-page[data-theme="light"] .sidebar-logo-mark {
+    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
+    color: var(--color-primary);
 }
 
 .dashboard-index-page .sidebar-panel {
@@ -2370,6 +2386,12 @@ body.dashboard-index-page {
     font-weight: 800;
 }
 
+.dashboard-index-page[data-theme="light"] .sidebar-profile-link {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(112, 98, 84, 0.06);
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .dashboard-index-page .sidebar-nav-item {
     width: auto;
     height: auto;
@@ -2385,11 +2407,22 @@ body.dashboard-index-page {
     font-weight: 600;
 }
 
+.dashboard-index-page[data-theme="light"] .sidebar-nav-item {
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .dashboard-index-page .sidebar-nav-item:hover,
 .dashboard-index-page .sidebar-nav-item-active {
     background: linear-gradient(90deg, rgba(86, 241, 230, 0.10), rgba(86, 241, 230, 0.02));
     border-left-color: #45ddd2;
     color: #f3ffff;
+}
+
+.dashboard-index-page[data-theme="light"] .sidebar-nav-item:hover,
+.dashboard-index-page[data-theme="light"] .sidebar-nav-item-active {
+    background: linear-gradient(90deg, rgba(59, 125, 134, 0.12), rgba(59, 125, 134, 0.03));
+    border-left-color: var(--color-primary);
+    color: var(--color-text);
 }
 
 .dashboard-index-page .sidebar-nav-item::after {
@@ -2401,10 +2434,22 @@ body.dashboard-index-page {
     color: rgba(239, 242, 245, 0.82);
 }
 
+.dashboard-index-page[data-theme="light"] .sidebar-nav-caret,
+.dashboard-index-page[data-theme="light"] .sidebar-subitem,
+.dashboard-index-page[data-theme="light"] .sidebar-caret {
+    color: rgba(47, 41, 37, 0.84);
+}
+
 .dashboard-index-page .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
 .dashboard-index-page .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
 .dashboard-index-page .sidebar-subitem:hover {
     color: #f3ffff;
+}
+
+.dashboard-index-page[data-theme="light"] .sidebar-nav-item-toggle:hover .sidebar-nav-caret,
+.dashboard-index-page[data-theme="light"] .sidebar-nav-item-toggle[aria-expanded="true"] .sidebar-nav-caret,
+.dashboard-index-page[data-theme="light"] .sidebar-subitem:hover {
+    color: var(--color-text);
 }
 
 .dashboard-index-page .sidebar-nav-icon {
@@ -2453,6 +2498,13 @@ body.dashboard-index-page {
     box-shadow: 0 26px 60px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+.dashboard-index-page[data-theme="light"] .dashboard-card,
+.dashboard-index-page[data-theme="light"] .dashboard-mini-card {
+    border-color: rgba(112, 98, 84, 0.16);
+    background: linear-gradient(180deg, rgba(255, 252, 247, 0.95), rgba(247, 241, 233, 0.94));
+    box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
 .dashboard-index-page .urgent-card,
 .dashboard-index-page .journey-card,
 .dashboard-index-page .radar-card {
@@ -2491,6 +2543,16 @@ body.dashboard-index-page {
     letter-spacing: -0.03em;
 }
 
+.dashboard-index-page[data-theme="light"] .card-heading h1,
+.dashboard-index-page[data-theme="light"] .card-heading h2,
+.dashboard-index-page[data-theme="light"] .coverage-header-row h3,
+.dashboard-index-page[data-theme="light"] .repo-atlas-name,
+.dashboard-index-page[data-theme="light"] .journey-point-title,
+.dashboard-index-page[data-theme="light"] .coverage-bar-meta,
+.dashboard-index-page[data-theme="light"] .coverage-bar-meta strong {
+    color: var(--color-text);
+}
+
 .dashboard-index-page .urgent-list {
     display: grid;
     gap: 10px;
@@ -2518,6 +2580,13 @@ body.dashboard-index-page {
     transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
 
+.dashboard-index-page[data-theme="light"] .repo-atlas-card-button {
+    border-color: rgba(112, 98, 84, 0.14);
+    background:
+        linear-gradient(180deg, rgba(112, 98, 84, 0.04), rgba(255, 255, 255, 0.48)),
+        radial-gradient(circle at top right, rgba(59, 125, 134, 0.12), transparent 38%);
+}
+
 .dashboard-index-page .repo-atlas-card-button:hover,
 .dashboard-index-page .repo-atlas-card-button:focus-visible,
 .dashboard-index-page .repo-atlas-card-button.active {
@@ -2527,6 +2596,16 @@ body.dashboard-index-page {
     background:
         linear-gradient(180deg, rgba(86, 239, 227, 0.12), rgba(255, 255, 255, 0.03)),
         radial-gradient(circle at top right, rgba(214, 162, 78, 0.18), transparent 42%);
+}
+
+.dashboard-index-page[data-theme="light"] .repo-atlas-card-button:hover,
+.dashboard-index-page[data-theme="light"] .repo-atlas-card-button:focus-visible,
+.dashboard-index-page[data-theme="light"] .repo-atlas-card-button.active {
+    border-color: var(--color-primary-outline);
+    box-shadow: 0 10px 26px rgba(91, 76, 59, 0.12);
+    background:
+        linear-gradient(180deg, rgba(59, 125, 134, 0.12), rgba(255, 255, 255, 0.32)),
+        radial-gradient(circle at top right, rgba(191, 133, 87, 0.16), transparent 42%);
 }
 
 .dashboard-index-page .repo-atlas-topline,
@@ -2550,6 +2629,14 @@ body.dashboard-index-page {
     text-transform: uppercase;
 }
 
+.dashboard-index-page[data-theme="light"] .repo-atlas-scope,
+.dashboard-index-page[data-theme="light"] .repo-atlas-baseline,
+.dashboard-index-page[data-theme="light"] .repo-atlas-metrics,
+.dashboard-index-page[data-theme="light"] .radar-repo-title,
+.dashboard-index-page[data-theme="light"] .journey-repo-name {
+    color: var(--color-text-faint);
+}
+
 .dashboard-index-page .repo-atlas-status {
     display: inline-flex;
     align-items: center;
@@ -2564,14 +2651,29 @@ body.dashboard-index-page {
     color: #ffd0ca;
 }
 
+.dashboard-index-page[data-theme="light"] .repo-atlas-status-high {
+    background: rgba(181, 95, 100, 0.14);
+    color: #8f4046;
+}
+
 .dashboard-index-page .repo-atlas-status-medium {
     background: rgba(255, 173, 86, 0.18);
     color: #ffe0b8;
 }
 
+.dashboard-index-page[data-theme="light"] .repo-atlas-status-medium {
+    background: rgba(191, 133, 87, 0.16);
+    color: #8a5a2b;
+}
+
 .dashboard-index-page .repo-atlas-status-steady {
     background: rgba(86, 239, 227, 0.16);
     color: #bff8f1;
+}
+
+.dashboard-index-page[data-theme="light"] .repo-atlas-status-steady {
+    background: rgba(59, 125, 134, 0.14);
+    color: var(--color-primary);
 }
 
 .dashboard-index-page .repo-atlas-name {
@@ -2592,8 +2694,24 @@ body.dashboard-index-page {
     overflow: hidden;
 }
 
+.dashboard-index-page[data-theme="light"] .repo-atlas-summary,
+.dashboard-index-page[data-theme="light"] .journey-note,
+.dashboard-index-page[data-theme="light"] .coverage-summary,
+.dashboard-index-page[data-theme="light"] .radar-axis-caption,
+.dashboard-index-page[data-theme="light"] .urgent-subline,
+.dashboard-index-page[data-theme="light"] .drift-ring-label {
+    color: var(--color-text-muted);
+}
+
 .dashboard-index-page .repo-atlas-open {
     color: #60f0e5;
+}
+
+.dashboard-index-page[data-theme="light"] .repo-atlas-open,
+.dashboard-index-page[data-theme="light"] .journey-link,
+.dashboard-index-page[data-theme="light"] .journey-point-action,
+.dashboard-index-page[data-theme="light"] .drift-ring-value {
+    color: var(--color-primary);
 }
 
 .dashboard-index-page .repo-atlas-footer {
@@ -2615,6 +2733,10 @@ body.dashboard-index-page {
     cursor: pointer;
 }
 
+.dashboard-index-page[data-theme="light"] .urgent-item {
+    border-bottom-color: rgba(112, 98, 84, 0.10);
+}
+
 .dashboard-index-page .urgent-item:last-child {
     border-bottom: 0;
     padding-bottom: 0;
@@ -2622,6 +2744,11 @@ body.dashboard-index-page {
 
 .dashboard-index-page .urgent-item.active .urgent-headline {
     color: #ffffff;
+}
+
+.dashboard-index-page[data-theme="light"] .urgent-item.active .urgent-headline,
+.dashboard-index-page[data-theme="light"] .urgent-headline {
+    color: var(--color-text);
 }
 
 .dashboard-index-page .urgent-icon {
@@ -2672,6 +2799,12 @@ body.dashboard-index-page {
     font-weight: 700;
 }
 
+.dashboard-index-page[data-theme="light"] .urgent-severity {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(112, 98, 84, 0.06);
+    color: var(--color-text);
+}
+
 .dashboard-index-page .urgent-severity.severity-high {
     background: rgba(255, 119, 108, 0.16);
 }
@@ -2698,6 +2831,10 @@ body.dashboard-index-page {
     background: linear-gradient(90deg, rgba(82, 224, 213, 0.66), rgba(82, 224, 213, 0.18));
 }
 
+.dashboard-index-page[data-theme="light"] .journey-line {
+    background: linear-gradient(90deg, rgba(59, 125, 134, 0.52), rgba(59, 125, 134, 0.14));
+}
+
 .dashboard-index-page .journey-points {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2719,6 +2856,12 @@ body.dashboard-index-page {
     background: rgba(255, 255, 255, 0.04);
     border-color: rgba(255, 255, 255, 0.08);
     transform: translateY(-1px);
+}
+
+.dashboard-index-page[data-theme="light"] .journey-point:hover,
+.dashboard-index-page[data-theme="light"] .journey-point:focus-within {
+    background: rgba(112, 98, 84, 0.04);
+    border-color: rgba(112, 98, 84, 0.10);
 }
 
 .dashboard-index-page .journey-dot-wrap {
@@ -2743,6 +2886,10 @@ body.dashboard-index-page {
     line-height: 1;
 }
 
+.dashboard-index-page[data-theme="light"] .journey-arrow {
+    color: rgba(59, 125, 134, 0.72);
+}
+
 .dashboard-index-page .journey-pill {
     display: inline-flex;
     align-self: start;
@@ -2760,6 +2907,12 @@ body.dashboard-index-page {
     white-space: nowrap;
 }
 
+.dashboard-index-page[data-theme="light"] .journey-pill {
+    border-color: rgba(112, 98, 84, 0.12);
+    background: rgba(112, 98, 84, 0.06);
+    color: var(--color-text-muted);
+}
+
 .dashboard-index-page .journey-point-title {
     color: #f1f5f8;
     font-size: 13px;
@@ -2770,6 +2923,10 @@ body.dashboard-index-page {
     color: rgba(195, 202, 209, 0.58);
     font-size: 11px;
     line-height: 1.45;
+}
+
+.dashboard-index-page[data-theme="light"] .journey-point-caption {
+    color: var(--color-text-muted);
 }
 
 .dashboard-index-page .journey-point-action {
@@ -2788,6 +2945,11 @@ body.dashboard-index-page {
     transition: opacity var(--transition), transform var(--transition), background var(--transition);
 }
 
+.dashboard-index-page[data-theme="light"] .journey-point-action {
+    background: rgba(59, 125, 134, 0.12);
+    border-color: rgba(59, 125, 134, 0.18);
+}
+
 .dashboard-index-page .journey-point:hover .journey-point-action,
 .dashboard-index-page .journey-point:focus-within .journey-point-action {
     opacity: 1;
@@ -2797,6 +2959,11 @@ body.dashboard-index-page {
 
 .dashboard-index-page .journey-point-action:hover {
     background: rgba(96, 240, 229, 0.18);
+}
+
+.dashboard-index-page[data-theme="light"] .journey-point-action:hover,
+.dashboard-index-page[data-theme="light"] .journey-link:hover {
+    background: rgba(59, 125, 134, 0.18);
 }
 
 .dashboard-index-page .journey-foot {
@@ -2867,6 +3034,12 @@ body.dashboard-index-page {
     color: rgba(248, 224, 175, 0.9);
 }
 
+.dashboard-index-page[data-theme="light"] .journey-point-baseline .journey-pill {
+    border-color: rgba(191, 133, 87, 0.22);
+    background: rgba(191, 133, 87, 0.12);
+    color: #7a531f;
+}
+
 .dashboard-index-page .journey-point-current .journey-dot {
     background: #56efe3;
 }
@@ -2889,6 +3062,10 @@ body.dashboard-index-page {
     text-decoration: none;
     font-size: 13px;
     font-weight: 700;
+}
+
+.dashboard-index-page[data-theme="light"] .journey-link {
+    background: rgba(59, 125, 134, 0.12);
 }
 
 .dashboard-index-page .radar-heading {
@@ -2916,6 +3093,10 @@ body.dashboard-index-page {
     color: rgba(195, 201, 207, 0.52);
     font-size: 12px;
     line-height: 1.55;
+}
+
+.dashboard-index-page[data-theme="light"] .radar-axis-caption {
+    border-bottom-color: rgba(112, 98, 84, 0.10);
 }
 
 .dashboard-index-page .coverage-section {
@@ -2966,6 +3147,10 @@ body.dashboard-index-page {
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.08);
     overflow: hidden;
+}
+
+.dashboard-index-page[data-theme="light"] .coverage-track {
+    background: rgba(112, 98, 84, 0.10);
 }
 
 .dashboard-index-page .coverage-fill {
