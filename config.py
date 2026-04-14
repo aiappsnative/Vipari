@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from services.persistence import is_postgres_locator, is_sqlite_locator, sqlite_path_from_locator
+
 
 DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
 PROJECT_ENV_PATH = Path(__file__).resolve().parent / ".env"
@@ -135,18 +137,18 @@ class Settings(BaseSettings):
 
     @property
     def uses_sqlite(self) -> bool:
-        return self.database_url.startswith("sqlite:///")
+        return is_sqlite_locator(self.database_url)
 
     @property
     def resolved_db_path(self) -> str:
+        if is_postgres_locator(self.database_url):
+            return self.database_url
         if "audit_db_path" in self.model_fields_set and self.audit_db_path:
             return self.audit_db_path
-        if self.database_url.startswith("sqlite:///"):
-            sqlite_path = self.database_url.removeprefix("sqlite:///")
+        if is_sqlite_locator(self.database_url):
+            sqlite_path = sqlite_path_from_locator(self.database_url)
             if sqlite_path:
                 return sqlite_path
-        if self.database_url and not self.database_url.startswith("sqlite:///"):
-            return self.audit_db_path
         return self.audit_db_path
 
 

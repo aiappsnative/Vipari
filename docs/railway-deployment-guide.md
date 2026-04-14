@@ -24,7 +24,7 @@ Railway project services:
 - `postgres`:
   private
   Railway managed Postgres
-  role: intended durable production store
+  role: durable production store
 - `redis`:
   private
   Railway managed Redis
@@ -107,6 +107,7 @@ These are starting values only; increase them once real job volume and latency a
 - set `SERVICE_ROLE` correctly on each service
 - set all required production secrets as env vars
 - confirm `worker`, `postgres`, and `redis` are not public
+- run `python scripts/db_migrate.py` against the production `DATABASE_URL` before first traffic
 - run `python scripts/railway_preflight.py --service-role <role> --app-env production` locally against the production env set before deploy
 - confirm GitHub OAuth callback URL matches the API domain exactly
 - confirm GitHub App webhook URL matches the webhook domain exactly
@@ -117,6 +118,13 @@ These are starting values only; increase them once real job volume and latency a
 
 - redeploy the last known-good image/commit
 - do not keep a partially healthy deploy live if `/health/ready` fails
+
+### Failed migration
+
+- stop the rollout before exposing traffic
+- inspect the output from `python scripts/db_migrate.py`
+- keep the previous application image in place until the schema step succeeds
+- see [docs/database-migration-runbook.md](docs/database-migration-runbook.md) for the migration sequence
 
 ### Broken login
 
@@ -132,7 +140,8 @@ These are starting values only; increase them once real job volume and latency a
 - check GitHub App webhook URL
 - check `QUEUE_BACKEND=redis` and `REDIS_URL`
 
-### Persistence blocker
+### Persistence checks
 
 - if production startup fails due to SQLite detection, do not bypass the guardrail casually
-- the correct response is to finish the Postgres persistence migration rather than force a SQLite production launch
+- production should point `DATABASE_URL` at Railway Postgres and let readiness confirm connectivity before cutting traffic
+- SQLite remains for local development only; it is not the production fallback path

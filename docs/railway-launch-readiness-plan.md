@@ -6,7 +6,7 @@ Issue: `#36 [Launch Blocker] Production-hardening and Railway deployment readine
 
 ## Executive summary
 
-This issue is not a pure deployment/configuration task. The current codebase is still **SQLite-native** at the persistence layer and **SQLite/SQS-native** at the queue layer. That means true production readiness on Railway requires two kinds of work:
+This issue is not a pure deployment/configuration task. At the time this plan was written, the codebase was still **SQLite-native** at the persistence layer and **SQLite/SQS-native** at the queue layer. The implementation on this branch has since added Redis queue support and a PostgreSQL-capable persistence adapter, but the engineering principle remains the same: production readiness must be earned with explicit contracts rather than deployment theater.
 
 1. immediate launch-hardening work that can and should land now
 2. deeper persistence work required before the issue can honestly be called fully complete
@@ -238,14 +238,15 @@ Acceptance criteria:
 
 - an operator can stand up the Railway project without guessing
 - launch-day setup is checklist-driven rather than tribal knowledge
+- the database bootstrap path is explicit, scriptable, and recorded in a runbook
 
-### Phase 6. Persistence blocker treatment
+### Phase 6. Persistence completion
 
 Changes:
 
-- explicitly document that the current code remains SQLite-native
-- if Track B is not completed in this branch, production mode must fail closed on SQLite rather than pretending support
-- capture the persistence migration path as the remaining blocking work
+- implement a PostgreSQL-backed persistence path without regressing the SQLite developer workflow
+- keep production mode fail-closed on SQLite so Railway cannot silently launch on file-backed persistence
+- verify that runtime readiness checks actual database connectivity rather than a placeholder capability flag
 
 Risks:
 

@@ -55,12 +55,15 @@ async def build_runtime_readiness(settings: Settings, *, queue_backend=None) -> 
         checks.append({"name": "config", "status": "failed", "detail": str(exc)})
 
     try:
-        if settings.uses_sqlite:
-            with connect_sqlite(settings.resolved_db_path) as conn:
-                conn.execute("SELECT 1").fetchone()
-            checks.append({"name": "persistence", "status": "ok", "detail": "SQLite connectivity verified."})
-        else:
-            checks.append({"name": "persistence", "status": "failed", "detail": "PostgreSQL persistence is not implemented yet in the runtime data layer."})
+        with connect_sqlite(settings.resolved_db_path) as conn:
+            conn.execute("SELECT 1").fetchone()
+        checks.append(
+            {
+                "name": "persistence",
+                "status": "ok",
+                "detail": "SQLite connectivity verified." if settings.uses_sqlite else "PostgreSQL connectivity verified.",
+            }
+        )
     except Exception as exc:
         checks.append({"name": "persistence", "status": "failed", "detail": str(exc)})
 

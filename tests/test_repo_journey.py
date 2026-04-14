@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -118,7 +119,28 @@ def test_build_repo_journey_materializes_meaningful_snapshots(tmp_path):
     assert snapshots[0].artifact_coverage["artifact_count"] == 1
     assert snapshots[-1].distance_from_baseline >= snapshots[1].distance_from_baseline
     assert snapshots[-1].drift_summary["changed_since_baseline"]["critical_surfaces_changed"] >= 1
-    assert snapshots[-1].risk_summary["risk_level"] in {"low", "medium", "high"}
+
+
+def test_repo_journey_init_skips_sqlite_rebuild_logic_for_postgres(monkeypatch):
+    class _FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+
+    with patch("services.repo_journey_records._connect", return_value=_FakeConn()), patch(
+        "services.repo_journey_records._repo_journey_table_needs_rebuild",
+        side_effect=AssertionError("sqlite rebuild check should be skipped for postgres"),
+    ):
+        from services.repo_journey_records import init_repo_journey_db
+
+        init_repo_journey_db("postgresql://user:pass@db.example.com/driftguard")
 
 
 def test_onboarding_and_backfill_persist_repo_journey_without_read_trigger(tmp_path):

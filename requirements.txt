@@ -11,6 +11,7 @@ prometheus-fastapi-instrumentator==7.1.0
 pydantic-settings==2.13.1
 redis==7.4.0
 python-multipart==0.0.24
+psycopg[binary]==3.2.9
 
 # test dependencies
 pytest==9.0.2

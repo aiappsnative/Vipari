@@ -245,16 +245,19 @@ Important deployment rules for this split surface:
 - the public Railway `api` service should now run the real customer control-plane app from `main.py`, with `SERVICE_ROLE=api` so webhook ingress is not active there
 - the legacy split operator API in `services/api_service.py` still exists for local/operator scenarios, but it is not the preferred public launch surface
 - Prometheus metrics are disabled by default and only exposed when `ENABLE_METRICS=true`
-- SQLite remains the default local/shared-volume store for local development only
+- SQLite remains the default local/shared-volume store for local development only, while production can now use a PostgreSQL `DATABASE_URL`
 - production hardening now fails closed on unsafe settings such as SQLite persistence, insecure cookies, non-HTTPS base URLs, file-path private keys, or non-Redis queue settings for webhook/worker services
 
 ### Railway launch note
 
-The repository now includes production guardrails and Railway-focused documentation, but there is still an important architectural truth:
+The repository now includes production guardrails, a PostgreSQL-capable persistence adapter, Redis-backed queue support, and Railway-focused documentation.
 
-- the persistence layer is still SQLite-native in code today
-- production mode will now refuse to start on SQLite rather than pretending that Railway file-backed persistence is good enough
-- the remaining true launch blocker is the deeper PostgreSQL persistence migration
+Current production stance:
+
+- use Railway Postgres via `DATABASE_URL=postgresql://...`
+- use Redis for webhook and worker queueing in production
+- keep SQLite for local development and local shared-volume workflows only
+- keep the preflight and readiness checks enabled so production rejects unsafe startup contracts instead of silently degrading
 
 Use the detailed plan in [docs/railway-launch-readiness-plan.md](docs/railway-launch-readiness-plan.md) and the operator guide in [docs/railway-deployment-guide.md](docs/railway-deployment-guide.md) before attempting a real launch
 
@@ -265,6 +268,14 @@ python scripts/railway_preflight.py --service-role api --app-env production
 python scripts/railway_preflight.py --service-role webhook --app-env production
 python scripts/railway_preflight.py --service-role worker --app-env production
 ```
+
+Run the database migration/bootstrap step before cutting traffic to a fresh or updated production database:
+
+```bash
+python scripts/db_migrate.py
+```
+
+The migration workflow and failure handling are documented in [docs/database-migration-runbook.md](docs/database-migration-runbook.md).
 
 You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
 

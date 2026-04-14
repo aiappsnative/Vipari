@@ -463,6 +463,16 @@ def test_explicit_audit_db_path_wins_for_shared_sqlite_volume(monkeypatch, tmp_p
     assert settings.resolved_db_path == shared_path
 
 
+def test_postgres_database_url_becomes_runtime_locator(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.resolved_db_path == "postgresql://user:pass@db.example.com/driftguard"
+
+
 def test_api_write_routes_require_admin_token(tmp_path, monkeypatch):
     db_path = str(tmp_path / "secured-api.db")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)

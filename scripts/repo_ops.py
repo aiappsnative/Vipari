@@ -23,16 +23,15 @@ from services.oss_eval_harness import (
     resolve_oss_eval_target,
     run_oss_evaluation,
 )
-from services.persistence import get_persistence_status
+from services.persistence import get_persistence_status, resolve_db_path
+from services.schema_migrations import list_applied_migrations, migrate_database
 
 
 load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _resolve_db_path(value: str | None) -> str:
-    if value:
-        return value
-    return os.getenv("AUDIT_DB_PATH", str(PROJECT_ROOT / "promptdrift.db"))
+    return resolve_db_path(value)
 
 
 def _require_installation_token(installation_id: int) -> str:
@@ -71,28 +70,30 @@ def _detect_git_branch() -> str:
 
 def cmd_list_repos(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
+    migrate_database(db_path)
     _write_json({"repos": [asdict(item) for item in list_repo_dashboard_index(db_path)]})
     return 0
 
 
 def cmd_persistence_status(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
-    _write_json(asdict(get_persistence_status(db_path)))
+    migrate_database(db_path)
+    payload = asdict(get_persistence_status(db_path))
+    payload["applied_migrations"] = [asdict(item) for item in list_applied_migrations(db_path)]
+    _write_json(payload)
     return 0
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
+    migrate_database(db_path)
     _write_json(asdict(build_repo_dashboard_view(db_path, args.repo_full)))
     return 0
 
 
 def cmd_onboard(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
+    migrate_database(db_path)
     token = _require_installation_token(args.installation_id)
 
     onboarding_result = onboard_repository(
@@ -133,7 +134,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 def cmd_backfill(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
+    migrate_database(db_path)
     token = _require_installation_token(args.installation_id)
     execution_results = execute_repository_history_backfill(
         db_path,
@@ -159,7 +160,7 @@ def cmd_list_eval_candidates(_: argparse.Namespace) -> int:
 
 def cmd_eval_run(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
-    init_db(db_path)
+    migrate_database(db_path)
     target = resolve_oss_eval_target(args.target)
     token = _require_installation_token(args.installation_id)
     output_root = args.output_dir or _default_eval_output_root()
@@ -208,6 +209,12 @@ def cmd_eval_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_migrate_db(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args.db)
+    _write_json(asdict(migrate_database(db_path)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DriftGuard repo operator CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -219,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     persistence_parser = subparsers.add_parser("persistence-status", help="Print the current persistence backend and logical table layout")
     persistence_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     persistence_parser.set_defaults(func=cmd_persistence_status)
+
+    migrate_parser = subparsers.add_parser("migrate-db", help="Apply schema migrations/bootstrap for the configured database")
+    migrate_parser.add_argument("--db", help="Path or DATABASE_URL override for the target database")
+    migrate_parser.set_defaults(func=cmd_migrate_db)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Print the unified dashboard payload for a repo")
     dashboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")

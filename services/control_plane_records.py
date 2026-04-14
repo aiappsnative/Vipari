@@ -5,7 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from .persistence import connect_sqlite
+from .persistence import connect_sqlite, is_postgres_locator, resolve_db_path
 
 
 CONTROL_PLANE_TABLES = (
@@ -679,6 +679,7 @@ def _rebuild_repo_allocations_table(conn: sqlite3.Connection) -> None:
 
 
 def init_control_plane_db(db_path: str) -> None:
+    uses_postgres = is_postgres_locator(resolve_db_path(db_path))
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -992,13 +993,13 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "repo_connections", "workspace_id", "INTEGER")
         _ensure_column(conn, "repo_connections", "status", "TEXT NOT NULL DEFAULT 'available'")
         _ensure_column(conn, "repo_connections", "last_synced_at", "REAL")
-        if _repo_connections_needs_rebuild(conn):
+        if not uses_postgres and _repo_connections_needs_rebuild(conn):
             _rebuild_repo_connections_table(conn)
         _ensure_column(conn, "repo_allocations", "baseline_mode", "TEXT NOT NULL DEFAULT 'default_branch'")
         _ensure_column(conn, "repo_allocations", "activated_by_user_id", "INTEGER")
         _ensure_column(conn, "repo_allocations", "activated_at", "REAL")
         _ensure_column(conn, "repo_allocations", "deactivated_at", "REAL")
-        if _repo_allocations_needs_rebuild(conn):
+        if not uses_postgres and _repo_allocations_needs_rebuild(conn):
             _rebuild_repo_allocations_table(conn)
         _ensure_column(conn, "webhook_event_receipts", "processed_at", "REAL")
         _ensure_column(conn, "webhook_event_receipts", "error_summary", "TEXT")

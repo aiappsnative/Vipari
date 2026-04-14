@@ -5,7 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from .persistence import connect_sqlite
+from .persistence import connect_sqlite, is_postgres_locator, resolve_db_path
 
 
 @dataclass(frozen=True)
@@ -43,8 +43,9 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def init_repo_journey_db(db_path: str) -> None:
+    uses_postgres = is_postgres_locator(resolve_db_path(db_path))
     with _connect(db_path) as conn:
-        if _repo_journey_table_needs_rebuild(conn):
+        if not uses_postgres and _repo_journey_table_needs_rebuild(conn):
             _rebuild_repo_journey_table(conn)
         conn.execute(
             """

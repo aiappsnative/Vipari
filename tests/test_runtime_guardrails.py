@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -52,7 +53,7 @@ def test_production_worker_requires_redis_queue(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_readiness_reports_postgres_runtime_blocker(monkeypatch):
+async def test_readiness_verifies_postgres_connectivity(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setenv("SERVICE_ROLE", "api")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
@@ -61,10 +62,12 @@ async def test_readiness_reports_postgres_runtime_blocker(monkeypatch):
     _reset_settings_cache()
 
     settings = get_settings()
-    readiness = await build_runtime_readiness(settings)
+    with patch("services.runtime_guardrails.connect_sqlite") as connect:
+        readiness = await build_runtime_readiness(settings)
 
-    assert readiness["status"] == "failed"
-    assert any(check["name"] == "persistence" and "not implemented" in check["detail"] for check in readiness["checks"])
+    assert readiness["status"] == "ok"
+    assert any(check["name"] == "persistence" and "PostgreSQL connectivity verified." in check["detail"] for check in readiness["checks"])
+    connect.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
 
 
 def test_worker_build_queue_backend_supports_redis(monkeypatch):
