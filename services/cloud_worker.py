@@ -18,7 +18,7 @@ from .cloud_common import fetch_diff_with_retry, is_transient_error, needs_audit
 from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
 from .observability import configure_logging
-from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue
+from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import validate_runtime_configuration
 from .token_cache import get_installation_token, set_installation_token
 from .webhook_deliveries import cleanup_webhook_deliveries
@@ -291,3 +291,4 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     finally:
         for worker in workers:
             worker.cancel()
+        await close_queue_backend(queue)

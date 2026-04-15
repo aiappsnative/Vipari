@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from config import get_settings
 from services.audit_jobs import init_db
 from services.schema_migrations import migrate_database
 
@@ -43,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
     os.environ.setdefault("API_ADMIN_TOKEN", "smoke-token")
 
+    get_settings.cache_clear()
     main_module = _load_main_module()
     db_path = main_module.AUDIT_DB_PATH
 

@@ -29,7 +29,7 @@ from services.control_plane_records import (
     upsert_github_installation,
 )
 from services.entitlements import derive_entitlement_payload
-from services.queue import LocalSQLiteQueue
+from services.queue import LocalSQLiteQueue, close_queue_backend
 from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
 from services.webhook_deliveries import claim_webhook_delivery, init_webhook_delivery_db
 from services.webhook_service import create_webhook_app
@@ -148,6 +148,47 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert second.status_code == 202
     assert len(queue.messages) == 1
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
+def test_webhook_lifespan_closes_queue_backend(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-close.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    _reset_settings_cache()
+
+    class ClosableQueue:
+        def __init__(self):
+            self.closed = False
+
+        async def enqueue(self, _message):
+            return "message-1"
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, _receipt_handle):
+            return None
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            self.closed = True
+
+    queue = ClosableQueue()
+    app = create_webhook_app(queue)
+
+    with TestClient(app):
+        pass
+
+    assert queue.closed is True
 
 
 def test_message_authorization_respects_workspace_pr_comments_setting(tmp_path, monkeypatch):
@@ -431,6 +472,25 @@ def test_token_cache_falls_back_to_in_process_cache(monkeypatch):
         assert await get_installation_token(321) == "cached-token"
 
     asyncio.run(exercise_cache())
+
+
+def test_close_queue_backend_ignores_none_and_closes_when_supported():
+    class ClosableQueue:
+        def __init__(self):
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    queue = ClosableQueue()
+
+    async def exercise_cleanup():
+        await close_queue_backend(None)
+        await close_queue_backend(queue)
+
+    asyncio.run(exercise_cleanup())
+
+    assert queue.closed is True
 
 
 def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch):

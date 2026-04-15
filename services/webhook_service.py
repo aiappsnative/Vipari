@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from config import get_settings
 from .cloud_common import build_webhook_envelope, verify_signature
 from .observability import configure_logging, instrument_fastapi
-from .queue import LocalSQLiteQueue, QueueBackend, RedisQueue, SQSQueue
+from .queue import LocalSQLiteQueue, QueueBackend, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .webhook_deliveries import (
     claim_webhook_delivery,
@@ -41,7 +41,10 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
             raise RuntimeError("GITHUB_WEBHOOK_SECRET must be configured for the webhook service.")
         init_webhook_delivery_db(db_path)
         cleanup_webhook_deliveries(db_path)
-        yield
+        try:
+            yield
+        finally:
+            await close_queue_backend(queue)
 
     app = FastAPI(lifespan=lifespan)
     instrument_fastapi(app)

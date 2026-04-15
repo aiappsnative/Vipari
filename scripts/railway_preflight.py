@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
-from services.queue import LocalSQLiteQueue, RedisQueue, SQSQueue
+from services.queue import LocalSQLiteQueue, RedisQueue, SQSQueue, close_queue_backend
 from services.runtime_guardrails import build_runtime_readiness
 
 
@@ -28,8 +28,7 @@ async def _run_readiness(settings):
     try:
         return await build_runtime_readiness(settings, queue_backend=queue_backend)
     finally:
-        if queue_backend is not None and hasattr(queue_backend, "aclose"):
-            await queue_backend.aclose()
+        await close_queue_backend(queue_backend)
 
 
 def main(argv: list[str] | None = None) -> int:

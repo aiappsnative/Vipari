@@ -37,6 +37,8 @@ class QueueBackend(Protocol):
 
     async def depth(self) -> int: ...
 
+    async def aclose(self) -> None: ...
+
 
 class LocalSQLiteQueue:
     def __init__(self, db_path: str, *, visibility_timeout_seconds: int = DEFAULT_VISIBILITY_TIMEOUT_SECONDS):
@@ -167,6 +169,9 @@ class LocalSQLiteQueue:
             row = conn.execute("SELECT COUNT(*) AS count FROM queue_messages WHERE in_dlq = 0").fetchone()
         return int(row["count"]) if row is not None else 0
 
+    async def aclose(self) -> None:
+        return None
+
 
 class SQSQueue:
     def __init__(self, queue_url: str, dlq_url: str):
@@ -226,6 +231,9 @@ class SQSQueue:
 
     async def depth(self) -> int:
         return 0
+
+    async def aclose(self) -> None:
+        return None
 
 
 class RedisQueue:
@@ -344,3 +352,10 @@ class RedisQueue:
 
     async def aclose(self) -> None:
         await self.client.aclose()
+
+
+async def close_queue_backend(queue: QueueBackend | None) -> None:
+    if queue is None:
+        return
+    if hasattr(queue, "aclose"):
+        await queue.aclose()
