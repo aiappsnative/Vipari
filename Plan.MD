@@ -361,6 +361,18 @@ Planned scope:
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
 - document a production-oriented path without overbuilding the local developer workflow or weakening the current fail-closed deployment defaults
 
+#### 6. `feature/railway-launch-hardening`
+
+Purpose:
+- turn the current cloud-oriented scaffolding into an operator-safe Railway deployment shape for launch preparation
+
+Planned scope:
+- align the public API service with the real customer control-plane app
+- add production startup validation, service-role contracts, and readiness-aware health checks
+- introduce Redis-backed queue support for worker/webhook production use
+- document Railway service topology, env matrix, launch checklist, and rollback guidance
+- explicitly fail closed on unsafe production persistence assumptions until the deeper Postgres migration lands
+
 ### Trial success criteria for the next version
 
 The next version should be judged by whether it can:

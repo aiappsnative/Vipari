@@ -5,7 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from .persistence import connect_sqlite
+from .persistence import connect_sqlite, is_postgres_locator, resolve_db_path
 
 
 @dataclass(frozen=True)
@@ -131,6 +131,7 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
 
 
 def init_export_job_db(db_path: str) -> None:
+    uses_postgres = is_postgres_locator(resolve_db_path(db_path))
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -159,10 +160,12 @@ def init_export_job_db(db_path: str) -> None:
             )
             """
         )
-        table_sql_row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'export_jobs'"
-        ).fetchone()
-        table_sql = table_sql_row[0] if table_sql_row else ""
+        table_sql = ""
+        if not uses_postgres:
+            table_sql_row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'export_jobs'"
+            ).fetchone()
+            table_sql = table_sql_row[0] if table_sql_row else ""
         columns = _table_columns(conn, "export_jobs")
         if "workspace_id" not in columns:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN workspace_id INTEGER")
@@ -174,7 +177,7 @@ def init_export_job_db(db_path: str) -> None:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN result_sha256 TEXT")
         if "result_blob" not in columns:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN result_blob BLOB")
-        if "UNIQUE(repo_full, from_ts, to_ts, export_mode, include_artifact_content)" in table_sql:
+        if not uses_postgres and "UNIQUE(repo_full, from_ts, to_ts, export_mode, include_artifact_content)" in table_sql:
             _rebuild_export_jobs_table(conn)
 
 

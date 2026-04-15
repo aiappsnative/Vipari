@@ -2663,7 +2663,6 @@ def test_repo_setup_slot_summary_counts_onboarded_repos_shown_on_page(tmp_path):
     main.AUDIT_DB_PATH = str(tmp_path / "repo-slot-summary.db")
     main.init_db(main.AUDIT_DB_PATH)
 
-    from services.auth_service import GithubUserRepository
     from services.control_plane_records import create_user_session, create_workspace, replace_repo_connections, upsert_entitlement, upsert_github_identity, upsert_github_installation
     from services.dashboard_views import RepoDashboardIndexEntry
 
@@ -2728,13 +2727,6 @@ def test_repo_setup_slot_summary_counts_onboarded_repos_shown_on_page(tmp_path):
     )
 
     with patch(
-        "main.list_github_user_repositories",
-        return_value=[
-            GithubUserRepository("1", "doria90/repo-one", "main", True, "https://github.com/doria90/repo-one"),
-            GithubUserRepository("2", "doria90/repo-two", "main", True, "https://github.com/doria90/repo-two"),
-            GithubUserRepository("3", "doria90/repo-three", "main", True, "https://github.com/doria90/repo-three"),
-        ],
-    ), patch(
         "main.list_repo_dashboard_index",
         return_value=[
             RepoDashboardIndexEntry("doria90/repo-one", "main", "baseline_approved", 5, time.time()),

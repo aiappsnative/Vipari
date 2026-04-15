@@ -30,6 +30,7 @@ from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .audit_jobs import init_db
+from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
 
 
@@ -84,6 +85,7 @@ def create_api_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        validate_runtime_configuration(settings)
         init_db(db_path)
         yield
 
@@ -93,7 +95,11 @@ def create_api_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok"}
+        return {"status": "ok", "service_role": settings.service_role}
+
+    @app.get("/health/ready")
+    async def ready():
+        return readiness_json_response(await build_runtime_readiness(settings))
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_index_page(request: Request):

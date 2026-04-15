@@ -36,7 +36,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path)
 
 
-def init_db(db_path: str) -> None:
+def bootstrap_application_schema(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -90,6 +90,12 @@ def init_db(db_path: str) -> None:
     init_control_plane_db(db_path)
     init_repo_journey_db(db_path)
     init_persistence_metadata(db_path)
+
+
+def init_db(db_path: str) -> None:
+    from .schema_migrations import migrate_database
+
+    migrate_database(db_path)
 
 
 def _row_to_job(row: sqlite3.Row) -> AuditJob:
