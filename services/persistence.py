@@ -69,6 +69,10 @@ _SQLITE_MASTER_PATTERN = re.compile(
 _PRAGMA_TABLE_INFO_PATTERN = re.compile(r"^\s*PRAGMA\s+table_info\(([^)]+)\)\s*$", re.IGNORECASE)
 _PRAGMA_FOREIGN_KEY_LIST_PATTERN = re.compile(r"^\s*PRAGMA\s+foreign_key_list\(([^)]+)\)\s*$", re.IGNORECASE)
 _LAST_INSERT_ROWID_QUERY = re.compile(r"last_insert_rowid\s*\(\s*\)", re.IGNORECASE)
+_INSERT_INTO_PATTERN = re.compile(
+    r'^\s*INSERT\s+INTO\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)',
+    re.IGNORECASE,
+)
 
 
 def is_postgres_locator(value: str | None) -> bool:
@@ -201,7 +205,7 @@ class PostgresConnection:
             params = (*params, self._last_insert_rowid)
 
         translated_sql = self._translate_sql(normalized_sql)
-        returning_insert_id = self._needs_insert_returning_id(translated_sql)
+        returning_insert_id = self._needs_insert_returning_id(normalized_sql)
         if returning_insert_id:
             translated_sql = translated_sql.rstrip().rstrip(";") + " RETURNING id"
 
@@ -217,7 +221,15 @@ class PostgresConnection:
                 self._last_insert_rowid = lastrowid
                 return DatabaseResult([], [], lastrowid=lastrowid)
 
-            return DatabaseResult(columns, rows)
+            lastrowid = None
+            if normalized_sql.upper().startswith("INSERT INTO") and rows and "id" in columns:
+                try:
+                    lastrowid = int(rows[0][columns.index("id")])
+                except (TypeError, ValueError):
+                    lastrowid = None
+                self._last_insert_rowid = lastrowid
+
+            return DatabaseResult(columns, rows, lastrowid=lastrowid)
 
     def executemany(self, sql: str, params_seq: Sequence[Sequence[Any]]) -> None:
         translated_sql = self._translate_sql(sql)
@@ -289,10 +301,37 @@ class PostgresConnection:
         translated = translated.replace("?", "%s")
         return translated
 
-    @staticmethod
-    def _needs_insert_returning_id(sql: str) -> bool:
+    def _needs_insert_returning_id(self, sql: str) -> bool:
         stripped = sql.lstrip().upper()
-        return stripped.startswith("INSERT INTO") and "RETURNING" not in stripped
+        if not stripped.startswith("INSERT INTO") or "RETURNING" in stripped:
+            return False
+
+        table_name = self._insert_target_table(sql)
+        if not table_name:
+            return False
+        return self._table_has_id_column(table_name)
+
+    def _table_has_id_column(self, table_name: str) -> bool:
+        sql = """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+              AND column_name = 'id'
+            LIMIT 1
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(sql, (table_name,))
+            rows = cursor.fetchall()
+        return bool(rows)
+
+    @staticmethod
+    def _insert_target_table(sql: str) -> str | None:
+        match = _INSERT_INTO_PATTERN.match(sql)
+        if not match:
+            return None
+        raw_table = match.group(1).split(".")[-1]
+        return _normalize_table_name(raw_table)
 
 
 @dataclass(frozen=True)

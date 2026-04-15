@@ -112,6 +112,8 @@ These are starting values only; increase them once real job volume and latency a
 - confirm GitHub OAuth callback URL matches the API domain exactly
 - confirm GitHub App webhook URL matches the webhook domain exactly
 
+The Railway preflight helper checks both the production configuration contract and live readiness for the selected role. For `webhook` and `worker`, that includes queue reachability in addition to database connectivity.
+
 ## Rollback notes
 
 ### Bad deploy

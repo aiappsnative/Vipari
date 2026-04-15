@@ -52,6 +52,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
 def test_postgres_connection_translates_last_insert_lookup():
     fake_connection = _FakePsycopgConnection(
         [
+            _FakeCursor(rows=[(1,)], description=[_FakeDescription("exists")]),
             _FakeCursor(rows=[(41,)], description=[_FakeDescription("id")]),
             _FakeCursor(rows=[(41, "Ada")], description=[_FakeDescription("id"), _FakeDescription("display_name")]),
         ]
@@ -63,14 +64,34 @@ def test_postgres_connection_translates_last_insert_lookup():
             lookup_result = conn.execute("SELECT * FROM users WHERE id = last_insert_rowid()")
 
     assert insert_result.lastrowid == 41
-    assert fake_connection.executed[0][0].endswith("RETURNING id")
-    assert fake_connection.executed[0][1] == ("Ada",)
-    assert fake_connection.executed[1][1] == (41,)
-    assert "%s" in fake_connection.executed[1][0]
+    assert fake_connection.executed[1][0].endswith("RETURNING id")
+    assert fake_connection.executed[1][1] == ("Ada",)
+    assert fake_connection.executed[2][1] == (41,)
+    assert "%s" in fake_connection.executed[2][0]
     rows = lookup_result.fetchall()
     assert len(rows) == 1
     assert rows[0]["id"] == 41
     assert rows[0]["display_name"] == "Ada"
+
+
+def test_postgres_connection_does_not_append_returning_id_for_tables_without_id():
+    fake_connection = _FakePsycopgConnection(
+        [
+            _FakeCursor(rows=[], description=[_FakeDescription("exists")]),
+            _FakeCursor(rows=[], description=None),
+        ]
+    )
+
+    with patch("services.persistence.psycopg", _FakePsycopgModule(fake_connection)):
+        with PostgresConnection("postgresql://user:pass@db.example.com/driftguard") as conn:
+            result = conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                ("0001", "bootstrap", 123.0),
+            )
+
+    assert result.lastrowid is None
+    assert fake_connection.executed[1][1] == ("0001", "bootstrap", 123.0)
+    assert "RETURNING id" not in fake_connection.executed[1][0]
 
 
 class _FakeDescription:

@@ -1,20 +1,42 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
-from services.runtime_guardrails import validate_runtime_configuration
+from services.queue import LocalSQLiteQueue, RedisQueue, SQSQueue
+from services.runtime_guardrails import build_runtime_readiness
 
 
-def main() -> int:
+def _build_queue_backend(settings):
+    if settings.service_role not in {"webhook", "worker"}:
+        return None
+    if settings.queue_backend == "sqs":
+        return SQSQueue(settings.sqs_queue_url, settings.sqs_dlq_url)
+    if settings.queue_backend == "redis":
+        return RedisQueue(settings.redis_url)
+    return LocalSQLiteQueue(settings.resolved_db_path)
+
+
+async def _run_readiness(settings):
+    queue_backend = _build_queue_backend(settings)
+    try:
+        return await build_runtime_readiness(settings, queue_backend=queue_backend)
+    finally:
+        if queue_backend is not None and hasattr(queue_backend, "aclose"):
+            await queue_backend.aclose()
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate DriftGuard Railway production configuration.")
     parser.add_argument("--service-role", choices=["monolith", "api", "webhook", "worker"], help="Override SERVICE_ROLE for this check.")
     parser.add_argument("--app-env", choices=["local", "test", "production"], help="Override APP_ENV for this check.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     get_settings.cache_clear()
     settings = get_settings()
@@ -23,13 +45,19 @@ def main() -> int:
     if args.app_env:
         settings.app_env = args.app_env
 
-    try:
-        validate_runtime_configuration(settings)
-    except RuntimeError as exc:
-        print(f"Preflight failed for role={settings.service_role} env={settings.app_env}: {exc}", file=sys.stderr)
+    readiness = asyncio.run(_run_readiness(settings))
+    if readiness["status"] != "ok":
+        print(
+            f"Preflight failed for role={settings.service_role} env={settings.app_env}: "
+            f"{json.dumps(readiness, sort_keys=True)}",
+            file=sys.stderr,
+        )
         return 1
 
-    print(f"Preflight passed for role={settings.service_role} env={settings.app_env}.")
+    print(
+        f"Preflight passed for role={settings.service_role} env={settings.app_env}: "
+        f"{json.dumps(readiness, sort_keys=True)}"
+    )
     return 0
 
 

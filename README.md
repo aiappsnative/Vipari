@@ -269,6 +269,8 @@ python scripts/railway_preflight.py --service-role webhook --app-env production
 python scripts/railway_preflight.py --service-role worker --app-env production
 ```
 
+The preflight helper now validates the runtime contract plus live readiness for the selected role, including database connectivity and queue connectivity for `webhook` and `worker`.
+
 Run the database migration/bootstrap step before cutting traffic to a fresh or updated production database:
 
 ```bash
@@ -341,6 +343,12 @@ python -m pytest tests/test_control_plane_ui.py -q
 ```
 
 ### Local runtime smoke test
+
+Run the smoke test helper from the repo root:
+
+```bash
+python scripts/local_runtime_smoke.py --db sqlite:///./promptdrift-smoke.db
+```
 
 Run the app locally from the repo root:
 
