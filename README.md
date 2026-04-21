@@ -281,6 +281,14 @@ The migration workflow and failure handling are documented in [docs/database-mig
 
 You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
 
+For a production-like local Docker rehearsal using the bundled Postgres and Redis containers, copy `docker-compose.local.env.example` to a local env file and run:
+
+```bash
+docker compose --env-file docker-compose.local.env.example up --build
+```
+
+This keeps `APP_ENV=local` for a safe local run while exercising the split `api`/`webhook`/`worker` services against Postgres and Redis instead of the default SQLite path.
+
 ## Local end-to-end testing
 
 1. Start the FastAPI app.

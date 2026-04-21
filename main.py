@@ -1723,15 +1723,16 @@ async def billing_checkout(request: Request, plan: str | None = Form(default=Non
         return RedirectResponse(_path_with_flow_context("/app/setup/install?free_activated=1", flow_context), status_code=303)
 
     if settings.base44_checkout_url:
-        checkout_url = f"{settings.base44_checkout_url}?{urlencode({
-            'plan': normalized_plan,
-            'workspace_id': workspace.id,
-            'workspace_slug': workspace.slug,
-            'workspace_name': workspace.display_name,
-            'billing_email': (access_context['user'].primary_email if access_context['user'] else '') or '',
-            'source': flow_context.get('source') or 'driftguard',
-            'return_url': f'{settings.app_base_url}/claim',
-        })}"
+        checkout_params = {
+            "plan": normalized_plan,
+            "workspace_id": workspace.id,
+            "workspace_slug": workspace.slug,
+            "workspace_name": workspace.display_name,
+            "billing_email": (access_context["user"].primary_email if access_context["user"] else "") or "",
+            "source": flow_context.get("source") or "driftguard",
+            "return_url": f"{settings.app_base_url}/claim",
+        }
+        checkout_url = f"{settings.base44_checkout_url}?{urlencode(checkout_params)}"
         return RedirectResponse(checkout_url, status_code=303)
 
     existing_customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
