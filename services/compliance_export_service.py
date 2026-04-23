@@ -31,6 +31,7 @@ from .onboarding_records import (
     list_latest_approved_onboarding_baseline_versions_for_onboarding,
 )
 from .persistence import connect_sqlite
+from .provenance_labels import artifact_provenance_label, review_output_provenance_label
 from .repo_journey_records import (
     RepoPostureSnapshotRecord,
     list_repo_posture_snapshots_for_repo,
@@ -193,6 +194,12 @@ def _build_core_compliance_files(
         baseline_artifact_types_by_path,
     )
 
+    # 02-governance-summary.json
+    files["02-governance-summary.json"] = json.dumps(
+        _build_governance_summary(baseline_versions, baseline_audit_log),
+        indent=2,
+    )
+
     # 03-version-history.csv
     files["03-version-history.csv"] = _build_version_history_csv(posture_snapshots)
 
@@ -209,6 +216,40 @@ def _build_core_compliance_files(
     files["08-control-mapping.md"] = _build_control_mapping_md(request.export_mode)
 
     return files
+
+
+def _build_governance_summary(
+    baseline_versions: list[OnboardingBaselineVersionRecord],
+    baseline_audit_log: list[BaselineAuditLogRecord],
+) -> dict[str, object]:
+    approved_count = sum(1 for baseline in baseline_versions if baseline.approval_status == "approved")
+    pending_count = sum(1 for baseline in baseline_versions if baseline.approval_status == "pending")
+    rejected_count = sum(1 for baseline in baseline_versions if baseline.approval_status == "rejected")
+    artifact_types = sorted({baseline.artifact_type for baseline in baseline_versions})
+    artifact_types_by_path = {
+        baseline.artifact_path: baseline.artifact_type
+        for baseline in baseline_versions
+    }
+    return {
+        "artifact_count": len(baseline_versions),
+        "approved_count": approved_count,
+        "pending_count": pending_count,
+        "rejected_count": rejected_count,
+        "artifact_types": artifact_types,
+        "recent_decisions": [
+            {
+                "action": log.action,
+                "decision_type": log.decision_type,
+                "artifact_path": log.artifact_path,
+                    "artifact_type": artifact_types_by_path.get(log.artifact_path, "unknown") if log.artifact_path else "repository",
+                "actor": log.actor_login,
+                "rationale": log.note,
+                "linked_findings": log.linked_findings,
+                    "created_at": _ts_to_iso(log.created_at),
+            }
+            for log in baseline_audit_log[-10:]
+        ],
+    }
 
 
 def _build_drift_files(
@@ -379,7 +420,7 @@ def _build_baseline_audit_log_csv(
 ) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=[
-        "actor", "action", "artifact_path", "artifact_type", "timestamp", "rationale"
+        "actor", "action", "decision_type", "artifact_path", "artifact_type", "timestamp", "rationale", "linked_findings"
     ])
     writer.writeheader()
     for log in baseline_audit_log:
@@ -391,10 +432,12 @@ def _build_baseline_audit_log_csv(
         writer.writerow({
             "actor": log.actor_login or "",
             "action": log.action,
+            "decision_type": log.decision_type or log.action,
             "artifact_path": log.artifact_path or "",
             "artifact_type": artifact_type,
             "timestamp": _ts_to_iso(log.created_at),
             "rationale": log.note or "",
+            "linked_findings": json.dumps(log.linked_findings),
         })
     return output.getvalue()
 
@@ -428,10 +471,11 @@ def _build_version_history_csv(posture_snapshots: list[RepoPostureSnapshotRecord
 def _build_pr_scan_history_csv(pr_audits: list[PullRequestAuditRecord]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=[
-        "pr_number", "head_sha", "pr_state", "pr_merged", "pr_merged_at", "status", "completion_mode", "deterministic_score", "suggested_risk_level", "semantic_review_completed", "error_message", "created_at", "updated_at"
+        "pr_number", "head_sha", "pr_state", "pr_merged", "pr_merged_at", "status", "completion_mode", "deterministic_score", "suggested_risk_level", "semantic_review_completed", "review_output_provenance_kind", "review_output_provenance_label", "error_message", "created_at", "updated_at"
     ])
     writer.writeheader()
     for a in pr_audits:
+        review_output = review_output_provenance_label(a.output_mode, a.semantic_review_completed)
         writer.writerow({
             "pr_number": a.pr_number,
             "head_sha": a.head_sha,
@@ -443,6 +487,8 @@ def _build_pr_scan_history_csv(pr_audits: list[PullRequestAuditRecord]) -> str:
             "deterministic_score": a.deterministic_score,
             "suggested_risk_level": a.suggested_risk_level,
             "semantic_review_completed": a.semantic_review_completed,
+            "review_output_provenance_kind": review_output.kind,
+            "review_output_provenance_label": review_output.label,
             "error_message": a.error_message or "",
             "created_at": _ts_to_iso(a.created_at),
             "updated_at": _ts_to_iso(a.updated_at),
@@ -511,10 +557,14 @@ def _build_artifact_content_payload(
     for baseline in baseline_versions:
         if baseline.content_text is None:
             continue
+        artifact_provenance = artifact_provenance_label(baseline.artifact_type)
         payload.append({
             "source_kind": "approved_baseline",
             "artifact_path": baseline.artifact_path,
             "artifact_type": baseline.artifact_type,
+            "artifact_family": artifact_provenance.family,
+            "artifact_provenance_kind": artifact_provenance.kind,
+            "artifact_provenance_label": artifact_provenance.label,
             "version_hash": baseline.version_hash,
             "approved_by": baseline.approved_by or "",
             "approved_at": _ts_to_iso(baseline.approved_at) if baseline.approved_at else "",
@@ -525,10 +575,14 @@ def _build_artifact_content_payload(
         if version.content_text is None:
             continue
         audit = audit_by_id.get(version.audit_id)
+        artifact_provenance = artifact_provenance_label(version.artifact_type)
         payload.append({
             "source_kind": "pr_scan",
             "artifact_path": version.artifact_path,
             "artifact_type": version.artifact_type,
+            "artifact_family": artifact_provenance.family,
+            "artifact_provenance_kind": artifact_provenance.kind,
+            "artifact_provenance_label": artifact_provenance.label,
             "version_hash": version.version_hash,
             "audit_id": version.audit_id,
             "pr_number": audit.pr_number if audit is not None else None,
@@ -551,6 +605,7 @@ Generated: {_ts_to_iso(time.time())}
 
 - 01-baseline-registry.csv: Approved baseline inventory
 - 02-baseline-audit-log.csv: Chain of custody and baseline decisions
+- 02-governance-summary.json: Machine-readable baseline approval state and recent governance decisions
 - 03-version-history.csv: High-level version / posture timeline
 - 04-pr-scan-history.csv: Proof that monitoring and review happened
 - 05-findings.csv: Actionable issues surfaced by analysis
@@ -575,6 +630,7 @@ All timestamps are in ISO 8601 UTC format.
 
 - Baseline files describe the currently approved artifact inventory and approval trail.
 - Version and PR scan history show when PromptDrift evaluated repository changes during the requested window.
+- Review-output provenance labels distinguish deterministic fallback records from AI-assisted review narratives when reviewer-facing output was generated.
 - Findings and risk events are derived from persisted scan and posture records; no synthetic placeholder rows are added.
 - Drift files, when present, summarize recorded static-profile deltas for artifacts scanned during the requested window.
 
@@ -584,6 +640,7 @@ All timestamps are in ISO 8601 UTC format.
 - This package supports control review and audit follow-up; it is not a standalone certification statement.
 - If a category of evidence was not persisted during the requested period, the corresponding export file may contain headers only.
 - Historical backfill content is intentionally not included in raw-content export output to avoid expanding the package beyond the requested review surface.
+- Raw artifact-content rows identify whether the captured text came from an AI control surface, a model/config surface, a governance surface, or a supporting repository artifact.
 """
 
 
@@ -646,6 +703,7 @@ It is intended as an evidence guide for auditors or internal reviewers. It does 
 
 - 01-baseline-registry.csv identifies the approved repository control-surface baseline under review.
 - 02-baseline-audit-log.csv records who approved or changed baseline decisions and when those actions were taken.
+- 02-governance-summary.json summarizes the current approval state and recent human-review decisions in a machine-readable format.
 
 ## SOC 2 CC7.2 - System Operations
 

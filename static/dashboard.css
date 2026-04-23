@@ -4896,6 +4896,92 @@ body.control-page[data-theme="light"] {
     background: var(--color-surface-2);
 }
 
+.compliance-framework-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.compliance-framework-card {
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-surface);
+}
+
+.compliance-framework-card p {
+    margin: 8px 0 0;
+    color: var(--color-text-muted);
+}
+
+.compliance-repo-list {
+    display: grid;
+    gap: 12px;
+}
+
+.compliance-repo-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-surface);
+}
+
+.compliance-repo-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+}
+
+.compliance-repo-copy {
+    display: grid;
+    gap: 4px;
+}
+
+.compliance-repo-copy span {
+    color: var(--color-text-muted);
+}
+
+.compliance-assessment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.compliance-assessment-card {
+    display: grid;
+    gap: 12px;
+    padding: 18px;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-surface);
+}
+
+.compliance-assessment-card p,
+.control-page-microcopy {
+    margin: 0;
+    color: var(--color-text-muted);
+}
+
+.compliance-assessment-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+#repo-ai-act-assessment .journey-strip {
+    margin-top: 6px;
+}
+
+#repo-ai-act-assessment .artifact-card {
+    margin-top: 4px;
+}
+
 .data-table {
     width: 100%;
     min-width: 680px;

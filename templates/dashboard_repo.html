@@ -35,13 +35,13 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
+                <a href="/app/compliance" class="sidebar-nav-item" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
                 <a href="#repo-journey-section" class="sidebar-nav-item" aria-label="Version Journey">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5"/><path d="M4 12h9"/><path d="M4 18h13"/><circle cx="18" cy="6" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
                     <span>Version Journey</span>
-                </a>
-                <a href="#repo-export-section" class="sidebar-nav-item" aria-label="Compliance Export">
-                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
-                    <span>Compliance Export</span>
                 </a>
                 <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifacts">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
@@ -104,7 +104,6 @@
                     <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
                     <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
                     <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
-                    <a class="repo-audit-anchor" href="#repo-export-section">Compliance Export</a>
                     <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
                 </section>
 
@@ -172,6 +171,14 @@
                 </section>
 
                 <section class="secondary-grid">
+                    <div class="secondary-panel" id="repo-ai-act-section">
+                        <div class="secondary-panel-title">EU AI Act relevance</div>
+                        <div id="repo-ai-act-assessment" class="loading-shell muted">Loading evidence-backed oversight signals...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-baseline-review-section">
+                        <div class="secondary-panel-title">Baseline Review</div>
+                        <div id="baseline-review-panel" class="loading-shell muted">Loading baseline review state...</div>
+                    </div>
                     <div class="secondary-panel" id="repo-history-section">
                         <div class="secondary-panel-title">Audit cues</div>
                         <div id="history-cues" class="loading-shell muted">Loading repo-level history cues...</div>
@@ -191,89 +198,6 @@
                     <div class="secondary-panel" id="repo-compare-section">
                         <div class="secondary-panel-title">Baseline vs current</div>
                         <div id="repo-journey-compare" class="loading-shell muted">Loading baseline comparison...</div>
-                    </div>
-                </section>
-
-                <section class="repos-section" id="repo-export-section">
-                    <div class="repos-header">
-                        <span class="repos-title">Compliance Export</span>
-                        <span class="repos-count">Build an auditor-facing evidence package for this repository without leaving the case file.</span>
-                    </div>
-                    <div class="export-panel">
-                        <div class="export-intro">
-                            <div class="export-intro-copy">
-                                <div class="export-kicker">Evidence Package</div>
-                                <p class="export-summary muted">Create an evidence package that follows the same review flow as the rest of this case file. Keep the package lean for auditors or add drift context for internal governance.</p>
-                            </div>
-                            <div class="export-meta-grid">
-                                <div class="export-meta-card">
-                                    <span class="export-meta-label">Visibility</span>
-                                    <strong>Private to your workspace session</strong>
-                                </div>
-                                <div class="export-meta-card">
-                                    <span class="export-meta-label">Download guard</span>
-                                    <strong>Owner-scoped link</strong>
-                                </div>
-                            </div>
-                        </div>
-                        <form id="export-form" class="export-form">
-                            <fieldset class="export-mode-group export-form-group export-form-group-wide">
-                                <legend>Export Mode</legend>
-                                <label class="export-mode-option">
-                                    <input type="radio" name="export_mode" value="compliance" checked>
-                                    <span class="export-mode-copy">
-                                        <span class="export-mode-title">Compliance Evidence</span>
-                                        <span class="export-mode-description">Lean, auditor-friendly package for SOC 2 and ISO review.</span>
-                                    </span>
-                                </label>
-                                <label class="export-mode-option">
-                                    <input type="radio" name="export_mode" value="compliance_plus_drift">
-                                    <span class="export-mode-copy">
-                                        <span class="export-mode-title">Compliance + Drift Intelligence</span>
-                                        <span class="export-mode-description">Adds PromptDrift posture and drift context for internal governance.</span>
-                                    </span>
-                                </label>
-                            </fieldset>
-                            <div class="form-group export-form-group">
-                                <label for="from-date">From Date</label>
-                                <input type="date" id="from-date" name="from_date" required>
-                            </div>
-                            <div class="form-group export-form-group">
-                                <label for="to-date">To Date</label>
-                                <input type="date" id="to-date" name="to_date" required>
-                            </div>
-                            <div class="form-group export-form-group export-form-group-wide">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="include-artifact-content" name="include_artifact_content">
-                                    Include raw artifact content (may contain sensitive prompt/policy text)
-                                </label>
-                            </div>
-                            <div class="export-actions">
-                                <button type="submit" id="export-submit-button" class="export-submit-button">Generate Export Package</button>
-                            </div>
-                        </form>
-                        <div id="export-status" class="export-status muted" hidden>Preparing export status…</div>
-                        <div class="export-history">
-                            <div class="export-history-head">
-                                <h3>Recent Exports</h3>
-                                <span class="muted">Only your own export jobs appear here.</span>
-                            </div>
-                            <table id="export-history-table" class="repos-table">
-                                <thead>
-                                    <tr>
-                                        <th>Mode</th>
-                                        <th>Date Range</th>
-                                        <th>Status</th>
-                                        <th>Generated</th>
-                                        <th>Size</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="export-history-tbody">
-                                    <tr><td colspan="6" class="muted">Loading export history...</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
                     </div>
                 </section>
 

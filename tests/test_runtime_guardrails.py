@@ -52,6 +52,39 @@ def test_production_worker_requires_redis_queue(monkeypatch):
     assert "QUEUE_BACKEND=redis" in str(exc_info.value)
 
 
+def test_runtime_configuration_rejects_malformed_github_private_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "not-a-pem")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "signing key is invalid" in str(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_readiness_reports_invalid_github_private_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "not-a-pem")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with patch("services.runtime_guardrails.connect_sqlite") as connect:
+        readiness = await build_runtime_readiness(settings)
+
+    assert readiness["status"] == "failed"
+    assert any(check["name"] == "config" and "signing key is invalid" in check["detail"] for check in readiness["checks"])
+    connect.assert_called_once_with("./promptdrift.db")
+
+
 @pytest.mark.anyio
 async def test_readiness_verifies_postgres_connectivity(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")

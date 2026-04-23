@@ -332,7 +332,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "attribute drift" in repo_text
     assert "control surface coverage" in repo_text
     assert "drift storyline" in repo_text
-    assert "baseline-review-panel" not in repo_response.text
+    assert "baseline-review-panel" in repo_response.text
+    assert "Baseline Review" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
 

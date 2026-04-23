@@ -141,6 +141,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["onboarding"]["default_branch"] == "main"
     assert payload["onboarding"]["status"] == "baseline_approved"
     assert payload["baseline_review"]["is_pending_review"] is False
+    assert isinstance(payload["baseline_review"]["recent_decisions"], list)
+    assert payload["artifacts"][0]["provenance_label"] == "AI control surface"
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
@@ -209,6 +211,47 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
     assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
+
+
+def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-ai-act-inputs.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: [
+            "prompts/refund.txt",
+            "tools/ai_agent_tool.py",
+            "config/model.json",
+            "policies/policy.md",
+        ],
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "prompts/refund.txt": PROMPT_BASELINE,
+            "tools/ai_agent_tool.py": "def run_tool():\n    return 'ok'\n",
+            "config/model.json": '{"model": "gpt-4o-mini", "temperature": 0.2}',
+            "policies/policy.md": "Human review is required before sensitive changes ship.\n",
+        }[path],
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["onboarding"]["status"] == "baseline_approved"
+    assert payload["baseline_review"]["is_pending_review"] is False
+    assert payload["baseline_review"]["approved_count"] == 4
+    provenance_kinds = {artifact["provenance_kind"] for artifact in payload["artifacts"]}
+    assert "ai_control_surface" in provenance_kinds
+    assert "ai_tool_surface" in provenance_kinds
+    assert "model_behavior_surface" in provenance_kinds
+    assert "human_governance_surface" in provenance_kinds
 
 
 def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):

@@ -1,15 +1,20 @@
 import csv
 import io
 import json
+import os
 import sqlite3
+import sys
 import zipfile
 from dataclasses import asdict
 
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from services.baseline_approval_service import approve_repo_baseline_artifact
 from services.baseline_provenance import approved_onboarding_provenance, baseline_provenance_to_json
 from services.compliance_export_service import ComplianceExportRequest, build_compliance_export
 from services.audit_records import init_audit_record_db
-from services.onboarding_records import OnboardingBaselineVersionRecord, init_onboarding_record_db
+from services.onboarding_records import OnboardingBaselineVersionRecord, init_onboarding_record_db, list_baseline_audit_log_for_onboarding
 from services.repo_journey_records import init_repo_journey_db, upsert_repo_posture_snapshot
 
 
@@ -105,8 +110,21 @@ def _seed_export_fixture(db_path: str) -> dict[str, float]:
             ),
         )
         conn.execute(
-            "INSERT INTO baseline_audit_log (id, repo_full, onboarding_id, artifact_path, action, actor_login, note, baseline_version_id, snapshot_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (200, repo_full, 1, artifact_path, "approved", "reviewer", "Accepted for monitoring", 100, None, baseline_created_at),
+            "INSERT INTO baseline_audit_log (id, repo_full, onboarding_id, artifact_path, action, decision_type, actor_login, note, linked_findings_json, baseline_version_id, snapshot_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                200,
+                repo_full,
+                1,
+                artifact_path,
+                "approved",
+                "human_review_approved",
+                "reviewer",
+                "Accepted for monitoring",
+                json.dumps(["RULE-1"]),
+                100,
+                None,
+                baseline_created_at,
+            ),
         )
         conn.execute(
             "INSERT INTO pull_request_audits (id, job_id, repo_full, pr_number, installation_id, head_sha, pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at, status, completion_mode, output_mode, deterministic_score, suggested_risk_level, semantic_review_completed, error_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -269,6 +287,25 @@ class TestComplianceExportService:
         assert "repo_baseline_review" in csv_text
         assert "approved" in csv_text
 
+    def test_approve_repo_baseline_artifact_records_governance_decision_type(self, tmp_path):
+        db_path = str(tmp_path / "approval.db")
+        _init_export_db(db_path)
+        _seed_export_fixture(db_path)
+
+        updated = approve_repo_baseline_artifact(
+            db_path,
+            repo_full="test/repo",
+            artifact_path="prompts/system.txt",
+            actor_login="reviewer",
+            approval_note="Approved after human review",
+        )
+        audit_log = list_baseline_audit_log_for_onboarding(db_path, 1)
+
+        assert updated.approval_status == "approved"
+        assert audit_log[-1].decision_type == "human_review_approved"
+        assert audit_log[-1].linked_findings == []
+        assert audit_log[-1].action == "approve"
+
     def test_build_compliance_export_uses_actual_values_and_includes_artifact_content(self, tmp_path):
         db_path = str(tmp_path / "test.db")
         _init_export_db(db_path)
@@ -302,15 +339,59 @@ class TestComplianceExportService:
                 {
                     "actor": "reviewer",
                     "action": "approved",
+                    "decision_type": "human_review_approved",
                     "artifact_path": "prompts/system.txt",
                     "artifact_type": "prompt",
                     "timestamp": "2023-11-14T22:13:20Z",
                     "rationale": "Accepted for monitoring",
+                    "linked_findings": '["RULE-1"]',
                 }
             ]
 
+            governance_summary = json.loads(zf.read("02-governance-summary.json"))
+            assert governance_summary == {
+                "artifact_count": 1,
+                "approved_count": 1,
+                "pending_count": 0,
+                "rejected_count": 0,
+                "artifact_types": ["prompt"],
+                "recent_decisions": [
+                    {
+                        "action": "approved",
+                        "decision_type": "human_review_approved",
+                        "artifact_path": "prompts/system.txt",
+                        "artifact_type": "prompt",
+                        "actor": "reviewer",
+                        "rationale": "Accepted for monitoring",
+                        "linked_findings": ["RULE-1"],
+                        "created_at": "2023-11-14T22:13:20Z",
+                    }
+                ],
+            }
+
             version_rows = _read_csv_from_zip(zf, "03-version-history.csv")
             assert version_rows[0]["high-level_risk_status"] == "high"
+
+            pr_scan_rows = _read_csv_from_zip(zf, "04-pr-scan-history.csv")
+            assert pr_scan_rows == [
+                {
+                    "pr_number": "7",
+                    "head_sha": "head123",
+                    "pr_state": "open",
+                    "pr_merged": "False",
+                    "pr_merged_at": "",
+                    "status": "completed",
+                    "completion_mode": "full",
+                    "deterministic_score": "88",
+                    "suggested_risk_level": "high",
+                    "semantic_review_completed": "True",
+                    "review_output_provenance_kind": "ai_assisted_review_narrative",
+                    "review_output_provenance_label": "AI-assisted review narrative",
+                    "error_message": "",
+                    "created_at": "2023-11-14T22:15:00Z",
+                    "updated_at": "2023-11-14T22:15:00Z",
+                }
+            ]
 
             findings_rows = _read_csv_from_zip(zf, "05-findings.csv")
             assert findings_rows == [
@@ -397,6 +478,9 @@ class TestComplianceExportService:
                     "source_kind": "approved_baseline",
                     "artifact_path": "prompts/system.txt",
                     "artifact_type": "prompt",
+                    "artifact_family": "prompt",
+                    "artifact_provenance_kind": "ai_control_surface",
+                    "artifact_provenance_label": "AI control surface",
                     "version_hash": "baseline-hash",
                     "approved_by": "reviewer",
                     "approved_at": "2023-11-14T22:13:20Z",
@@ -407,6 +491,9 @@ class TestComplianceExportService:
                     "source_kind": "pr_scan",
                     "artifact_path": "prompts/system.txt",
                     "artifact_type": "prompt",
+                    "artifact_family": "prompt",
+                    "artifact_provenance_kind": "ai_control_surface",
+                    "artifact_provenance_label": "AI control surface",
                     "version_hash": "scan-hash",
                     "audit_id": 300,
                     "pr_number": 7,

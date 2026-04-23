@@ -2,6 +2,7 @@ import asyncio
 import io
 import base64
 import hashlib
+import html
 import hmac
 import json
 import re
@@ -16,6 +17,7 @@ from urllib.parse import quote, urlencode
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from github.GithubException import GithubException
+from jwt.exceptions import InvalidKeyError
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -55,6 +57,7 @@ from services.billing_service import (
 from services.control_plane_frontend import (
     render_control_plane_admin_page,
     render_control_plane_billing_page,
+    render_control_plane_compliance_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
@@ -129,12 +132,14 @@ from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_i
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
+from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
-from services.onboarding_records import get_latest_repository_onboarding, promote_latest_source_to_onboarding_baseline
+from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import get_persistence_status
+from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import encrypt_text
@@ -762,7 +767,7 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
                 installation_id=installation.installation_id,
                 repositories=repositories,
             )
-        except (HTTPError, OSError, RuntimeError, ValueError):
+        except (HTTPError, OSError, RuntimeError, ValueError, InvalidKeyError):
             pass
 
     existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
@@ -862,6 +867,428 @@ def _export_job_payload(job) -> dict[str, object]:
     }
     payload["download_url"] = _export_download_url(job) if job.status == "completed" and job.result_blob else None
     return payload
+
+
+def _render_compliance_repo_rows(repo_rows: list[dict[str, object]]) -> str:
+    if not repo_rows:
+        return '<div class="control-page-empty">No repositories are connected to this workspace yet.</div>'
+    rendered: list[str] = []
+    for repo in repo_rows:
+        repo_full = str(repo.get("repo_full") or "")
+        if not repo_full:
+            continue
+        status = str(repo.get("status") or "Unknown")
+        branch = str(repo.get("branch") or "unknown")
+        href = str(repo.get("href") or "#")
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+        artifact_families = _compliance_repo_artifact_families(repo_full) if onboarding is not None else set()
+        freshness_label, freshness_chip_class, _freshness_guidance = _evidence_freshness_label(
+            onboarding.updated_at if onboarding is not None else None
+        )
+        is_review_ready = onboarding is not None and str(onboarding.status or "").lower() == "baseline_approved" and "governance" in artifact_families
+        is_fresh_review_ready = is_review_ready and freshness_label.startswith("Fresh")
+
+        eligibility_chips: list[str] = []
+        if is_review_ready:
+            eligibility_chips.append('<span class="drift-chip chip-guardrails">Review-ready preset</span>')
+        else:
+            eligibility_chips.append('<span class="drift-chip chip-baseline">Not review-ready yet</span>')
+        if is_fresh_review_ready:
+            eligibility_chips.append('<span class="drift-chip chip-guardrails">Fresh review-ready preset</span>')
+        elif freshness_label:
+            eligibility_chips.append(f'<span class="drift-chip {freshness_chip_class}">{html.escape(freshness_label)}</span>')
+
+        if onboarding is None:
+            preset_reason = "No onboarding record exists yet, so server-side presets will not include this repo."
+        elif str(onboarding.status or "").lower() != "baseline_approved":
+            preset_reason = "Pending baseline approval keeps this repo out of review-ready presets until human review is complete."
+        elif "governance" not in artifact_families:
+            preset_reason = "A governance or policy artifact is still missing, so the stricter preset excludes this repo."
+        elif not freshness_label.startswith("Fresh"):
+            preset_reason = "This repo qualifies for the review-ready preset, but not the fresh review-ready preset yet."
+        else:
+            preset_reason = "This repo qualifies for both secure review-ready presets based on current workspace evidence."
+
+        rendered.append(
+            f'''
+            <label class="compliance-repo-row">
+                <input type="checkbox" name="repo_fulls" value="{html.escape(repo_full)}" />
+                <div class="compliance-repo-main">
+                    <div class="compliance-repo-copy">
+                        <strong>{html.escape(repo_full)}</strong>
+                        <span>{html.escape(status)} · default branch {html.escape(branch)}</span>
+                        <div class="tag-row">{"".join(eligibility_chips)}</div>
+                        <span>{html.escape(preset_reason)}</span>
+                    </div>
+                    <a class="subtle-link" href="{html.escape(href)}">Open audit page</a>
+                </div>
+            </label>
+            '''
+        )
+    return "".join(rendered)
+
+
+def _render_compliance_export_history(jobs: list[object]) -> str:
+    if not jobs:
+        return '<div class="control-page-empty">No compliance exports have been generated for this workspace session yet.</div>'
+    headers = ["Repository", "Mode", "Date range", "Status", "Download"]
+    head_html = "".join(f"<th>{header}</th>" for header in headers)
+    rows = []
+    for job in jobs:
+        range_label = (
+            f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')} to {datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}"
+        )
+        download_cell = (
+            f'<a class="link" href="{html.escape(_export_download_url(job) or "#")}">Download</a>'
+            if job.status == "completed" and job.result_blob
+            else html.escape(job.status.replace("_", " ").title())
+        )
+        rows.append(
+            "<tr>"
+            + "".join(
+                (
+                    f"<td>{html.escape(job.repo_full)}</td>",
+                    f"<td>{html.escape(job.export_mode.replace('_', ' ').title())}</td>",
+                    f"<td>{html.escape(range_label)}</td>",
+                    f"<td>{html.escape(job.status.replace('_', ' ').title())}</td>",
+                    f"<td>{download_cell}</td>",
+                )
+            )
+            + "</tr>"
+        )
+    return f'<div class="table-shell"><table class="data-table"><thead><tr>{head_html}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+
+
+def _render_compliance_ai_act_assessment(repo_summaries: list[object]) -> str:
+    if not repo_summaries:
+        return '<div class="control-page-empty">No onboarded repositories are available for AI Act relevance assessment yet.</div>'
+
+    repos_with_ai_surfaces = 0
+    repos_with_tool_surfaces = 0
+    repos_with_model_surfaces = 0
+    repos_with_governance_surfaces = 0
+    rendered_cards: list[str] = []
+
+    for summary in sorted(repo_summaries, key=lambda item: str(item.repo_full).lower()):
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, summary.repo_full)
+        if onboarding is None:
+            continue
+        artifact_families = {
+            artifact_family(artifact.artifact_type)
+            for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id)
+        }
+        if not artifact_families:
+            continue
+
+        has_ai_surface = bool(artifact_families & {"prompt", "tool", "model", "config"})
+        has_tool_surface = "tool" in artifact_families
+        has_model_surface = bool(artifact_families & {"model", "config"})
+        has_governance_surface = "governance" in artifact_families
+
+        repos_with_ai_surfaces += int(has_ai_surface)
+        repos_with_tool_surfaces += int(has_tool_surface)
+        repos_with_model_surfaces += int(has_model_surface)
+        repos_with_governance_surfaces += int(has_governance_surface)
+
+        chips: list[str] = []
+        if "prompt" in artifact_families:
+            chips.append('<span class="drift-chip chip-capability">AI control surface</span>')
+        if has_tool_surface:
+            chips.append('<span class="drift-chip chip-model">AI-assisted tool surface</span>')
+        if has_model_surface:
+            chips.append('<span class="drift-chip chip-baseline">Model/config surface</span>')
+        if has_governance_surface:
+            chips.append('<span class="drift-chip chip-governance">Governance surface</span>')
+
+        if str(summary.onboarding_status or "").lower() == "baseline_approved":
+            chips.append('<span class="drift-chip chip-guardrails">Human-reviewed baseline</span>')
+            oversight_copy = "Reviewed baseline and stored control-surface evidence are present for this repository."
+        else:
+            chips.append('<span class="drift-chip chip-baseline">Baseline review pending</span>')
+            oversight_copy = "Control-surface evidence is present, but baseline review is not yet fully approved."
+
+        rendered_cards.append(
+            f'''
+            <article class="compliance-assessment-card">
+                <div class="compliance-assessment-head">
+                    <strong>{html.escape(summary.repo_full)}</strong>
+                    <a class="subtle-link" href="/dashboard/{quote(summary.repo_full, safe='')}">Open audit page</a>
+                </div>
+                <div class="tag-row">{"".join(chips)}</div>
+                <p>{html.escape(oversight_copy)}</p>
+            </article>
+            '''
+        )
+
+    summary_cards = [
+        ("Repos with AI surfaces", repos_with_ai_surfaces, "Prompt, tool, model, or config surfaces were found in persisted onboarding artifacts."),
+        ("Repos with tool surfaces", repos_with_tool_surfaces, "Tool-linked artifacts suggest action-taking or integrated AI tooling surfaces to review."),
+        ("Repos with model/config surfaces", repos_with_model_surfaces, "Model selection and behavior-shaping config artifacts are present."),
+        ("Repos with governance surfaces", repos_with_governance_surfaces, "Policy, guardrail, or governance artifacts were detected in the stored baseline."),
+    ]
+    summary_html = "".join(
+        f'''
+        <article class="control-page-stat-card">
+            <span class="control-page-stat-label">{html.escape(label)}</span>
+            <strong>{value}</strong>
+            <span class="control-page-microcopy">{html.escape(detail)}</span>
+        </article>
+        '''
+        for label, value, detail in summary_cards
+    )
+    cards_html = "".join(rendered_cards) or '<div class="control-page-empty">Stored onboarding evidence was found, but no artifact families were available for assessment.</div>'
+    return f'<div class="control-page-stat-grid">{summary_html}</div><div class="compliance-assessment-grid">{cards_html}</div>'
+
+
+def _render_compliance_evidence_gaps(repo_summaries: list[object]) -> str:
+    if not repo_summaries:
+        return '<div class="control-page-empty">No onboarded repositories are available for evidence-gap review yet.</div>'
+
+    repos_needing_baseline_review = 0
+    repos_missing_governance = 0
+    repos_missing_model_config = 0
+    repos_ready_for_review_pack = 0
+    rendered_cards: list[str] = []
+
+    for summary in sorted(repo_summaries, key=lambda item: str(item.repo_full).lower()):
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, summary.repo_full)
+        if onboarding is None:
+            continue
+        artifact_families = {
+            artifact_family(artifact.artifact_type)
+            for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id)
+        }
+        if not artifact_families:
+            continue
+
+        missing_governance = "governance" not in artifact_families
+        missing_model_config = not bool(artifact_families & {"model", "config"})
+        needs_baseline_review = str(summary.onboarding_status or "").lower() != "baseline_approved"
+
+        repos_needing_baseline_review += int(needs_baseline_review)
+        repos_missing_governance += int(missing_governance)
+        repos_missing_model_config += int(missing_model_config)
+        repos_ready_for_review_pack += int(not needs_baseline_review and not missing_governance)
+
+        gaps: list[str] = []
+        if needs_baseline_review:
+            gaps.append("Baseline still needs human approval")
+        if missing_governance:
+            gaps.append("No governance or policy artifact detected")
+        if missing_model_config:
+            gaps.append("No model/config artifact detected")
+        if not gaps:
+            gaps.append("No immediate evidence gaps detected from stored onboarding artifacts")
+
+        if needs_baseline_review:
+            recommended_action = "Approve or reject the pending baseline so the repo can become a stable review reference."
+        elif missing_governance:
+            recommended_action = "Add a policy, guardrail, or governance artifact so oversight evidence is packaged with the repo."
+        elif missing_model_config:
+            recommended_action = "Capture the model or behavior-shaping config artifact to complete the repo evidence set."
+        else:
+            recommended_action = "Use this repo in compliance export runs as a stronger evidence candidate."
+
+        rendered_cards.append(
+            f'''
+            <article class="compliance-assessment-card">
+                <div class="compliance-assessment-head">
+                    <strong>{html.escape(summary.repo_full)}</strong>
+                    <a class="subtle-link" href="/dashboard/{quote(summary.repo_full, safe='')}">Open audit page</a>
+                </div>
+                <div class="stack compact-stack">
+                    <div>
+                        <div class="detail-section-label">Evidence gaps</div>
+                        <div class="tag-row">{"".join(f'<span class="drift-chip chip-baseline">{html.escape(gap)}</span>' for gap in gaps)}</div>
+                    </div>
+                    <div>
+                        <div class="detail-section-label">Recommended next action</div>
+                        <p>{html.escape(recommended_action)}</p>
+                    </div>
+                </div>
+            </article>
+            '''
+        )
+
+    summary_cards = [
+        ("Repos needing baseline approval", repos_needing_baseline_review, "Baseline approval is still pending, so the stored evidence is not yet a stable review reference."),
+        ("Repos missing governance artifacts", repos_missing_governance, "No policy, guardrail, or governance artifact was detected in the stored onboarding baseline."),
+        ("Repos missing model/config artifacts", repos_missing_model_config, "No explicit model selection or behavior-shaping config artifact was detected."),
+        ("Repos ready for review packs", repos_ready_for_review_pack, "Approved baselines with governance evidence are the strongest candidates for compliance export workflows."),
+    ]
+    summary_html = "".join(
+        f'''
+        <article class="control-page-stat-card">
+            <span class="control-page-stat-label">{html.escape(label)}</span>
+            <strong>{value}</strong>
+            <span class="control-page-microcopy">{html.escape(detail)}</span>
+        </article>
+        '''
+        for label, value, detail in summary_cards
+    )
+    cards_html = "".join(rendered_cards) or '<div class="control-page-empty">Stored onboarding evidence was found, but no repo-level gaps could be summarized.</div>'
+    return f'<div class="control-page-stat-grid">{summary_html}</div><div class="compliance-assessment-grid">{cards_html}</div>'
+
+
+def _evidence_freshness_label(last_onboarded_at: float | None) -> tuple[str, str, str]:
+    if not isinstance(last_onboarded_at, (int, float)) or last_onboarded_at <= 0:
+        return (
+            "No freshness signal",
+            "chip-baseline",
+            "No onboarding timestamp is available, so evidence freshness cannot be assessed.",
+        )
+    age_days = max(0, int((time.time() - float(last_onboarded_at)) // 86400))
+    if age_days >= 30:
+        return (
+            f"Stale evidence ({age_days}d)",
+            "chip-baseline",
+            "Re-run onboarding before relying on this repo in a governance review pack.",
+        )
+    if age_days >= 7:
+        return (
+            f"Aging evidence ({age_days}d)",
+            "chip-model",
+            "Evidence is still usable, but a refresh is worth scheduling soon.",
+        )
+    return (
+        f"Fresh evidence ({age_days}d)",
+        "chip-guardrails",
+        "Stored onboarding evidence is recent enough for current governance follow-up.",
+    )
+
+
+def _render_compliance_evidence_freshness(repo_summaries: list[object]) -> str:
+    if not repo_summaries:
+        return '<div class="control-page-empty">No onboarded repositories are available for evidence freshness review yet.</div>'
+
+    stale_count = 0
+    aging_count = 0
+    fresh_count = 0
+    rendered_cards: list[str] = []
+
+    for summary in sorted(repo_summaries, key=lambda item: str(item.repo_full).lower()):
+        label, chip_class, guidance = _evidence_freshness_label(getattr(summary, "last_onboarded_at", None))
+        if label.startswith("Stale"):
+            stale_count += 1
+        elif label.startswith("Aging"):
+            aging_count += 1
+        elif label.startswith("Fresh"):
+            fresh_count += 1
+
+        last_onboarded_at = getattr(summary, "last_onboarded_at", None)
+        if isinstance(last_onboarded_at, (int, float)) and last_onboarded_at > 0:
+            last_seen = datetime.fromtimestamp(last_onboarded_at).strftime("%Y-%m-%d")
+        else:
+            last_seen = "Unavailable"
+
+        rendered_cards.append(
+            f'''
+            <article class="compliance-assessment-card">
+                <div class="compliance-assessment-head">
+                    <strong>{html.escape(summary.repo_full)}</strong>
+                    <span class="drift-chip {chip_class}">{html.escape(label)}</span>
+                </div>
+                <div class="stack compact-stack">
+                    <div class="detail-section-label">Last onboarded</div>
+                    <p>{html.escape(last_seen)}</p>
+                    <div class="detail-section-label">Follow-up</div>
+                    <p>{html.escape(guidance)}</p>
+                </div>
+            </article>
+            '''
+        )
+
+    summary_cards = [
+        ("Fresh repos", fresh_count, "Evidence refreshed within the last 7 days."),
+        ("Aging repos", aging_count, "Evidence is 7 to 29 days old and may need a scheduled refresh."),
+        ("Stale repos", stale_count, "Evidence is 30 or more days old and should be refreshed before formal review."),
+    ]
+    summary_html = "".join(
+        f'''
+        <article class="control-page-stat-card">
+            <span class="control-page-stat-label">{html.escape(label)}</span>
+            <strong>{value}</strong>
+            <span class="control-page-microcopy">{html.escape(detail)}</span>
+        </article>
+        '''
+        for label, value, detail in summary_cards
+    )
+    return f'<div class="control-page-stat-grid">{summary_html}</div><div class="compliance-assessment-grid">{"".join(rendered_cards)}</div>'
+
+
+def _compliance_repo_artifact_families(repo_full: str) -> set[str]:
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+    if onboarding is None:
+        return set()
+    return {
+        artifact_family(artifact.artifact_type)
+        for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id)
+    }
+
+
+def _compliance_export_preset_repo_fulls(visible_repo_fulls: set[str], export_preset: str) -> list[str]:
+    selected_repo_fulls: list[str] = []
+    for repo_full in sorted(visible_repo_fulls):
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+        if onboarding is None:
+            continue
+        artifact_families = _compliance_repo_artifact_families(repo_full)
+        if not artifact_families:
+            continue
+
+        needs_baseline_review = str(onboarding.status or "").lower() != "baseline_approved"
+        missing_governance = "governance" not in artifact_families
+        freshness_label, _, _ = _evidence_freshness_label(onboarding.updated_at)
+
+        if export_preset == "review_ready" and not needs_baseline_review and not missing_governance:
+            selected_repo_fulls.append(repo_full)
+        if export_preset == "fresh_review_ready" and not needs_baseline_review and not missing_governance and freshness_label.startswith("Fresh"):
+            selected_repo_fulls.append(repo_full)
+    return selected_repo_fulls
+
+
+def _run_compliance_export_job(
+    *,
+    repo_full: str,
+    from_ts: float,
+    to_ts: float,
+    export_mode: str,
+    include_artifact_content: bool,
+    workspace_id: int | None,
+    requested_by_user_id: int | None,
+    requested_by_github_login: str | None,
+):
+    job = create_export_job(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        export_mode=export_mode,
+        include_artifact_content=include_artifact_content,
+        workspace_id=workspace_id,
+        requested_by_user_id=requested_by_user_id,
+        requested_by_github_login=requested_by_github_login,
+    )
+    result = build_compliance_export(
+        AUDIT_DB_PATH,
+        ComplianceExportServiceRequest(
+            repo_full=repo_full,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            export_mode=export_mode,
+            include_artifact_content=include_artifact_content,
+            export_version=job.export_version,
+        ),
+    )
+    update_export_job_status(
+        AUDIT_DB_PATH,
+        job.id,
+        "completed",
+        result_size_bytes=result.total_size_bytes,
+        result_sha256=hashlib.sha256(result.zip_bytes).hexdigest(),
+        result_blob=result.zip_bytes,
+    )
+    return get_export_job(AUDIT_DB_PATH, job.id) or job
 
 
 def _dashboard_repo_visibility(access_context: dict[str, object]) -> dict[str, object]:
@@ -1348,6 +1775,50 @@ async def policies_page(request: Request):
     )
 
 
+@app.get("/app/compliance", response_class=HTMLResponse)
+async def compliance_page(request: Request):
+    access_context = _current_workspace_context(request)
+    workspace = access_context["workspace"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    user = access_context["user"]
+    session = access_context["session"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    repo_rows = _workspace_repo_rows(workspace.id)
+    allocation_status_by_full = {
+        allocation.repo_full: allocation.allocation_status
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+    }
+    repo_summaries = list_repo_dashboard_index(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls={str(item["repo_full"]) for item in repo_rows},
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    export_jobs = list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
+    status_note = request.query_params.get("status") or (
+        "Centralize EU AI Act, SOC 2, and ISO 27001 evidence work here. Existing exports still reuse the repo-level evidence model."
+    )
+    return HTMLResponse(
+        render_control_plane_compliance_page(
+            workspace_name=workspace.display_name,
+            audit_href="/dashboard",
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            status_note=status_note,
+            tracked_repo_count=len(repo_rows),
+            baseline_approved_repo_count=sum(1 for item in repo_summaries if item.onboarding_status == "baseline_approved"),
+            export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
+            export_pending_count=sum(1 for job in export_jobs if job.status != "completed"),
+            ai_act_assessment_html=_render_compliance_ai_act_assessment(repo_summaries),
+            evidence_gaps_html=_render_compliance_evidence_gaps(repo_summaries),
+            evidence_freshness_html=_render_compliance_evidence_freshness(repo_summaries),
+            repo_rows_html=_render_compliance_repo_rows(repo_rows),
+            export_history_html=_render_compliance_export_history(export_jobs),
+            csrf_token=session.csrf_secret,
+        )
+    )
+
+
 @app.get("/app/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -1369,6 +1840,65 @@ async def help_page(request: Request):
             active_nav="help",
         )
     )
+
+
+@app.post("/app/compliance/export")
+async def compliance_export_page_submit(
+    request: Request,
+    export_scope: str = Form(default="all"),
+    export_preset: str = Form(default="none"),
+    repo_fulls: list[str] = Form(default=[]),
+    from_date: str = Form(default=""),
+    to_date: str = Form(default=""),
+    export_mode: str = Form(default="compliance"),
+    include_artifact_content: str | None = Form(default=None),
+    csrf_token: str | None = Form(default=None),
+):
+    access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    workspace = access_context["workspace"]
+    session = access_context["session"]
+    if not from_date or not to_date:
+        return RedirectResponse("/app/compliance?status=Choose+an+export+date+range+before+running+Compliance+exports.", status_code=303)
+    from_ts = datetime.fromisoformat(from_date).timestamp()
+    to_ts = datetime.fromisoformat(to_date).timestamp()
+    if from_ts > to_ts:
+        return RedirectResponse("/app/compliance?status=The+export+start+date+must+be+earlier+than+the+end+date.", status_code=303)
+    if export_mode not in {"compliance", "compliance_plus_drift"}:
+        return RedirectResponse("/app/compliance?status=Choose+a+valid+export+mode.", status_code=303)
+    if export_preset not in {"none", "review_ready", "fresh_review_ready"}:
+        return RedirectResponse("/app/compliance?status=Choose+a+valid+export+preset.", status_code=303)
+
+    visible_repo_rows = _workspace_repo_rows(workspace.id)
+    visible_repo_fulls = {str(item["repo_full"]) for item in visible_repo_rows}
+    if export_preset != "none":
+        selected_repo_fulls = _compliance_export_preset_repo_fulls(visible_repo_fulls, export_preset)
+    else:
+        selected_repo_fulls = sorted(visible_repo_fulls) if export_scope == "all" else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
+    if not selected_repo_fulls:
+        return RedirectResponse("/app/compliance?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
+
+    completed = 0
+    failed = 0
+    for repo_full in selected_repo_fulls:
+        try:
+            _run_compliance_export_job(
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=export_mode,
+                include_artifact_content=include_artifact_content is not None,
+                workspace_id=workspace.id,
+                requested_by_user_id=session.user_id,
+                requested_by_github_login=_dashboard_actor_login(request),
+            )
+            completed += 1
+        except Exception:
+            failed += 1
+    status_message = f"Queued exports for {completed} repo(s)."
+    if failed:
+        status_message += f" {failed} repo(s) failed and can be retried."
+    return RedirectResponse(f"/app/compliance?status={quote(status_message)}", status_code=303)
 
 
 @app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)
@@ -2503,8 +3033,7 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             raise HTTPException(status_code=400, detail="Invalid export_mode")
         workspace = access_context.get("workspace")
         session = access_context.get("session")
-        job = create_export_job(
-            AUDIT_DB_PATH,
+        job = _run_compliance_export_job(
             repo_full=repo_full,
             from_ts=from_ts,
             to_ts=to_ts,
@@ -2514,32 +3043,12 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
             requested_by_user_id=session.user_id if session is not None else None,
             requested_by_github_login=_dashboard_actor_login(request),
         )
-        result = build_compliance_export(
-            AUDIT_DB_PATH,
-            ComplianceExportServiceRequest(
-                repo_full=repo_full,
-                from_ts=from_ts,
-                to_ts=to_ts,
-                export_mode=payload.export_mode,
-                include_artifact_content=payload.include_artifact_content,
-                export_version=job.export_version,
-            ),
-        )
-        update_export_job_status(
-            AUDIT_DB_PATH,
-            job.id,
-            "completed",
-            result_size_bytes=result.total_size_bytes,
-            result_sha256=hashlib.sha256(result.zip_bytes).hexdigest(),
-            result_blob=result.zip_bytes,
-        )
-        job = get_export_job(AUDIT_DB_PATH, job.id) or job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="An identical export request is already in progress. Change the date range or wait for it to finish.")
     except Exception as exc:
-        if 'job' in locals():
+        if "job" in locals():
             update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return JSONResponse({

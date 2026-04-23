@@ -139,10 +139,13 @@ Current export behavior:
 
 - core compliance files are generated from approved baseline records, baseline audit history, persisted PR audits, findings, and repo posture snapshots within the requested time window
 - drift-mode files are generated from persisted static artifact profiles and artifact versions recorded during PR audits in that same window
+- PR scan history labels whether reviewer-facing output came from a deterministic fallback path or an AI-assisted review narrative
 - `manifest.json` includes a SHA-256 hash per exported file so package integrity can be checked downstream
-- optional raw content export is intentionally narrow: when enabled, `09-artifact-content.json` includes approved baseline content and in-window PR scan artifact content, but not historical backfill content
+- optional raw content export is intentionally narrow: when enabled, `09-artifact-content.json` includes approved baseline content and in-window PR scan artifact content, labels each row by control-surface provenance, and does not include historical backfill content
 
 This scope is deliberate. The export is meant to answer what baseline was approved, what changed in the requested period, and what evidence supported that conclusion, without becoming a noisy historical archive dump.
+
+For EU AI Act readiness positioning, treat these labels as transparency metadata, not legal conclusions. DriftGuard distinguishes deterministic records, AI-assisted review output, and human-reviewed baseline decisions so operators can explain where a package element came from.
 
 ## Static drift profile model
 
@@ -280,6 +283,34 @@ python scripts/db_migrate.py
 The migration workflow and failure handling are documented in [docs/database-migration-runbook.md](docs/database-migration-runbook.md).
 
 You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
+
+For the simplest local Docker workflow, use the checked-in wrapper script:
+
+```powershell
+./scripts/docker-stack.ps1 up sqlite
+./scripts/docker-stack.ps1 down sqlite
+./scripts/docker-stack.ps1 up postgres
+./scripts/docker-stack.ps1 down postgres
+```
+
+Those commands start the local API-first inspection flow and keep the app reachable at `http://127.0.0.1:8011` in either database mode. The wrapper exists because the base compose file hard-requires runtime values such as `API_ADMIN_TOKEN`, and the SQLite and Postgres variants each need different compose overrides. Those details are now wrapped so you do not need to pass ad hoc environment variables or use the old `.tmp` overlay path directly.
+
+`up` runs detached by default so the containers stay alive while you inspect the UI. Use `./scripts/docker-stack.ps1 logs sqlite` or `./scripts/docker-stack.ps1 logs postgres` when you want to tail service output.
+
+If you want the full split stack for webhook and worker testing, opt in explicitly:
+
+```powershell
+./scripts/docker-stack.ps1 up postgres -FullStack
+./scripts/docker-stack.ps1 down postgres -FullStack
+```
+
+The full-stack path expects valid GitHub App and AI provider credentials. The simple default path intentionally clears GitHub App credentials so the local control-plane API can start even when your `.env` contains placeholder or host-only key paths.
+
+If you want the raw compose commands, SQLite mode is:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
+```
 
 For a production-like local Docker rehearsal using the bundled Postgres and Redis containers, copy `docker-compose.local.env.example` to a local env file and run:
 

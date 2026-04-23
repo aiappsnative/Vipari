@@ -112,6 +112,8 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.baseline_review is not None
     assert dashboard.baseline_review.is_pending_review is False
     assert dashboard.baseline_review.authoritative_artifact_count == 1
+    assert isinstance(dashboard.baseline_review.recent_decisions, list)
+    assert dashboard.artifacts[0].provenance_label == "AI control surface"
     assert dashboard.baseline_version_count == 1
     assert dashboard.backfill.completed_job_count == 1
     assert dashboard.backfill.total_historical_versions == 3

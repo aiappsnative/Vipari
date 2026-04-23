@@ -121,8 +121,159 @@ function baselineStatusBadge(status) {
     return `<span class="baseline-status-badge ${className}">${label}</span>`;
 }
 
+function formatUnixTimestamp(ts) {
+    const value = Number(ts);
+    if (!Number.isFinite(value) || value <= 0) {
+        return "Unknown time";
+    }
+    return new Date(value * 1000).toLocaleString();
+}
+
 function renderBaselineReviewPanel(panel) {
-    return "";
+    if (!panel) {
+        return '<div class="muted">No baseline review data is available for this repository yet.</div>';
+    }
+
+    const recentDecisions = asArray(panel.recent_decisions);
+    const artifactCards = asArray(panel.artifacts).slice(0, 6).map((artifact) => `
+        <div class="artifact-card">
+            <strong>${escapeHtml(artifact.artifact_path)}</strong>
+            <div class="artifact-card-reason">${baselineStatusBadge(artifact.approval_status)} ${escapeHtml(artifact.artifact_type || "artifact")} · ${escapeHtml(artifact.provenance_label || "Supporting repository artifact")} · ${escapeHtml(`${artifact.line_count || 0} lines`)}</div>
+            <div class="detail-note">${escapeHtml(artifact.approval_note || "No approval rationale recorded yet.")}</div>
+        </div>
+    `).join("");
+
+    const decisionsHtml = recentDecisions.length
+        ? `<div class="stack compact-stack">${recentDecisions.map((decision) => `
+            <div class="artifact-card">
+                <strong>${escapeHtml(decision.decision_type || decision.action || "decision")}</strong>
+                <div class="artifact-card-reason">${escapeHtml(decision.actor_login || "system")} · ${escapeHtml(formatUnixTimestamp(decision.created_at))}${decision.artifact_path ? ` · ${escapeHtml(decision.artifact_path)}` : ""}</div>
+                <div class="detail-note">${escapeHtml(decision.rationale || "No rationale recorded.")}</div>
+                ${asArray(decision.linked_findings).length ? `<div class="tag-row">${asArray(decision.linked_findings).map((finding) => `<span class="drift-chip chip-governance">${escapeHtml(finding)}</span>`).join("")}</div>` : ""}
+            </div>
+        `).join("")}</div>`
+        : '<div class="muted">No baseline review decisions have been recorded yet.</div>';
+
+    const actionsHtml = panel.is_pending_review
+        ? `
+            <div class="export-actions">
+                <button type="button" class="export-submit-button" data-baseline-decision="approve">Approve baseline</button>
+                <button type="button" class="cue-action-button" data-baseline-decision="reject">Reject baseline</button>
+            </div>
+        `
+        : '<div class="detail-note">Baseline review is not currently pending for this repository.</div>';
+
+    return `
+        <div class="stack compact-stack">
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(panel.artifact_count || 0))}</span>
+                    <span class="journey-node-label">Artifacts</span>
+                    <span class="journey-node-caption">Tracked baseline candidates</span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${escapeHtml(String(panel.pending_count || 0))}</span>
+                    <span class="journey-node-label">Pending</span>
+                    <span class="journey-node-caption">Awaiting human review</span>
+                </div>
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(panel.approved_count || 0))}</span>
+                    <span class="journey-node-label">Approved</span>
+                    <span class="journey-node-caption">Authoritative baseline entries</span>
+                </div>
+                <div class="journey-node journey-tone-gap">
+                    <span class="journey-node-value">${escapeHtml(String(panel.rejected_count || 0))}</span>
+                    <span class="journey-node-label">Rejected</span>
+                    <span class="journey-node-caption">Need follow-up or rework</span>
+                </div>
+            </div>
+            ${actionsHtml}
+            <div>
+                <div class="detail-section-label">Recent governance decisions</div>
+                ${decisionsHtml}
+            </div>
+            <div>
+                <div class="detail-section-label">Current artifact review state</div>
+                <div class="stack compact-stack">${artifactCards || '<div class="muted">No baseline artifacts are present.</div>'}</div>
+            </div>
+        </div>
+    `;
+}
+
+function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null) {
+    const items = asArray(artifacts);
+    if (!items.length) {
+        return '<div class="muted">No stored onboarding artifacts are available yet for a repo-level relevance assessment.</div>';
+    }
+
+    const counts = {
+        aiControl: 0,
+        tool: 0,
+        model: 0,
+        governance: 0,
+    };
+
+    for (const artifact of items) {
+        const kind = String(artifact?.provenance_kind || "");
+        if (kind === "ai_control_surface") {
+            counts.aiControl += 1;
+        } else if (kind === "ai_tool_surface") {
+            counts.tool += 1;
+        } else if (kind === "model_behavior_surface") {
+            counts.model += 1;
+        } else if (kind === "human_governance_surface") {
+            counts.governance += 1;
+        }
+    }
+
+    const statusTags = [];
+    if (counts.aiControl > 0) {
+        statusTags.push(`<span class="drift-chip chip-capability">${escapeHtml(`${counts.aiControl} AI control surface${counts.aiControl === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.tool > 0) {
+        statusTags.push(`<span class="drift-chip chip-model">${escapeHtml(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.model > 0) {
+        statusTags.push(`<span class="drift-chip chip-baseline">${escapeHtml(`${counts.model} model/config surface${counts.model === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.governance > 0) {
+        statusTags.push(`<span class="drift-chip chip-governance">${escapeHtml(`${counts.governance} governance artifact${counts.governance === 1 ? "" : "s"}`)}</span>`);
+    }
+    statusTags.push(`<span class="drift-chip ${baselineReview?.is_pending_review ? "chip-baseline" : "chip-guardrails"}">${escapeHtml(baselineReview?.is_pending_review ? "Baseline review pending" : "Human-reviewed baseline")}</span>`);
+
+    const reviewState = baselineReview?.is_pending_review
+        ? "Baseline review is still pending for part of the stored evidence."
+        : "Stored evidence includes a reviewed baseline reference for this repository."
+    const repoStatus = String(onboarding?.status || "onboarded repository").replaceAll("_", " ");
+
+    return `
+        <div class="stack compact-stack">
+            <p class="detail-note">This repo view surfaces stored evidence that may require AI governance review. It does not classify the repository under the EU AI Act or make legal claims.</p>
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(counts.aiControl + counts.tool + counts.model))}</span>
+                    <span class="journey-node-label">AI surfaces</span>
+                    <span class="journey-node-caption">Prompt, tool, and model/config artifacts found in stored onboarding evidence.</span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${escapeHtml(String(counts.governance))}</span>
+                    <span class="journey-node-label">Governance</span>
+                    <span class="journey-node-caption">Policy and guardrail artifacts detected during onboarding.</span>
+                </div>
+                <div class="journey-node ${baselineReview?.is_pending_review ? "journey-tone-gap" : "journey-tone-primary"}">
+                    <span class="journey-node-value">${escapeHtml(String(baselineReview?.pending_count || 0))}</span>
+                    <span class="journey-node-label">Pending review</span>
+                    <span class="journey-node-caption">Baseline entries still awaiting human approval.</span>
+                </div>
+            </div>
+            <div class="tag-row">${statusTags.join("")}</div>
+            <div class="artifact-card">
+                <strong>Oversight summary</strong>
+                <div class="artifact-card-reason">${escapeHtml(repoStatus)} · ${escapeHtml(`${items.length} stored artifacts`)}</div>
+                <div class="detail-note">${escapeHtml(reviewState)}</div>
+            </div>
+        </div>
+    `;
 }
 
 async function mutateRepoBaselineDecision(action, note) {
@@ -138,7 +289,33 @@ async function mutateRepoBaselineDecision(action, note) {
 }
 
 function bindBaselineReviewActions() {
-    return;
+    document.querySelectorAll("[data-baseline-decision]").forEach((button) => {
+        if (button.dataset.boundBaselineDecision === "true") {
+            return;
+        }
+        button.dataset.boundBaselineDecision = "true";
+        button.addEventListener("click", async () => {
+            const action = button.getAttribute("data-baseline-decision");
+            if (!action) {
+                return;
+            }
+            const note = window.prompt(`Optional rationale for ${action}ing this baseline:`) || "";
+            button.disabled = true;
+            try {
+                const payload = await mutateRepoBaselineDecision(action, note.trim() || null);
+                if (payload?.dashboard) {
+                    applyDashboardPayload(payload.dashboard);
+                    return;
+                }
+                await loadDashboard();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : `Baseline ${action} failed.`;
+                window.alert(message);
+            } finally {
+                button.disabled = false;
+            }
+        });
+    });
 }
 
 function clamp(value, min, max) {
@@ -565,7 +742,7 @@ function renderArtifactTable(items = []) {
     return items.map((item) => `
         <tr>
             <td>${escapeHtml(item.artifact_path)}</td>
-            <td>${escapeHtml(item.artifact_type)}</td>
+            <td><div>${escapeHtml(item.artifact_type)}</div><div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div></td>
             <td>${Number(item.historical_profile_count || 0)}</td>
             <td>${Math.max(Number(item.latest_historical_drift_magnitude || 0), Number(item.leaderboard_drift_magnitude || 0)).toFixed(3)}</td>
             <td><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(item.artifact_path)}">Open storyline</button></td>
@@ -875,6 +1052,7 @@ function applyDashboardPayload(payload) {
     const insights = asArray(payload.insights);
     const lowerConfidenceInsights = asArray(payload.lower_confidence_insights);
     const controlSurfaces = asArray(payload.control_surface_groups);
+    const baselineReview = payload.baseline_review || null;
     const historyCues = asArray(payload.history_cues);
     const artifacts = asArray(payload.artifacts);
     const historyTimelines = asArray(payload.history_timelines);
@@ -897,7 +1075,9 @@ function applyDashboardPayload(payload) {
 
     setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
     setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
+    setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
     setSectionHtml("history-cues", renderCueCards(historyCues));
+    setSectionHtml("baseline-review-panel", renderBaselineReviewPanel(baselineReview));
     setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
@@ -907,6 +1087,7 @@ function applyDashboardPayload(payload) {
     window.__artifactEntries = artifacts;
     refreshArtifactsSection();
     bindArtifactControls();
+    bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
 }
@@ -1064,6 +1245,7 @@ async function loadDashboard() {
         setSectionHtml("detail-attributes", fallback);
         setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
         setSectionHtml("control-surfaces", fallback);
+        setSectionHtml("repo-ai-act-assessment", fallback);
         setSectionHtml("history-cues", fallback);
         setSectionHtml("baseline-review-panel", fallback);
         setSectionHtml("repo-journey-summary", fallback);
@@ -1152,14 +1334,16 @@ function bindExportForm() {
 }
 
 async function loadExportHistory() {
+    const tbody = document.getElementById('export-history-tbody');
+    if (!tbody) {
+        return;
+    }
     try {
         const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/history`);
         if (!response.ok) throw new Error('Failed to load export history');
 
         const payload = await response.json();
         const exportJobs = asArray(payload.jobs || []);
-
-        const tbody = document.getElementById('export-history-tbody');
         if (exportJobs.length === 0) {
             tbody.innerHTML = '<tr><td colspan="6" class="muted">No exports found</td></tr>';
             return;
@@ -1178,7 +1362,6 @@ async function loadExportHistory() {
             </tr>
         `).join('');
     } catch (error) {
-        const tbody = document.getElementById('export-history-tbody');
         tbody.innerHTML = '<tr><td colspan="6" class="muted">Error loading export history</td></tr>';
     }
 }

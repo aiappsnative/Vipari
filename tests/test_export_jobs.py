@@ -1,10 +1,15 @@
+import os
+import sys
 import time
+
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services.export_jobs import (
     create_export_job,
     get_export_job,
     list_export_jobs_for_requester,
     list_export_jobs_for_repo,
+    list_export_jobs_for_workspace_requester,
     update_export_job_status,
 )
 
@@ -230,3 +235,48 @@ class TestExportJobs:
         )
 
         assert second_job.id != first_job.id
+
+    def test_list_export_jobs_for_workspace_requester_spans_multiple_repos(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+
+        from services.audit_jobs import init_db
+
+        init_db(db_path)
+
+        job_one = create_export_job(
+            db_path=db_path,
+            repo_full="test/repo-one",
+            from_ts=1700000000,
+            to_ts=1700086400,
+            workspace_id=7,
+            requested_by_user_id=41,
+            requested_by_github_login="owner",
+            export_mode="compliance",
+            include_artifact_content=False,
+        )
+        job_two = create_export_job(
+            db_path=db_path,
+            repo_full="test/repo-two",
+            from_ts=1700100000,
+            to_ts=1700186400,
+            workspace_id=7,
+            requested_by_user_id=41,
+            requested_by_github_login="owner",
+            export_mode="compliance_plus_drift",
+            include_artifact_content=True,
+        )
+        create_export_job(
+            db_path=db_path,
+            repo_full="test/repo-three",
+            from_ts=1700200000,
+            to_ts=1700286400,
+            workspace_id=8,
+            requested_by_user_id=41,
+            requested_by_github_login="owner",
+            export_mode="compliance",
+            include_artifact_content=False,
+        )
+
+        jobs = list_export_jobs_for_workspace_requester(db_path, workspace_id=7, requested_by_user_id=41)
+
+        assert [job.id for job in jobs] == [job_two.id, job_one.id]

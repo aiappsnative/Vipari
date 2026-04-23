@@ -811,8 +811,47 @@ def render_control_plane_placeholder_page(
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{COMPLIANCE_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "compliance" else "")
         .replace("{{POLICIES_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "policies" else "")
         .replace("{{HELP_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "help" else "")
+    )
+
+
+def render_control_plane_compliance_page(
+    *,
+    workspace_name: str,
+    audit_href: str,
+    plan_label: str,
+    theme_preference: str,
+    status_note: str,
+    tracked_repo_count: int,
+    baseline_approved_repo_count: int,
+    export_ready_count: int,
+    export_pending_count: int,
+    ai_act_assessment_html: str,
+    evidence_gaps_html: str,
+    evidence_freshness_html: str,
+    repo_rows_html: str,
+    export_history_html: str,
+    csrf_token: str,
+) -> str:
+    template = _load_template("control_plane_compliance.html")
+    return (
+        template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{AUDIT_HREF}}", html_escape(audit_href))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{STATUS_NOTE}}", html_escape(status_note))
+        .replace("{{TRACKED_REPO_COUNT}}", html_escape(str(tracked_repo_count)))
+        .replace("{{BASELINE_APPROVED_REPO_COUNT}}", html_escape(str(baseline_approved_repo_count)))
+        .replace("{{EXPORT_READY_COUNT}}", html_escape(str(export_ready_count)))
+        .replace("{{EXPORT_PENDING_COUNT}}", html_escape(str(export_pending_count)))
+        .replace("{{AI_ACT_ASSESSMENT}}", ai_act_assessment_html)
+        .replace("{{EVIDENCE_GAPS}}", evidence_gaps_html)
+        .replace("{{EVIDENCE_FRESHNESS}}", evidence_freshness_html)
+        .replace("{{REPO_ROWS}}", repo_rows_html)
+        .replace("{{EXPORT_HISTORY}}", export_history_html)
+        .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
     )
 
 

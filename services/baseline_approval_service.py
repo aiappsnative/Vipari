@@ -9,12 +9,14 @@ from engine.drift_profile import build_attribute_profile
 
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .onboarding_records import (
+    BaselineAuditLogRecord,
     OnboardedArtifactRecord,
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
     create_onboarding_baseline_version,
     get_latest_repository_onboarding,
     get_latest_rebaseline_snapshot_id_for_onboarding,
+    list_baseline_audit_log_for_onboarding,
     list_latest_approved_onboarding_baseline_versions_for_onboarding,
     list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
@@ -23,6 +25,7 @@ from .onboarding_records import (
     update_onboarding_baseline_review,
     update_repository_onboarding_approval_status,
 )
+from .provenance_labels import artifact_provenance_label
 from .repo_journey import build_repo_journey, get_repo_snapshot_detail
 
 
@@ -36,6 +39,19 @@ class BaselineReviewArtifact:
     approved_at: float | None
     profile: dict[str, float]
     line_count: int
+    provenance_kind: str = "supporting_repository_artifact"
+    provenance_label: str = "Supporting repository artifact"
+
+
+@dataclass(frozen=True)
+class BaselineReviewDecision:
+    action: str
+    decision_type: str | None
+    actor_login: str | None
+    rationale: str | None
+    artifact_path: str | None
+    linked_findings: list[str]
+    created_at: float
 
 
 @dataclass(frozen=True)
@@ -49,6 +65,7 @@ class RepoBaselineReviewPanel:
     pending_count: int
     rejected_count: int
     artifacts: list[BaselineReviewArtifact]
+    recent_decisions: list[BaselineReviewDecision]
 
 
 def _profile_payload(profile) -> dict[str, float]:
@@ -92,6 +109,8 @@ def build_repo_baseline_review_panel(db_path: str, repo_full: str) -> RepoBaseli
             approved_at=baseline.approved_at,
             profile=_profile_payload(baseline.profile),
             line_count=baseline.line_count,
+            provenance_kind=artifact_provenance_label(baseline.artifact_type).kind,
+            provenance_label=artifact_provenance_label(baseline.artifact_type).label,
         )
         for baseline in latest_baselines
     ]
@@ -99,6 +118,18 @@ def build_repo_baseline_review_panel(db_path: str, repo_full: str) -> RepoBaseli
     pending_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "pending")
     rejected_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "rejected")
     authoritative_count = len(list_latest_approved_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id))
+    recent_decisions = [
+        BaselineReviewDecision(
+            action=log.action,
+            decision_type=log.decision_type,
+            actor_login=log.actor_login,
+            rationale=log.note,
+            artifact_path=log.artifact_path,
+            linked_findings=log.linked_findings,
+            created_at=log.created_at,
+        )
+        for log in reversed(list_baseline_audit_log_for_onboarding(db_path, onboarding.id)[-5:])
+    ]
     return RepoBaselineReviewPanel(
         repo_full=repo_full,
         onboarding_status=onboarding.status,
@@ -109,6 +140,7 @@ def build_repo_baseline_review_panel(db_path: str, repo_full: str) -> RepoBaseli
         pending_count=pending_count,
         rejected_count=rejected_count,
         artifacts=artifacts,
+        recent_decisions=recent_decisions,
     )
 
 
@@ -168,6 +200,7 @@ def approve_repo_baseline(
         onboarding_id=onboarding.id,
         artifact_path=None,
         action="approve_repo_baseline",
+        decision_type="human_review_approved",
         actor_login=actor_login,
         note=approval_note,
         snapshot_id=approved_snapshot_id,
@@ -227,6 +260,7 @@ def reject_repo_baseline(
         onboarding_id=onboarding.id,
         artifact_path=None,
         action="reject_repo_baseline",
+        decision_type="human_review_rejected",
         actor_login=actor_login,
         note=approval_note,
     )
@@ -264,6 +298,7 @@ def approve_repo_baseline_artifact(
         onboarding_id=onboarding.id,
         artifact_path=artifact_path,
         action="approve",
+        decision_type="human_review_approved",
         actor_login=actor_login,
         note=approval_note,
         baseline_version_id=updated.id,
@@ -320,6 +355,7 @@ def reject_repo_baseline_artifact(
         onboarding_id=onboarding.id,
         artifact_path=artifact_path,
         action="reject",
+        decision_type="human_review_rejected",
         actor_login=actor_login,
         note=approval_note,
         baseline_version_id=updated.id,
@@ -426,6 +462,7 @@ def rebaseline_repo_from_snapshot(
         onboarding_id=onboarding.id,
         artifact_path=None,
         action="rebaseline",
+        decision_type="baseline_reset_requested",
         actor_login=actor_login,
         note=rationale,
         snapshot_id=snapshot_id,

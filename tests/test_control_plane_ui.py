@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from jwt.exceptions import InvalidKeyError
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -14,6 +16,8 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 import main
+from engine.diff_parser import extract_signal_terms_from_text
+from engine.drift_profile import build_attribute_profile
 from services.billing_service import build_stripe_signature
 from services.auth_service import GithubOAuthToken, GithubUserProfile
 from services.secure_store import decrypt_text
@@ -72,6 +76,7 @@ def test_marketing_page_renders():
     assert response.status_code == 200
     assert "DriftGuard Control Plane" in response.text
     assert "GitHub-native AI governance" in response.text
+    assert "AI-assisted review output labels" in response.text
 
 
 def test_pricing_page_renders_plan_cards():
@@ -654,6 +659,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Repo Posture Radar" in dashboard_html
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
+    assert 'href="/app/compliance"' in dashboard_html
     assert 'id="audit-logs-toggle"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
@@ -663,8 +669,12 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'data-theme="light"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
+    assert "EU AI Act relevance" in repo_dashboard_html
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
+    assert 'href="/app/compliance"' in repo_dashboard_html
+    assert "Generate Export Package" not in repo_dashboard_html
+    assert "Recent Exports" not in repo_dashboard_html
 
     dashboard_css = (Path(__file__).resolve().parent.parent / "static" / "dashboard.css").read_text(encoding="utf-8")
     assert 'body.dashboard-index-page[data-theme="light"]' in dashboard_css
@@ -1132,6 +1142,8 @@ def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
     assert policies_response.status_code == 200
     assert "We are working on this" in help_response.text
     assert "We are working on this" in policies_response.text
+    assert 'href="/app/compliance"' in help_response.text
+    assert 'href="/app/compliance"' in policies_response.text
     assert 'data-theme-toggle' in help_response.text
     assert 'data-theme-toggle' in policies_response.text
 
@@ -2452,6 +2464,522 @@ def test_export_download_serves_completed_artifact_without_rebuild(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "compliance-page.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.export_jobs import create_export_job, update_export_job_status
+    from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="970",
+        github_login="compliance-owner",
+        display_name="Compliance Owner",
+        primary_email="compliance-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="compliance-workspace",
+        display_name="Compliance Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="compliance-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_compliance_owner",
+        stripe_price_id="price_compliance_owner",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9700,
+        account_id="9700",
+        account_login="compliance-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9700,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "compliance-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "2",
+                "repo_full": "compliance-org/repo-two",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="compliance-org/repo-one",
+        installation_id=9700,
+        default_branch="main",
+        status="baseline_approved",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Prompt file",
+                confidence=0.9,
+                baseline_content="You must follow the approved workflow.",
+            ),
+            DiscoveredArtifactInput(
+                artifact_path="policies/governance.md",
+                artifact_type="policy",
+                discovery_reason="Governance policy",
+                confidence=0.8,
+                baseline_content="Human review is required for sensitive changes.",
+            ),
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="compliance-org/repo-two",
+        installation_id=9700,
+        default_branch="main",
+        status="pending_baseline_approval",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="tools/agent_tool.py",
+                artifact_type="tool",
+                discovery_reason="Tool implementation",
+                confidence=0.8,
+                baseline_content="def run_tool():\n    return 'ok'",
+            ),
+            DiscoveredArtifactInput(
+                artifact_path="config/model.json",
+                artifact_type="model_config",
+                discovery_reason="Model configuration",
+                confidence=0.8,
+                baseline_content='{"model": "gpt-4o"}',
+            ),
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    stale_timestamp = time.time() - (45 * 86400)
+    with sqlite3.connect(main.AUDIT_DB_PATH) as conn:
+        conn.execute(
+            "UPDATE repository_onboardings SET updated_at = ? WHERE repo_full = ?",
+            (stale_timestamp, "compliance-org/repo-two"),
+        )
+    job = create_export_job(
+        db_path=main.AUDIT_DB_PATH,
+        repo_full="compliance-org/repo-one",
+        from_ts=1700000000,
+        to_ts=1700086400,
+        workspace_id=workspace.id,
+        requested_by_user_id=user.id,
+        requested_by_github_login="compliance-owner",
+        export_mode="compliance",
+        include_artifact_content=False,
+    )
+    update_export_job_status(
+        main.AUDIT_DB_PATH,
+        job.id,
+        "completed",
+        result_size_bytes=14,
+        result_sha256="abc123",
+        result_blob=b"zip-artifact",
+    )
+
+    response = client.get("/app/compliance", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Compliance workspace" in response.text
+    assert "compliance-org/repo-one" in response.text
+    assert "compliance-org/repo-two" in response.text
+    assert "Run compliance exports" in response.text
+    assert "Download" in response.text
+    assert 'aria-label="Audit Logs"' in response.text
+    assert "EU AI Act relevance assessment" in response.text
+    assert "Next actions for stronger review packs" in response.text
+    assert "How current the stored review evidence is" in response.text
+    assert "AI control surface" in response.text
+    assert "Governance surface" in response.text
+    assert "AI-assisted tool surface" in response.text
+    assert "Model/config surface" in response.text
+    assert "Human-reviewed baseline" in response.text
+    assert "No governance or policy artifact detected" in response.text
+    assert "Approve or reject the pending baseline" in response.text
+    assert "Stale evidence (45d)" in response.text
+    assert "Review-ready preset" in response.text
+    assert "Not review-ready yet" in response.text
+    assert "Pending baseline approval keeps this repo out of review-ready presets" in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "compliance-export-submit.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.compliance_export_service import ComplianceExportResult
+    from services.export_jobs import list_export_jobs_for_workspace_requester
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="971",
+        github_login="compliance-exporter",
+        display_name="Compliance Exporter",
+        primary_email="compliance-exporter@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="compliance-export-workspace",
+        display_name="Compliance Export Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="compliance-export-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_compliance_exporter",
+        stripe_price_id="price_compliance_exporter",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9710,
+        account_id="9710",
+        account_login="compliance-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9710,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "compliance-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "2",
+                "repo_full": "compliance-org/repo-two",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+
+    created_result = ComplianceExportResult(
+        zip_bytes=b"workspace-export-zip",
+        manifest={"version": "1"},
+        file_count=2,
+        total_size_bytes=len(b"workspace-export-zip"),
+    )
+    with patch("main.build_compliance_export", return_value=created_result):
+        response = client.post(
+            "/app/compliance/export",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={
+                "export_scope": "selected",
+                "repo_fulls": ["compliance-org/repo-two"],
+                "from_date": "2023-11-14",
+                "to_date": "2023-11-15",
+                "export_mode": "compliance",
+                "csrf_token": session.csrf_secret,
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/app/compliance?status=")
+
+    jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
+    assert len(jobs) == 1
+    assert jobs[0].repo_full == "compliance-org/repo-two"
+    assert jobs[0].status == "completed"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_compliance_page_can_create_exports_for_review_ready_preset(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "compliance-export-preset.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.compliance_export_service import ComplianceExportResult
+    from services.export_jobs import list_export_jobs_for_workspace_requester
+    from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="972",
+        github_login="preset-exporter",
+        display_name="Preset Exporter",
+        primary_email="preset-exporter@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="compliance-export-preset-workspace",
+        display_name="Compliance Export Preset Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="compliance-export-preset-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_compliance_preset",
+        stripe_price_id="price_compliance_preset",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9720,
+        account_id="9720",
+        account_login="compliance-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9720,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "compliance-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "2",
+                "repo_full": "compliance-org/repo-two",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="compliance-org/repo-one",
+        installation_id=9720,
+        default_branch="main",
+        status="baseline_approved",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Prompt file",
+                confidence=0.9,
+                baseline_content="You must follow the approved workflow.",
+            ),
+            DiscoveredArtifactInput(
+                artifact_path="policies/policy.md",
+                artifact_type="policy",
+                discovery_reason="Governance policy",
+                confidence=0.8,
+                baseline_content="Human review is required for sensitive changes.",
+            ),
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="compliance-org/repo-two",
+        installation_id=9720,
+        default_branch="main",
+        status="pending_baseline_approval",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="tools/agent_tool.py",
+                artifact_type="tool",
+                discovery_reason="Tool implementation",
+                confidence=0.8,
+                baseline_content="def run_tool():\n    return 'ok'",
+            ),
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+
+    created_result = ComplianceExportResult(
+        zip_bytes=b"workspace-export-zip",
+        manifest={"version": "1"},
+        file_count=2,
+        total_size_bytes=len(b"workspace-export-zip"),
+    )
+    with patch("main.build_compliance_export", return_value=created_result):
+        response = client.post(
+            "/app/compliance/export",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={
+                "export_scope": "all",
+                "export_preset": "review_ready",
+                "from_date": "2023-11-14",
+                "to_date": "2023-11-15",
+                "export_mode": "compliance",
+                "csrf_token": session.csrf_secret,
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/app/compliance?status=")
+
+    jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
+    assert len(jobs) == 1
+    assert jobs[0].repo_full == "compliance-org/repo-one"
+    assert jobs[0].status == "completed"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_versioned_dashboard_assets_are_cacheable():
     css_response = client.get("/static/dashboard.css?v=123")
     js_response = client.get("/static/dashboard-index.js?v=123")
@@ -2741,5 +3269,98 @@ def test_repo_setup_slot_summary_counts_onboarded_repos_shown_on_page(tmp_path):
 
     assert response.status_code == 200
     assert "17 of 20 repository slots available on this plan." in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_page_ignores_invalid_github_app_private_key(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-setup-invalid-key.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="961",
+        github_login="repo-owner",
+        display_name="Repo Owner",
+        primary_email="repo-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["repo"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="Repo Setup Workspace",
+        slug="repo-setup-workspace",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_repo_setup",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-setup-invalid-key-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch.object(main.settings, "github_app_id", "app-id"), patch.object(
+        main.settings, "github_app_private_key", "not-a-pem"
+    ), patch("main.sync_installation_repositories", side_effect=InvalidKeyError("bad key")):
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "Repository Inventory" in response.text
+    assert "20 of 20 repository slots available on this plan." in response.text
 
     main.AUDIT_DB_PATH = original_db_path
