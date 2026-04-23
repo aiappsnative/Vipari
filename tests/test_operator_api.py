@@ -328,7 +328,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert repo_response.status_code == 200
     repo_text = repo_response.text.lower()
     assert "audit page" in repo_text
-    assert "static analysis only" in repo_text
+    assert "governance attention" in repo_text
+    assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
     assert "attribute drift" in repo_text
     assert "control surface coverage" in repo_text
     assert "drift storyline" in repo_text

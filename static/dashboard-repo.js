@@ -276,6 +276,73 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
     `;
 }
 
+function governanceSurfaceCounts(artifacts = []) {
+    const counts = {
+        aiControl: 0,
+        tool: 0,
+        model: 0,
+        governance: 0,
+    };
+
+    for (const artifact of asArray(artifacts)) {
+        const kind = String(artifact?.provenance_kind || "");
+        if (kind === "ai_control_surface") {
+            counts.aiControl += 1;
+        } else if (kind === "ai_tool_surface") {
+            counts.tool += 1;
+        } else if (kind === "model_behavior_surface") {
+            counts.model += 1;
+        } else if (kind === "human_governance_surface") {
+            counts.governance += 1;
+        }
+    }
+
+    return counts;
+}
+
+function renderGovernanceAttentionNote(onboarding, artifacts = [], baselineReview = null, journeySnapshots = []) {
+    const counts = governanceSurfaceCounts(artifacts);
+    const snapshots = asArray(journeySnapshots);
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1] || null;
+    const riskLevel = String(current?.risk_summary?.risk_level || "low").toLowerCase();
+    const pendingReview = Boolean(baselineReview?.is_pending_review || Number(baselineReview?.pending_count || 0) > 0);
+    const aiSurfaceCount = counts.aiControl + counts.tool + counts.model;
+    const hasGovernanceCoverage = counts.governance > 0;
+    const repoStatus = String(onboarding?.status || "onboarded").replaceAll("_", " ");
+
+    const reasons = [];
+    if (riskLevel === "high") {
+        reasons.push("a high current drift-risk posture");
+    } else if (riskLevel === "medium") {
+        reasons.push("a moderate current drift-risk posture");
+    }
+    if (counts.tool > 0) {
+        reasons.push(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`);
+    }
+    if (counts.model > 0) {
+        reasons.push(`${counts.model} model or config surface${counts.model === 1 ? "" : "s"}`);
+    }
+    if (pendingReview) {
+        reasons.push("baseline evidence still awaiting human approval");
+    }
+    if (!hasGovernanceCoverage) {
+        reasons.push("limited stored governance artifacts");
+    }
+
+    let headline = "Moderate governance attention";
+    let body = `This repo should stay in the regular governance review path because it has meaningful AI control evidence. Under the EU AI Act, that supports ongoing oversight of control surfaces and human review signals. For SOC 2 and ISO 27001, keep change approval, traceability, and baseline evidence current while the repository remains ${repoStatus}.`;
+
+    if (riskLevel === "high" || pendingReview || counts.tool > 0 || (!hasGovernanceCoverage && aiSurfaceCount >= 3)) {
+        headline = "Higher governance attention";
+        body = `This repo needs stronger governance attention because the stored evidence shows ${reasons.length ? reasons.join(", ") : "material AI control surfaces"}. Under the EU AI Act, those signals increase the need for documented oversight, approval, and change accountability. For SOC 2 and ISO 27001, that means tighter change control, clearer reviewer sign-off, and stronger traceability from baseline to current posture.`;
+    } else if (riskLevel === "low" && !pendingReview && hasGovernanceCoverage && aiSurfaceCount <= 2) {
+        headline = "Lower governance attention";
+        body = "This repo currently points to lighter governance attention because the stored evidence shows a low drift-risk posture, reviewed baseline evidence, and governance artifacts alongside a limited number of AI control surfaces. Under the EU AI Act, that suggests lighter ongoing oversight rather than a legal risk classification. For SOC 2 and ISO 27001, standard change approval, baseline traceability, and periodic evidence review should remain in place.";
+    }
+
+    return { headline, body };
+}
+
 async function mutateRepoBaselineDecision(action, note) {
     const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/baseline/${action}`, {
         method: "POST",
@@ -1059,6 +1126,7 @@ function applyDashboardPayload(payload) {
     const journeySnapshots = asArray(payload.journey_snapshots);
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
     const preferredArtifactPath = requestedArtifactPath();
+    const governanceAttention = renderGovernanceAttentionNote(onboarding, artifacts, baselineReview, journeySnapshots);
     window.__designProfiles = asArray(payload.design_profiles);
     window.__journeySnapshots = journeySnapshots;
     const comparison = payload.journey_comparison || null;
@@ -1067,6 +1135,8 @@ function applyDashboardPayload(payload) {
     setText("repo-stat-review", String(insights.length));
     setText("repo-stat-baselines", String(asNumber(payload.baseline_version_count)));
     setText("repo-stat-history", String(historyTimelines.reduce((sum, item) => sum + Number(item.point_count || 0), 0)));
+    setText("repo-governance-attention-headline", governanceAttention.headline);
+    setText("repo-governance-attention-copy", governanceAttention.body);
 
     setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
     bindRepoRows(insights);
