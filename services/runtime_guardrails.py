@@ -8,6 +8,7 @@ from jwt.exceptions import InvalidKeyError
 from config import Settings
 from .github_integration import generate_jwt
 from .persistence import connect_sqlite
+from .schema_migrations import MIGRATIONS, list_applied_migrations
 
 
 def _is_https_url(value: str) -> bool:
@@ -90,6 +91,22 @@ async def build_runtime_readiness(settings: Settings, *, queue_backend=None) -> 
         )
     except Exception as exc:
         checks.append({"name": "persistence", "status": "failed", "detail": str(exc)})
+
+    try:
+        applied_versions = {item.version for item in list_applied_migrations(settings.resolved_db_path)}
+        pending_versions = [version for version, _description, _handler in MIGRATIONS if version not in applied_versions]
+        if pending_versions:
+            checks.append(
+                {
+                    "name": "migrations",
+                    "status": "failed",
+                    "detail": f"Pending schema migrations: {', '.join(pending_versions)}.",
+                }
+            )
+        else:
+            checks.append({"name": "migrations", "status": "ok", "detail": "Schema migrations applied."})
+    except Exception as exc:
+        checks.append({"name": "migrations", "status": "failed", "detail": str(exc)})
 
     if queue_backend is not None:
         try:
