@@ -4,6 +4,7 @@
 
 ### Changed
 - persistence status JSON now omits the raw `database_path` or locator by default across the monolith API, split API service, and operator CLI so PostgreSQL DSNs are not exposed in status output
+- PostgreSQL persistence status now fails closed on connection errors instead of reporting the database as present when the configured locator is unreachable
 - the production-persistence branch is reconciled onto the current migration-aware baseline instead of reintroducing stale pre-migration persistence code
 
 ### Verified

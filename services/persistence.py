@@ -488,7 +488,7 @@ def get_persistence_status(db_path: str) -> PersistenceStatus:
         return PersistenceStatus(
             backend=backend,
             database_path=resolved_path,
-            database_exists=(backend == "postgresql"),
+            database_exists=False,
             schema_version=CURRENT_PERSISTENCE_SCHEMA_VERSION,
             production_target=DEFAULT_PRODUCTION_TARGET,
             sqlite_busy_timeout_ms=DEFAULT_SQLITE_BUSY_TIMEOUT_MS if backend == "sqlite" else 0,

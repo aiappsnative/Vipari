@@ -47,6 +47,17 @@ def test_resolve_db_path_prefers_postgres_database_url(monkeypatch):
     assert resolve_db_path(None) == "postgresql://user:pass@db.example.com/driftguard"
 
 
+def test_get_persistence_status_reports_postgres_unreachable_as_not_existing():
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+
+    with patch("services.persistence.connect_sqlite", side_effect=RuntimeError("db unreachable")):
+        status = get_persistence_status(locator)
+
+    assert status.backend == "postgresql"
+    assert status.database_exists is False
+    assert status.production_target == "postgresql"
+
+
 def test_migrate_database_records_bootstrap_migration(tmp_path):
     db_path = str(tmp_path / "migration.db")
 
