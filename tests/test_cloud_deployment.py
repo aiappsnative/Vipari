@@ -191,6 +191,96 @@ def test_webhook_lifespan_closes_queue_backend(tmp_path, monkeypatch):
     assert queue.closed is True
 
 
+def test_run_api_uses_configured_api_port(monkeypatch):
+    monkeypatch.setenv("API_PORT", "9012")
+    _reset_settings_cache()
+    import run_api
+
+    with patch.object(run_api.uvicorn, "run") as run_server:
+        run_api.main()
+
+    run_server.assert_called_once_with("run_api:app", host="0.0.0.0", port=9012)
+
+
+def test_run_webhook_uses_configured_webhook_port(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_PORT", "9011")
+    _reset_settings_cache()
+    import run_webhook
+
+    with patch.object(run_webhook.uvicorn, "run") as run_server:
+        run_webhook.main()
+
+    run_server.assert_called_once_with("run_webhook:app", host="0.0.0.0", port=9011)
+
+
+def test_run_api_falls_back_to_railway_port(monkeypatch):
+    monkeypatch.delenv("API_PORT", raising=False)
+    monkeypatch.setenv("PORT", "7810")
+    _reset_settings_cache()
+    import run_api
+
+    with patch.object(run_api.uvicorn, "run") as run_server:
+        run_api.main()
+
+    run_server.assert_called_once_with("run_api:app", host="0.0.0.0", port=7810)
+
+
+def test_run_webhook_falls_back_to_railway_port(monkeypatch):
+    monkeypatch.delenv("WEBHOOK_PORT", raising=False)
+    monkeypatch.setenv("PORT", "7811")
+    _reset_settings_cache()
+    import run_webhook
+
+    with patch.object(run_webhook.uvicorn, "run") as run_server:
+        run_webhook.main()
+
+    run_server.assert_called_once_with("run_webhook:app", host="0.0.0.0", port=7811)
+
+
+def test_api_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "api-health.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_ENV", "local")
+    _reset_settings_cache()
+
+    with TestClient(create_api_app()) as client:
+        health_response = client.get("/health")
+        ready_response = client.get("/health/ready")
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok", "service_role": "api"}
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert ready_payload["status"] == "ok"
+    assert ready_payload["service_role"] == "api"
+    assert any(check["name"] == "config" and check["status"] == "ok" for check in ready_payload["checks"])
+
+
+def test_webhook_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-health.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("SERVICE_ROLE", "webhook")
+    monkeypatch.setenv("APP_ENV", "local")
+    _reset_settings_cache()
+
+    with TestClient(create_webhook_app()) as client:
+        health_response = client.get("/health")
+        ready_response = client.get("/health/ready")
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok", "service_role": "webhook"}
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert ready_payload["status"] == "ok"
+    assert ready_payload["service_role"] == "webhook"
+    assert any(check["name"] == "config" and check["status"] == "ok" for check in ready_payload["checks"])
+
+
 def test_message_authorization_respects_workspace_pr_comments_setting(tmp_path, monkeypatch):
     db_path = str(tmp_path / "worker-settings.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")

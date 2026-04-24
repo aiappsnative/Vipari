@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from services.persistence import is_postgres_locator, is_sqlite_locator, sqlite_path_from_locator
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     app_env: Literal["local", "test", "production"] = "local"
     service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
     app_base_url: str = "http://127.0.0.1:8000"
+    api_port: int = Field(default=8002, validation_alias=AliasChoices("API_PORT", "PORT"))
+    webhook_port: int = Field(default=8001, validation_alias=AliasChoices("WEBHOOK_PORT", "PORT"))
     session_cookie_name: str = "promptdrift_session"
     session_cookie_secure: bool = False
     session_ttl_seconds: int = 604800

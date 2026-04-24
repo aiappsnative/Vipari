@@ -9,13 +9,13 @@ Railway project services:
   Docker source: `Dockerfile.api`
   runtime entrypoint: `run_api.py`
   role: customer control plane, dashboard, auth, setup, billing, workspace app
-  bind: honors Railway `PORT`
+  bind: honors Railway `PORT` through centralized settings resolution
 - `webhook`:
   public
   Docker source: `Dockerfile.webhook`
   runtime entrypoint: `run_webhook.py`
   role: GitHub App webhook ingress only
-  bind: honors Railway `PORT`
+  bind: honors Railway `PORT` through centralized settings resolution
 - `worker`:
   private
   Docker source: `Dockerfile.worker`
@@ -47,6 +47,7 @@ Railway project services:
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY`
 - `APP_ENCRYPTION_KEY`
+- Railway should provide `PORT` per public service automatically; use `API_PORT` or `WEBHOOK_PORT` only for local split-service overrides
 
 ### API service
 
