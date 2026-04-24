@@ -583,7 +583,8 @@ function applyRepoDetail(item) {
 }
 
 function bindRepoRows(items) {
-    document.querySelectorAll(".triage-row").forEach((row) => {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    rows.forEach((row) => {
         const activate = () => {
             document.querySelectorAll(".triage-row").forEach((candidate) => candidate.classList.remove("selected"));
             row.classList.add("selected");
@@ -593,7 +594,38 @@ function bindRepoRows(items) {
             }
         };
         row.addEventListener("click", activate);
+        row.addEventListener("focus", activate);
         row.addEventListener("keydown", (event) => {
+            const index = Number(row.getAttribute("data-row-index"));
+            if (!Number.isFinite(index)) {
+                return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                const nextIndex = clamp(index + delta, 0, rows.length - 1);
+                const nextRow = rows[nextIndex];
+                if (nextRow instanceof HTMLElement) {
+                    nextRow.focus();
+                }
+                return;
+            }
+            if (event.key === "Home") {
+                event.preventDefault();
+                const firstRow = rows[0];
+                if (firstRow instanceof HTMLElement) {
+                    firstRow.focus();
+                }
+                return;
+            }
+            if (event.key === "End") {
+                event.preventDefault();
+                const lastRow = rows[rows.length - 1];
+                if (lastRow instanceof HTMLElement) {
+                    lastRow.focus();
+                }
+                return;
+            }
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activate();

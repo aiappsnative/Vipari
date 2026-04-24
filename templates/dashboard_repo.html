@@ -7,7 +7,7 @@
     <meta name="driftguard-repo-full" content="{{REPO_FULL}}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-repo.js"></script>
@@ -63,42 +63,25 @@
         </nav>
 
         <div class="main-content">
+            <section class="posture-strip" aria-label="Repository posture">
+                <div class="posture-strip-left">
+                    <span class="posture-title">{{REPO_FULL}}</span>
+                    <div class="filter-pills" aria-hidden="true">
+                        <span class="filter-pill"><strong id="repo-stat-artifacts">-</strong>&nbsp;artifacts</span>
+                        <span class="filter-pill"><strong id="repo-stat-review">-</strong>&nbsp;open items</span>
+                        <span class="filter-pill"><strong id="repo-stat-baselines">-</strong>&nbsp;baselines</span>
+                        <span class="filter-pill"><strong id="repo-stat-history">-</strong>&nbsp;history markers</span>
+                    </div>
+                </div>
+                <div class="posture-strip-center repo-posture-summary">
+                    <div class="posture-title" id="repo-governance-attention-headline">Governance attention</div>
+                    <div class="posture-disclaimer" id="repo-governance-attention-copy">Loading EU AI Act, SOC 2, and ISO 27001 governance guidance...</div>
+                </div>
+                <div class="posture-strip-right">
+                    <a href="/dashboard" class="filter-add">Back to portfolio</a>
+                </div>
+            </section>
             <main class="page-scroll" id="top">
-                <section class="repo-audit-hero">
-                    <div class="repo-audit-hero-copy">
-                        <p class="repo-audit-eyebrow">Audit Page</p>
-                        <h1>{{REPO_FULL}}</h1>
-                        <p>Repo-level drift review for prompts, models, guardrails, and control surfaces across the full AI story of this repository.</p>
-                    </div>
-                    <div class="repo-audit-hero-note">
-                        <span class="repo-audit-note-label" id="repo-governance-attention-headline">Governance attention</span>
-                        <span class="repo-audit-note-copy" id="repo-governance-attention-copy">Loading EU AI Act, SOC 2, and ISO 27001 governance guidance...</span>
-                    </div>
-                </section>
-
-                <section class="repo-audit-metrics" aria-label="Repository audit summary">
-                    <article class="repo-audit-metric-card">
-                        <span class="repo-audit-metric-label">Tracked artifacts</span>
-                        <strong id="repo-stat-artifacts">-</strong>
-                        <span class="repo-audit-metric-foot">Artifacts under audit</span>
-                    </article>
-                    <article class="repo-audit-metric-card repo-audit-metric-alert">
-                        <span class="repo-audit-metric-label">Open items</span>
-                        <strong id="repo-stat-review">-</strong>
-                        <span class="repo-audit-metric-foot">Items requiring review</span>
-                    </article>
-                    <article class="repo-audit-metric-card repo-audit-metric-warm">
-                        <span class="repo-audit-metric-label">Approved baselines</span>
-                        <strong id="repo-stat-baselines">-</strong>
-                        <span class="repo-audit-metric-foot">Trusted checkpoints</span>
-                    </article>
-                    <article class="repo-audit-metric-card repo-audit-metric-cool">
-                        <span class="repo-audit-metric-label">History markers</span>
-                        <strong id="repo-stat-history">-</strong>
-                        <span class="repo-audit-metric-foot">Repo journey signals</span>
-                    </article>
-                </section>
-
                 <section class="repo-audit-anchor-bar" aria-label="Audit sections">
                     <a class="repo-audit-anchor" href="#repo-available-repos-section">Available repositories</a>
                     <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
