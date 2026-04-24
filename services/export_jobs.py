@@ -346,3 +346,24 @@ def list_export_jobs_for_requester(
             (repo_full, workspace_id, requested_by_user_id, limit),
         ).fetchall()
     return [_row_to_job(row) for row in rows]
+
+
+def list_export_jobs_for_workspace_requester(
+    db_path: str,
+    workspace_id: int,
+    requested_by_user_id: int,
+    limit: int = 25,
+) -> list[ExportJob]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM export_jobs
+            WHERE workspace_id = ?
+              AND requested_by_user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (workspace_id, requested_by_user_id, limit),
+        ).fetchall()
+    return [_row_to_job(row) for row in rows]

@@ -3,14 +3,32 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from fastapi.responses import JSONResponse
+from jwt.exceptions import InvalidKeyError
 
 from config import Settings
+from .github_integration import generate_jwt
 from .persistence import connect_sqlite
 
 
 def _is_https_url(value: str) -> bool:
     parsed = urlparse(value.strip())
     return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def _validate_github_app_private_key(settings: Settings) -> None:
+    if not settings.has_github_app_credentials:
+        return
+    try:
+        generate_jwt(
+            settings.github_app_id,
+            settings.github_private_key_path,
+            settings.resolved_github_private_key,
+        )
+    except (InvalidKeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "GitHub App credentials are configured, but the signing key is invalid. "
+            "Set GITHUB_APP_PRIVATE_KEY to a valid PEM private key or point GITHUB_PRIVATE_KEY_PATH to a readable PEM file."
+        ) from exc
 
 
 def validate_runtime_configuration(settings: Settings) -> None:
@@ -28,6 +46,12 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append("Worker service requires OPENAI_API_KEY or FOUNDRY_API_KEY.")
         if not settings.has_github_app_credentials:
             errors.append("Worker service requires GitHub App credentials.")
+
+    if settings.has_github_app_credentials:
+        try:
+            _validate_github_app_private_key(settings)
+        except RuntimeError as exc:
+            errors.append(str(exc))
 
     if settings.is_production:
         if not _is_https_url(settings.app_base_url):

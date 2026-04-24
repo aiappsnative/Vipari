@@ -24,7 +24,7 @@ def test_build_github_oauth_authorize_url_contains_expected_query():
     assert query["client_id"] == ["client-123"]
     assert query["redirect_uri"] == ["https://app.driftguard.ai/auth/github/callback"]
     assert query["state"] == ["opaque-state"]
-    assert query["scope"] == ["read:user user:email"]
+    assert query["scope"] == ["read:user user:email repo read:org"]
 
 
 def test_generated_auth_tokens_are_non_empty_and_distinct():

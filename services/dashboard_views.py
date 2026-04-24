@@ -38,6 +38,7 @@ from .onboarding_records import (
     select_effective_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
+from .provenance_labels import artifact_provenance_label
 
 
 _DASHBOARD_CACHE_LOCK = threading.RLock()
@@ -257,6 +258,8 @@ class RepoDashboardArtifactEntry:
     latest_pr_autonomy_shift: float = 0.0
     leaderboard_drift_magnitude: float = 0.0
     latest_activity_at: float = 0.0
+    provenance_kind: str = "supporting_repository_artifact"
+    provenance_label: str = "Supporting repository artifact"
 
 
 @dataclass(frozen=True)
@@ -690,6 +693,7 @@ def _build_repo_dashboard_view_uncached(
 
     for artifact in artifacts:
         baseline = baseline_by_path.get(artifact.artifact_path)
+        provenance = artifact_provenance_label(artifact.artifact_type)
         metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
         leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
 
@@ -716,6 +720,8 @@ def _build_repo_dashboard_view_uncached(
                 latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
                 leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
                 latest_activity_at=metrics["latest_activity_at"],
+                provenance_kind=provenance.kind,
+                provenance_label=provenance.label,
             )
         )
 
@@ -902,13 +908,15 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
         artifact_entries: list[RepoDashboardArtifactEntry] = []
         for row in artifact_rows:
             artifact_path = str(row["artifact_path"])
+            artifact_type = str(row["artifact_type"])
+            provenance = artifact_provenance_label(artifact_type)
             metrics = metrics_by_path.get(artifact_path, _empty_artifact_metrics())
             leaderboard_entry = leaderboard_by_path.get(artifact_path)
             baseline = baseline_by_path.get(artifact_path)
             artifact_entries.append(
                 RepoDashboardArtifactEntry(
                     artifact_path=artifact_path,
-                    artifact_type=str(row["artifact_type"]),
+                    artifact_type=artifact_type,
                     discovery_reason=str(row["discovery_reason"]),
                     discovery_confidence=float(row["confidence"]),
                     baseline_line_count=(baseline.line_count if baseline is not None else 0),
@@ -928,6 +936,8 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                     latest_pr_autonomy_shift=float(metrics["latest_pr_autonomy_shift"]),
                     leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
                     latest_activity_at=float(metrics["latest_activity_at"]),
+                    provenance_kind=provenance.kind,
+                    provenance_label=provenance.label,
                 )
             )
 
@@ -2893,6 +2903,7 @@ def _load_storyline_context(db_path: str, repo_full: str):
     artifact_entries: list[RepoDashboardArtifactEntry] = []
     for artifact in artifacts:
         baseline = baseline_by_path.get(artifact.artifact_path)
+        provenance = artifact_provenance_label(artifact.artifact_type)
         metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
         leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
         artifact_entries.append(
@@ -2918,6 +2929,8 @@ def _load_storyline_context(db_path: str, repo_full: str):
                 latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
                 leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
                 latest_activity_at=metrics["latest_activity_at"],
+                provenance_kind=provenance.kind,
+                provenance_label=provenance.label,
             )
         )
     return artifact_entries, baseline_by_path, profile_context_by_path

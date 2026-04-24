@@ -94,8 +94,10 @@ class BaselineAuditLogRecord:
     onboarding_id: int
     artifact_path: str | None
     action: str
+    decision_type: str | None
     actor_login: str | None
     note: str | None
+    linked_findings: list[str]
     baseline_version_id: int | None
     snapshot_id: int | None
     created_at: float
@@ -230,8 +232,10 @@ def init_onboarding_record_db(db_path: str) -> None:
                 onboarding_id INTEGER NOT NULL,
                 artifact_path TEXT,
                 action TEXT NOT NULL,
+                decision_type TEXT,
                 actor_login TEXT,
                 note TEXT,
+                linked_findings_json TEXT NOT NULL DEFAULT '[]',
                 baseline_version_id INTEGER,
                 snapshot_id INTEGER,
                 created_at REAL NOT NULL,
@@ -339,6 +343,12 @@ def init_onboarding_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approved_at REAL")
         if "approval_note" not in baseline_columns:
             conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approval_note TEXT")
+
+        baseline_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(baseline_audit_log)").fetchall()}
+        if "decision_type" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN decision_type TEXT")
+        if "linked_findings_json" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN linked_findings_json TEXT NOT NULL DEFAULT '[]'")
 
         onboarding_columns = {row["name"] for row in conn.execute("PRAGMA table_info(repository_onboardings)").fetchall()}
         if "approved_by" not in onboarding_columns:
@@ -734,19 +744,35 @@ def record_baseline_audit_log(
     action: str,
     actor_login: str | None,
     note: str | None,
+    decision_type: str | None = None,
+    linked_findings: list[str] | None = None,
     baseline_version_id: int | None = None,
     snapshot_id: int | None = None,
 ) -> BaselineAuditLogRecord:
     now = time.time()
+    decision_type = decision_type or action
+    linked_findings_json = json.dumps(linked_findings or [])
     with _connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO baseline_audit_log (
-                repo_full, onboarding_id, artifact_path, action, actor_login, note,
-                baseline_version_id, snapshot_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                repo_full, onboarding_id, artifact_path, action, decision_type, actor_login, note,
+                linked_findings_json, baseline_version_id, snapshot_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (repo_full, onboarding_id, artifact_path, action, actor_login, note, baseline_version_id, snapshot_id, now),
+            (
+                repo_full,
+                onboarding_id,
+                artifact_path,
+                action,
+                decision_type,
+                actor_login,
+                note,
+                linked_findings_json,
+                baseline_version_id,
+                snapshot_id,
+                now,
+            ),
         )
         row = conn.execute("SELECT * FROM baseline_audit_log WHERE id = last_insert_rowid()").fetchone()
     if row is None:
@@ -1331,8 +1357,10 @@ def _row_to_baseline_audit_log(row: sqlite3.Row) -> BaselineAuditLogRecord:
         onboarding_id=row["onboarding_id"],
         artifact_path=row["artifact_path"],
         action=row["action"],
+        decision_type=row["decision_type"] if "decision_type" in row.keys() else row["action"],
         actor_login=row["actor_login"],
         note=row["note"],
+        linked_findings=json.loads(row["linked_findings_json"]) if "linked_findings_json" in row.keys() and row["linked_findings_json"] else [],
         baseline_version_id=row["baseline_version_id"],
         snapshot_id=row["snapshot_id"],
         created_at=row["created_at"],

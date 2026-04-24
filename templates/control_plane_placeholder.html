@@ -25,6 +25,10 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
                 </a>
+                <a href="/app/compliance" class="sidebar-nav-item{{COMPLIANCE_ACTIVE}}" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
                 <a href="/app/policies" class="sidebar-nav-item{{POLICIES_ACTIVE}}" aria-label="Policies">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
                     <span>Policies</span>
@@ -50,6 +54,7 @@
                         <p class="control-page-eyebrow">{{PAGE_KICKER}}</p>
                         <h1>{{PAGE_TITLE}}</h1>
                         <p>{{PAGE_COPY}}</p>
+                        {{ADMIN_CONTROL}}
                     </div>
                     <div class="control-page-hero-note">
                         <span class="control-page-note-label">Status</span>
