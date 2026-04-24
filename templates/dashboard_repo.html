@@ -3,108 +3,308 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{REPO_FULL}} · PromptDrift</title>
-    <meta name="promptdrift-repo-full" content="{{REPO_FULL}}" />
+    <title>{{REPO_FULL}} · Audit Page · DriftGuard</title>
+    <meta name="driftguard-repo-full" content="{{REPO_FULL}}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-repo.js"></script>
 </head>
-<body>
-    <div class="wrap wrap-dashboard">
-        <div class="topbar">
-            <div>
-                <a class="link" href="/dashboard">← All repositories</a>
-                <h1>{{REPO_FULL}}</h1>
-                <p class="muted hero-copy-tight">Review case file: strongest item first, then the ranked queue, then supporting evidence.</p>
+<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}">
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
+                <span class="sidebar-logo-mark">D</span>
+            </a>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <button type="button" class="sidebar-nav-item sidebar-nav-item-toggle sidebar-nav-item-active" aria-label="Audit Logs" id="audit-logs-toggle" aria-expanded="false">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
+                    <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div id="audit-logs-list" class="sidebar-sublist" hidden>
+                    <div class="muted">Loading repositories...</div>
+                </div>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
+                </a>
+                <a href="/app/compliance" class="sidebar-nav-item" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
+                <a href="#repo-journey-section" class="sidebar-nav-item" aria-label="Version Journey">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5"/><path d="M4 12h9"/><path d="M4 18h13"/><circle cx="18" cy="6" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+                    <span>Version Journey</span>
+                </a>
+                <a href="#repo-artifacts-section" class="sidebar-nav-item" aria-label="Artifacts">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>
+                    <span>Artifacts</span>
+                </a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
+                </a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
+                </a>
             </div>
-            <div class="callout">Live from the local PromptDrift SQLite store</div>
-        </div>
 
-        <div class="info-strip section">
-            Static-only analysis: PromptDrift derives these signals from repository code, prompts, and config only. No production traffic or user data is analyzed.
-        </div>
-
-        <div id="repo-command-deck" class="section">
-            <div class="card muted">Loading repo command deck...</div>
-        </div>
-
-        <div id="summary" class="grid grid-summary"></div>
-
-        <div class="casefile-layout section">
-            <div class="casefile-main stack">
-                <div class="card">
-                    <div class="section-kicker">Open next</div>
-                    <h2>Open this first</h2>
-                    <div class="section-hint">Best next source change.</div>
-                    <div id="featured-insight" class="muted">Loading primary review target...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">Continue reviewing</div>
-                    <h2>Needs review queue</h2>
-                    <div class="section-hint">Next best leads after the first one.</div>
-                    <div id="insights" class="muted">Loading prioritized insights...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">Merged or active drift</div>
-                    <h2>Top drifting artifacts</h2>
-                    <div id="leaderboard" class="muted">Loading drift leaderboard...</div>
-                </div>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="Profile">D</a>
             </div>
+        </nav>
 
-            <aside class="casefile-side stack">
-                <div class="card">
-                    <div class="section-kicker">Why PromptDrift flagged this repo</div>
-                    <h2>Posture and provenance</h2>
-                    <div class="section-hint">Baseline vs current posture.</div>
-                    <div id="design-profiles" class="muted">Loading baseline comparison...</div>
-                </div>
-
-                <div class="card">
-                    <div class="section-kicker">Repo surface map</div>
-                    <h2>Control surface coverage</h2>
-                    <div class="section-hint">Where evidence is concentrated.</div>
-                    <div id="control-surfaces" class="muted">Loading grouped control surfaces...</div>
-                </div>
-
-                <details class="card collapsible-card">
-                    <summary class="details-summary">
-                        <div>
-                            <div class="section-kicker">Signal hunting</div>
-                            <h2>Lower-confidence findings</h2>
-                            <div class="section-hint">Optional leads only.</div>
-                        </div>
-                        <span class="details-toggle">Show more</span>
-                    </summary>
-                    <div class="section-inner-gap">
-                        <div id="lower-confidence-insights" class="muted">Loading lower-confidence findings...</div>
+        <div class="main-content">
+            <main class="page-scroll" id="top">
+                <section class="repo-audit-hero">
+                    <div class="repo-audit-hero-copy">
+                        <p class="repo-audit-eyebrow">Audit Page</p>
+                        <h1>{{REPO_FULL}}</h1>
+                        <p>Repo-level drift review for prompts, models, guardrails, and control surfaces across the full AI story of this repository.</p>
                     </div>
-                </details>
-            </aside>
+                    <div class="repo-audit-hero-note">
+                        <span class="repo-audit-note-label" id="repo-governance-attention-headline">Governance attention</span>
+                        <span class="repo-audit-note-copy" id="repo-governance-attention-copy">Loading EU AI Act, SOC 2, and ISO 27001 governance guidance...</span>
+                    </div>
+                </section>
+
+                <section class="repo-audit-metrics" aria-label="Repository audit summary">
+                    <article class="repo-audit-metric-card">
+                        <span class="repo-audit-metric-label">Tracked artifacts</span>
+                        <strong id="repo-stat-artifacts">-</strong>
+                        <span class="repo-audit-metric-foot">Artifacts under audit</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-alert">
+                        <span class="repo-audit-metric-label">Open items</span>
+                        <strong id="repo-stat-review">-</strong>
+                        <span class="repo-audit-metric-foot">Items requiring review</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-warm">
+                        <span class="repo-audit-metric-label">Approved baselines</span>
+                        <strong id="repo-stat-baselines">-</strong>
+                        <span class="repo-audit-metric-foot">Trusted checkpoints</span>
+                    </article>
+                    <article class="repo-audit-metric-card repo-audit-metric-cool">
+                        <span class="repo-audit-metric-label">History markers</span>
+                        <strong id="repo-stat-history">-</strong>
+                        <span class="repo-audit-metric-foot">Repo journey signals</span>
+                    </article>
+                </section>
+
+                <section class="repo-audit-anchor-bar" aria-label="Audit sections">
+                    <a class="repo-audit-anchor" href="#repo-available-repos-section">Available repositories</a>
+                    <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
+                    <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
+                    <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
+                    <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
+                    <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
+                </section>
+
+                <section class="secondary-row" id="repo-available-repos-section">
+                    <div class="secondary-panel">
+                        <div class="secondary-panel-title">Available repositories</div>
+                        <div id="repo-available-repos-list" class="loading-shell muted">Loading repositories available to this workspace...</div>
+                    </div>
+                </section>
+
+                <section class="main-columns" id="repo-triage-section">
+                    <section class="triage-column">
+                        <div class="triage-header card-shell">
+                            <span class="triage-title">Audit Queue</span>
+                            <span class="triage-count" id="repo-triage-count">Loading...</span>
+                            <div class="triage-filters">
+                                <button type="button" class="triage-filter-btn active" data-filter="all">All</button>
+                                <button type="button" class="triage-filter-btn" data-filter="high">High</button>
+                                <button type="button" class="triage-filter-btn" data-filter="medium">Medium</button>
+                            </div>
+                        </div>
+                        <div id="triage-list" class="card-shell loading-shell muted" role="list">Loading prioritized insights...</div>
+                    </section>
+
+                    <aside class="detail-panel" id="detail-panel">
+                        <div class="detail-panel-header card-shell">
+                            <div class="detail-panel-title-row">
+                                <span class="detail-artifact-name" id="detail-artifact-name">—</span>
+                                <span class="severity-badge severity-medium" id="detail-severity-badge">—</span>
+                            </div>
+                            <div class="detail-panel-subtitle" id="detail-subtitle">—</div>
+                        </div>
+                        <div class="detail-score-row card-shell">
+                            <div class="score-card score-card-baseline">
+                                <div class="score-number" id="detail-baseline-score" aria-live="polite">—</div>
+                                <div class="score-label" id="detail-baseline-label">Baseline</div>
+                            </div>
+                            <div class="score-arrow">→</div>
+                            <div class="score-card score-card-current">
+                                <div class="score-number" id="detail-current-score" aria-live="polite">—</div>
+                                <div class="score-label" id="detail-current-label">Current</div>
+                            </div>
+                            <div class="score-delta" id="detail-score-delta">—</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Attribute drift</div>
+                            <div id="detail-attributes" class="detail-attributes loading-shell muted">Select a repo insight to inspect its baseline comparison.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">Key changes</div>
+                            <ul class="evidence-list" id="detail-evidence-list">
+                                <li>Awaiting selected artifact evidence.</li>
+                            </ul>
+                        </div>
+                        <div class="detail-recommendation" id="detail-recommendation">
+                            <div class="detail-recommendation-label">Recommendation</div>
+                            <div class="detail-recommendation-body" id="detail-recommendation-body">Select the first artifact in the queue to see DriftGuard's recommended action.</div>
+                            <button type="button" class="escalate-btn" id="detail-escalate-btn">Escalate before merge</button>
+                        </div>
+                    </aside>
+                </section>
+
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-storyline-section">
+                        <div class="secondary-panel-title">Drift storyline</div>
+                        <div id="featured-storyline" class="loading-shell muted">Loading selected artifact storyline...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-surfaces-section">
+                        <div class="secondary-panel-title">Control surface coverage</div>
+                        <div id="control-surfaces" class="loading-shell muted">Loading grouped control surfaces...</div>
+                    </div>
+                </section>
+
+                <section class="secondary-grid">
+                    <div class="secondary-panel" id="repo-ai-act-section">
+                        <div class="secondary-panel-title">EU AI Act relevance</div>
+                        <div id="repo-ai-act-assessment" class="loading-shell muted">Loading evidence-backed oversight signals...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-baseline-review-section">
+                        <div class="secondary-panel-title">Baseline Review</div>
+                        <div id="baseline-review-panel" class="loading-shell muted">Loading baseline review state...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-history-section">
+                        <div class="secondary-panel-title">Audit cues</div>
+                        <div id="history-cues" class="loading-shell muted">Loading repo-level history cues...</div>
+                    </div>
+                    <div class="secondary-panel">
+                        <div class="secondary-panel-title">Lower-confidence findings</div>
+                        <div id="lower-confidence-insights" class="loading-shell muted">Loading lower-confidence findings...</div>
+                    </div>
+                </section>
+
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-journey-section">
+                        <div class="secondary-panel-title">Version journey</div>
+                        <div id="repo-journey-summary" class="loading-shell muted">Loading repository checkpoints...</div>
+                        <div id="repo-journey-timeline" class="loading-shell muted">Loading repository journey timeline...</div>
+                    </div>
+                    <div class="secondary-panel" id="repo-compare-section">
+                        <div class="secondary-panel-title">Baseline vs current</div>
+                        <div id="repo-journey-compare" class="loading-shell muted">Loading baseline comparison...</div>
+                    </div>
+                </section>
+
+                <section class="repos-section" id="repo-artifacts-section">
+                    <div class="repos-header">
+                        <span class="repos-title">Artifact Registry</span>
+                        <div class="artifacts-header-actions">
+                            <span id="artifact-results-summary" class="repos-count">Loading artifact registry…</span>
+                            <button type="button" id="artifacts-collapse-toggle" class="cue-action-button">Collapse</button>
+                        </div>
+                    </div>
+                    <div class="artifacts-toolbar">
+                        <label class="artifact-search-label" for="artifact-search-input">Search artifacts</label>
+                        <input type="search" id="artifact-search-input" class="artifact-search-input" placeholder="Search by path or type" autocomplete="off">
+                        <div id="artifact-filter-chips" class="artifact-filter-chips" role="group" aria-label="Artifact type filters"></div>
+                    </div>
+                    <div id="artifacts-panel-body">
+                        <table class="repos-table">
+                            <thead>
+                                <tr>
+                                    <th>Artifact</th>
+                                    <th>Type</th>
+                                    <th>Profiles</th>
+                                    <th>Latest drift</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="artifacts-tbody">
+                                <tr><td colspan="5" class="muted">Loading artifact table...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </main>
         </div>
+        <script>
+            // Populate audit logs list for repo pages and bind toggle
+            (function(){
+                const toggle = document.getElementById('audit-logs-toggle');
+                const list = document.getElementById('audit-logs-list');
+                if (toggle && list) {
+                    toggle.addEventListener('click', async () => {
+                        const hidden = list.hasAttribute('hidden');
+                        if (hidden) {
+                            try {
+                                const resp = await fetch('/api/dashboard/overview');
+                                if (resp.ok) {
+                                    const payload = await resp.json();
+                                    const repos = Array.isArray(payload.repos) ? payload.repos : [];
+                                    if (repos.length === 0) {
+                                        list.innerHTML = '<div class="muted">No repositories available</div>';
+                                    } else {
+                                        list.innerHTML = '<nav class="sidebar-sublist-nav">' + repos.map(r => `<a class="sidebar-subitem" href="/dashboard/${encodeURIComponent(r.repo_full)}">${r.repo_full}</a>`).join('') + '</nav>';
+                                    }
+                                } else {
+                                    list.innerHTML = '<div class="muted">Unable to load repositories</div>';
+                                }
+                            } catch (e) {
+                                list.innerHTML = '<div class="muted">Unable to load repositories</div>';
+                            }
+                            list.removeAttribute('hidden');
+                            toggle.setAttribute('aria-expanded','true');
+                        } else {
+                            list.setAttribute('hidden','true');
+                            toggle.setAttribute('aria-expanded','false');
+                        }
+                    });
+                }
+            })();
+        </script>
+    </div>
 
-        <details class="section card collapsible-card">
-            <summary class="details-summary">
-                <div>
-                    <div class="section-kicker">Secondary context</div>
-                    <h2>History and full inventory</h2>
-                    <div class="section-hint">Open only when you need the deep trail.</div>
-                </div>
-                <span class="details-toggle">Show more</span>
-            </summary>
-
-            <div class="stack section-inner-gap">
-                <div>
-                    <h3 class="subsection-title">History and drift timeline</h3>
-                    <div id="history-timelines" class="muted">Loading artifact history...</div>
-                </div>
-
-                <div>
-                    <h3 class="subsection-title">Artifact inventory</h3>
-                    <div id="artifacts" class="muted">Loading artifact table...</div>
-                </div>
+    <div id="rebaseline-modal" class="modal-shell" hidden>
+        <div class="modal-backdrop" data-close-rebaseline="true"></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rebaseline-modal-title">
+            <div class="modal-head">
+                <strong id="rebaseline-modal-title">Re-baseline from snapshot</strong>
+                <button type="button" class="modal-close" data-close-rebaseline="true" aria-label="Close">×</button>
             </div>
-        </details>
+            <div id="rebaseline-modal-summary" class="modal-body muted">Select a snapshot to review its delta.</div>
+            <label class="modal-field" for="rebaseline-rationale">Rationale (optional)</label>
+            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for reviewers if needed."></textarea>
+            <div id="rebaseline-progress" class="modal-progress" hidden>
+                <span class="modal-spinner" aria-hidden="true"></span>
+                <span id="rebaseline-progress-text">Preparing a new baseline proposal...</span>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="modal-secondary" data-close-rebaseline="true">Cancel</button>
+                <button type="button" class="modal-primary" id="rebaseline-confirm-btn">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
     </div>
 </body>
 </html>

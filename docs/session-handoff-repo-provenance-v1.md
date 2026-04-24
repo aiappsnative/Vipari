@@ -42,7 +42,7 @@ Strategic source:
 
 The product wedge is now materially real:
 
-- PromptDrift can detect risky AI control-surface changes in PRs
+- DriftGuard can detect risky AI control-surface changes in PRs
 - it can recommend escalation before merge
 - it can apply a GitHub label for high-confidence escalation cases
 - it can compare against an approved baseline model rather than only implicit prior versions
@@ -58,7 +58,7 @@ Right now the system can say a control surface drifted from an approved or fallb
 
 ## Product target for this slice
 
-PromptDrift should move from:
+DriftGuard should move from:
 
 - "this artifact drifted from baseline"
 

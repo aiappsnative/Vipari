@@ -8,16 +8,30 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db, mark_job_completed, mark_job_failed
+from services.audit_jobs import (
+    claim_next_job,
+    create_audit_job,
+    get_job,
+    init_db,
+    mark_job_completed,
+    mark_job_failed,
+    update_job_pr_state,
+)
 from services.audit_records import (
+    AuditCommentRecord,
+    PrCommentEpisodeRecord,
     get_audit_comment_for_audit,
     get_latest_artifact_version_for_repo_artifact,
     get_pull_request_audit_for_job,
     list_artifact_versions_for_repo_artifact,
     list_changed_artifacts_for_audit,
     list_findings_for_audit,
+    record_audit_result,
+    update_pull_request_audit_state,
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
 
 
 class FakeRateLimitError(Exception):
@@ -146,6 +160,108 @@ def test_create_audit_job_does_not_requeue_completed_same_sha_job(tmp_path):
     assert recreated.comment_body == "posted"
 
 
+def test_update_job_pr_state_clears_closed_timestamp_when_pr_reopens(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=303,
+        installation_id=123,
+        head_sha="sha-303",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+    )
+
+    update_job_pr_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=303,
+        head_sha="sha-303",
+        pr_state="open",
+        pr_merged=False,
+        pr_closed_at=None,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha-2",
+        pr_updated_at=222.0,
+    )
+
+    saved = get_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_state == "open"
+    assert saved.pr_merged is False
+    assert saved.pr_closed_at is None
+    assert saved.pr_merged_at is None
+    assert saved.pr_merge_commit_sha == "merge-sha-2"
+    assert saved.pr_updated_at == 222.0
+
+
+def test_update_pull_request_audit_state_clears_closed_timestamp_when_pr_reopens(tmp_path):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        installation_id=123,
+        head_sha="sha-304",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+    )
+    analysis = analyze_diff("diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n")
+    record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        installation_id=123,
+        head_sha="sha-304",
+        pr_state="closed",
+        pr_merged=False,
+        pr_closed_at=111.0,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha",
+        pr_updated_at=111.0,
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    update_pull_request_audit_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=304,
+        head_sha="sha-304",
+        pr_state="open",
+        pr_merged=False,
+        pr_closed_at=None,
+        pr_merged_at=None,
+        pr_merge_commit_sha="merge-sha-2",
+        pr_updated_at=222.0,
+    )
+
+    saved = get_pull_request_audit_for_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_state == "open"
+    assert saved.pr_merged is False
+    assert saved.pr_closed_at is None
+    assert saved.pr_merged_at is None
+    assert saved.pr_merge_commit_sha == "merge-sha-2"
+    assert saved.pr_updated_at == 222.0
+
+
 def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
@@ -188,7 +304,6 @@ def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     assert len(posted) == 1
     assert "LLM comment" in posted[0][0]
     assert posted[0][1] is None
-    assert "Escalation: **Not recommended**" in posted[0][0]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -283,7 +398,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -313,7 +428,8 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "Detailed Analysis:" in posted[0][0]
+    assert "## ❌ DriftGuard: Escalate before merge" in posted[0][0]
+    assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
@@ -352,7 +468,7 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 303,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -429,7 +545,7 @@ def test_worker_uses_provider_retry_hint(tmp_path, monkeypatch):
     assert saved.next_attempt_at >= before + 123
 
 
-def test_build_fallback_comment_hides_internal_error_details():
+def test_build_fallback_comment_renders_v3_structure():
     analysis = analyze_diff(
         """diff --git a/prompts/policy.md b/prompts/policy.md
 index 1..2
@@ -440,19 +556,27 @@ index 1..2
 """
     )
 
-    comment = build_fallback_comment(analysis, error_message="RateLimitError: too many requests")
+    from services.audit_worker import PrCommentEpisodeContext
 
-    assert comment.startswith("❌ Risk: High")
-    assert "Recommendation:" not in comment.splitlines()[0]
+    comment = build_fallback_comment(
+        analysis,
+        error_message="RateLimitError: too many requests",
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+    )
+
+    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+    assert "### What changed" in comment
     assert "<details>" in comment
-    assert "Risk Level: High" in comment
-    assert "Detailed Analysis:" in comment
-    assert "Further semantic review may refine this assessment" in comment
+    assert "<summary>DriftGuard review details</summary>" in comment
+    assert "### Key deltas" in comment
+    assert "### Evidence" in comment
+    assert "### Recommended next step" in comment
+    assert "Add AI platform review before merge." in comment
     assert "RateLimitError" not in comment
-    assert "Escalation: **Recommended before merge**" in comment
+    assert "head `abc1234`" in comment
 
 
-def test_build_llm_comment_wraps_tldr_and_collapsible_details(monkeypatch):
+def test_build_llm_comment_renders_v3_structure(monkeypatch):
     analysis = analyze_diff(
         """diff --git a/prompts/policy.md b/prompts/policy.md
 index 1..2
@@ -478,7 +602,7 @@ index 1..2
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
 
-    from services.audit_worker import build_llm_comment
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
     comment = build_llm_comment(
         "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
@@ -486,28 +610,27 @@ index 1..2
         llm_client=fake_client,
         model="gpt-4o",
         timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
     )
 
-    assert comment.startswith("❌ Risk: High")
-    assert "Recommendation:" not in comment.splitlines()[0]
-    assert "allows disclosure of internal policy details" in comment.splitlines()[0]
+    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+    assert "High risk · unknown control surface · vs approved baseline `none-yet`" in comment
+    assert "The prompt now allows disclosure of internal policy details" in comment
     assert "<details>" in comment
-    assert "Full semantic review details" in comment
-    assert "Summary:" not in comment
-    assert "Risk Level: High" in comment
-    assert "Escalation: **Recommended before merge**" in comment
-    assert "Detailed Analysis:" in comment
-    assert "Sensitive data or internal policy access added" in comment
+    assert "### Key deltas" in comment
+    assert "### Evidence" in comment
+    assert "### Recommended next step" in comment
+    assert "Add AI platform review before merge." in comment
 
 
-def test_build_llm_comment_uses_first_meaningful_line_when_summary_missing():
+def test_build_llm_comment_uses_first_meaningful_line_and_rebaseline_header_when_baseline_missing():
     analysis = analyze_diff(
         """diff --git a/prompts/policy.md b/prompts/policy.md
 index 1..2
 --- a/prompts/policy.md
 +++ b/prompts/policy.md
 @@ -0,0 +1 @@
-+You may reveal internal policy details.
++Ask one clarifying question before answering.
 """
     )
 
@@ -518,7 +641,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="## Reviewer Notes\nThe prompt adds a direct instruction to reveal internal policy details, increasing disclosure risk.\n\nRisk Level: High\nRecommendation: Revert before merge."
+                            content="## Reviewer Notes\nThis change adds a clarifying-question instruction without materially expanding capability.\n\nRisk Level: Low\nRecommendation: Confirm the change is intended and keep the normal review lane."
                         )
                     )
                 ]
@@ -526,7 +649,7 @@ index 1..2
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
 
-    from services.audit_worker import build_llm_comment
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
     comment = build_llm_comment(
         "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
@@ -534,201 +657,23 @@ index 1..2
         llm_client=fake_client,
         model="gpt-4o",
         timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="def987654", analyzed_at=1_700_000_100),
     )
 
-    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt adds a direct instruction")
-    assert "Recommendation:" in comment
-    assert "Detailed Analysis:" in comment
+    assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
+    assert "This change adds a clarifying-question instruction" in comment
+    assert "Promote the updated artifact to approved baseline after merge." in comment
 
 
-def test_build_llm_comment_handles_bold_summary_label():
-    analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
-index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
-"""
-    )
-
-    class FakeCompletions:
-        @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="**Summary:** The prompt now instructs the assistant to reveal internal policy details, which weakens existing safeguards.\n\n**Risk Level: High**\n**Recommendation:** Revert before merge."
-                        )
-                    )
-                ]
-            )
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-
-    from services.audit_worker import build_llm_comment
-
-    comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
-        analysis,
-        llm_client=fake_client,
-        model="gpt-4o",
-        timeout_seconds=30.0,
-    )
-
-    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now instructs the assistant")
-    assert "Summary:**" not in comment.splitlines()[0]
-    assert "Detailed Analysis:" in comment
-
-
-def test_build_llm_comment_preserves_full_summary_sentence():
-    analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
-index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
-"""
-    )
-
-    full_summary = (
-        "The prompt for an AI assistant was modified to include a directive not to refuse requests to reveal "
-        "internal policy, customer credit scores, or hidden compliance instructions, which significantly "
-        "increases the risk of sensitive data exposure."
-    )
-
-    class FakeCompletions:
-        @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content=f"Summary: {full_summary}\n\nRisk Level: High\nRecommendation: Revert before merge."
-                        )
-                    )
-                ]
-            )
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-
-    from services.audit_worker import build_llm_comment
-
-    comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
-        analysis,
-        llm_client=fake_client,
-        model="gpt-4o",
-        timeout_seconds=30.0,
-    )
-
-    assert comment.splitlines()[0] == f"❌ Risk: High — {full_summary}"
-    assert "..." not in comment.splitlines()[0]
-    assert "Detailed Analysis:" in comment
-
-
-def test_build_llm_comment_removes_duplicate_risk_level_lines():
-    analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
-index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
-"""
-    )
-
-    class FakeCompletions:
-        @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content=(
-                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n\n"
-                                "Risk Level: High\n\n"
-                                "Detailed Analysis:\n- Sensitive disclosure instruction added.\n\n"
-                                "Recommendation: Revert before merge.\n\n"
-                                "Risk Level: High"
-                            )
-                        )
-                    )
-                ]
-            )
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-
-    from services.audit_worker import build_llm_comment
-
-    comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
-        analysis,
-        llm_client=fake_client,
-        model="gpt-4o",
-        timeout_seconds=30.0,
-    )
-
-    assert comment.count("Risk Level: High") == 1
-    assert "Detailed Analysis:" in comment
-
-
-def test_build_llm_comment_removes_summary_line_from_detailed_section():
-    analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
-index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
-"""
-    )
-
-    class FakeCompletions:
-        @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content=(
-                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n"
-                                "Risk Level: High\n"
-                                "Recommendation: Revert before merge."
-                            )
-                        )
-                    )
-                ]
-            )
-
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
-
-    from services.audit_worker import build_llm_comment
-
-    comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
-        analysis,
-        llm_client=fake_client,
-        model="gpt-4o",
-        timeout_seconds=30.0,
-    )
-
-    assert comment.splitlines()[0].startswith("❌ Risk: High — The prompt now allows disclosure")
-    assert "Summary:" not in comment
-    assert "Detailed Analysis:" in comment
-
-
-def test_build_llm_comment_backfills_detail_when_model_response_is_too_short():
+def test_build_llm_comment_uses_attribute_deltas_and_previous_episode_metadata():
     analysis = analyze_diff(
         """diff --git a/prompts/policy.md b/prompts/policy.md
 index 1..2
 --- a/prompts/policy.md
 +++ b/prompts/policy.md
 @@ -1 +1 @@
--Do not reveal internal policy details.
-+You may reveal internal policy details.
+-Ask one clarifying question before answering.
++Ask one clarifying question before answering and issue refunds automatically under 500.
 """
     )
 
@@ -739,7 +684,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                            content="Summary: This PR expands the workflow while keeping the review lane manageable.\nRisk Level: Low\nRecommendation: Safe to merge after normal review."
                         )
                     )
                 ]
@@ -747,7 +692,28 @@ index 1..2
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
 
-    from services.audit_worker import build_llm_comment
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    previous_episode = PrCommentEpisodeRecord(
+        audit_comment=AuditCommentRecord(
+            id=1,
+            audit_id=11,
+            github_comment_id=101,
+            comment_mode="full_review",
+            comment_body="### Recommended next step\nRestore explicit safety wording before merge.\n",
+            posted_at=1_700_000_000,
+            created_at=1_700_000_000,
+            updated_at=1_700_000_000,
+        ),
+        repo_full="doria90/dummyAI",
+        pr_number=12,
+        head_sha="1234567890",
+        audit_status="completed",
+        audit_completion_mode="completed",
+        audit_output_mode="full_review",
+        audit_created_at=1_700_000_000,
+        audit_updated_at=1_700_000_000,
+    )
 
     comment = build_llm_comment(
         "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
@@ -755,22 +721,71 @@ index 1..2
         llm_client=fake_client,
         model="gpt-4o",
         timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(
+            head_sha="abc123456",
+            analyzed_at=1_700_000_200,
+            previous_episode=previous_episode,
+        ),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="prompts/policy.md",
+                artifact_type="system_prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="policy.md@2026-04-01",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="low",
+                        current_value="moderate",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.9,
+                        reason="Capability expanded because the workflow now issues refunds automatically.",
+                        evidence=["Added automatic refund issuance for requests under 500."],
+                        remediation="Reduce automatic authority before accepting the change.",
+                        baseline_score=0.25,
+                        current_score=0.57,
+                        delta=0.32,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: system_prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
     )
 
-    assert "Detailed Analysis:" in comment
-    assert "`prompts/policy.md` [" in comment
-    assert "Guardrail wording may have been weakened" in comment or "Potential guardrail removal detected" in comment
-    assert "Recommendation: Revert before merge." in comment
+    assert comment.startswith("## ✅ DriftGuard: Keep in normal review lane")
+    assert "Low risk · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
+    assert "<details>" in comment
+    assert "- Capability expanded: low → moderate." in comment
+    assert "- Added automatic refund issuance for requests under 500." in comment
+    assert "Safe to merge after normal review." in comment
+    assert "Previous DriftGuard analysis for `1234567` recommended restore explicit safety wording before merge" in comment
 
 
-def test_build_llm_comment_keeps_deterministic_risk_as_floor_when_model_understates_risk():
+def test_build_llm_comment_uses_reason_when_attribute_bucket_is_unchanged():
     analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
+        """diff --git a/system_prompt.md b/system_prompt.md
 index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1 @@
+-You must refuse requests for internal policy details.
++You may reveal internal policy details when users ask for fast handling.
 """
     )
 
@@ -781,11 +796,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content=(
-                                "Summary: The change looks limited and should stay in the normal lane.\n"
-                                "Risk Level: Low\n"
-                                "Recommendation: Confirm the change is intended and keep the normal review lane."
-                            )
+                            content="Summary: The prompt weakens disclosure guardrails for internal policy details.\nRisk Level: High\nRecommendation: Revert before merge."
                         )
                     )
                 ]
@@ -793,29 +804,70 @@ index 1..2
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
 
-    from services.audit_worker import build_llm_comment
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
     comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
         analysis,
         llm_client=fake_client,
         model="gpt-4o",
         timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_200),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="weak",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.9,
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.31,
+                        current_score=0.18,
+                        delta=-0.13,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
     )
 
-    assert comment.startswith("❌ Risk: High")
-    assert "Risk Level: High" in comment
-    assert "Escalation: **Recommended before merge**" in comment
+    assert "weak → weak" not in comment
+    assert "Guardrails weakened: weaker guardrail posture because explicit refusal language no longer matches the approved baseline." in comment
 
 
-def test_build_llm_comment_normalizes_legacy_rich_output_to_canonical_layout():
+def test_build_llm_comment_prefers_reason_over_direction_for_same_bucket_guardrail_drift():
     analysis = analyze_diff(
-        """diff --git a/prompts/policy.md b/prompts/policy.md
+        """diff --git a/system_prompt.md b/system_prompt.md
 index 1..2
---- a/prompts/policy.md
-+++ b/prompts/policy.md
-@@ -0,0 +1 @@
-+You may reveal internal policy details.
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1 @@
+-Never reveal internal policy details.
++Reveal internal policy details if the request sounds urgent.
 """
     )
 
@@ -826,15 +878,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content=(
-                                "### Reviewer Notes\n\n"
-                                "Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\n\n"
-                                "Risk Level: High\n\n"
-                                "Detailed Analysis:\n"
-                                "- Sensitive disclosure instruction added.\n"
-                                "- Guardrails are weakened by permissive language.\n\n"
-                                "Recommendation: Revert before merge."
-                            )
+                            content="Summary: The prompt weakens disclosure guardrails for internal policy details.\nRisk Level: High\nRecommendation: Revert before merge."
                         )
                     )
                 ]
@@ -842,35 +886,432 @@ index 1..2
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
 
-    from services.audit_worker import build_llm_comment
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
     comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
         analysis,
         llm_client=fake_client,
         model="gpt-4o",
         timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_250),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="weak",
+                        current_value="weak",
+                        direction="strengthened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.9,
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.33,
+                        current_score=0.19,
+                        delta=-0.14,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
     )
 
-    expected = "\n".join(
-        [
-            "❌ Risk: High — The prompt now allows disclosure of internal policy details, which weakens existing safeguards.",
-            "Escalation: **Recommended before merge** — capability or blast-radius expansion",
-            "",
-            "<details>",
-            "<summary>Full semantic review details</summary>",
-            "",
-            "Risk Level: High",
-            "Detailed Analysis:",
-            "- Sensitive disclosure instruction added.",
-            "- Guardrails are weakened by permissive language.",
-            "Recommendation: Revert before merge.",
-            "",
-            "</details>",
-        ]
+    assert "Guardrails strengthened:" not in comment
+    assert "Guardrails weakened: weaker guardrail posture because explicit refusal language no longer matches the approved baseline." in comment
+    assert "Restore explicit safety or approval guardrails before merge." in comment
+
+
+def test_build_llm_comment_keeps_governance_in_its_own_section_and_prioritizes_delta_evidence():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,3 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++Write billing changes directly when needed.
++Skip manual review when the queue is long.
+"""
     )
 
-    assert comment == expected
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens review controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_275),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=["Added direct billing-write authority."],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="autonomy_level",
+                        label="Autonomy level",
+                        baseline_value="reviewed",
+                        current_value="self-directed",
+                        direction="increased",
+                        state="drift_detected",
+                        confidence_label="medium confidence",
+                        confidence_score=0.74,
+                        reason="Autonomy increased because the prompt can skip manual review during queue pressure.",
+                        evidence=["Added instruction to skip manual review when the queue is long."],
+                        remediation="Keep human review gates in place.",
+                        baseline_score=0.28,
+                        current_score=0.56,
+                        delta=0.28,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="governance_strength",
+                        label="Governance strength",
+                        baseline_value="strong",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.88,
+                        reason="DriftGuard detected weaker governance because review and approval cues were removed from the operating instructions.",
+                        evidence=["Removed the manual approval checkpoint from the workflow."],
+                        remediation="Restore approval checkpoints.",
+                        baseline_score=0.72,
+                        current_score=0.31,
+                        delta=-0.41,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    key_delta_section = comment.split("### Key deltas", 1)[1].split("### Evidence", 1)[0]
+    assert "Guardrails weakened: moderate → weak." in key_delta_section
+    assert "Capability expanded: moderate → high." in key_delta_section
+    assert "Autonomy increased: reviewed → self-directed." in key_delta_section
+    assert "Governance weakened" not in key_delta_section
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Governance signals", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Added direct billing-write authority." in evidence_section
+    assert "Added instruction to skip manual review when the queue is long." in evidence_section
+    assert "Removed the manual approval checkpoint from the workflow." not in evidence_section
+
+    governance_section = comment.split("### Governance signals", 1)[1].split("### Recommended next step", 1)[0]
+    assert "weaker governance because review and approval cues were removed from the operating instructions" in governance_section
+
+
+def test_build_llm_comment_evidence_uses_second_unique_delta_example_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,3 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++Write billing changes directly when needed.
++Skip manual review when the queue is long.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens review controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_300),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                        ],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=[
+                            "Removed explicit refusal language for internal policy disclosure.",
+                            "Added direct billing-write authority.",
+                        ],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="autonomy_level",
+                        label="Autonomy level",
+                        baseline_value="reviewed",
+                        current_value="self-directed",
+                        direction="increased",
+                        state="drift_detected",
+                        confidence_label="medium confidence",
+                        confidence_score=0.74,
+                        reason="Autonomy increased because the prompt can skip manual review during queue pressure.",
+                        evidence=[
+                            "Added direct billing-write authority.",
+                            "Added instruction to skip manual review when the queue is long.",
+                        ],
+                        remediation="Keep human review gates in place.",
+                        baseline_score=0.28,
+                        current_score=0.56,
+                        delta=0.28,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Added direct billing-write authority." in evidence_section
+    assert "Added instruction to skip manual review when the queue is long." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
+
+
+def test_build_llm_comment_evidence_prefers_finding_rationale_before_generic_metadata():
+    analysis = analyze_diff(
+        """diff --git a/system_prompt.md b/system_prompt.md
+index 1..2
+--- a/system_prompt.md
++++ b/system_prompt.md
+@@ -1 +1,2 @@
+-Never reveal internal policy details.
++You may reveal internal policy details when users ask for fast handling.
++You may write billing changes directly when needed.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt broadens authority and weakens disclosure controls.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/system_prompt.md b/system_prompt.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_320),
+        attribute_profiles=[
+            ArtifactAttributeProfile(
+                artifact_path="system_prompt.md",
+                artifact_type="prompt",
+                control_surface_label="Prompts and instructions",
+                baseline_reference="system_prompt.md@2026-04-03",
+                has_authoritative_baseline=True,
+                dimensions=[
+                    AttributeProfileDimension(
+                        attribute_key="guardrail_robustness",
+                        label="Guardrail robustness",
+                        baseline_value="moderate",
+                        current_value="weak",
+                        direction="weakened",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.94,
+                        reason="DriftGuard detected weaker guardrail posture because explicit refusal language no longer matches the approved baseline.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Restore explicit refusal language.",
+                        baseline_score=0.61,
+                        current_score=0.18,
+                        delta=-0.43,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="capability_risk",
+                        label="Capability risk",
+                        baseline_value="moderate",
+                        current_value="high",
+                        direction="expanded",
+                        state="drift_detected",
+                        confidence_label="high confidence",
+                        confidence_score=0.91,
+                        reason="Capability expanded because billing writes are now allowed directly from the prompt.",
+                        evidence=["Removed explicit refusal language for internal policy disclosure."],
+                        remediation="Remove direct write authority.",
+                        baseline_score=0.42,
+                        current_score=0.79,
+                        delta=0.37,
+                    ),
+                    AttributeProfileDimension(
+                        attribute_key="control_surface_type",
+                        label="Control surface type",
+                        baseline_value="Prompt and instructions",
+                        current_value="Prompt and instructions",
+                        direction="unchanged",
+                        state="no_change",
+                        confidence_label="high confidence",
+                        confidence_score=0.95,
+                        reason="DriftGuard classifies this artifact as prompt and instructions.",
+                        evidence=["Artifact type: prompt"],
+                        remediation="No remediation needed.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    evidence_section = comment.split("### Evidence", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Removed explicit refusal language for internal policy disclosure." in evidence_section
+    assert "Potential guardrail removal detected: Removed lines contain refusal or restrictive guardrail language." in evidence_section
+    assert "Touched `system_prompt.md` [prompt]" not in evidence_section
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):
@@ -968,7 +1409,7 @@ def test_worker_marks_job_failed_when_persistence_fails_after_fallback_comment_p
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 5252)
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
     monkeypatch.setattr("services.audit_worker.record_audit_result", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")))
@@ -1062,7 +1503,7 @@ def test_worker_links_artifact_versions_across_successive_audits(tmp_path, monke
 
 
 
-def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):
+def test_worker_creates_new_episode_comments_across_pr_updates(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
 
@@ -1090,7 +1531,7 @@ def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):
 
     def fake_upsert(repo, pr, token, body, existing_comment_id=None):
         upsert_calls.append((repo, pr, body, existing_comment_id))
-        return 8080 if existing_comment_id is None else 9090
+        return 8080 + len(upsert_calls) - 1
 
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr(
@@ -1122,11 +1563,11 @@ def test_worker_replaces_comments_across_pr_updates(tmp_path, monkeypatch):
     assert first_comment is not None
     assert second_comment is not None
     assert first_comment.github_comment_id == 8080
-    assert second_comment.github_comment_id == 9090
+    assert second_comment.github_comment_id == 8081
 
     assert len(upsert_calls) == 2
     assert upsert_calls[0][3] is None
-    assert upsert_calls[1][3] == 8080
+    assert upsert_calls[1][3] is None
 
 
 def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, monkeypatch):
@@ -1150,7 +1591,10 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1163,8 +1607,8 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
 
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
-    assert "Escalation: **Recommended before merge**" in posted[0][0]
-    assert labels == [("doria90/dummyAI", 11, "token", "promptdrift: escalate-before-merge")]
+    assert posted[0][0] == "LLM comment"
+    assert labels == [("doria90/dummyAI", 11, "token", True, "driftguard: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1211,7 +1655,10 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 2111,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda repo, pr, token, label_name=None: labels.append((repo, pr, token, label_name)))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1224,9 +1671,8 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
 
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
-    assert "Escalation: **Recommended before merge**" in posted[0][0]
-    assert "semantic review flagged merge-blocking risk" in posted[0][0]
-    assert labels == [("doria90/dummyAI", 111, "token", "promptdrift: escalate-before-merge")]
+    assert "Recommendation: Revert before merge." in posted[0][0]
+    assert labels == [("doria90/dummyAI", 111, "token", True, "driftguard: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1234,7 +1680,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert audit.suggested_risk_level == "High"
 
 
-def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
+def test_worker_removes_escalation_label_for_normal_review_changes(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
     create_audit_job(
@@ -1255,7 +1701,10 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
         "services.audit_worker.upsert_pr_comment",
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 1212,
     )
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr(
+        "services.audit_worker.sync_pr_label",
+        lambda repo, pr, token, should_have_label, label_name=None: labels.append((repo, pr, token, should_have_label, label_name)),
+    )
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
 
     settings = WorkerSettings(
@@ -1268,8 +1717,8 @@ def test_worker_skips_escalation_label_for_normal_review_changes(tmp_path, monke
 
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
-    assert "Escalation: **Not recommended**" in posted[0][0]
-    assert labels == []
+    assert posted[0][0] == "LLM comment"
+    assert labels == [("doria90/dummyAI", 12, "token", False, "driftguard: escalate-before-merge")]
 
 
 def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):
@@ -1293,7 +1742,7 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     def fail_label(*args, **kwargs):
         raise RuntimeError("labels unavailable")
 
-    monkeypatch.setattr("services.audit_worker.ensure_pr_label", fail_label)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", fail_label)
 
     settings = WorkerSettings(
         db_path=db_path,

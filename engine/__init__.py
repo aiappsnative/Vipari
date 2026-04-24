@@ -1,4 +1,4 @@
-"""Core PromptDrift detection engine package."""
+"""Core DriftGuard detection engine package."""
 
 from .analysis import analyze_diff
 from .context_selector import determine_context_mode

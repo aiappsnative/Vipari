@@ -3,112 +3,171 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PromptDrift Dashboard</title>
+    <title>DriftGuard Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-index.js"></script>
 </head>
-<body>
-    <div class="wrap wrap-wide">
-        <h1>PromptDrift Dashboard</h1>
-        <p class="hero-copy hero-copy-tight">AI change review inbox. Triage decides what to open now. Coverage explains how much of the portfolio is actually being watched.</p>
-
-        <div id="portfolio-risk-state" class="hero-panel section">
-            <div class="muted">Loading portfolio risk state...</div>
-        </div>
-
-        <div id="portfolio-pulse" class="section">
-            <div class="card muted">Loading portfolio pulse...</div>
-        </div>
-
-        <div class="info-strip section">
-            All metrics are derived from repository code, prompts, and config only. No production traffic or user data is analyzed.
-        </div>
-
-        <div class="section mode-switch" aria-label="Dashboard mode switch">
-            <button type="button" class="mode-button mode-button-active" data-dashboard-mode="triage" aria-pressed="true">Triage</button>
-            <button type="button" class="mode-button" data-dashboard-mode="coverage" aria-pressed="false">Coverage</button>
-        </div>
-
-        <section class="mode-panel section" data-mode-panel="triage">
-            <div class="inbox-layout">
-                <div class="inbox-main stack">
-                    <div class="card">
-                        <div class="section-kicker">Open next</div>
-                        <h2>Primary review target</h2>
-                        <div class="section-hint">One clear next move.</div>
-                        <div id="top-review-focus" class="muted">Loading primary review target...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Review inbox</div>
-                        <h2>Ranked queue</h2>
-                        <div class="section-hint">Short, operational, ordered.</div>
-                        <div id="review-queue" class="muted">Loading ranked queue...</div>
-                    </div>
+<body class="dashboard-index-page" data-theme="{{THEME_PREFERENCE}}">
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
+                <span class="sidebar-logo-mark">D</span>
+            </a>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <button type="button" class="sidebar-nav-item sidebar-nav-item-toggle" aria-label="Audit Logs" id="audit-logs-toggle" aria-expanded="false">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
+                    <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div id="audit-logs-list" class="sidebar-sublist" hidden>
+                    <div class="muted">Loading repositories...</div>
                 </div>
-
-                <aside class="inbox-side stack">
-                    <div class="card">
-                        <div class="section-kicker">Trust check</div>
-                        <h2>Coverage trust</h2>
-                        <div class="section-hint">How reliable the map is.</div>
-                        <div id="coverage-trust" class="muted">Loading coverage trust...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Escalation context</div>
-                        <h2>Why these are rising</h2>
-                        <div class="section-hint">Cross-repo pressure points.</div>
-                        <div id="highest-risk-items" class="muted">Loading highest-risk drift...</div>
-                    </div>
-                </div>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
+                </a>
+                <a href="/app/compliance" class="sidebar-nav-item" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+                    <span>Policies</span>
+                </a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
+                </a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
+                </a>
             </div>
-        </section>
-
-        <section class="mode-panel section" data-mode-panel="coverage" hidden>
-            <div id="overview-metrics" class="grid grid-summary"></div>
-
-            <div class="card section">
-                <div class="section-kicker">Coverage scan</div>
-                <h2>Coverage atlas</h2>
-                <div class="section-hint">Density and confidence at a glance.</div>
-                <div id="coverage-atlas" class="muted">Loading coverage atlas...</div>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="Profile">D</a>
             </div>
+        </nav>
 
-            <div class="triage-layout section">
-                <div class="triage-primary stack">
-                    <div class="card">
-                        <div class="section-kicker">Monitoring map</div>
-                        <h2>Control surface coverage</h2>
-                        <div class="section-hint">Where evidence is dense.</div>
-                        <div id="control-surface-coverage" class="muted">Loading control surface map...</div>
-                    </div>
+        <div class="main-content">
+            <main class="page-scroll" id="top">
+                <section class="dashboard-grid" aria-label="Dashboard overview">
+                    <section class="dashboard-column dashboard-column-left">
+                        <article class="dashboard-card urgent-card" id="triage-section">
+                            <header class="card-heading">
+                                <h1>Urgent Items for Review</h1>
+                            </header>
+                            <div id="triage-list" class="urgent-list loading-shell muted" role="list">Loading urgent review items...</div>
+                        </article>
 
-                    <div class="card">
-                        <div class="section-kicker">Portfolio inventory</div>
-                        <h2>All onboarded repositories</h2>
-                        <div class="section-hint">Repo capsules, not a spreadsheet.</div>
-                        <div id="repos" class="muted">Loading repositories...</div>
-                    </div>
+                        <article class="dashboard-card journey-card" id="journey-section">
+                            <header class="card-heading">
+                                <div>
+                                    <h2>Version Journey</h2>
+                                    <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
+                                </div>
+                            </header>
+                            <div class="journey-stage" id="repo-journey-strip">Loading repo journey preview...</div>
+                            <div class="journey-foot">
+                                <div class="drift-ring-wrap">
+                                    <canvas id="drift-ring" width="180" height="180" aria-label="Baseline drift"></canvas>
+                                    <div class="drift-ring-center">
+                                        <span class="drift-ring-label">Baseline Drift</span>
+                                        <span class="drift-ring-value" id="drift-ring-value">--%</span>
+                                    </div>
+                                </div>
+                                <div class="journey-summary">
+                                    <div class="journey-repo-name" id="journey-repo-name">Selected repo posture</div>
+                                    <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                                    <a id="detail-escalate-btn" class="journey-link" href="#">Open audit page</a>
+                                </div>
+                            </div>
+                        </article>
+                    </section>
+
+                    <aside class="dashboard-column dashboard-column-right">
+                        <article class="dashboard-card repo-atlas-card" id="repo-atlas-section">
+                            <header class="card-heading">
+                                <div>
+                                    <h2>Repository Atlas</h2>
+                                    <div class="muted">Hover any repo to inspect its posture, even if it is not in the urgent queue.</div>
+                                </div>
+                            </header>
+                            <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell muted">Loading repositories...</div>
+                        </article>
+
+                        <article class="dashboard-card radar-card" id="radar-section">
+                            <header class="card-heading radar-heading">
+                                <div>
+                                    <h2>Repo Posture Radar</h2>
+                                    <div class="radar-repo-title" id="repo-radar-title">Selected repo posture</div>
+                                </div>
+                            </header>
+                            <div class="radar-wrap">
+                                <div class="radar-visual-shell">
+                                    <canvas id="repo-posture-radar" width="420" height="320"></canvas>
+                                </div>
+                                <div class="radar-legend" aria-hidden="true">
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(78, 103, 255, 0.9); border: 1px solid rgba(79, 106, 255, 0.9);"></span><span>Approved baseline</span></div>
+                                    <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(85, 230, 222, 0.92); border: 1px solid rgba(73, 223, 217, 0.92);"></span><span>Current posture</span></div>
+                                </div>
+                            </div>
+                            <div class="radar-axis-caption" id="repo-radar-meta">Compliance, stability, coverage, efficiency, performance, and security posture.</div>
+                            <section class="coverage-section" id="coverage-section">
+                                <div class="coverage-header-row">
+                                    <h3>Coverage</h3>
+                                    <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
+                                </div>
+                                <div class="coverage-bars" id="coverage-bars">Loading coverage bars...</div>
+                            </section>
+                        </article>
+                    </aside>
+                </section>
+
+                <div class="dashboard-screenreader-stats" aria-hidden="true">
+                    <span id="repos-count">Loading...</span>
+                    <span id="stat-needs-review">-</span>
+                    <span id="stat-high-risk">-</span>
+                    <span id="stat-approved">-</span>
                 </div>
 
-                <div class="triage-secondary stack">
-                    <div class="card">
-                        <div class="section-kicker">Risk distribution</div>
-                        <h2>Risk by control surface</h2>
-                        <div class="section-hint">Where attention clusters.</div>
-                        <div id="control-surface-risk" class="muted">Loading control-surface risk...</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="section-kicker">Pattern context</div>
-                        <h2>Recurring change patterns</h2>
-                        <div class="section-hint">The repeat offenders.</div>
-                        <div id="regression-patterns" class="muted">Loading regression patterns...</div>
+                <div id="overview-rebaseline-modal" class="modal-shell" hidden>
+                    <div class="modal-backdrop" data-close-overview-rebaseline="true"></div>
+                    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="overview-rebaseline-modal-title">
+                        <div class="modal-head">
+                            <strong id="overview-rebaseline-modal-title">Re-baseline from timeline</strong>
+                            <button type="button" class="modal-close" data-close-overview-rebaseline="true" aria-label="Close">×</button>
+                        </div>
+                        <div id="overview-rebaseline-modal-summary" class="modal-body muted">Select a checkpoint to make it the active baseline.</div>
+                        <label class="modal-field" for="overview-rebaseline-rationale">Rationale (optional)</label>
+                        <textarea id="overview-rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for this baseline switch if needed."></textarea>
+                        <div id="overview-rebaseline-progress" class="modal-progress" hidden>
+                            <span class="modal-spinner" aria-hidden="true"></span>
+                            <span id="overview-rebaseline-progress-text">Applying the selected checkpoint as the repo baseline...</span>
+                        </div>
+                        <div class="modal-actions">
+                            <button type="button" class="modal-secondary" data-close-overview-rebaseline="true">Cancel</button>
+                            <button type="button" class="modal-primary" id="overview-rebaseline-confirm-btn">Confirm</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
+            </main>
+        </div>
+    </div>
+
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
     </div>
 </body>
 </html>

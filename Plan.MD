@@ -1,6 +1,6 @@
-# PromptDrift Development Plan
+# DriftGuard Development Plan
 
-This document outlines the phased roadmap for building the PromptDrift backend. It is intended as a living guide and will evolve as the project grows.
+This document outlines the phased roadmap for building the DriftGuard backend. It is intended as a living guide and will evolve as the project grows.
 
 This is the canonical roadmap document. Product/usage guidance belongs in [README.md](README.md), while deeper architecture belongs in [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -10,7 +10,7 @@ For the enduring product thesis, guardrails, and design principles that should o
 
 ## Product value north star
 
-PromptDrift exists to help customers safely ship AI changes.
+DriftGuard exists to help customers safely ship AI changes.
 
 The core value is not generic PR summarization. The core value is:
 
@@ -38,19 +38,67 @@ This framing should shape roadmap decisions:
 
 ---
 
-## Current repository map (March 2026)
+## Current repository map (April 2026)
 
 ### `main`
-- Purpose: active post-merge baseline for the static-first drift engine
+- Purpose: active post-merge baseline for the static-first drift engine plus the merged customer control plane
 - Current status:
 	- includes the merged `feature/drift-engine-v1` milestone
 	- includes the merged `feature/pr-escalation-v1` slice
 	- includes the merged `feature/approved-baseline-v1` slice
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
-	- is green at the full-suite level (`83 passed` on the latest local verification)
-	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, escalation labeling, approved-baseline provenance, provenance-linked repo case files, and lightweight baseline promotion
+	- includes the merged `feature/pr-comment-v2-tuning` slice
+	- now includes the merged `feature/driftguard-base44-stripe-handoff-v1` slice
+	- is green at the targeted hardening-slice level (`73 passed` on the latest local verification)
+	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
+	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
+	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, and the final Stripe billing-ownership and webhook/worker hardening pass
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
+
+### `feature/drift-storyline-v1`
+- Purpose: active planning branch for turning artifact history into a first-class case-file storyline surface
+- Planned scope on this branch:
+	- define a normalized `DriftEpisode` read model spanning approved-baseline promotions, historical backfill points, and PR-side drift episodes
+	- upgrade repo case files from lightweight history timelines to a decision-useful `Drift storyline` with baseline milestone, major episodes, latest posture, and safe sparse-history fallback
+	- add artifact-level episode inspection APIs and dashboard rendering hooks without redesigning PR comments
+	- surface small repo-level history cues for repeated drift, stale baselines, mixed-direction changes, and latest high-severity episodes
+	- preserve current dashboard split boundaries by keeping storyline product logic in read models plus versioned frontend assets instead of inline route code
+- Exit criteria for the first implementation slice:
+	- repo case files show a visible storyline for the featured artifact
+	- storyline items expose date, episode type, top attribute deltas, and provenance
+	- sparse-history repos degrade honestly without fabricating continuity
+	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
+
+### `feature/compliance-export-package`
+- Purpose: completed branch for turning the compliance export from a structural archive into a persisted-evidence package with explicit scope boundaries
+- Final status on this branch:
+	- compliance export rows now use persisted baseline, audit, artifact-version, static-profile, and posture data instead of placeholder blanks where source data already exists
+	- risk events and version-history rows now read the stored posture risk level consistently
+	- drift export files now emit real artifact drift history and leaderboard rows from persisted PR-side static profiles
+	- optional raw artifact content export is intentionally limited to approved baseline content plus in-range PR scan versions, excluding historical backfill noise
+	- exact-value regression coverage now validates export contents rather than only ZIP shape and file presence
+- Exit note:
+	- this slice is directionally complete for the current feature goal; remaining work should be separate product decisions such as broader control mapping, auditor-facing copy polish, or future export formats rather than more placeholder cleanup on this branch
+
+### `feature/driftguard-base44-stripe-handoff-v1`
+- Purpose: completed integration branch for issue `#25`, now merged to `main`
+- Final status at merge:
+	- customer control-plane persistence, auth, billing, install-linking, repo allocation, and setup-aware access gating are now mainline functionality
+	- the final merge included Stripe billing-ownership hardening, worker allocation/entitlement revalidation, and stale webhook-delivery reclaim
+	- remote and local feature-branch cleanup is complete
+- Historical note:
+	- keep [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as archived branch context rather than a live restart target
+
+### `feature/pr-comment-v2-tuning`
+- Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
+- Current status at merge time:
+	- reviewer-facing PR comments tuned around the most decision-useful deltas (`guardrail_robustness`, `capability_risk`, `autonomy_level`)
+	- governance drift separated into its own conditional section instead of crowding the main `Key deltas` summary
+	- evidence selection tuned to prefer concrete delta-linked examples before generic artifact metadata
+	- decision-first headers now include risk emojis for high, medium, and low recommendations
+	- escalation labels now sync bidirectionally with the latest review outcome, including de-escalation cleanup on later low-risk passes
+	- live validation completed against dummyAI PR `#46`, including stale-worker debugging and final GitHub-side confirmation of the tuned comment format
 
 ### `feature/drift-engine-v1`
 - Purpose: completed milestone branch retained as the merge lineage for the first static-first drift engine release
@@ -72,7 +120,7 @@ This framing should shape roadmap decisions:
 	- repo-detail baseline-vs-current design posture cards, static-only messaging, and risk-tag/provenance-lite surfacing implemented
 	- overview regression-pattern summaries and compatibility hardening implemented so stale or sparse payloads degrade safely in the browser
 	- artifact lineage and baseline-aware suppression implemented
-	- PR comment replace-on-update behavior implemented
+	- initial managed PR comment lifecycle implemented
 	- compact TLDR + collapsible reviewer comment format implemented
 	- GitHub App auth hardening, opened-PR diff retry, and exact-SHA synchronize diff reconstruction implemented
 	- atomic job claiming, failed-job requeue on same-SHA redelivery, and honest persistence-failure handling implemented
@@ -84,7 +132,7 @@ This framing should shape roadmap decisions:
 	- signal fusion still needs improvement
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
-	- current dashboard is now directionally customer-oriented, but still needs denser PR-linked evidence and more varied real-world data
+	- current dashboard is now directionally customer-oriented, but reviewer queues still need tighter synthesis between proposal-only PR audits and landed-history posture
 	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
 	- dashboard still needs stronger merged-commit linkage and reviewer-target quality on history-heavy OSS repositories
 
@@ -96,7 +144,7 @@ This framing should shape roadmap decisions:
 5. Retry handling, provider retry hints, and deterministic preliminary fallback
 6. Structured semantic review packages for LLM review framing
 7. Durable audit history and artifact lineage
-8. Managed comment replacement behavior on PR updates
+8. Managed PR comment lifecycle on PR updates
 9. Reviewer-facing comment formatting polish
 10. GitHub App auth hardening, transient PR diff retry, and synchronize diff freshness hardening
 11. Queue correctness hardening for atomic claim, failed-job revival, and truthful terminal states
@@ -111,15 +159,19 @@ This framing should shape roadmap decisions:
 20. Large-repo dashboard aggregation optimization for real OSS repo responsiveness
 21. Overview regression-pattern summaries plus payload-compatibility hardening for stale or sparse dashboard responses
 22. Retry-window correctness fix so retryable LLM failures receive at least one retry before deterministic fallback
+23. Reviewer-facing PR comment tuning, risk-emoji headers, and escalation-label lifecycle sync
 
 ### Next prioritized slices after the merge
-1. PR-linked evidence density and merged-commit reviewer-target linkage on real OSS repos
-2. Signal fusion improvements between deterministic and semantic findings
-3. Discovery precision improvements for large OSS onboarding and backfill
-4. More representative OSS/demo data plus a repeatable OSS evaluation harness
-5. Production-oriented persistence and deployment hardening
+1. Dashboard redesign v2 for triage-first shell, split-pane detail, and reduced scroll depth
+2. Reviewer-queue synthesis between proposal-only PR audits and landed-history evidence on real repos
+3. Signal fusion improvements between deterministic and semantic findings
+4. Discovery precision improvements for large OSS onboarding and backfill
+5. Expanded OSS evaluation harness coverage for seeded and real-repo scenarios
+6. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
 
 Suggested next branch sequence:
+- `feature/dashboard-redesign-v2`
+- `feature/drift-storyline-v1`
 - `feature/repo-evidence-v1`
 - `feature/signal-fusion-v1`
 - `feature/discovery-precision-v1`
@@ -136,7 +188,7 @@ Suggested next branch sequence:
 
 The newly implemented dashboard is now the right structural product surface, but it is not yet the final customer-facing product end state.
 
-The next design priority should be to deepen the decision surface with denser PR-linked evidence, stronger merged-commit linkage, and stronger real-world examples, not to add more generic metrics.
+The next design priority should be to deepen the decision surface with stronger proposal-vs-landed evidence synthesis, stronger merged-commit linkage, and stronger real-world examples, not to add more generic metrics.
 
 Today's architecture priority should be to preserve the extracted frontend split and keep hardening it against payload evolution before adding more product complexity.
 
@@ -190,7 +242,7 @@ Completed today on `feature/dashboard-ux-v1`:
 
 Highest-value follow-on work from that checkpoint was:
 
-1. improve signal quality on real OSS repos, especially PR-linked evidence density
+1. improve signal quality and proposal-vs-landed evidence synthesis on real OSS repos
 2. tighten merged-commit / PR provenance so repo case files route to better review targets
 3. reduce discovery noise further on large public repositories
 4. turn the current OSS validation path into a more repeatable harness
@@ -209,7 +261,7 @@ Completed on `feature/dashboard-ux-v1` after the triage-first redesign:
 
 Current validation status:
 
-- full automated suite passes locally (`83 passed`)
+- full automated suite passes locally (`98 passed`)
 - dashboard API/read-model regression coverage passed during final hardening
 - operator/onboarding/static-profile regression coverage passed during final hardening
 
@@ -221,16 +273,53 @@ Current validation status:
 - `feature/approved-baseline-v1`
 - `feature/repo-provenance-v1`
 - `feature/dashboard-ux-v1`
+- cloud deployment scaffolding split with secured webhook/worker/api service boundaries
+
+#### 0. `feature/dashboard-redesign-v2`
+
+Purpose:
+- turn the current dashboard from a card-heavy document layout into a triage-first operator shell with a fixed left rail, sticky posture strip, split-pane review flow, and de-emphasized secondary context
+
+Planned scope:
+- replace the current index and repo page wrappers with a shared `app-shell` layout, icon-only sidebar, sticky posture strip, and fixed-height main columns
+- adapt `static/dashboard-index.js` and `static/dashboard-repo.js` to render into the new triage list, detail panel, secondary-row panels, and compact repo table without changing API shapes
+- replace the current CSS language with the issue-defined token system while deleting obsolete mode-switch, hero, wrap, and collapsible-layout classes that belong to the previous document-style UI
+- preserve the existing data-fetching logic and read models while introducing keyboard selection, auto-select-first-item behavior, and skeleton loading states for the new shell
+- remove repo-detail deep-history and artifact inventory from the primary view so the default surface answers what needs attention now with one obvious next action
+
+Implementation notes:
+- issue `#20` is explicitly frontend-only, so this slice should avoid Python, service, route, and payload changes unless a blocker is discovered and re-scoped intentionally
+- the work should be phased by shared shell first, then dashboard index migration, then repo-detail migration, then CSS deletion/cleanup so regressions stay understandable
+- the existing JS files contain useful data and rendering helpers, but many are coupled to the old `Triage` / `Coverage` mode split and should be adapted rather than transplanted mechanically
+- the current roadmap numbering above uses `20` for a different optimization item; when discussing next work with GitHub issue numbers, refer to this slice explicitly as GitHub issue `#20` to avoid ambiguity
 
 #### 1. `feature/repo-evidence-v1`
 
 Purpose:
-- strengthen reviewer-target quality on real repositories where historical drift exists but PR-linked evidence is sparse
+- strengthen reviewer-target quality on real repositories where historical drift exists and proposal-only PR audits need clearer separation and synthesis
 
 Planned scope:
+- preserve the landed-only rule for dashboard posture while making proposal-only PR audit context easier to interpret in reviewer queues
 - improve merged-commit and PR linkage so repo case files route to better review targets
 - enrich history-backed insights with stronger source attribution and reviewer-facing context
 - keep the read-model focused on actionable evidence rather than new top-level dashboard chrome
+
+#### Completed: `feature/drift-storyline-v1`
+
+Purpose:
+- turn the existing artifact history and lightweight timeline groundwork into a first-class case-file storyline for important control surfaces
+
+Planned scope:
+- introduce a normalized `DriftEpisode` concept that groups meaningful history points from PR audits, historical backfill, and baseline-promotion milestones
+- add a repo case-file `Drift storyline` section for the featured artifact with baseline milestone, major episodes, latest posture, and sparse-history disclosure
+- add artifact-level episode inspection APIs so the frontend can expand beyond the compact repo timeline without overloading the initial dashboard payload
+- surface small repo-level prioritization cues for repeated drift, stale baselines, mixed-direction changes, and latest severe episodes
+- preserve the dashboard split by implementing storyline logic in `services/dashboard_views.py`, JSON APIs, and `static/dashboard-repo.js`
+
+Implementation notes:
+- current groundwork already exists in persisted profile history, provenance fields, and the lightweight repo history timeline in `services/dashboard_views.py`
+- the first slice should keep timeline displays compact on the main repo page and reserve full episode history for artifact-level expansion or a dedicated API
+- performance should be treated as a read-model concern from the start because larger OSS repos can accumulate many profile-history rows quickly
 
 #### 2. `feature/signal-fusion-v1`
 
@@ -268,9 +357,21 @@ Purpose:
 - harden local-stage persistence and deployment assumptions toward a production-ready posture
 
 Planned scope:
-- define the next durable-store step beyond the current local SQLite shape
+- define the next durable-store step beyond the current SQLite-first split scaffolding
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
-- document a production-oriented path without overbuilding the local developer workflow
+- document a production-oriented path without overbuilding the local developer workflow or weakening the current fail-closed deployment defaults
+
+#### 6. `feature/railway-launch-hardening`
+
+Purpose:
+- turn the current cloud-oriented scaffolding into an operator-safe Railway deployment shape for launch preparation
+
+Planned scope:
+- align the public API service with the real customer control-plane app
+- add production startup validation, service-role contracts, and readiness-aware health checks
+- introduce Redis-backed queue support for worker/webhook production use
+- document Railway service topology, env matrix, launch checklist, and rollback guidance
+- explicitly fail closed on unsafe production persistence assumptions until the deeper Postgres migration lands
 
 ### Trial success criteria for the next version
 
@@ -281,300 +382,43 @@ The next version should be judged by whether it can:
 - trigger real review interventions, edits, or explicit acknowledgements on a meaningful share of surfaced findings
 - avoid becoming a generic dashboard-first or governance-suite-first product before the PR wedge is trusted
 
-### Planned future workflow
+### Future backlog kept for reference
 
-Name:
-- `audit-feedback-loop-v1`
+The sections below replace the older stage-based roadmap so this document stays aligned with the current codebase while still preserving future direction.
 
-Suggested branch name:
-- `feature/audit-feedback-loop-v1`
+#### `audit-feedback-loop-v1`
 
 Purpose:
-- create a feedback and outcome loop so PromptDrift can learn from reviewer reactions, explicit customer feedback, and eventual PR outcomes
-- improve the risk engine using real-world disagreement and acceptance patterns rather than only internal intuition
+- learn from reviewer reactions, managed-comment feedback, and eventual PR outcomes without treating those signals as automatic truth
 
-Why it matters:
-- a strong AI review product should not only publish audits, it should also learn where its guidance was useful, noisy, ignored, accepted, or overridden
-- customer feedback and PR outcomes are a future source of product-quality signals, evaluation fixtures, and rule-tuning priorities
+Likely scope:
+- passive PR outcome capture tied to audited head SHA
+- lightweight feedback collection on managed DriftGuard comments
+- derived learning signals for reporting and later evaluation work
 
-Important interpretation rule:
-- a `High` risk PR being merged is not automatic proof that the engine was wrong
-- it should be treated as a disagreement or review-outcome signal that requires context
-- learning inputs should remain advisory until validated through broader analysis
+Guardrails:
+- feedback remains advisory first
+- raw user events and derived learning signals stay logically separate
+- early use is reporting and evaluation, not automatic retraining
 
-Planned scope:
-- collect lightweight feedback on managed PromptDrift comments
-- support future explicit textual feedback from reviewers
-- capture PR outcomes such as merged, closed, changed-after-audit, and merged-after-follow-up
-- derive learning signals that can be used for reporting, evaluation, and future engine tuning
-
-Expected future data concepts:
-- `AuditFeedback`
-- `PullRequestOutcome`
-- `AuditLearningSignal`
-
-Recommended future rollout:
-1. Passive PR outcome capture
-2. GitHub emoji reaction capture on managed comments
-3. Structured textual feedback on managed comments or a dedicated future input surface
-4. Derived learning-signal reporting
-5. Engine-tuning and evaluation workflows built on top of those signals
-
-Guardrails for future implementation:
-- only feedback tied to managed PromptDrift comments should count as product feedback
-- raw user events and derived learning signals should be stored separately
-- outcome collection should be tied to the audited head SHA, not only the PR number
-- the first consumer of this data should be reporting and evaluation, not automatic model retraining
-
-### Planned future workflow
-
-Name:
-- `customer-onboarding-baseline-v1`
-
-Suggested branch name:
-- `feature/customer-onboarding-baseline-v1`
+#### `customer-onboarding-baseline-v1`
 
 Purpose:
-- help PromptDrift understand a newly installed repository before future PRs arrive
-- establish an initial baseline for AI-relevant artifacts, prompt locations, and likely behavioral control surfaces
-- make later drift detection more accurate by grounding audits in the repo's starting state
+- extend already-landed onboarding and selective backfill into a more installation-aware customer baseline workflow
 
-Why it matters:
-- many meaningful AI changes only make sense relative to the pre-existing baseline
-- onboarding intelligence can reduce false positives caused by treating every future edit as isolated
-- it can help PromptDrift identify where prompts, policies, model-routing logic, and tool-authority definitions actually live inside a repo
-- it creates the foundation for future trend, governance, and repo-specific tuning workflows
+Likely scope:
+- stronger installation-time artifact discovery summaries
+- clearer onboarding confidence and artifact-purpose hints
+- optional targeted historical backfill where customer value justifies it
 
-Core customer value:
-- faster time-to-value after installation
-- more accurate first audits because the engine already knows the likely AI control surface
-- better artifact lineage from day one
-- future ability to explain not only what changed, but what changed relative to the repo's original AI baseline
-
-Key product question:
-- should PromptDrift ingest the full historical commit graph on install, or establish a strong present-day baseline and optionally backfill later?
-
-Recommended starting answer:
-- start with a **baseline-first onboarding model**, not full historical ingestion by default
-- capture the repository's current AI-relevant artifact map and baseline versions at installation time
-- add selective or optional historical backfill later only where it produces clear customer value
-
-Why baseline-first is the right first move:
-- it is much cheaper and faster than replaying full repo history
-- it gives immediate product value without long installation delays
-- it avoids over-collecting data before there is a strong use case for it
-- it keeps onboarding operationally predictable for larger repositories
-
-When historical backfill may later be justified:
-- regulated customers want governance history from before install time
-- a repo already has a long and important prompt/policy evolution history
-- customers want trend views that start before PromptDrift was installed
-- baseline-only mode proves insufficient for high-value onboarding use cases
-
-Planned onboarding outputs:
-- discovered AI-relevant artifact inventory
-- artifact classification and likely purpose hints
-- baseline artifact versions and hashes
-- repo-level onboarding summary
-- confidence notes about what PromptDrift believes are the main AI control surfaces in that repo
-
-Expected future data concepts:
-- `RepositoryOnboarding`
-- `OnboardedArtifact`
-- `OnboardingBaselineVersion`
-- optional future `HistoricalBackfillJob`
-
-Recommended future rollout:
-1. Installation-time repository scan and AI artifact discovery
-2. Baseline version capture for relevant artifacts
-3. Repo-level onboarding summary and persisted inventory
-4. Optional targeted historical backfill for selected repos or artifacts
-5. Future onboarding-aware detection and reporting improvements
-
-Guardrails for future implementation:
-- do not require full historical replay for every customer install
+Guardrails:
+- do not require full-history replay on every install
 - keep onboarding bounded in time and cost
-- preserve a distinction between baseline captured at install time and history reconstructed later
-- treat inferred artifact purpose as probabilistic metadata, not hard truth
-- prefer selective backfill over all-history ingestion unless customers explicitly need it
+- preserve the distinction between install-time baseline capture and reconstructed history
 
-### End-goal validation plan
+#### Long-horizon architecture direction
 
-The ultimate validation for the `drift-engine` and onboarding work should be real open-source repository onboarding.
-
-That means PromptDrift should eventually be able to behave as if a public repository installed it as a GitHub App and then:
-- discover likely AI control surfaces,
-- establish a strong present-day baseline,
-- selectively digest relevant historical evolution,
-- populate artifact and static-profile history,
-- and surface useful PR and dashboard-level drift outputs.
-
-The `doria90/openfang` onboarding run has now validated that the current system can at least discover and render a large public-agent-style repository through the new dashboard surface.
-
-That run also exposed the next product truth clearly:
-- discovery alone is not sufficient,
-- customers need the dashboard to translate noisy artifact inventories into prioritized, explainable review guidance.
-
-Why this is the right end-goal test:
-- it validates onboarding robustness on repositories we did not design
-- it tests whether baseline-first onboarding and selective history digestion produce useful drift intelligence
-- it tests whether the eventual dashboard and read-side surfaces are helpful on real repository history
-- it keeps product development honest by requiring value on messy, real-world GitHub repositories
-
-Recommended validation sequence:
-1. Build onboarding inventory persistence and baseline capture
-2. Add selective historical backfill for discovered artifacts
-3. Add read-side trend and repo-level aggregation queries
-4. Add operator/API surfaces for onboarding and backfill
-5. Validate against a curated set of public OSS repositories with visible prompts/configs/tooling
-
-See `docs/oss-onboarding-evaluation-plan.md` for the detailed evaluation plan and success criteria.
-
-### Persistence architecture direction
-- one relational database for the near term
-- SQLite for local/dev and PostgreSQL as the production target
-- logical separation between operational queue tables and durable audit/history tables
-- hot structured records in primary storage, cold/raw payloads minimized or archived later
-- do not split into multiple primary databases yet; design for future decomposition instead
-
----
-
-## Stage 1 – MVP (Core Logic & Webhook Processing)
-
-### Goals
-1. Deliver a working FastAPI service that receives GitHub `pull_request` webhooks and analyzes diffs for AI‑related changes.
-2. Implement the core audit logic using OpenAI to produce a summary and risk level.
-3. Post comments back to the PR.
-4. Provide a simple `.env.example` and `requirements.txt` so the service can be run locally.
-5. Structure the code for easy extension: separate modules for GitHub interactions, auditing, and HTTP handling.
-
-### Features
-- FastAPI app with `/webhook` endpoint and signature verification.
-- JWT generation for GitHub App authentication and installation token retrieval.
-- Diff fetching and simple filename filter for `prompt|ai|llm`.
-- OpenAI integration (gpt-4o-mini) with prescribed system prompt.
-- Commenting on PRs via PyGithub.
-- Minimal error handling and logging.
-- Basic unit tests covering the analyzer logic and webhook verification.
-
-### Deliverables
-- `main.py` containing endpoint and helpers.
-- `requirements.txt` (specified packages).
-- `.env.example` with necessary variables.
-- A handful of tests.
-
-### Notes
-This stage is effectively complete and now surpassed by the active branch. The product has already moved beyond pure synchronous MVP behavior.
-
----
-
-## Stage 2 – Persistence, Multi-Tenancy & Dashboard
-
-### Goals
-1. Introduce data storage to record audit results, installations, and users.
-2. Add basic multi‑tenant architecture (installations as tenants) with row‑level scoping.
-3. Implement a simple admin dashboard (API endpoints and minimal UI) for customers.
-4. Add background processing so webhooks enqueue work and workers perform analysis asynchronously.
-5. Improve environment variable handling and configuration.
-
-### Features
-- PostgreSQL (or SQLite for development) with SQLAlchemy or Tortoise models.
-- `Installation`, `AuditRecord`, and `User` models; migrations included.
-- separate operational queue data from durable audit/history data at the schema and service layer even if they share one physical database initially.
-- Token caching in Redis (installation tokens expire every 10 minutes).
-- Background task queue using FastAPI’s `BackgroundTasks` or Celery/Redis for the audit jobs.
-- API routes for dashboard data: total PRs audited, risk distribution, recent summaries.
-- Simple web UI (FastAPI’s Jinja templates or a React/HTML static bundle) that shows metrics per installation.
-- GitHub OAuth login for users; role-based access control.
-- Enhanced logging and error handling; proper HTTP responses for failures.
-- Configuration module using Pydantic’s `BaseSettings`.
-
-### Deliverables
-- `app/` package with submodules (`models.py`, `audit.py`, `routers/` etc.).
-- Dashboard API and minimal front‑end assets.
-- Updated `requirements.txt` with new dependencies (sqlalchemy, psycopg2-binary, redis, celery, jinja2, etc.).
-- Deployment notes for using PostgreSQL and Redis.
-- Migration scripts (Alembic or similar).
-
-### Notes
-This stage is now partially underway. Durable persistence, queue-backed execution, and history structures have already started. The remaining work is to turn those foundations into customer-visible reporting and operational control surfaces.
-
-### Planned future extension: audit feedback loop
-
-Once the durable audit/history layer is stable enough, PromptDrift should add a feedback-and-outcome workflow under `audit-feedback-loop-v1`.
-
-This future slice should aim to answer:
-- did reviewers find the audit useful?
-- did reviewers disagree with the assigned risk level?
-- was a high-risk PR merged anyway?
-- was the PR materially changed after the audit before it was accepted?
-- which findings or rule families most often correlate with overrides or disagreement?
-
-This work should initially be framed as:
-- customer feedback intake
-- PR outcome telemetry
-- evaluation signal generation
-
-It should not initially be framed as:
-- automatic retraining
-- direct auto-lowering or auto-raising of risk levels without review
-
-### Planned future extension: customer onboarding baseline
-
-Once PromptDrift has a stable durable history layer, it should add onboarding intelligence under `customer-onboarding-baseline-v1`.
-
-This future slice should aim to answer:
-- where do the repo's likely prompts, guardrails, and AI control artifacts live?
-- which files appear to define behavior, policy, model routing, tool access, or disclosure boundaries?
-- what baseline artifact versions should future audits compare against?
-- what can PromptDrift learn immediately at install time without replaying full history?
-
-Recommended product stance:
-- onboarding should default to present-day baseline capture
-- historical commit ingestion should be optional, selective, and justified by customer value
-
-This work should initially be framed as:
-- installation-time artifact discovery
-- baseline capture
-- future drift-context enrichment
-
-It should not initially be framed as:
-- mandatory full historical mining for every repository
-- expensive repo reconstruction before the product can provide any value
-
----
-
-## Stage 3 – Enterprise Scaling & Advanced Features
-
-### Goals
-1. Harden the system for high traffic and multi‑region deployments.
-2. Add advanced auditing capabilities and reports.
-3. Provide optional per‑tenant configuration (e.g. custom OpenAI key, drift thresholds).
-4. Build administrative tooling for operators and a richer customer UI.
-5. Implement billing hooks, usage tracking, and exportable reports.
-
-### Features
-- Add Celery/RabbitMQ or managed queue for processing; autoscale workers.
-- Use PostgreSQL with read replicas, apply RLS policies, and optionally support separate schemas or databases per tenant.
-- Implement a dedicated `PromptHistory` table and drift metrics (token counts, model versioning, baseline comparisons).
-- Offer email or Slack notifications for high‑risk PRs.
-- Add Sentry or another APM for error tracing and performance monitoring.
-- Support multiple AI models and providers; allow customers to plug in their own evaluation logic or rules engine.
-- Rich dashboard with charts (using Chart.js or similar), export to PDF/CSV, per‑repo drill‑downs.
-- Admin panel for organization owners to manage installations, view usage, and override settings.
-- Multi‑region deployment guidance and infrastructure as code (Terraform) examples.
-- Add robust rate‑limiting, retry logic, and back‑pressure to handle bursts.
-
-### Deliverables
-- Scalable deployment documentation (Kubernetes manifests, cloud templates).
-- Instrumentation for metrics (Prometheus, Grafana dashboards).
-- Full operator API for tenants, users, and billing.
-- Comprehensive test suite including load tests and multi‑tenant isolation tests.
-
-### Notes
-By this stage, the product should be ready for enterprise customers with SLAs. The architectural decisions from earlier phases must prove functional; we will iterate based on customer feedback and usage patterns.
-
----
-
-## Epilogue
-Each stage builds on the previous one. The early emphasis on modularity and separation of concerns ensures that the core audit logic developed in Stage 1 is easily reused as we add persistence, multi-tenancy, and scaling features. This plan should continue to be updated whenever the implementation materially outpaces the roadmap text.
+For future reference only:
+- keep one relational store in the near term, with SQLite locally and PostgreSQL as the production target
+- continue the logical separation between operational queue tables and durable audit/history tables
+- scale worker/back-pressure strategy only after reviewer usefulness, repo evidence, discovery precision, and evaluation coverage are stronger

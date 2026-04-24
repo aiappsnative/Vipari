@@ -92,8 +92,25 @@ def test_repo_ops_persistence_status_cli_outputs_backend_metadata(tmp_path):
     assert payload["backend"] == "sqlite"
     assert payload["production_target"] == "postgresql"
     assert "audit_jobs" in payload["operational_tables"]
+    assert "database_path" not in payload
+    assert payload["applied_migrations"][0]["version"] == "0001_bootstrap_relational_schema"
 
 
+def test_repo_ops_default_db_path_stays_runtime_compatible(monkeypatch):
+    monkeypatch.delenv("AUDIT_DB_PATH", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    resolved = repo_ops._resolve_db_path(None)
+
+    assert resolved.endswith("promptdrift.db")
+
+
+def test_repo_ops_default_db_path_uses_postgres_database_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+
+    resolved = repo_ops._resolve_db_path(None)
+
+    assert resolved == "postgresql://user:pass@db.example.com/driftguard"
 def test_repo_ops_dashboard_cli_outputs_unified_repo_payload(tmp_path):
     db_path = str(tmp_path / "cli.db")
     init_db(db_path)

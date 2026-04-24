@@ -15,6 +15,7 @@ env/
 .vscode/
 .idea/
 .pytest_cache/
+.tmp/
 
 # Plan and other docs
 #Plan.MD
@@ -27,7 +28,10 @@ dist/
 # Logs
 *.log
 *.db
+*.db-shm
+*.db-wal
 artifacts/oss-evals/
+artifacts/sbom/
 
 # Keys
 *.pem

@@ -4,7 +4,7 @@
 
 This document describes the first implemented slice of the GitHub-native drift engine: the static drift-profile layer.
 
-It explains what was built, why it exists, how it fits the PromptDrift product thesis, and how it should evolve into stronger repo evidence, better signal fusion, and longitudinal trend analysis.
+It explains what was built, why it exists, how it fits the DriftGuard product thesis, and how it should evolve into stronger repo evidence, better signal fusion, and longitudinal trend analysis.
 
 Read this alongside [SOUL.md](../SOUL.md), [Plan.MD](../Plan.MD), and [docs/detection-engine-plan.md](detection-engine-plan.md).
 
@@ -12,7 +12,7 @@ Read this alongside [SOUL.md](../SOUL.md), [Plan.MD](../Plan.MD), and [docs/dete
 
 ## Product fit
 
-PromptDrift is now explicitly centered on a GitHub-native static analysis thesis:
+DriftGuard is now explicitly centered on a GitHub-native static analysis thesis:
 
 - we do not need runtime traffic to deliver useful design governance value
 - the control surface is visible in prompts, policies, tool wiring, model config, and governance metadata
@@ -20,9 +20,9 @@ PromptDrift is now explicitly centered on a GitHub-native static analysis thesis
 
 The drift-profile layer is the first code implementation of that thesis.
 
-Before this slice, PromptDrift could already determine whether a PR contained AI-relevant changes and whether those changes looked risky.
+Before this slice, DriftGuard could already determine whether a PR contained AI-relevant changes and whether those changes looked risky.
 
-After this slice, PromptDrift can start representing an agent or prompt as a stable design profile that can be compared over time.
+After this slice, DriftGuard can start representing an agent or prompt as a stable design profile that can be compared over time.
 
 That is a major conceptual step toward:
 - baseline-aware review
@@ -138,13 +138,13 @@ The current scoring model is heuristic and intentionally interpretable.
 
 ### 1. Guardrail robustness
 
-This score increases when PromptDrift finds:
+This score increases when DriftGuard finds:
 - explicit constraint language
 - bounded authority phrases
 - policy/safety/escalation/audit rule language
 - examples that clarify expected behavior
 
-It decreases when PromptDrift finds:
+It decreases when DriftGuard finds:
 - ambiguity markers
 - looser prose without explicit constraints
 
@@ -154,13 +154,13 @@ Interpretation:
 
 ### 2. Capability risk
 
-This score increases when PromptDrift finds:
+This score increases when DriftGuard finds:
 - write-capable action language
 - production environment wording
 - sensitive tool or system mentions
 - broader system reach
 
-It decreases when PromptDrift finds:
+It decreases when DriftGuard finds:
 - sandbox/test-only wording
 - explicit authority limits
 - human review gates
@@ -172,12 +172,12 @@ Interpretation:
 
 ### 3. Autonomy level
 
-This score increases when PromptDrift finds:
+This score increases when DriftGuard finds:
 - more step depth
 - planner/parallel/concurrent wording
 - more self-directed execution hints
 
-It decreases when PromptDrift finds:
+It decreases when DriftGuard finds:
 - human approval or escalation markers
 
 Interpretation:
@@ -233,7 +233,7 @@ It needs:
 - testability
 - baseline-relative usefulness
 
-A heuristic-first layer is the right bridge because it lets PromptDrift move from:
+A heuristic-first layer is the right bridge because it lets DriftGuard move from:
 - file-level and line-level change detection
 
 to:
@@ -250,7 +250,7 @@ This gives immediate architectural leverage while keeping the logic reviewable.
 The static drift-profile layer sits between raw artifact analysis and future read-side history/reporting.
 
 ### Before this slice
-PromptDrift had:
+DriftGuard had:
 - webhook ingestion
 - AI relevance classification
 - deterministic rule analysis
@@ -259,7 +259,7 @@ PromptDrift had:
 - durable audit persistence
 
 ### After this slice
-PromptDrift also has:
+DriftGuard also has:
 - a static attribute vocabulary for design drift
 - a concrete baseline-comparison payload
 - a scoring layer suitable for trend graphs and PR summaries
@@ -284,7 +284,7 @@ The current implementation deliberately still has important limits:
 
 - semantic similarity remains lexical and lightweight rather than embedding-based
 - scoring is still mostly artifact-agnostic and heuristic-first
-- repo-level urgency is still stronger when historical backfill exists than when PR-linked evidence is sparse
+- landed posture intentionally depends on approved baselines plus merged-history evidence, while proposal-only PR audits still need clearer reviewer-facing synthesis
 - profile outputs are explainable, but they are not yet fused as tightly as they should be with deterministic and semantic review channels
 - customer-facing visualization remains intentionally lightweight and reviewer-first rather than exhaustive
 
@@ -356,7 +356,7 @@ This is the correct test strategy for an early heuristic engine because it prote
 
 This slice is important because it is not just another rule.
 
-It introduces the central product abstraction PromptDrift needs in order to become a true GitHub-native design drift engine:
+It introduces the central product abstraction DriftGuard needs in order to become a true GitHub-native design drift engine:
 
 **an agent or prompt can now be represented as a static attribute profile and compared against a baseline over time.**
 

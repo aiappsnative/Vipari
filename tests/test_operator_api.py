@@ -62,9 +62,12 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
             default_branch="main",
             status="completed",
             discovered_artifact_count=1,
+            approved_by=None,
+            approved_at=None,
             created_at=1.0,
             updated_at=1.0,
         ),
+        baseline_review=None,
         backfill=RepoDashboardBackfillSummary(
             job_count=1,
             planned_job_count=0,
@@ -127,8 +130,8 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                         drift_magnitude=0.4,
                     ),
                     RepoArtifactTimelinePoint(
-                        source="pull_request",
-                        label="PR #42",
+                        source="historical",
+                        label="commit sha-2",
                         created_at=2.0,
                         semantic_distance=0.3,
                         capability_shift=0.2,
@@ -160,7 +163,7 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 ),
                 risk_tags=["capability expanded", "autonomy increased"],
                 narrative=["Capability risk increased due to broader or more sensitive actions."],
-                provenance=RepoArtifactProvenance(source_type="pull_request", label="PR #42 · sha-cur", created_at=2.0),
+                provenance=RepoArtifactProvenance(source_type="historical", label="commit sha-2", created_at=2.0),
             )
         ],
         artifacts=[
@@ -174,6 +177,10 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 historical_profile_count=2,
                 latest_historical_semantic_distance=0.3,
                 latest_historical_drift_magnitude=0.7,
+                latest_historical_capability_shift=0.2,
+                latest_historical_guardrail_shift=-0.1,
+                latest_historical_governance_shift=0.0,
+                latest_historical_autonomy_shift=0.1,
                 pr_profile_count=0,
                 latest_pr_semantic_distance=0.0,
                 latest_pr_capability_shift=0.0,
@@ -196,6 +203,8 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         default_branch="main",
         status="completed",
         discovered_artifact_count=1,
+        approved_by=None,
+        approved_at=None,
         created_at=1.0,
         updated_at=1.0,
     )
@@ -225,6 +234,10 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
                 signal_terms=["safe"],
                 line_count=4,
                 profile=_profile(),
+                approval_status="pending",
+                approved_by=None,
+                approved_at=None,
+                approval_note=None,
                 created_at=1.0,
             )
         ],
@@ -236,6 +249,7 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         repo_full="doria90/dummyAI",
         artifact_path="prompts/system.txt",
         artifact_type="prompt",
+        job_kind="historical_backfill",
         status="completed",
         commit_count=2,
         completed_commit_count=2,
@@ -301,38 +315,45 @@ def test_dashboard_html_pages_render(tmp_path):
         repo_js_response = client.get("/static/dashboard-repo.js")
 
     assert index_response.status_code == 200
-    assert "PromptDrift Dashboard" in index_response.text
+    assert "DriftGuard Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
-    assert "portfolio-risk-state" in index_response.text
-    assert "Recurring change patterns" in index_response.text
-    assert "No production traffic or user data is analyzed" in index_response.text
-    assert "Why these are rising" in index_response.text
-    assert "Risk by control surface" in index_response.text
-    assert "Ranked queue" in index_response.text
-    assert "Control surface coverage" in index_response.text
+    index_text = index_response.text.lower()
+    assert "urgent items for review" in index_text
+    assert "repository atlas" in index_text
+    assert "repo posture radar" in index_text
+    assert "version journey" in index_text
+    assert "coverage" in index_text
+    assert "overview-rebaseline-modal" in index_response.text
 
     assert repo_response.status_code == 200
-    assert "Review case file: strongest item first, then the ranked queue, then supporting evidence." in repo_response.text
-    assert "Static-only analysis" in repo_response.text
-    assert "Baseline vs current posture." in repo_response.text
-    assert "Needs review queue" in repo_response.text
-    assert "Control surface coverage" in repo_response.text
-    assert "History and drift timeline" in repo_response.text
-    assert "promptdrift-repo-full" in repo_response.text
+    repo_text = repo_response.text.lower()
+    assert "audit page" in repo_text
+    assert "available repositories" in repo_text
+    assert "governance attention" in repo_text
+    assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
+    assert "attribute drift" in repo_text
+    assert "control surface coverage" in repo_text
+    assert "drift storyline" in repo_text
+    assert "baseline-review-panel" in repo_response.text
+    assert "Baseline Review" in repo_response.text
+    assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
 
     assert css_response.status_code == 200
-    assert ".hero-panel" in css_response.text
-    assert ".risk-surface-card" in css_response.text
-    assert "--panel-border" in css_response.text
+    assert ".app-shell" in css_response.text
+    assert ".posture-strip" in css_response.text
+    assert ".detail-panel" in css_response.text
+    assert "--color-border" in css_response.text
     assert index_js_response.status_code == 200
-    assert "renderRiskState" in index_js_response.text
-    assert "renderHighestRiskItems" in index_js_response.text
-    assert "renderControlSurfaceRisk" in index_js_response.text
+    assert "renderUrgentRow" in index_js_response.text
+    assert "renderRepoAtlasCard" in index_js_response.text
+    assert "submitOverviewRebaseline" in index_js_response.text
+    assert "loadOverview" in index_js_response.text
+    assert "drawRadar" in index_js_response.text
     assert "Unable to load dashboard overview" in index_js_response.text
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
-    assert "renderDesignProfiles" in repo_js_response.text
-    assert "renderHistoryTimelines" in repo_js_response.text
+    assert "renderRepoTriageRow" in repo_js_response.text
+    assert "renderAttributeBars" in repo_js_response.text
     assert "Unable to load repository dashboard" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text
