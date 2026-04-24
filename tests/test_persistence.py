@@ -6,7 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services.audit_jobs import init_db
-from services.persistence import PostgresConnection, get_persistence_status, resolve_db_path
+from services.persistence import PostgresConnection, get_persistence_status, persistence_status_payload, resolve_db_path
 from services.schema_migrations import list_applied_migrations, migrate_database
 
 
@@ -30,11 +30,32 @@ def test_init_db_persists_backend_metadata_and_table_groups(tmp_path):
     assert row == ("sqlite", 3)
 
 
+def test_persistence_status_payload_omits_database_path_by_default(tmp_path):
+    db_path = str(tmp_path / "driftguard.db")
+
+    init_db(db_path)
+    payload = persistence_status_payload(get_persistence_status(db_path))
+
+    assert payload["backend"] == "sqlite"
+    assert "database_path" not in payload
+
+
 def test_resolve_db_path_prefers_postgres_database_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
     monkeypatch.delenv("AUDIT_DB_PATH", raising=False)
 
     assert resolve_db_path(None) == "postgresql://user:pass@db.example.com/driftguard"
+
+
+def test_get_persistence_status_reports_postgres_unreachable_as_not_existing():
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+
+    with patch("services.persistence.connect_sqlite", side_effect=RuntimeError("db unreachable")):
+        status = get_persistence_status(locator)
+
+    assert status.backend == "postgresql"
+    assert status.database_exists is False
+    assert status.production_target == "postgresql"
 
 
 def test_migrate_database_records_bootstrap_migration(tmp_path):

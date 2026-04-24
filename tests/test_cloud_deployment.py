@@ -259,6 +259,24 @@ def test_api_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     assert any(check["name"] == "config" and check["status"] == "ok" for check in ready_payload["checks"])
 
 
+def test_api_service_persistence_status_redacts_database_path(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "api-persistence.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_ENV", "local")
+    _reset_settings_cache()
+
+    with TestClient(create_api_app()) as client:
+        response = client.get("/api/persistence", headers={"Authorization": "Bearer admin-token"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"] == "sqlite"
+    assert "database_path" not in payload
+
+
 def test_webhook_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     db_path = str(tmp_path / "webhook-health.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")

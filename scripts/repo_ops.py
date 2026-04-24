@@ -23,7 +23,7 @@ from services.oss_eval_harness import (
     resolve_oss_eval_target,
     run_oss_evaluation,
 )
-from services.persistence import get_persistence_status, resolve_db_path
+from services.persistence import get_persistence_status, persistence_status_payload, resolve_db_path
 from services.schema_migrations import list_applied_migrations, migrate_database
 
 
@@ -78,7 +78,7 @@ def cmd_list_repos(args: argparse.Namespace) -> int:
 def cmd_persistence_status(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
     migrate_database(db_path)
-    payload = asdict(get_persistence_status(db_path))
+    payload = persistence_status_payload(get_persistence_status(db_path))
     payload["applied_migrations"] = [asdict(item) for item in list_applied_migrations(db_path)]
     _write_json(payload)
     return 0
@@ -230,7 +230,6 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser = subparsers.add_parser("migrate-db", help="Apply schema migrations/bootstrap for the configured database")
     migrate_parser.add_argument("--db", help="Path or DATABASE_URL override for the target database")
     migrate_parser.set_defaults(func=cmd_migrate_db)
-
     dashboard_parser = subparsers.add_parser("dashboard", help="Print the unified dashboard payload for a repo")
     dashboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
     dashboard_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")

@@ -20,69 +20,69 @@ The critical engineering principle for this branch is:
 
 ## Current-state audit findings
 
-### 1. Production persistence is still SQLite-bound
+Status refresh: the original audit captured a pre-hardening snapshot. The findings below reflect the current branch state after PostgreSQL-capable persistence, Redis queue support, split-service packaging, and readiness guardrails landed.
+
+### 1. Production persistence is PostgreSQL-capable, but not yet fully proven end to end
 
 Observed facts:
 
 - `config.py` still defaults `DATABASE_URL` to `sqlite:///...`
-- `services/persistence.py` exposes only `connect_sqlite(...)`
-- operational and durable stores still use `sqlite3` directly across the codebase
-- local/dev compose still mounts `/data` and points all services at the same SQLite file
-- there is currently no Postgres adapter, migration framework, or dual-backend abstraction
+- `services/persistence.py` now resolves SQLite and PostgreSQL locators and exposes a PostgreSQL-capable connection adapter
+- application bootstrap and schema repair now flow through `services.schema_migrations` and `scripts/db_migrate.py`
+- runtime guardrails fail closed in production when SQLite is configured
+- local/dev still defaults to SQLite and many persistence call sites continue to rely on SQLite-compatible semantics exercised through the adapter layer
 
 Implication:
 
-- true Postgres-backed Railway production is not available yet
-- the issue cannot be considered fully done until persistence stops being SQLite-only
+- the branch now supports a PostgreSQL-backed production path, but the umbrella issue should not be considered fully done until restart, redeploy, and broader production data flows are proven against PostgreSQL-backed persistence
 
-### 2. Queueing is not aligned with the target production architecture
+### 2. Queueing is aligned for production, but operational validation still matters
 
 Observed facts:
 
-- webhook and worker queue selection is `sqlite` or `sqs`
-- there is no Redis queue backend yet
-- `REDIS_URL` exists in config/docs, but is not the queue implementation in practice
+- webhook and worker now support `QUEUE_BACKEND=redis`
+- production runtime validation requires Redis for `webhook` and `worker` roles
+- local/dev compatibility still preserves SQLite queue behavior for non-production workflows
 
 Implication:
 
-- queue reliability on Railway is not yet aligned with the issue requirements
+- Railway queue topology is now aligned with the intended production architecture, and the remaining concern is operational verification rather than missing Redis support
 
-### 3. Split cloud service shape is only partially production-usable
+### 3. Split cloud service shape is now aligned with the intended public surface
 
 Observed facts:
 
-- `Dockerfile.api`, `run_api.py`, and `services/api_service.py` represent a split operator API/dashboard service
-- the actual customer control plane, auth, and workspace app live in `main.py`
-- current `Dockerfile.api` does not copy `main.py`
+- `run_api.py` serves the real app from `main.py`
+- `Dockerfile.api` copies `main.py`, `run_api.py`, and the required runtime tree
+- webhook and worker remain split services with dedicated entrypoints
 
 Implication:
 
-- the current “api” service shape does not match the product surface the issue wants to launch
-- the public API service must be aligned with the real app surface
+- the deployment shape is now materially aligned with the intended Railway topology, so remaining work is about production hardening rather than correcting the service boundary itself
 
-### 4. Health endpoints are only liveness checks
+### 4. Readiness is now meaningful, but only as strong as the contracts it checks
 
 Observed facts:
 
-- `services/api_service.py` exposes `GET /health` returning `{status: ok}`
-- `services/webhook_service.py` exposes `GET /health` returning `{status: ok}`
-- there is no readiness concept checking config, persistence, or queue connectivity
+- `main.py`, `services/api_service.py`, and `services/webhook_service.py` expose `/health/ready`
+- readiness validates runtime configuration, persistence reachability, and queue reachability when relevant
+- readiness now fails when schema migrations have not been applied, rather than treating bare database connectivity as sufficient
 
 Implication:
 
-- Railway can currently mark a service healthy while it is unusable or dangerously misconfigured
+- Railway can now use readiness to reject misconfigured or partially bootstrapped services, but operators still need to run the migration entrypoint explicitly before cutting traffic
 
 ### 5. Secret and production-safety rules are not explicit enough
 
 Observed facts:
 
-- production still permits local-file private key assumptions via `GITHUB_PRIVATE_KEY_PATH`
-- secure-cookie, app-base-url, and production env constraints are not centrally validated
-- there is no formal startup validation layer for production-critical config
+- runtime guardrails centrally validate production-critical config in `services.runtime_guardrails`
+- production rejects insecure cookie settings, non-HTTPS app URLs, SQLite persistence, and non-Redis webhook/worker queue configuration
+- production continues to reject local-file-only GitHub private key assumptions in favor of inline key material
 
 Implication:
 
-- deploys can come up in broken or insecure states without a clear startup failure
+- production startup is now materially safer and more explicit, though the broader issue still depends on continued PostgreSQL-backed operational validation before it can honestly be called fully complete
 
 ## Delivery strategy
 

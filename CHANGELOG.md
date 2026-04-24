@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-24 — Persistence status output sanitization
+
+### Changed
+- persistence status JSON now omits the raw `database_path` or locator by default across the monolith API, split API service, and operator CLI so PostgreSQL DSNs are not exposed in status output
+- PostgreSQL persistence status now fails closed on connection errors instead of reporting the database as present when the configured locator is unreachable
+- runtime readiness now fails when required schema migrations have not been applied instead of treating bare database connectivity as fully ready
+- webhook service startup now bootstraps the shared application schema before delivery-table setup so readiness and runtime storage expectations stay aligned
+- the production-persistence branch is reconciled onto the current migration-aware baseline instead of reintroducing stale pre-migration persistence code
+
+### Verified
+- targeted persistence and repo-ops regression slices cover the redacted payload shape and retained migration metadata
+- runtime guardrails and cloud deployment readiness regression slices passed locally (`33 passed`)
+
 ## 2026-04-14 — Compliance export package hardening on feature branch
 
 ### Added

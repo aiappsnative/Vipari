@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -347,6 +347,17 @@ class PersistenceStatus:
     durable_tables: list[str]
 
 
+def persistence_status_payload(
+    status: PersistenceStatus,
+    *,
+    include_database_path: bool = False,
+) -> dict[str, object]:
+    payload = asdict(status)
+    if not include_database_path:
+        payload.pop("database_path", None)
+    return payload
+
+
 def resolve_db_path(explicit_path: str | None = None) -> str:
     if explicit_path:
         return explicit_path
@@ -477,7 +488,7 @@ def get_persistence_status(db_path: str) -> PersistenceStatus:
         return PersistenceStatus(
             backend=backend,
             database_path=resolved_path,
-            database_exists=(backend == "postgresql"),
+            database_exists=False,
             schema_version=CURRENT_PERSISTENCE_SCHEMA_VERSION,
             production_target=DEFAULT_PRODUCTION_TARGET,
             sqlite_busy_timeout_ms=DEFAULT_SQLITE_BUSY_TIMEOUT_MS if backend == "sqlite" else 0,

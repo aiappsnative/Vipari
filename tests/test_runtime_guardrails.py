@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 import pytest
 
 from config import get_settings
+from services.audit_jobs import init_db
 from services.cloud_worker import build_queue_backend as build_worker_queue_backend
 from services.queue import RedisQueue
 from services.runtime_guardrails import build_runtime_readiness, validate_runtime_configuration
@@ -95,12 +96,54 @@ async def test_readiness_verifies_postgres_connectivity(monkeypatch):
     _reset_settings_cache()
 
     settings = get_settings()
-    with patch("services.runtime_guardrails.connect_sqlite") as connect:
+    applied_migration = type("AppliedMigration", (), {"version": "0001_bootstrap_relational_schema"})()
+    with patch("services.runtime_guardrails.connect_sqlite") as connect, patch(
+        "services.runtime_guardrails.list_applied_migrations", return_value=[applied_migration]
+    ):
         readiness = await build_runtime_readiness(settings)
 
     assert readiness["status"] == "ok"
     assert any(check["name"] == "persistence" and "PostgreSQL connectivity verified." in check["detail"] for check in readiness["checks"])
     connect.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
+
+
+@pytest.mark.anyio
+async def test_readiness_fails_when_schema_migrations_are_missing(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "readiness-migrations.db")
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+
+    settings = get_settings()
+    readiness = await build_runtime_readiness(settings)
+
+    assert readiness["status"] == "failed"
+    assert any(check["name"] == "persistence" and check["status"] == "ok" for check in readiness["checks"])
+    assert any(
+        check["name"] == "migrations"
+        and check["status"] == "failed"
+        and "0001_bootstrap_relational_schema" in check["detail"]
+        for check in readiness["checks"]
+    )
+
+
+@pytest.mark.anyio
+async def test_readiness_reports_migrations_ok_after_bootstrap(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "readiness-migrations-ready.db")
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+
+    init_db(db_path)
+    settings = get_settings()
+    readiness = await build_runtime_readiness(settings)
+
+    assert readiness["status"] == "ok"
+    assert any(check["name"] == "migrations" and check["status"] == "ok" for check in readiness["checks"])
 
 
 def test_worker_build_queue_backend_supports_redis(monkeypatch):

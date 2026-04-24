@@ -27,7 +27,7 @@ from .baseline_approval_service import (
 from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
-from .persistence import get_persistence_status
+from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
@@ -124,9 +124,7 @@ def create_api_app() -> FastAPI:
     @app.get("/api/persistence")
     def persistence_status(request: Request):
         _require_admin_token(request, settings)
-        payload = asdict(get_persistence_status(db_path))
-        payload.pop("database_path", None)
-        return JSONResponse(payload)
+        return JSONResponse(persistence_status_payload(get_persistence_status(db_path)))
 
     @app.get("/api/repos/{repo_full:path}/dashboard")
     def repo_dashboard(repo_full: str, request: Request):

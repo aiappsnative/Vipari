@@ -140,7 +140,7 @@ from services.github_integration import fetch_commit_pair_diff, fetch_file_conte
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
-from services.persistence import get_persistence_status
+from services.persistence import get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
@@ -2780,9 +2780,7 @@ def dashboard_overview(request: Request):
 @app.get("/api/persistence")
 def persistence_status(request: Request):
     _require_dashboard_access(request)
-    payload = asdict(get_persistence_status(AUDIT_DB_PATH))
-    payload.pop("database_path", None)
-    return JSONResponse(payload)
+    return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")
