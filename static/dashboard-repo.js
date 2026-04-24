@@ -88,6 +88,15 @@ function escapeHtml(value) {
         .replaceAll("'", "&#39;");
 }
 
+function repoDetailUrl(repo) {
+    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
+    const artifactPath = repo.highest_insight_artifact_path || "";
+    if (artifactPath) {
+        url.searchParams.set("artifact", artifactPath);
+    }
+    return `${url.pathname}${url.search}`;
+}
+
 function profileMetricLabel(key) {
     return {
         guardrail_robustness: "Guardrails",
@@ -1289,6 +1298,59 @@ function renderJourneyCompare(comparison) {
     `;
 }
 
+function renderAvailableRepoCards(repos = []) {
+    const items = asArray(repos);
+    if (!items.length) {
+        return '<div class="muted">No repositories are available for this workspace yet. In the current local SQLite API-only mode, this usually means no repo connections were previously synced into the local database.</div>';
+    }
+
+    return `<div class="stack compact-stack">${items.map((repo) => {
+        const repoFullValue = String(repo.repo_full || "");
+        const isActive = repoFullValue === repoFull;
+        const status = String(repo.onboarding_status || "discovery_pending").replaceAll("_", " ");
+        const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+        return `
+            <article class="artifact-card">
+                <strong><a class="repo-setup-card-link" href="${repoDetailUrl(repo)}">${escapeHtml(repoFullValue)}</a></strong>
+                <div class="artifact-card-reason">${escapeHtml(statusLabel)}${isActive ? ' · Current audit page' : ''}</div>
+            </article>
+        `;
+    }).join("")}</div>`;
+}
+
+function populateAuditRepoLists(repos = []) {
+    const items = asArray(repos);
+    if (!items.length) {
+        setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
+        setSectionHtml("repo-available-repos-list", renderAvailableRepoCards(items));
+        return;
+    }
+
+    const navItems = items.map((repo) => {
+        const repoFullValue = String(repo.repo_full || "");
+        const currentClass = repoFullValue === repoFull ? " sidebar-subitem-active" : "";
+        return `<a class="sidebar-subitem${currentClass}" href="${repoDetailUrl(repo)}">${escapeHtml(repoFullValue)}</a>`;
+    }).join("");
+    setSectionHtml("audit-logs-list", `<nav class="sidebar-sublist-nav">${navItems}</nav>`);
+    setSectionHtml("repo-available-repos-list", renderAvailableRepoCards(items));
+}
+
+async function loadAvailableRepos() {
+    try {
+        const response = await fetch("/api/dashboard/overview");
+        if (!response.ok) {
+            throw new Error(`Overview request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        populateAuditRepoLists(asArray(payload.repos));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown repository inventory error";
+        const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;
+        setSectionHtml("audit-logs-list", fallback);
+        setSectionHtml("repo-available-repos-list", fallback);
+    }
+}
+
 async function loadDashboard() {
     try {
         if (!repoFull) {
@@ -1337,6 +1399,7 @@ async function loadDashboard() {
 bindSidebarNavigation();
 bindRebaselineModal();
 bindExportForm();
+loadAvailableRepos();
 loadDashboard();
 
 function bindExportForm() {

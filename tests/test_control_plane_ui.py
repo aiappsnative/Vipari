@@ -20,7 +20,7 @@ from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
 from services.billing_service import build_stripe_signature
 from services.auth_service import GithubOAuthToken, GithubUserProfile
-from services.secure_store import decrypt_text
+from services.secure_store import decrypt_text, encrypt_text
 
 
 client = TestClient(main.app)
@@ -137,6 +137,7 @@ def test_github_auth_start_redirects_to_provider_when_configured():
 
     assert response.status_code == 302
     assert "github.com/login/oauth/authorize" in response.headers["location"]
+    assert "scope=read%3Auser+user%3Aemail+repo+read%3Aorg" in response.headers["location"]
     assert "promptdrift_oauth_state=" in response.headers.get("set-cookie", "")
 
 
@@ -154,7 +155,7 @@ def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
         display_name="Existing User",
         primary_email="existing@example.com",
         avatar_url=None,
-        granted_scopes=["read:user"],
+        granted_scopes=["read:user", "user:email", "repo", "read:org"],
         access_token_encrypted="encrypted-token",
     )
     session = create_user_session(
@@ -669,6 +670,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'data-theme="light"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
+    assert "Available repositories" in repo_dashboard_html
     assert "EU AI Act relevance" in repo_dashboard_html
     assert "Governance attention" in repo_dashboard_html
     assert "Loading EU AI Act, SOC 2, and ISO 27001 governance guidance..." in repo_dashboard_html
@@ -1193,6 +1195,133 @@ def test_admin_page_requires_explicit_owner_identity(tmp_path):
     main.settings.owner_github_login = original_login
     main.settings.owner_github_user_id = original_id
     main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_profile_page_shows_admin_link_for_local_billing_owner_without_owner_config(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    original_app_env = main.settings.app_env
+    main.AUDIT_DB_PATH = str(tmp_path / "profile-local-owner.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = ""
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+    main.settings.app_env = "local"
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription, upsert_workspace_membership
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="975",
+        github_login="doria90",
+        display_name="Doria",
+        primary_email="doria@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="Local Owner Workspace",
+        slug="local-owner-workspace",
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_local_owner",
+        stripe_price_id="price_starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="local-owner-profile-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert 'href="/app/admin"' in response.text
+    assert "Open system admin" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_github_auth_start_reauths_when_existing_session_scopes_are_stale(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "auth-reauth-stale-scopes.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="126",
+        github_login="stale-user",
+        display_name="Stale User",
+        primary_email="stale@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="stale-scope-session",
+        user_id=user.id,
+        workspace_id=None,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch.object(main.settings, "github_oauth_client_id", "client-id"), patch.object(
+        main.settings, "github_oauth_client_secret", "client-secret"
+    ), patch.object(main.settings, "github_oauth_callback_url", "http://testserver/auth/github/callback"), patch.object(
+        main.settings, "app_encryption_key", "very-secret"
+    ):
+        response = client.get(
+            "/auth/github/start",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert "github.com/login/oauth/authorize" in response.headers["location"]
+
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -3366,4 +3495,108 @@ def test_repo_setup_page_ignores_invalid_github_app_private_key(tmp_path):
     assert "Repository Inventory" in response.text
     assert "20 of 20 repository slots available on this plan." in response.text
 
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_encryption_key = main.settings.app_encryption_key
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-setup-oauth-inventory.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+    )
+    from services.auth_service import GithubUserRepository
+
+    main.settings.app_encryption_key = "very-secret"
+    encrypted_token = encrypt_text("oauth-token", main.settings.app_encryption_key)
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="962",
+        github_login="repo-viewer",
+        display_name="Repo Viewer",
+        primary_email="repo-viewer@example.com",
+        avatar_url=None,
+        granted_scopes=["repo"],
+        access_token_encrypted=encrypted_token,
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="OAuth Repo Workspace",
+        slug="oauth-repo-workspace",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_repo_oauth",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-setup-oauth-inventory-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch("main.list_github_user_repositories") as list_repositories:
+        list_repositories.return_value = [
+            GithubUserRepository(
+                github_repo_id="1",
+                full_name="doria90/dummyAI",
+                default_branch="main",
+                is_private=True,
+                html_url="https://github.com/doria90/dummyAI",
+            ),
+            GithubUserRepository(
+                github_repo_id="2",
+                full_name="doria90/PromptDrift",
+                default_branch="main",
+                is_private=True,
+                html_url="https://github.com/doria90/PromptDrift",
+            ),
+        ]
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "Repository Inventory" in response.text
+    assert "doria90/dummyAI" in response.text
+    assert "doria90/PromptDrift" in response.text
+
+    main.settings.app_encryption_key = original_encryption_key
     main.AUDIT_DB_PATH = original_db_path

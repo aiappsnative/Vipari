@@ -13,7 +13,8 @@ GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_USER_EMAILS_URL = "https://api.github.com/user/emails"
 GITHUB_USER_REPOS_URL = "https://api.github.com/user/repos"
-GITHUB_OAUTH_SCOPE = "read:user user:email"
+GITHUB_OAUTH_SCOPE = "read:user user:email repo read:org"
+GITHUB_REQUIRED_REPO_SCOPES = {"repo", "read:org"}
 
 
 @dataclass(frozen=True)

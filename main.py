@@ -38,6 +38,7 @@ from services.baseline_approval_service import (
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorker, BranchScanWorkerSettings
 from services.auth_service import (
+    GITHUB_REQUIRED_REPO_SCOPES,
     GithubOAuthToken,
     GithubUserProfile,
     build_github_oauth_authorize_url,
@@ -46,6 +47,7 @@ from services.auth_service import (
     generate_csrf_secret,
     generate_oauth_state,
     generate_session_id,
+    list_github_user_repositories,
 )
 from services.billing_service import (
     create_billing_portal_session,
@@ -142,7 +144,7 @@ from services.persistence import get_persistence_status
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
-from services.secure_store import encrypt_text
+from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
 
 settings = get_settings()
@@ -750,6 +752,7 @@ def _workspace_member_rows(workspace_id: int) -> list[dict[str, object]]:
 def _github_account_repo_inventory(access_context: dict[str, object]) -> list[dict[str, object]]:
     workspace = access_context.get("workspace")
     installation = access_context.get("installation")
+    user = access_context.get("user")
     if workspace is None:
         return []
 
@@ -773,20 +776,39 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
     existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
     existing_repo_fulls.update(allocation.repo_full for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id))
 
-    inventory: list[dict[str, object]] = []
+    inventory_by_full: dict[str, dict[str, object]] = {}
     for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id):
         repo_full = connection.repo_full.strip()
         if not repo_full:
             continue
-        inventory.append(
-            {
-                "repo_full": repo_full,
-                "is_onboarded": repo_full in existing_repo_fulls,
-                "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
-            }
-        )
+        inventory_by_full[repo_full.lower()] = {
+            "repo_full": repo_full,
+            "is_onboarded": repo_full in existing_repo_fulls,
+            "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+        }
 
-    return inventory
+    if user is not None:
+        identity = get_github_identity_for_user(AUDIT_DB_PATH, user.id)
+        access_token_encrypted = identity.access_token_encrypted if identity is not None else None
+        if access_token_encrypted:
+            try:
+                access_token = decrypt_text(access_token_encrypted, settings.app_encryption_key)
+                for repository in list_github_user_repositories(access_token):
+                    repo_full = repository.full_name.strip()
+                    if not repo_full:
+                        continue
+                    inventory_by_full.setdefault(
+                        repo_full.lower(),
+                        {
+                            "repo_full": repo_full,
+                            "is_onboarded": repo_full in existing_repo_fulls,
+                            "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+                        },
+                    )
+            except (HTTPError, OSError, RuntimeError, ValueError):
+                pass
+
+    return sorted(inventory_by_full.values(), key=lambda item: str(item.get("repo_full") or "").lower())
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
@@ -1350,9 +1372,29 @@ def _is_owner_identity(user, identity) -> bool:
     return bool(checks) and all(checks)
 
 
+def _has_local_owner_fallback(user, workspace) -> bool:
+    if settings.has_owner_access_config or settings.is_production:
+        return False
+    if user is None or workspace is None:
+        return False
+    return bool(getattr(workspace, "billing_owner_user_id", None) == user.id)
+
+
+def _has_owner_admin_access(user, identity, workspace=None) -> bool:
+    if user is None or identity is None:
+        return False
+    return _is_owner_identity(user, identity) or _has_local_owner_fallback(user, workspace)
+
+
+def _identity_has_required_repo_scopes(identity) -> bool:
+    granted_scopes = {str(scope).strip().lower() for scope in getattr(identity, "granted_scopes", []) if str(scope).strip()}
+    return GITHUB_REQUIRED_REPO_SCOPES.issubset(granted_scopes)
+
+
 def _require_owner_access(request: Request) -> dict[str, object]:
     context = _current_authenticated_identity_context(request)
-    if not _is_owner_identity(context["user"], context["identity"]):
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, context["session"].workspace_id) if context["session"].workspace_id else None
+    if not _has_owner_admin_access(context["user"], context["identity"], workspace):
         raise HTTPException(status_code=403, detail="System owner access is not enabled for this GitHub identity.")
     return context
 
@@ -1439,7 +1481,9 @@ async def github_auth_start(request: Request):
     existing_session = _get_session(request)
     flow_context = _flow_context_from_request(request)
     if existing_session is not None:
-        return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
+        existing_identity = get_github_identity_for_user(AUDIT_DB_PATH, existing_session.user_id)
+        if existing_identity is not None and _identity_has_required_repo_scopes(existing_identity):
+            return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
     if not settings.has_github_oauth_credentials:
         return RedirectResponse(_path_with_flow_context("/login?login_error=oauth_not_configured", flow_context), status_code=303)
     if not settings.has_encryption_key:
@@ -1608,7 +1652,7 @@ async def profile_page(request: Request):
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
         )
     )
