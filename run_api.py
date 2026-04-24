@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import os
-
 import uvicorn
 
+from config import get_settings
 from main import app
 
 
+def main() -> None:
+    settings = get_settings()
+    uvicorn.run("run_api:app", host="0.0.0.0", port=settings.api_port)
+
 
 if __name__ == "__main__":
-    uvicorn.run("run_api:app", host="0.0.0.0", port=int(os.getenv("PORT", "8002")))
+    main()

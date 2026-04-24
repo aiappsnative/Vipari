@@ -209,6 +209,7 @@ Optional variables:
 - `REDIS_URL`
 - `QUEUE_BACKEND`, `SQS_QUEUE_URL`, and `SQS_DLQ_URL`
 - `API_ADMIN_TOKEN` for the split API service
+- `API_PORT` and `WEBHOOK_PORT` for local split-service overrides; deployed services still honor platform-provided `PORT`
 - `ENABLE_METRICS` (defaults to `false`)
 
 Control-plane preflight helper:
@@ -247,6 +248,7 @@ Important deployment rules for this split surface:
 - the webhook ingress should be the only internet-facing unauthenticated route surface
 - the public Railway `api` service should now run the real customer control-plane app from `main.py`, with `SERVICE_ROLE=api` so webhook ingress is not active there
 - the legacy split operator API in `services/api_service.py` still exists for local/operator scenarios, but it is not the preferred public launch surface
+- split-service entrypoints now resolve bind ports through centralized settings: use `API_PORT` and `WEBHOOK_PORT` for local overrides, while deployed services continue to honor the platform-provided `PORT`
 - Prometheus metrics are disabled by default and only exposed when `ENABLE_METRICS=true`
 - SQLite remains the default local/shared-volume store for local development only, while production can now use a PostgreSQL `DATABASE_URL`
 - production hardening now fails closed on unsafe settings such as SQLite persistence, insecure cookies, non-HTTPS base URLs, file-path private keys, or non-Redis queue settings for webhook/worker services
