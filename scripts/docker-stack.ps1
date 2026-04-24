@@ -15,6 +15,22 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
+function Ensure-LocalAppEncryptionKey {
+    if ($env:APP_ENCRYPTION_KEY) {
+        return
+    }
+
+    $randomBytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($randomBytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
+    $env:APP_ENCRYPTION_KEY = [Convert]::ToBase64String($randomBytes)
+}
+
 try {
     $composeArgs = @()
     $serviceArgs = @("api")
@@ -35,7 +51,7 @@ try {
         $env:APP_ENV = "local"
         $env:APP_BASE_URL = "http://127.0.0.1:8011"
         $env:API_ADMIN_TOKEN = "local-admin-token"
-        $env:APP_ENCRYPTION_KEY = "local-dev-encryption-key"
+        Ensure-LocalAppEncryptionKey
         if (-not $env:SESSION_COOKIE_SECURE) {
             $env:SESSION_COOKIE_SECURE = "false"
         }
@@ -49,7 +65,7 @@ try {
             $env:APP_ENV = "local"
             $env:APP_BASE_URL = "http://127.0.0.1:8011"
             $env:API_ADMIN_TOKEN = "local-admin-token"
-            $env:APP_ENCRYPTION_KEY = "local-dev-encryption-key"
+            Ensure-LocalAppEncryptionKey
             if (-not $env:SESSION_COOKIE_SECURE) {
                 $env:SESSION_COOKIE_SECURE = "false"
             }

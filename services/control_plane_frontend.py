@@ -234,6 +234,8 @@ def _render_quick_links(*, profile_url: str | None = None, admin_url: str | None
     links = ['<a class="subtle-link" href="/app">Workspace</a>']
     if profile_url:
         links.append(f'<a class="subtle-link" href="{html_escape(profile_url)}">Profile</a>')
+    if admin_url:
+        links.append(f'<a class="subtle-link" href="{html_escape(admin_url)}">Admin</a>')
     return "".join(links)
 
 
@@ -764,9 +766,13 @@ def render_control_plane_settings_page(
     if not pr_comments_allowed_by_plan:
         status_copy = "Your current plan does not permit PR comments, so this setting will not take effect until comments are included in the workspace entitlement."
     manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
+    admin_control = ""
+    if admin_url:
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{STATUS_NOTE}}", html_escape(status_copy))
@@ -804,6 +810,9 @@ def render_control_plane_placeholder_page(
     active_nav: str,
 ) -> str:
     template = _load_template("control_plane_placeholder.html")
+    admin_control = ""
+    if admin_url:
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     return (
         template.replace("{{PAGE_TITLE}}", html_escape(page_title))
         .replace("{{PAGE_KICKER}}", html_escape(page_kicker))
@@ -811,6 +820,7 @@ def render_control_plane_placeholder_page(
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{COMPLIANCE_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "compliance" else "")
         .replace("{{POLICIES_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "policies" else "")
         .replace("{{HELP_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "help" else "")

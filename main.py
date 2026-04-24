@@ -1291,17 +1291,21 @@ def _run_compliance_export_job(
         requested_by_user_id=requested_by_user_id,
         requested_by_github_login=requested_by_github_login,
     )
-    result = build_compliance_export(
-        AUDIT_DB_PATH,
-        ComplianceExportServiceRequest(
-            repo_full=repo_full,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            export_mode=export_mode,
-            include_artifact_content=include_artifact_content,
-            export_version=job.export_version,
-        ),
-    )
+    try:
+        result = build_compliance_export(
+            AUDIT_DB_PATH,
+            ComplianceExportServiceRequest(
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=export_mode,
+                include_artifact_content=include_artifact_content,
+                export_version=job.export_version,
+            ),
+        )
+    except Exception as exc:
+        update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
+        raise
     update_export_job_status(
         AUDIT_DB_PATH,
         job.id,
@@ -1705,7 +1709,7 @@ async def settings_page(request: Request):
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
@@ -1813,7 +1817,7 @@ async def policies_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_nav="policies",
         )
     )
@@ -1880,7 +1884,7 @@ async def help_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if identity and user and _is_owner_identity(user, identity) else None,
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_nav="help",
         )
     )
@@ -1939,7 +1943,7 @@ async def compliance_export_page_submit(
             completed += 1
         except Exception:
             failed += 1
-    status_message = f"Queued exports for {completed} repo(s)."
+    status_message = f"Completed exports for {completed} repo(s)."
     if failed:
         status_message += f" {failed} repo(s) failed and can be retried."
     return RedirectResponse(f"/app/compliance?status={quote(status_message)}", status_code=303)

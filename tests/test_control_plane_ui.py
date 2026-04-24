@@ -1282,6 +1282,96 @@ def test_profile_page_shows_admin_link_for_local_billing_owner_without_owner_con
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_settings_help_and_policies_show_admin_link_for_local_billing_owner_without_owner_config(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    original_app_env = main.settings.app_env
+    main.AUDIT_DB_PATH = str(tmp_path / "local-owner-nav.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = ""
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+    main.settings.app_env = "local"
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription, upsert_workspace_membership
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="976",
+        github_login="doria90",
+        display_name="Doria",
+        primary_email="doria@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="Local Owner Workspace",
+        slug="local-owner-nav-workspace",
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_local_owner_nav",
+        stripe_price_id="price_starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="local-owner-nav-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    cookies = {main.settings.session_cookie_name: session.session_id}
+    settings_response = client.get("/app/settings", cookies=cookies)
+    help_response = client.get("/app/help", cookies=cookies)
+    policies_response = client.get("/app/policies", cookies=cookies)
+
+    assert settings_response.status_code == 200
+    assert help_response.status_code == 200
+    assert policies_response.status_code == 200
+    assert 'href="/app/admin"' in settings_response.text
+    assert 'href="/app/admin"' in help_response.text
+    assert 'href="/app/admin"' in policies_response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_github_auth_start_reauths_when_existing_session_scopes_are_stale(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "auth-reauth-stale-scopes.db")
@@ -2930,6 +3020,127 @@ def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
     assert len(jobs) == 1
     assert jobs[0].repo_full == "compliance-org/repo-two"
     assert jobs[0].status == "completed"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_compliance_page_marks_failed_exports_and_reports_retryable_status(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "compliance-export-failure.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.export_jobs import list_export_jobs_for_workspace_requester
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="973",
+        github_login="failing-exporter",
+        display_name="Failing Exporter",
+        primary_email="failing-exporter@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="compliance-export-failure-workspace",
+        display_name="Compliance Export Failure Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="compliance-export-failure-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_compliance_failure",
+        stripe_price_id="price_compliance_failure",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9730,
+        account_id="9730",
+        account_login="compliance-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9730,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "compliance-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+
+    with patch("main.build_compliance_export", side_effect=RuntimeError("zip failed")):
+        response = client.post(
+            "/app/compliance/export",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={
+                "export_scope": "selected",
+                "repo_fulls": ["compliance-org/repo-one"],
+                "from_date": "2023-11-14",
+                "to_date": "2023-11-15",
+                "export_mode": "compliance",
+                "csrf_token": session.csrf_secret,
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "Completed%20exports%20for%200%20repo%28s%29.%201%20repo%28s%29%20failed%20and%20can%20be%20retried." in response.headers["location"]
+
+    jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
+    assert len(jobs) == 1
+    assert jobs[0].repo_full == "compliance-org/repo-one"
+    assert jobs[0].status == "failed"
+    assert jobs[0].last_error == "zip failed"
 
     main.AUDIT_DB_PATH = original_db_path
 
