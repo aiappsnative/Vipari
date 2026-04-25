@@ -655,22 +655,23 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     dashboard_html = render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'data-theme="light"' in dashboard_html
     assert 'class="dashboard-index-page"' in dashboard_html
-    assert "Urgent Items for Review" in dashboard_html
-    assert "Version Journey" in dashboard_html
-    assert "Repo Posture Radar" in dashboard_html
+    assert "Needs attention now" in dashboard_html
+    assert "History and drift timeline" in dashboard_html
+    assert "Posture map" in dashboard_html
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
     assert 'href="/app/compliance"' in dashboard_html
     assert 'id="audit-logs-toggle"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
+    assert 'class="journey-stage loading-shell"' in dashboard_html
+    assert dashboard_html.index("Repository map") < dashboard_html.index("Needs attention now")
 
     repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'class="repo-audit-page"' in repo_dashboard_html
     assert 'data-theme="light"' in repo_dashboard_html
     assert "Audit Page" in repo_dashboard_html
     assert "Audit Queue" in repo_dashboard_html
-    assert "Available repositories" in repo_dashboard_html
     assert "EU AI Act relevance" in repo_dashboard_html
     assert "Governance attention" in repo_dashboard_html
     assert "Loading EU AI Act, SOC 2, and ISO 27001 governance guidance..." in repo_dashboard_html
@@ -680,6 +681,8 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'href="/app/compliance"' in repo_dashboard_html
     assert "Generate Export Package" not in repo_dashboard_html
     assert "Recent Exports" not in repo_dashboard_html
+    assert "Available repositories" not in repo_dashboard_html
+    assert "/api/dashboard/overview" not in repo_dashboard_html
 
     dashboard_css = (Path(__file__).resolve().parent.parent / "static" / "dashboard.css").read_text(encoding="utf-8")
     assert 'body.dashboard-index-page[data-theme="light"]' in dashboard_css
@@ -688,7 +691,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert '.dashboard-index-page[data-theme="light"] .journey-arrow' in dashboard_css
     assert '.dashboard-index-page[data-theme="light"] .journey-point-baseline .journey-pill' in dashboard_css
     assert 'body.repo-audit-page[data-theme="light"]' in dashboard_css
-    assert '.repo-audit-page[data-theme="light"] .repo-audit-hero' in dashboard_css
+    assert '.repo-audit-page[data-theme="light"] .detail-panel' in dashboard_css
 
 
 def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
@@ -2297,8 +2300,8 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert dashboard_response.status_code == 200
-    assert "Urgent Items for Review" in dashboard_response.text
-    assert "Repo Posture Radar" in dashboard_response.text
+    assert "Needs attention now" in dashboard_response.text
+    assert "Posture map" in dashboard_response.text
     assert 'href="/app/repos"' in dashboard_response.text
 
     main.AUDIT_DB_PATH = original_db_path

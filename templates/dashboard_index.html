@@ -82,6 +82,28 @@
                 </div>
             </section>
             <main class="page-scroll" id="top">
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-atlas-section">
+                        <div class="secondary-panel-title">Repository map</div>
+                        <div class="muted">Preview other repositories without leaving the queue.</div>
+                        <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading repositories...</span>
+                            <div class="skeleton-card-grid" aria-hidden="true">
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="main-columns" id="overview-triage-section">
                     <section class="triage-column">
                         <div class="triage-header card-shell">
@@ -140,7 +162,7 @@
                     <div class="secondary-panel" id="journey-section">
                         <div class="secondary-panel-title">History and drift timeline</div>
                         <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
-                        <div id="repo-journey-strip" class="loading-shell" aria-busy="true">
+                        <div id="repo-journey-strip" class="journey-stage loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading repo journey preview...</span>
                             <div class="skeleton-stack" aria-hidden="true">
                                 <div class="skeleton-chip-row">
@@ -178,28 +200,6 @@
                                 <div class="skeleton-bar-row">
                                     <span class="skeleton-bar"></span>
                                     <span class="skeleton-bar"></span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="secondary-row">
-                    <div class="secondary-panel" id="repo-atlas-section">
-                        <div class="secondary-panel-title">Repository map</div>
-                        <div class="muted">Preview other repositories without leaving the queue.</div>
-                        <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading repositories...</span>
-                            <div class="skeleton-card-grid" aria-hidden="true">
-                                <div class="skeleton-card skeleton-stack">
-                                    <span class="skeleton-line skeleton-line-short"></span>
-                                    <span class="skeleton-line skeleton-line-medium"></span>
-                                    <span class="skeleton-line skeleton-line-long"></span>
-                                </div>
-                                <div class="skeleton-card skeleton-stack">
-                                    <span class="skeleton-line skeleton-line-short"></span>
-                                    <span class="skeleton-line skeleton-line-medium"></span>
-                                    <span class="skeleton-line skeleton-line-long"></span>
                                 </div>
                             </div>
                         </div>

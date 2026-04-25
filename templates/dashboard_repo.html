@@ -98,7 +98,6 @@
                     <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
                     <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
                     <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
-                    <a class="repo-audit-anchor" href="#repo-available-repos-section">Available repositories</a>
                 </section>
 
                 <section class="main-columns" id="repo-triage-section">
@@ -170,25 +169,6 @@
                             <button type="button" class="escalate-btn" id="detail-escalate-btn">Escalate before merge</button>
                         </div>
                     </aside>
-                </section>
-
-                <section class="secondary-row" id="repo-available-repos-section">
-                    <div class="secondary-panel">
-                        <div class="secondary-panel-title">Available repositories</div>
-                        <div id="repo-available-repos-list" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading repositories available to this workspace...</span>
-                            <div class="skeleton-card-grid" aria-hidden="true">
-                                <div class="skeleton-card skeleton-stack">
-                                    <span class="skeleton-line skeleton-line-medium"></span>
-                                    <span class="skeleton-line skeleton-line-long"></span>
-                                </div>
-                                <div class="skeleton-card skeleton-stack">
-                                    <span class="skeleton-line skeleton-line-medium"></span>
-                                    <span class="skeleton-line skeleton-line-long"></span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </section>
 
                 <section class="secondary-row">
@@ -349,41 +329,6 @@
                 </section>
             </main>
         </div>
-        <script>
-            // Populate audit logs list for repo pages and bind toggle
-            (function(){
-                const toggle = document.getElementById('audit-logs-toggle');
-                const list = document.getElementById('audit-logs-list');
-                if (toggle && list) {
-                    toggle.addEventListener('click', async () => {
-                        const hidden = list.hasAttribute('hidden');
-                        if (hidden) {
-                            try {
-                                const resp = await fetch('/api/dashboard/overview');
-                                if (resp.ok) {
-                                    const payload = await resp.json();
-                                    const repos = Array.isArray(payload.repos) ? payload.repos : [];
-                                    if (repos.length === 0) {
-                                        list.innerHTML = '<div class="muted">No repositories available</div>';
-                                    } else {
-                                        list.innerHTML = '<nav class="sidebar-sublist-nav">' + repos.map(r => `<a class="sidebar-subitem" href="/dashboard/${encodeURIComponent(r.repo_full)}">${r.repo_full}</a>`).join('') + '</nav>';
-                                    }
-                                } else {
-                                    list.innerHTML = '<div class="muted">Unable to load repositories</div>';
-                                }
-                            } catch (e) {
-                                list.innerHTML = '<div class="muted">Unable to load repositories</div>';
-                            }
-                            list.removeAttribute('hidden');
-                            toggle.setAttribute('aria-expanded','true');
-                        } else {
-                            list.setAttribute('hidden','true');
-                            toggle.setAttribute('aria-expanded','false');
-                        }
-                    });
-                }
-            })();
-        </script>
     </div>
 
     <div id="rebaseline-modal" class="modal-shell" hidden>
