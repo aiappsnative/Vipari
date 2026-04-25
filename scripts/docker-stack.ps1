@@ -34,6 +34,7 @@ function Ensure-LocalAppEncryptionKey {
 try {
     $composeArgs = @()
     $serviceArgs = @("api")
+    $upArgs = @("up", "-d", "--build")
 
     if ($FullStack) {
         $serviceArgs = @("api", "webhook-ingress", "worker")
@@ -56,6 +57,9 @@ try {
             $env:SESSION_COOKIE_SECURE = "false"
         }
         $composeArgs = @("-f", "docker-compose.yml", "-f", "docker-compose.sqlite.yml")
+        if (-not $FullStack) {
+            $upArgs += "--no-deps"
+        }
     }
     else {
         if ($FullStack) {
@@ -75,7 +79,7 @@ try {
 
     switch ($Action) {
         "up" {
-            & docker compose @composeArgs up -d --build @serviceArgs
+            & docker compose @composeArgs @upArgs @serviceArgs
         }
         "down" {
             & docker compose @composeArgs down
@@ -85,7 +89,7 @@ try {
             if ($LASTEXITCODE -ne 0) {
                 exit $LASTEXITCODE
             }
-            & docker compose @composeArgs up -d --build @serviceArgs
+            & docker compose @composeArgs @upArgs @serviceArgs
         }
         "logs" {
             & docker compose @composeArgs logs -f

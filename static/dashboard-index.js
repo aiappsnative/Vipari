@@ -22,12 +22,24 @@ function setSectionHtml(elementId, html) {
     element.innerHTML = html;
     element.classList.remove("loading-shell");
     element.classList.remove("muted");
+    element.removeAttribute("aria-busy");
 }
 
 function setText(elementId, value) {
     const element = document.getElementById(elementId);
     if (element) {
         element.textContent = value;
+        element.removeAttribute("aria-busy");
+    }
+}
+
+function setHtml(elementId, html) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -679,22 +691,33 @@ function onboardingStatusBadge(repo) {
 
 function renderUrgentRow(repo, index) {
     const severity = severityForPriority(repo.highest_priority);
+    const chips = [
+        repo.highest_baseline_label || baselineLabelForRepo(repo),
+        `${Number(repo.discovered_artifact_count || 0)} artifacts`,
+        reviewContext(repo),
+    ].filter(Boolean);
     return `
-        <button type="button" class="urgent-item" data-row-index="${index}">
-            <span class="urgent-icon">!</span>
-            <span class="urgent-copy">
-                <span class="urgent-headline">${escapeHtml(issueHeadline(repo))}</span>
-                <span class="urgent-subline">in ${escapeHtml(repo.repo_full)}</span>
-            </span>
-            ${onboardingStatusBadge(repo)}
-            <span class="urgent-severity ${severity.className}">${escapeHtml(severity.label)}</span>
+        <button type="button" class="triage-row" data-row-index="${index}">
+            <div class="triage-row-top">
+                <strong>${escapeHtml(issueHeadline(repo))}</strong>
+                <span class="severity-badge ${severity.className}">${escapeHtml(severity.label)}</span>
+            </div>
+            <div class="triage-row-reason">${escapeHtml(repo.repo_full)}</div>
+            <div class="triage-row-meta">
+                <span>${escapeHtml(triageSummary(repo))}</span>
+                <span>${escapeHtml(repoSubtitle(repo))}</span>
+            </div>
+            <div class="triage-row-chips">
+                ${chips.map((chip) => `<span class="drift-chip chip-governance">${escapeHtml(chip)}</span>`).join("")}
+            </div>
+            <span class="triage-row-chevron" aria-hidden="true">Open</span>
         </button>
     `;
 }
 
 function selectUrgentRow(index) {
-    document.querySelectorAll(".urgent-item").forEach((item, itemIndex) => {
-        item.classList.toggle("active", itemIndex === index);
+    document.querySelectorAll(".triage-row").forEach((item, itemIndex) => {
+        item.classList.toggle("selected", itemIndex === index);
     });
 }
 
@@ -706,10 +729,33 @@ function selectRepoAtlasCard(repoFull) {
 
 function applyRepoPreview(repo, repos, repoPayload = null) {
     previewState.activeRepoFull = repo.repo_full;
+    const severity = severityForPriority(repo.highest_priority);
+    const severityBadge = document.getElementById("detail-severity-badge");
+    if (severityBadge) {
+        severityBadge.textContent = severity.label;
+        severityBadge.className = `severity-badge ${severity.className}`;
+    }
+    setText("detail-repo-name", repo.repo_full);
+    setText("detail-subtitle", repoSubtitle(repo));
+    setText("selected-repo-summary", triageSummary(repo));
     setText("repo-radar-title", compactRepoLabel(repo.repo_full));
     setText("journey-repo-title", compactRepoLabel(repo.repo_full));
     setText("journey-repo-name", repo.repo_full);
     setText("repo-radar-meta", triageSummary(repo));
+    setHtml(
+        "detail-summary",
+        `
+            <div class="stack compact-stack">
+                <div>${escapeHtml(triageSummary(repo))}</div>
+                <div class="tag-row">
+                    <span class="drift-chip chip-governance">${escapeHtml(repoScopeLabel(repo))}</span>
+                    <span class="drift-chip chip-governance">${escapeHtml(repo.highest_baseline_label || baselineLabelForRepo(repo))}</span>
+                    <span class="drift-chip chip-governance">${escapeHtml(`${Number(repo.review_now_count || 0)} review now`)}</span>
+                    <span class="drift-chip chip-governance">${escapeHtml(`${Number(repo.watch_count || 0)} watch`)}</span>
+                </div>
+            </div>
+        `,
+    );
     setSectionHtml("repo-journey-strip", renderJourney(repo, repoPayload));
     bindOverviewJourneyActions(repo, repoPayload);
     const repoStoryNote = repoPayload?.journey_comparison?.risk_summary?.headline || repoPayload?.featured_storyline?.summary || triageSummary(repo);
@@ -725,6 +771,10 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     if (detailLink) {
         detailLink.setAttribute("href", repoDetailUrl(repo));
     }
+    setText(
+        "detail-recommendation-body",
+        repo.highest_recommended_action || `Inspect ${repo.highest_insight_artifact_path || reviewContext(repo)} before merge.`,
+    );
     const auditToggle = document.getElementById("audit-logs-toggle");
     if (auditToggle) {
         auditToggle.dataset.defaultHref = repoDetailUrl(repo);
@@ -781,7 +831,10 @@ async function previewRepoSelection(repo, repos, rowIndex = null) {
     if (Number.isFinite(rowIndex)) {
         selectUrgentRow(rowIndex);
     }
-    applyRepoPreview(repo, repos, null);
+    if (repoDashboardCache.has(repo.repo_full)) {
+        applyRepoPreview(repo, repos, repoDashboardCache.get(repo.repo_full));
+        return;
+    }
     try {
         const repoPayload = await fetchRepoDashboard(repo.repo_full);
         if (previewState.pendingRepoFull !== repo.repo_full) {
@@ -797,7 +850,8 @@ async function previewRepoSelection(repo, repos, rowIndex = null) {
 }
 
 function bindUrgentRows(items, repos) {
-    document.querySelectorAll(".urgent-item").forEach((button) => {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    rows.forEach((button) => {
         const preview = async () => {
             const index = Number(button.getAttribute("data-row-index"));
             if (!Number.isFinite(index) || !items[index]) {
@@ -831,6 +885,43 @@ function bindUrgentRows(items, repos) {
             }
             const repo = items[index];
             window.location.href = repoDetailUrl(repo);
+        });
+        button.addEventListener("keydown", (event) => {
+            const index = Number(button.getAttribute("data-row-index"));
+            if (!Number.isFinite(index)) {
+                return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                const nextIndex = clamp(index + delta, 0, rows.length - 1);
+                const nextRow = rows[nextIndex];
+                if (nextRow instanceof HTMLButtonElement) {
+                    nextRow.focus();
+                    void previewRepoSelection(items[nextIndex], repos, nextIndex);
+                }
+            }
+            if (event.key === "Home") {
+                event.preventDefault();
+                const firstRow = rows[0];
+                if (firstRow instanceof HTMLButtonElement) {
+                    firstRow.focus();
+                    void previewRepoSelection(items[0], repos, 0);
+                }
+            }
+            if (event.key === "End") {
+                event.preventDefault();
+                const lastIndex = rows.length - 1;
+                const lastRow = rows[lastIndex];
+                if (lastRow instanceof HTMLButtonElement) {
+                    lastRow.focus();
+                    void previewRepoSelection(items[lastIndex], repos, lastIndex);
+                }
+            }
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                window.location.href = repoDetailUrl(items[index]);
+            }
         });
     });
 }
@@ -1011,7 +1102,8 @@ function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos)
     setText("stat-needs-review", String(payload.risk_state?.review_now_repo_count || 0));
     setText("stat-high-risk", String(highestRiskItems.length));
     setText("stat-approved", String(approvedBaselineRepos));
-    setText("repos-count", `${repos.length} repos`);
+    setText("repos-count", String(repos.length));
+    setText("triage-count-summary", `${attentionRepos.length || highestRiskItems.length || repos.length} repositories in queue`);
 }
 
 async function loadOverview(preferredRepoFull = null, preferredRepoPayload = null) {
@@ -1074,7 +1166,6 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             if (urgentIndex >= 0) {
                 selectUrgentRow(urgentIndex);
             }
-            applyRepoPreview(selectedRepo, repos, null);
             primeRepoDashboardCache(selectionItems.slice(0, 4));
             try {
                 const firstPayload = preferredRepoPayload && selectedRepo.repo_full === preferredRepoFull
@@ -1084,19 +1175,24 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
                     applyRepoPreview(selectedRepo, repos, firstPayload);
                 }
             } catch {
-                previewState.activeRepoFull = selectedRepo.repo_full;
+                applyRepoPreview(selectedRepo, repos, null);
             }
         } else {
             setSectionHtml("repo-journey-strip", '<div class="muted">No version journey data is available.</div>');
             setSectionHtml("coverage-bars", '<div class="muted">No coverage data is available.</div>');
             setSectionHtml("repo-atlas-grid", '<div class="muted">No repositories are available for overview preview yet.</div>');
+            setHtml("detail-summary", '<div class="muted">Populate the workspace with onboarded repositories to see drift context.</div>');
+            setText("detail-repo-name", "No repository selected");
+            setText("detail-subtitle", "Overview is ready once repositories are onboarded.");
+            setText("detail-recommendation-body", "Onboard a repository to populate the triage queue.");
             setText("repo-radar-title", "No repository selected");
             setText("journey-repo-title", "No repository selected");
             setText("journey-repo-name", "No repository selected");
             setText("repo-radar-meta", "Populate the workspace with onboarded repositories to see posture tracking.");
             setText("coverage-note", "Coverage summary unavailable");
-            setText("drift-ring-value", "0%");
+            setText("drift-ring-value", "--%");
             drawDriftRing(0);
+            setText("selected-repo-summary", "No repository is currently selected.");
         }
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown overview error";
@@ -1109,6 +1205,10 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         setSectionHtml("repo-atlas-grid", fallback);
         setSectionHtml("repo-journey-strip", fallback);
         setSectionHtml("coverage-bars", fallback);
+        setHtml("detail-summary", fallback);
+        setText("detail-repo-name", "Overview unavailable");
+        setText("detail-subtitle", message);
+        setText("detail-recommendation-body", message);
         setText("repo-radar-title", "Overview unavailable");
         setText("journey-repo-title", "Overview unavailable");
         setText("journey-repo-name", "Overview unavailable");
@@ -1117,6 +1217,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         setText("coverage-note", message);
         setText("drift-ring-value", "--%");
         drawDriftRing(0);
+        setText("selected-repo-summary", message);
     }
 }
 

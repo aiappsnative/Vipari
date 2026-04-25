@@ -318,17 +318,16 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "DriftGuard Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     index_text = index_response.text.lower()
-    assert "urgent items for review" in index_text
-    assert "repository atlas" in index_text
-    assert "repo posture radar" in index_text
-    assert "version journey" in index_text
+    assert "needs attention now" in index_text
+    assert "repository map" in index_text
+    assert "posture map" in index_text
+    assert "history and drift timeline" in index_text
     assert "coverage" in index_text
     assert "overview-rebaseline-modal" in index_response.text
 
     assert repo_response.status_code == 200
     repo_text = repo_response.text.lower()
     assert "audit page" in repo_text
-    assert "available repositories" in repo_text
     assert "governance attention" in repo_text
     assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
     assert "attribute drift" in repo_text
@@ -338,6 +337,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Baseline Review" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
+    assert "available repositories" not in repo_text
+    assert "/api/dashboard/overview" not in repo_response.text
 
     assert css_response.status_code == 200
     assert ".app-shell" in css_response.text

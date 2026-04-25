@@ -48,6 +48,7 @@ function setSectionHtml(elementId, html) {
         element.innerHTML = html;
         element.classList.remove("loading-shell");
         element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -76,6 +77,7 @@ function setText(elementId, value) {
     const element = document.getElementById(elementId);
     if (element) {
         element.textContent = value;
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -583,17 +585,53 @@ function applyRepoDetail(item) {
 }
 
 function bindRepoRows(items) {
-    document.querySelectorAll(".triage-row").forEach((row) => {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    rows.forEach((row) => {
         const activate = () => {
-            document.querySelectorAll(".triage-row").forEach((candidate) => candidate.classList.remove("selected"));
+            document.querySelectorAll(".triage-row").forEach((candidate) => {
+                candidate.classList.remove("selected");
+                candidate.removeAttribute("aria-current");
+            });
             row.classList.add("selected");
+            row.setAttribute("aria-current", "true");
             const index = Number(row.getAttribute("data-row-index"));
             if (Number.isFinite(index) && items[index]) {
                 applyRepoDetail(items[index]);
             }
         };
         row.addEventListener("click", activate);
+        row.addEventListener("focus", activate);
         row.addEventListener("keydown", (event) => {
+            const index = Number(row.getAttribute("data-row-index"));
+            if (!Number.isFinite(index)) {
+                return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                const nextIndex = clamp(index + delta, 0, rows.length - 1);
+                const nextRow = rows[nextIndex];
+                if (nextRow instanceof HTMLElement) {
+                    nextRow.focus();
+                }
+                return;
+            }
+            if (event.key === "Home") {
+                event.preventDefault();
+                const firstRow = rows[0];
+                if (firstRow instanceof HTMLElement) {
+                    firstRow.focus();
+                }
+                return;
+            }
+            if (event.key === "End") {
+                event.preventDefault();
+                const lastRow = rows[rows.length - 1];
+                if (lastRow instanceof HTMLElement) {
+                    lastRow.focus();
+                }
+                return;
+            }
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activate();
@@ -1298,31 +1336,10 @@ function renderJourneyCompare(comparison) {
     `;
 }
 
-function renderAvailableRepoCards(repos = []) {
-    const items = asArray(repos);
-    if (!items.length) {
-        return '<div class="muted">No repositories are available for this workspace yet. In the current local SQLite API-only mode, this usually means no repo connections were previously synced into the local database.</div>';
-    }
-
-    return `<div class="stack compact-stack">${items.map((repo) => {
-        const repoFullValue = String(repo.repo_full || "");
-        const isActive = repoFullValue === repoFull;
-        const status = String(repo.onboarding_status || "discovery_pending").replaceAll("_", " ");
-        const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
-        return `
-            <article class="artifact-card">
-                <strong><a class="repo-setup-card-link" href="${repoDetailUrl(repo)}">${escapeHtml(repoFullValue)}</a></strong>
-                <div class="artifact-card-reason">${escapeHtml(statusLabel)}${isActive ? ' · Current audit page' : ''}</div>
-            </article>
-        `;
-    }).join("")}</div>`;
-}
-
 function populateAuditRepoLists(repos = []) {
     const items = asArray(repos);
     if (!items.length) {
         setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
-        setSectionHtml("repo-available-repos-list", renderAvailableRepoCards(items));
         return;
     }
 
@@ -1332,7 +1349,6 @@ function populateAuditRepoLists(repos = []) {
         return `<a class="sidebar-subitem${currentClass}" href="${repoDetailUrl(repo)}">${escapeHtml(repoFullValue)}</a>`;
     }).join("");
     setSectionHtml("audit-logs-list", `<nav class="sidebar-sublist-nav">${navItems}</nav>`);
-    setSectionHtml("repo-available-repos-list", renderAvailableRepoCards(items));
 }
 
 async function loadAvailableRepos() {
@@ -1347,7 +1363,6 @@ async function loadAvailableRepos() {
         const message = error instanceof Error ? error.message : "Unknown repository inventory error";
         const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;
         setSectionHtml("audit-logs-list", fallback);
-        setSectionHtml("repo-available-repos-list", fallback);
     }
 }
 

@@ -6,7 +6,7 @@
     <title>DriftGuard Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-index.js"></script>
@@ -28,7 +28,14 @@
                     <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
                 <div id="audit-logs-list" class="sidebar-sublist" hidden>
-                    <div class="muted">Loading repositories...</div>
+                    <div class="loading-shell" aria-busy="true">
+                        <span class="visually-hidden">Loading repositories...</span>
+                        <div class="skeleton-stack" aria-hidden="true">
+                            <span class="skeleton-line skeleton-line-medium"></span>
+                            <span class="skeleton-line skeleton-line-long"></span>
+                            <span class="skeleton-line skeleton-line-medium"></span>
+                        </div>
+                    </div>
                 </div>
                 <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
@@ -57,24 +64,77 @@
         </nav>
 
         <div class="main-content">
+            <section class="posture-strip" aria-label="Portfolio posture">
+                <div class="posture-strip-left">
+                    <span class="posture-title">Portfolio triage</span>
+                    <div class="filter-pills" aria-hidden="true">
+                        <span class="filter-pill"><strong id="repos-count"><span class="visually-hidden">Loading repository count</span><span class="skeleton-inline" aria-hidden="true"></span></strong>&nbsp;repos</span>
+                        <span class="filter-pill"><strong id="stat-needs-review">-</strong>&nbsp;review now</span>
+                        <span class="filter-pill"><strong id="stat-high-risk">-</strong>&nbsp;highest risk</span>
+                        <span class="filter-pill"><strong id="stat-approved">-</strong>&nbsp;approved baselines</span>
+                    </div>
+                </div>
+                <div class="posture-strip-center">
+                    <span class="posture-disclaimer" id="selected-repo-summary">Select a repository to inspect the next recommended action.</span>
+                </div>
+                <div class="posture-strip-right">
+                    <a href="/app/repos" class="filter-add">Open repositories</a>
+                </div>
+            </section>
             <main class="page-scroll" id="top">
-                <section class="dashboard-grid" aria-label="Dashboard overview">
-                    <section class="dashboard-column dashboard-column-left">
-                        <article class="dashboard-card urgent-card" id="triage-section">
-                            <header class="card-heading">
-                                <h1>Urgent Items for Review</h1>
-                            </header>
-                            <div id="triage-list" class="urgent-list loading-shell muted" role="list">Loading urgent review items...</div>
-                        </article>
-
-                        <article class="dashboard-card journey-card" id="journey-section">
-                            <header class="card-heading">
-                                <div>
-                                    <h2>Version Journey</h2>
-                                    <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
+                <section class="secondary-row">
+                    <div class="secondary-panel" id="repo-atlas-section">
+                        <div class="secondary-panel-title">Repository map</div>
+                        <div class="muted">Preview other repositories without leaving the queue.</div>
+                        <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading repositories...</span>
+                            <div class="skeleton-card-grid" aria-hidden="true">
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
                                 </div>
-                            </header>
-                            <div class="journey-stage" id="repo-journey-strip">Loading repo journey preview...</div>
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="main-columns" id="overview-triage-section">
+                    <section class="triage-column">
+                        <div class="triage-queue-card card-shell">
+                            <div class="triage-header">
+                                <span class="triage-title">Needs attention now</span>
+                                <span class="triage-count" id="triage-count-summary"><span class="visually-hidden">Loading triage count</span><span class="skeleton-inline" aria-hidden="true"></span></span>
+                            </div>
+                            <div id="triage-list" class="loading-shell" role="list" aria-label="Repositories needing review" aria-busy="true">
+                                <span class="visually-hidden">Loading urgent review items...</span>
+                                <div class="skeleton-stack skeleton-list" aria-hidden="true">
+                                    <div class="skeleton-block"></div>
+                                    <div class="skeleton-block"></div>
+                                    <div class="skeleton-block"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="secondary-panel" id="journey-section">
+                            <div class="secondary-panel-title">History and drift timeline</div>
+                            <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
+                            <div id="repo-journey-strip" class="journey-stage loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading repo journey preview...</span>
+                                <div class="skeleton-stack" aria-hidden="true">
+                                    <div class="skeleton-chip-row">
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                    </div>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                </div>
+                            </div>
                             <div class="journey-foot">
                                 <div class="drift-ring-wrap">
                                     <canvas id="drift-ring" width="180" height="180" aria-label="Baseline drift"></canvas>
@@ -86,30 +146,31 @@
                                 <div class="journey-summary">
                                     <div class="journey-repo-name" id="journey-repo-name">Selected repo posture</div>
                                     <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
-                                    <a id="detail-escalate-btn" class="journey-link" href="#">Open audit page</a>
                                 </div>
                             </div>
-                        </article>
+                        </div>
                     </section>
 
-                    <aside class="dashboard-column dashboard-column-right">
-                        <article class="dashboard-card repo-atlas-card" id="repo-atlas-section">
-                            <header class="card-heading">
+                    <aside class="detail-panel" id="detail-panel">
+                        <div class="detail-panel-header card-shell">
+                            <div class="detail-panel-title-row">
+                                <span class="detail-artifact-name" id="detail-repo-name">No repository selected</span>
+                                <span class="severity-badge severity-medium" id="detail-severity-badge">Review queue</span>
+                            </div>
+                            <div class="detail-panel-subtitle" id="detail-subtitle">Choose a triage row to inspect the current posture and recommended action.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="detail-section-label">What needs review</div>
+                            <div id="detail-summary" class="muted">Repository-specific drift context will appear here.</div>
+                        </div>
+                        <div class="card-shell">
+                            <div class="radar-header">
                                 <div>
-                                    <h2>Repository Atlas</h2>
-                                    <div class="muted">Hover any repo to inspect its posture, even if it is not in the urgent queue.</div>
+                                    <div class="detail-section-label">Posture map</div>
+                                    <div class="radar-title" id="repo-radar-title">Selected repo posture</div>
                                 </div>
-                            </header>
-                            <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell muted">Loading repositories...</div>
-                        </article>
-
-                        <article class="dashboard-card radar-card" id="radar-section">
-                            <header class="card-heading radar-heading">
-                                <div>
-                                    <h2>Repo Posture Radar</h2>
-                                    <div class="radar-repo-title" id="repo-radar-title">Selected repo posture</div>
-                                </div>
-                            </header>
+                                <div class="radar-meta" id="repo-radar-meta">Compliance, stability, coverage, autonomy, capability, and guardrail posture.</div>
+                            </div>
                             <div class="radar-wrap">
                                 <div class="radar-visual-shell">
                                     <canvas id="repo-posture-radar" width="420" height="320"></canvas>
@@ -119,24 +180,34 @@
                                     <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(85, 230, 222, 0.92); border: 1px solid rgba(73, 223, 217, 0.92);"></span><span>Current posture</span></div>
                                 </div>
                             </div>
-                            <div class="radar-axis-caption" id="repo-radar-meta">Compliance, stability, coverage, efficiency, performance, and security posture.</div>
-                            <section class="coverage-section" id="coverage-section">
-                                <div class="coverage-header-row">
-                                    <h3>Coverage</h3>
-                                    <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
-                                </div>
-                                <div class="coverage-bars" id="coverage-bars">Loading coverage bars...</div>
-                            </section>
-                        </article>
+                        </div>
+                        <div class="detail-recommendation">
+                            <div class="detail-recommendation-label">Recommended next action</div>
+                            <div class="detail-recommendation-body" id="detail-recommendation-body">Select the first repository in the queue to see DriftGuard's recommended action.</div>
+                            <a id="detail-escalate-btn" class="escalate-btn" href="#">Open repo case file</a>
+                        </div>
                     </aside>
                 </section>
 
-                <div class="dashboard-screenreader-stats" aria-hidden="true">
-                    <span id="repos-count">Loading...</span>
-                    <span id="stat-needs-review">-</span>
-                    <span id="stat-high-risk">-</span>
-                    <span id="stat-approved">-</span>
-                </div>
+                <section class="secondary-row single-panel-row">
+                    <div class="secondary-panel" id="coverage-section">
+                        <div class="secondary-panel-title">Coverage and confidence</div>
+                        <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
+                        <div class="coverage-bars loading-shell" id="coverage-bars" aria-busy="true">
+                            <span class="visually-hidden">Loading coverage bars...</span>
+                            <div class="skeleton-stack" aria-hidden="true">
+                                <div class="skeleton-bar-row">
+                                    <span class="skeleton-bar"></span>
+                                    <span class="skeleton-bar"></span>
+                                </div>
+                                <div class="skeleton-bar-row">
+                                    <span class="skeleton-bar"></span>
+                                    <span class="skeleton-bar"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
 
                 <div id="overview-rebaseline-modal" class="modal-shell" hidden>
                     <div class="modal-backdrop" data-close-overview-rebaseline="true"></div>

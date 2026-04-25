@@ -45,3 +45,39 @@ def test_sync_installation_repositories_returns_installation_and_repos():
 
     assert installation["account"]["login"] == "doria90"
     assert repos[0]["repo_full"] == "doria90/dummyAI"
+
+
+def test_sync_installation_repositories_paginates_all_results():
+    first_page = {
+        "repositories": [
+            {"id": index, "full_name": f"doria90/repo-{index}", "default_branch": "main", "private": True}
+            for index in range(1, 101)
+        ]
+    }
+    second_page = {
+        "repositories": [
+            {"id": 101, "full_name": "doria90/repo-101", "default_branch": "main", "private": False}
+        ]
+    }
+    responses = [
+        io.StringIO(json.dumps({"target_type": "User", "account": {"login": "doria90", "type": "User", "id": 77}})),
+        io.StringIO(json.dumps(first_page)),
+        io.StringIO(json.dumps(second_page)),
+    ]
+
+    def _urlopen(_request):
+        return responses.pop(0)
+
+    with patch("services.github_provisioning.generate_jwt", return_value="jwt"), patch(
+        "services.github_provisioning.get_installation_token", return_value="installation-token"
+    ), patch("services.github_provisioning.urllib.request.urlopen", side_effect=_urlopen):
+        installation, repos = sync_installation_repositories(
+            app_id="123",
+            private_key_path="private-key.pem",
+            private_key="inline-key",
+            installation_id=999,
+        )
+
+    assert installation["account"]["login"] == "doria90"
+    assert len(repos) == 101
+    assert repos[-1]["repo_full"] == "doria90/repo-101"
