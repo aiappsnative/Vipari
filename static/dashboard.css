@@ -2166,6 +2166,112 @@ strong {
     background: var(--color-surface-glass-3);
 }
 
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.skeleton-stack {
+    display: grid;
+    gap: 12px;
+}
+
+.skeleton-line,
+.skeleton-block,
+.skeleton-chip,
+.skeleton-bar,
+.skeleton-table-cell,
+.skeleton-inline {
+    display: block;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(180deg, var(--color-surface-glass-3), rgba(255, 255, 255, 0.08));
+}
+
+.skeleton-line,
+.skeleton-inline {
+    height: 12px;
+}
+
+.skeleton-inline {
+    width: 2.75ch;
+    min-width: 2.75ch;
+}
+
+.skeleton-line-short {
+    width: 34%;
+}
+
+.skeleton-line-medium {
+    width: 58%;
+}
+
+.skeleton-line-long {
+    width: 82%;
+}
+
+.skeleton-block {
+    min-height: 88px;
+}
+
+.skeleton-chip-row,
+.skeleton-bar-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.skeleton-chip {
+    width: 84px;
+    height: 28px;
+    border-radius: var(--radius-full);
+}
+
+.skeleton-bar {
+    flex: 1 1 140px;
+    min-width: 120px;
+    height: 10px;
+}
+
+.skeleton-list .skeleton-block {
+    min-height: 70px;
+}
+
+.skeleton-card-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.skeleton-card {
+    padding: 16px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-glass-2);
+}
+
+.skeleton-table-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) 0.8fr 0.9fr 0.8fr 0.9fr;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.skeleton-table-row:last-child {
+    border-bottom: 0;
+}
+
+.skeleton-table-cell {
+    height: 14px;
+}
+
 .loading-shell {
     position: relative;
     overflow: hidden;
@@ -2179,6 +2285,11 @@ strong {
     background: linear-gradient(90deg, transparent, var(--color-shimmer), transparent);
     animation: shell-shimmer 1.4s infinite;
     pointer-events: none;
+}
+
+.loading-shell .skeleton-inline {
+    display: inline-block;
+    vertical-align: middle;
 }
 
 @keyframes shell-shimmer {

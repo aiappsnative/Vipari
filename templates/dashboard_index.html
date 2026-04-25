@@ -28,7 +28,14 @@
                     <svg class="sidebar-nav-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
                 <div id="audit-logs-list" class="sidebar-sublist" hidden>
-                    <div class="muted">Loading repositories...</div>
+                    <div class="loading-shell" aria-busy="true">
+                        <span class="visually-hidden">Loading repositories...</span>
+                        <div class="skeleton-stack" aria-hidden="true">
+                            <span class="skeleton-line skeleton-line-medium"></span>
+                            <span class="skeleton-line skeleton-line-long"></span>
+                            <span class="skeleton-line skeleton-line-medium"></span>
+                        </div>
+                    </div>
                 </div>
                 <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
@@ -61,7 +68,7 @@
                 <div class="posture-strip-left">
                     <span class="posture-title">Portfolio triage</span>
                     <div class="filter-pills" aria-hidden="true">
-                        <span class="filter-pill"><strong id="repos-count">Loading...</strong>&nbsp;repos</span>
+                        <span class="filter-pill"><strong id="repos-count"><span class="visually-hidden">Loading repository count</span><span class="skeleton-inline" aria-hidden="true"></span></strong>&nbsp;repos</span>
                         <span class="filter-pill"><strong id="stat-needs-review">-</strong>&nbsp;review now</span>
                         <span class="filter-pill"><strong id="stat-high-risk">-</strong>&nbsp;highest risk</span>
                         <span class="filter-pill"><strong id="stat-approved">-</strong>&nbsp;approved baselines</span>
@@ -79,9 +86,16 @@
                     <section class="triage-column">
                         <div class="triage-header card-shell">
                             <span class="triage-title">Needs attention now</span>
-                            <span class="triage-count" id="triage-count-summary">Loading…</span>
+                            <span class="triage-count" id="triage-count-summary"><span class="visually-hidden">Loading triage count</span><span class="skeleton-inline" aria-hidden="true"></span></span>
                         </div>
-                        <div id="triage-list" class="card-shell loading-shell muted" role="listbox" aria-label="Repositories needing review">Loading urgent review items...</div>
+                        <div id="triage-list" class="card-shell loading-shell" role="listbox" aria-label="Repositories needing review" aria-busy="true">
+                            <span class="visually-hidden">Loading urgent review items...</span>
+                            <div class="skeleton-stack skeleton-list" aria-hidden="true">
+                                <div class="skeleton-block"></div>
+                                <div class="skeleton-block"></div>
+                                <div class="skeleton-block"></div>
+                            </div>
+                        </div>
                     </section>
 
                     <aside class="detail-panel" id="detail-panel">
@@ -126,13 +140,35 @@
                     <div class="secondary-panel" id="journey-section">
                         <div class="secondary-panel-title">History and drift timeline</div>
                         <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
-                        <div id="repo-journey-strip" class="loading-shell muted">Loading repo journey preview...</div>
+                        <div id="repo-journey-strip" class="loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading repo journey preview...</span>
+                            <div class="skeleton-stack" aria-hidden="true">
+                                <div class="skeleton-chip-row">
+                                    <span class="skeleton-chip"></span>
+                                    <span class="skeleton-chip"></span>
+                                    <span class="skeleton-chip"></span>
+                                </div>
+                                <span class="skeleton-line skeleton-line-medium"></span>
+                            </div>
+                        </div>
                         <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
                     </div>
                     <div class="secondary-panel" id="coverage-section">
                         <div class="secondary-panel-title">Coverage and confidence</div>
                         <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
-                        <div class="coverage-bars" id="coverage-bars">Loading coverage bars...</div>
+                        <div class="coverage-bars loading-shell" id="coverage-bars" aria-busy="true">
+                            <span class="visually-hidden">Loading coverage bars...</span>
+                            <div class="skeleton-stack" aria-hidden="true">
+                                <div class="skeleton-bar-row">
+                                    <span class="skeleton-bar"></span>
+                                    <span class="skeleton-bar"></span>
+                                </div>
+                                <div class="skeleton-bar-row">
+                                    <span class="skeleton-bar"></span>
+                                    <span class="skeleton-bar"></span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -140,7 +176,21 @@
                     <div class="secondary-panel" id="repo-atlas-section">
                         <div class="secondary-panel-title">Repository map</div>
                         <div class="muted">Preview other repositories without leaving the queue.</div>
-                        <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell muted">Loading repositories...</div>
+                        <div id="repo-atlas-grid" class="repo-atlas-grid loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading repositories...</span>
+                            <div class="skeleton-card-grid" aria-hidden="true">
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                                <div class="skeleton-card skeleton-stack">
+                                    <span class="skeleton-line skeleton-line-short"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
