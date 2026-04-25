@@ -44,19 +44,30 @@ def sync_installation_repositories(
     jwt_token = generate_jwt(app_id, private_key_path, private_key)
     installation = _github_api_json(f"https://api.github.com/app/installations/{installation_id}", jwt_token)
     installation_token = get_installation_token(jwt_token, installation_id)
-    repositories = _github_api_json("https://api.github.com/installation/repositories?per_page=100", installation_token)
-    repo_payloads = repositories.get("repositories") if isinstance(repositories, dict) else []
     parsed_repositories: list[dict[str, object]] = []
-    for repo in repo_payloads if isinstance(repo_payloads, list) else []:
-        if not isinstance(repo, dict):
-            continue
-        parsed_repositories.append(
-            {
-                "repo_github_id": str(repo.get("id") or repo.get("full_name") or ""),
-                "repo_full": str(repo.get("full_name") or ""),
-                "default_branch": str(repo.get("default_branch") or "main"),
-                "is_private": bool(repo.get("private", True)),
-                "status": "available",
-            }
+    page = 1
+    while True:
+        repositories = _github_api_json(
+            f"https://api.github.com/installation/repositories?per_page=100&page={page}",
+            installation_token,
         )
+        repo_payloads = repositories.get("repositories") if isinstance(repositories, dict) else []
+        repo_items = repo_payloads if isinstance(repo_payloads, list) else []
+        if not repo_items:
+            break
+        for repo in repo_items:
+            if not isinstance(repo, dict):
+                continue
+            parsed_repositories.append(
+                {
+                    "repo_github_id": str(repo.get("id") or repo.get("full_name") or ""),
+                    "repo_full": str(repo.get("full_name") or ""),
+                    "default_branch": str(repo.get("default_branch") or "main"),
+                    "is_private": bool(repo.get("private", True)),
+                    "status": "available",
+                }
+            )
+        if len(repo_items) < 100:
+            break
+        page += 1
     return installation, parsed_repositories

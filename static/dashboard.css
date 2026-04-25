@@ -1381,6 +1381,11 @@ strong {
     gap: var(--space-3);
 }
 
+.triage-queue-card {
+    display: grid;
+    gap: var(--space-3);
+}
+
 .triage-title,
 .repos-title,
 .detail-artifact-name {
@@ -2614,6 +2619,32 @@ body.dashboard-index-page[data-theme="light"] {
     padding-inline: 24px;
 }
 
+.dashboard-index-page .triage-queue-card {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: linear-gradient(180deg, rgba(28, 29, 34, 0.92), rgba(22, 23, 28, 0.88));
+    box-shadow: 0 26px 60px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.dashboard-index-page[data-theme="light"] .triage-queue-card {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: linear-gradient(180deg, rgba(255, 252, 247, 0.95), rgba(247, 241, 233, 0.94));
+    box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.dashboard-index-page .triage-header {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.dashboard-index-page #triage-list {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
 .dashboard-index-page .triage-row {
     width: 100%;
     background: transparent;
@@ -2628,8 +2659,7 @@ body.dashboard-index-page[data-theme="light"] {
 
 .dashboard-index-page .detail-panel .card-shell,
 .dashboard-index-page .detail-recommendation,
-.dashboard-index-page .secondary-panel,
-.dashboard-index-page .triage-header {
+.dashboard-index-page .secondary-panel {
     border-color: rgba(255, 255, 255, 0.1);
     background: linear-gradient(180deg, rgba(28, 29, 34, 0.92), rgba(22, 23, 28, 0.88));
     box-shadow: 0 26px 60px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03);
@@ -2637,8 +2667,7 @@ body.dashboard-index-page[data-theme="light"] {
 
 .dashboard-index-page[data-theme="light"] .detail-panel .card-shell,
 .dashboard-index-page[data-theme="light"] .detail-recommendation,
-.dashboard-index-page[data-theme="light"] .secondary-panel,
-.dashboard-index-page[data-theme="light"] .triage-header {
+.dashboard-index-page[data-theme="light"] .secondary-panel {
     border-color: rgba(112, 98, 84, 0.14);
     background: linear-gradient(180deg, rgba(255, 252, 247, 0.95), rgba(247, 241, 233, 0.94));
     box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
@@ -3441,7 +3470,7 @@ body.dashboard-index-page[data-theme="light"] {
 
 body.repo-setup-page {
     --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.10), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.12), transparent 26%), linear-gradient(180deg, #17181b 0%, #1d1e21 100%);
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     background: var(--dashboard-bg);
     color: #eef1f4;
 }
@@ -4028,7 +4057,7 @@ body.repo-setup-page[data-theme="light"] {
 
 body.repo-audit-page {
     --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.10), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.12), transparent 26%), linear-gradient(180deg, #17181b 0%, #1d1e21 100%);
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     background: var(--dashboard-bg);
     color: #eef1f4;
 }
@@ -4487,9 +4516,29 @@ body.repo-audit-page[data-theme="light"] {
 
 body.control-page {
     --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.10), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.12), transparent 26%), linear-gradient(180deg, #17181b 0%, #1d1e21 100%);
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     background: var(--dashboard-bg);
     color: #eef1f4;
+}
+
+body.control-page.compliance-page .control-page-hero-copy h1 {
+    font-size: clamp(28px, 4vw, 42px);
+}
+
+body.control-page.compliance-page .control-page-section-title {
+    font-size: 22px;
+}
+
+body.control-page.compliance-page .control-page-hero-copy p,
+body.control-page.compliance-page .control-page-copy,
+body.control-page.compliance-page .control-page-note-copy,
+body.control-page.compliance-page .control-page-choice-copy {
+    font-size: 14px;
+}
+
+body.control-page.compliance-page .control-page-stat-card strong,
+body.control-page.compliance-page .control-page-meta-card strong {
+    font-size: 18px;
 }
 
 body.control-page[data-theme="light"] {

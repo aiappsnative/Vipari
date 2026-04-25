@@ -106,16 +106,47 @@
 
                 <section class="main-columns" id="overview-triage-section">
                     <section class="triage-column">
-                        <div class="triage-header card-shell">
-                            <span class="triage-title">Needs attention now</span>
-                            <span class="triage-count" id="triage-count-summary"><span class="visually-hidden">Loading triage count</span><span class="skeleton-inline" aria-hidden="true"></span></span>
+                        <div class="triage-queue-card card-shell">
+                            <div class="triage-header">
+                                <span class="triage-title">Needs attention now</span>
+                                <span class="triage-count" id="triage-count-summary"><span class="visually-hidden">Loading triage count</span><span class="skeleton-inline" aria-hidden="true"></span></span>
+                            </div>
+                            <div id="triage-list" class="loading-shell" role="list" aria-label="Repositories needing review" aria-busy="true">
+                                <span class="visually-hidden">Loading urgent review items...</span>
+                                <div class="skeleton-stack skeleton-list" aria-hidden="true">
+                                    <div class="skeleton-block"></div>
+                                    <div class="skeleton-block"></div>
+                                    <div class="skeleton-block"></div>
+                                </div>
+                            </div>
                         </div>
-                        <div id="triage-list" class="card-shell loading-shell" role="list" aria-label="Repositories needing review" aria-busy="true">
-                            <span class="visually-hidden">Loading urgent review items...</span>
-                            <div class="skeleton-stack skeleton-list" aria-hidden="true">
-                                <div class="skeleton-block"></div>
-                                <div class="skeleton-block"></div>
-                                <div class="skeleton-block"></div>
+
+                        <div class="secondary-panel" id="journey-section">
+                            <div class="secondary-panel-title">History and drift timeline</div>
+                            <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
+                            <div id="repo-journey-strip" class="journey-stage loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading repo journey preview...</span>
+                                <div class="skeleton-stack" aria-hidden="true">
+                                    <div class="skeleton-chip-row">
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                    </div>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                </div>
+                            </div>
+                            <div class="journey-foot">
+                                <div class="drift-ring-wrap">
+                                    <canvas id="drift-ring" width="180" height="180" aria-label="Baseline drift"></canvas>
+                                    <div class="drift-ring-center">
+                                        <span class="drift-ring-label">Baseline Drift</span>
+                                        <span class="drift-ring-value" id="drift-ring-value">--%</span>
+                                    </div>
+                                </div>
+                                <div class="journey-summary">
+                                    <div class="journey-repo-name" id="journey-repo-name">Selected repo posture</div>
+                                    <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                                </div>
                             </div>
                         </div>
                     </section>
@@ -158,35 +189,7 @@
                     </aside>
                 </section>
 
-                <section class="secondary-row">
-                    <div class="secondary-panel" id="journey-section">
-                        <div class="secondary-panel-title">History and drift timeline</div>
-                        <div class="radar-repo-title" id="journey-repo-title">Selected repo posture</div>
-                        <div id="repo-journey-strip" class="journey-stage loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading repo journey preview...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <div class="skeleton-chip-row">
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
-                                </div>
-                                <span class="skeleton-line skeleton-line-medium"></span>
-                            </div>
-                        </div>
-                        <div class="journey-foot">
-                            <div class="drift-ring-wrap">
-                                <canvas id="drift-ring" width="180" height="180" aria-label="Baseline drift"></canvas>
-                                <div class="drift-ring-center">
-                                    <span class="drift-ring-label">Baseline Drift</span>
-                                    <span class="drift-ring-value" id="drift-ring-value">--%</span>
-                                </div>
-                            </div>
-                            <div class="journey-summary">
-                                <div class="journey-repo-name" id="journey-repo-name">Selected repo posture</div>
-                                <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
-                            </div>
-                        </div>
-                    </div>
+                <section class="secondary-row single-panel-row">
                     <div class="secondary-panel" id="coverage-section">
                         <div class="secondary-panel-title">Coverage and confidence</div>
                         <div class="coverage-summary" id="coverage-note">Coverage summary unavailable</div>
