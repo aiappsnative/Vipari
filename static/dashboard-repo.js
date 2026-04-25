@@ -48,6 +48,7 @@ function setSectionHtml(elementId, html) {
         element.innerHTML = html;
         element.classList.remove("loading-shell");
         element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -76,6 +77,7 @@ function setText(elementId, value) {
     const element = document.getElementById(elementId);
     if (element) {
         element.textContent = value;
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -586,8 +588,12 @@ function bindRepoRows(items) {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     rows.forEach((row) => {
         const activate = () => {
-            document.querySelectorAll(".triage-row").forEach((candidate) => candidate.classList.remove("selected"));
+            document.querySelectorAll(".triage-row").forEach((candidate) => {
+                candidate.classList.remove("selected");
+                candidate.removeAttribute("aria-current");
+            });
             row.classList.add("selected");
+            row.setAttribute("aria-current", "true");
             const index = Number(row.getAttribute("data-row-index"));
             if (Number.isFinite(index) && items[index]) {
                 applyRepoDetail(items[index]);

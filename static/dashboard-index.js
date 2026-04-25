@@ -22,12 +22,14 @@ function setSectionHtml(elementId, html) {
     element.innerHTML = html;
     element.classList.remove("loading-shell");
     element.classList.remove("muted");
+    element.removeAttribute("aria-busy");
 }
 
 function setText(elementId, value) {
     const element = document.getElementById(elementId);
     if (element) {
         element.textContent = value;
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -35,6 +37,9 @@ function setHtml(elementId, html) {
     const element = document.getElementById(elementId);
     if (element) {
         element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
     }
 }
 
@@ -692,7 +697,7 @@ function renderUrgentRow(repo, index) {
         reviewContext(repo),
     ].filter(Boolean);
     return `
-        <button type="button" class="triage-row" role="option" aria-selected="false" data-row-index="${index}">
+        <button type="button" class="triage-row" data-row-index="${index}">
             <div class="triage-row-top">
                 <strong>${escapeHtml(issueHeadline(repo))}</strong>
                 <span class="severity-badge ${severity.className}">${escapeHtml(severity.label)}</span>
@@ -712,9 +717,7 @@ function renderUrgentRow(repo, index) {
 
 function selectUrgentRow(index) {
     document.querySelectorAll(".triage-row").forEach((item, itemIndex) => {
-        const isSelected = itemIndex === index;
-        item.classList.toggle("selected", isSelected);
-        item.setAttribute("aria-selected", String(isSelected));
+        item.classList.toggle("selected", itemIndex === index);
     });
 }
 
@@ -1092,7 +1095,7 @@ function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos)
     setText("stat-needs-review", String(payload.risk_state?.review_now_repo_count || 0));
     setText("stat-high-risk", String(highestRiskItems.length));
     setText("stat-approved", String(approvedBaselineRepos));
-    setText("repos-count", `${repos.length} repos`);
+    setText("repos-count", String(repos.length));
     setText("triage-count-summary", `${attentionRepos.length || highestRiskItems.length || repos.length} repositories in queue`);
 }
 
