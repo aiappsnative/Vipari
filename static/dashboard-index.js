@@ -740,6 +740,7 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     setText("selected-repo-summary", triageSummary(repo));
     setText("repo-radar-title", compactRepoLabel(repo.repo_full));
     setText("journey-repo-title", compactRepoLabel(repo.repo_full));
+    setText("journey-repo-name", repo.repo_full);
     setText("repo-radar-meta", triageSummary(repo));
     setHtml(
         "detail-summary",
@@ -762,6 +763,9 @@ function applyRepoPreview(repo, repos, repoPayload = null) {
     setSectionHtml("coverage-bars", renderCoverageBars(repo, repos, repoPayload));
     setText("coverage-note", `${Number(repo.discovered_artifact_count || 0)} tracked artifacts · ${repoScopeLabel(repo)}`);
     drawRadar(repo, repoPayload);
+    const drift = driftPercentFromPayload(repo, repoPayload);
+    drawDriftRing(drift);
+    setText("drift-ring-value", `${drift}%`);
     selectRepoAtlasCard(repo.repo_full);
     const detailLink = document.getElementById("detail-escalate-btn");
     if (detailLink) {
@@ -827,7 +831,10 @@ async function previewRepoSelection(repo, repos, rowIndex = null) {
     if (Number.isFinite(rowIndex)) {
         selectUrgentRow(rowIndex);
     }
-    applyRepoPreview(repo, repos, null);
+    if (repoDashboardCache.has(repo.repo_full)) {
+        applyRepoPreview(repo, repos, repoDashboardCache.get(repo.repo_full));
+        return;
+    }
     try {
         const repoPayload = await fetchRepoDashboard(repo.repo_full);
         if (previewState.pendingRepoFull !== repo.repo_full) {
@@ -1159,7 +1166,6 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             if (urgentIndex >= 0) {
                 selectUrgentRow(urgentIndex);
             }
-            applyRepoPreview(selectedRepo, repos, null);
             primeRepoDashboardCache(selectionItems.slice(0, 4));
             try {
                 const firstPayload = preferredRepoPayload && selectedRepo.repo_full === preferredRepoFull
@@ -1169,7 +1175,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
                     applyRepoPreview(selectedRepo, repos, firstPayload);
                 }
             } catch {
-                previewState.activeRepoFull = selectedRepo.repo_full;
+                applyRepoPreview(selectedRepo, repos, null);
             }
         } else {
             setSectionHtml("repo-journey-strip", '<div class="muted">No version journey data is available.</div>');
@@ -1181,8 +1187,11 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             setText("detail-recommendation-body", "Onboard a repository to populate the triage queue.");
             setText("repo-radar-title", "No repository selected");
             setText("journey-repo-title", "No repository selected");
+            setText("journey-repo-name", "No repository selected");
             setText("repo-radar-meta", "Populate the workspace with onboarded repositories to see posture tracking.");
             setText("coverage-note", "Coverage summary unavailable");
+            setText("drift-ring-value", "--%");
+            drawDriftRing(0);
             setText("selected-repo-summary", "No repository is currently selected.");
         }
     } catch (error) {
@@ -1202,9 +1211,12 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         setText("detail-recommendation-body", message);
         setText("repo-radar-title", "Overview unavailable");
         setText("journey-repo-title", "Overview unavailable");
+        setText("journey-repo-name", "Overview unavailable");
         setText("repo-radar-meta", message);
         setText("repo-journey-note", message);
         setText("coverage-note", message);
+        setText("drift-ring-value", "--%");
+        drawDriftRing(0);
         setText("selected-repo-summary", message);
     }
 }

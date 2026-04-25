@@ -151,7 +151,19 @@
                                 <span class="skeleton-line skeleton-line-medium"></span>
                             </div>
                         </div>
-                        <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                        <div class="journey-foot">
+                            <div class="drift-ring-wrap">
+                                <canvas id="drift-ring" width="180" height="180" aria-label="Baseline drift"></canvas>
+                                <div class="drift-ring-center">
+                                    <span class="drift-ring-label">Baseline Drift</span>
+                                    <span class="drift-ring-value" id="drift-ring-value">--%</span>
+                                </div>
+                            </div>
+                            <div class="journey-summary">
+                                <div class="journey-repo-name" id="journey-repo-name">Selected repo posture</div>
+                                <div class="journey-note" id="repo-journey-note">Version history preview will appear for the selected repo.</div>
+                            </div>
+                        </div>
                     </div>
                     <div class="secondary-panel" id="coverage-section">
                         <div class="secondary-panel-title">Coverage and confidence</div>
