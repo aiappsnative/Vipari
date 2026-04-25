@@ -520,10 +520,10 @@ def test_dashboard_api_rebaseline_route_uses_resolved_github_private_key(tmp_pat
     current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
 
     with patch.object(type(main.settings), "resolved_github_private_key", new_callable=PropertyMock, return_value="resolved-private-key"), patch(
-        "main.generate_jwt", return_value="jwt-token"
-    ) as generate_jwt_mock, patch("main.get_installation_token", return_value="installation-token"), patch(
-        "main.fetch_file_content", return_value=PROMPT_CURRENT
-    ), TestClient(main.app) as client:
+        "services.runtime_guardrails.generate_jwt", return_value="jwt-token"
+    ), patch("main.generate_jwt", return_value="jwt-token") as generate_jwt_mock, patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.fetch_file_content", return_value=PROMPT_CURRENT), TestClient(main.app) as client:
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": current_snapshot["id"], "rationale": "Use current checkpoint."},
