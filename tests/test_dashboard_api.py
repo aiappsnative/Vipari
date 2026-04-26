@@ -111,15 +111,15 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     overview_payload = overview_response.json()
     assert overview_payload["risk_state"]["headline"]
     assert overview_payload["highest_risk_items"][0]["repo_full"] == "doria90/dummyAI"
-    assert overview_payload["highest_risk_items"][0]["review_target"] == "PR #42 · sha-cur"
-    assert overview_payload["highest_risk_items"][0]["review_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert overview_payload["highest_risk_items"][0]["review_target"] == "commit sha-2"
+    assert overview_payload["highest_risk_items"][0]["review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert overview_payload["control_surface_risk"][0]["group_key"] == "prompts"
     assert overview_payload["metrics"][0]["label"] == "Onboarded repositories"
     assert overview_payload["attention_repos"][0]["repo_full"] == "doria90/dummyAI"
-    assert overview_payload["attention_repos"][0]["highest_evidence_label"] == "PR + history"
-    assert overview_payload["attention_repos"][0]["highest_evidence_summary"].startswith("Open PR #42 · sha-cur first;")
+    assert overview_payload["attention_repos"][0]["highest_evidence_label"] == "history only"
+    assert overview_payload["attention_repos"][0]["highest_evidence_summary"] == "Only merged-history evidence is available right now; start with commit sha-2."
     assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Approved")
-    assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
 
@@ -133,26 +133,26 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
-    assert payload["insights"][0]["evidence_label"] == "PR + history"
-    assert payload["insights"][0]["evidence_summary"].startswith("Open PR #42 · sha-cur first;")
+    assert payload["insights"][0]["evidence_label"] == "history only"
+    assert payload["insights"][0]["evidence_summary"] == "Only merged-history evidence is available right now; start with commit sha-2."
     assert payload["insights"][0]["baseline_label"].startswith("Baseline: Approved")
-    assert payload["insights"][0]["review_target"] == "PR #42 · sha-cur"
-    assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/pull/42"
-    assert payload["insights"][0]["supporting_review_target"].startswith("commit sha-")
-    assert payload["insights"][0]["supporting_review_url"].startswith("https://github.com/doria90/dummyAI/commit/")
+    assert payload["insights"][0]["review_target"] == "commit sha-2"
+    assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert payload["insights"][0]["supporting_review_target"] is None
+    assert payload["insights"][0]["supporting_review_url"] is None
     assert payload["insights"][0]["change_summary"]
     assert payload["insights"][0]["flag_summary"].startswith("Flagged because")
     assert payload["insights"][0]["risk_reasons"]
     assert payload["lower_confidence_insights"] == []
     assert payload["control_surface_groups"][0]["group_key"] == "prompts"
     assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["history_timelines"][0]["point_count"] == 3
+    assert payload["history_timelines"][0]["point_count"] == 2
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
-    assert payload["design_profiles"][0]["provenance"]["label"] == "Pull request audit"
-    assert payload["design_profiles"][0]["provenance"]["source_ref"] == "PR #42 · sha-cur"
-    assert payload["design_profiles"][0]["provenance"]["source_url"] == "https://github.com/doria90/dummyAI/pull/42"
-    assert payload["design_profiles"][0]["provenance"]["review_context"] == "full semantic review · semantic complete · risk low"
+    assert payload["design_profiles"][0]["provenance"]["label"] == "Historical backfill"
+    assert payload["design_profiles"][0]["provenance"]["source_ref"] == "commit sha-2"
+    assert payload["design_profiles"][0]["provenance"]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert payload["design_profiles"][0]["provenance"]["review_context"] == "Historical snapshot from backfill"
     assert payload["design_profiles"][0]["headline_summary"]
     assert payload["design_profiles"][0]["drift_label"] in ["small drift", "medium drift", "large drift"]
     assert payload["design_profiles"][0]["drift_tone"] in ["low", "medium", "high"]
@@ -171,10 +171,10 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["history_timelines"][0]["points"][0]["source_ref"] == "commit sha-1"
     assert payload["history_timelines"][0]["points"][0]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-1"
     assert payload["history_timelines"][0]["points"][0]["review_context"] == "Historical snapshot from backfill"
-    assert payload["history_timelines"][0]["points"][-1]["label"] == "Pull request audit"
-    assert payload["history_timelines"][0]["points"][-1]["source_ref"] == "PR #42 · sha-cur"
-    assert payload["history_timelines"][0]["points"][-1]["source_url"] == "https://github.com/doria90/dummyAI/pull/42"
-    assert payload["history_timelines"][0]["points"][-1]["review_context"] == "full semantic review · semantic complete · risk low"
+    assert payload["history_timelines"][0]["points"][-1]["label"] == "Historical backfill"
+    assert payload["history_timelines"][0]["points"][-1]["source_ref"] == "commit sha-2"
+    assert payload["history_timelines"][0]["points"][-1]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert payload["history_timelines"][0]["points"][-1]["review_context"] == "Historical snapshot from backfill"
     assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"
 
