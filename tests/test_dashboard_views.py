@@ -7,6 +7,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.signal_fusion import priority_from_fused_signals
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -158,7 +159,13 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
         finding.attribute_key == "stability_vs_creativity"
         for finding in dashboard.design_profiles[0].attribute_findings
     )
-    assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
+    assert dashboard.design_profiles[0].risk_tags[0] in {
+        "capability expanded",
+        "guardrails weakened",
+        "autonomy increased",
+        "historical hotspot",
+        "baseline only",
+    }
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 3
     assert dashboard.artifacts[0].pr_profile_count == 1
@@ -172,6 +179,56 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].points[-1].source_ref == "PR #42 · sha-cur"
     assert dashboard.history_timelines[0].points[-1].source_url == "https://github.com/doria90/dummyAI/pull/42"
     assert dashboard.history_timelines[0].points[-1].review_context == "full semantic review · semantic complete · risk low"
+
+
+def test_priority_from_fused_signals_raises_dashboard_priority_for_high_risk_audits():
+    assert priority_from_fused_signals(0.41, risk_level="High") == "review_now"
+    assert priority_from_fused_signals(0.41, risk_level="Medium") == "watch"
+    assert priority_from_fused_signals(1.31, risk_level="Low") == "review_now"
+
+
+def test_build_repo_dashboard_view_uses_fused_pr_risk_for_priority(tmp_path):
+    db_path = str(tmp_path / "dashboard-fused-risk.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    analysis = analyze_diff("diff --git a/prompts/refund.txt b/prompts/refund.txt\nindex 1..2 100644\n")
+    record_audit_result(
+        db_path,
+        job_id=100,
+        repo_full="doria90/dummyAI",
+        pr_number=43,
+        installation_id=123,
+        head_sha="sha-fused",
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+        suggested_risk_level="High",
+        artifact_snapshots={"prompts/refund.txt": PROMPT_BASELINE},
+    )
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert dashboard.artifacts[0].latest_pr_risk_level == "High"
+    assert dashboard.insights[0].priority == "review_now"
+    assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
+    assert dashboard.artifacts[0].pr_profile_count == 1
+    assert dashboard.design_profiles[0].provenance is not None
+    assert dashboard.design_profiles[0].provenance.source_ref == "PR #43 · sha-fus"
+    assert dashboard.design_profiles[0].provenance.review_context == "full semantic review · semantic complete · risk high"
 
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):

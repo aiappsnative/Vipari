@@ -22,6 +22,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
+from .signal_fusion import priority_from_fused_signals
 from .onboarding_records import (
     RepositoryOnboardingRecord,
     get_latest_repository_onboarding,
@@ -181,6 +182,7 @@ class RepoDashboardArtifactEntry:
     latest_historical_drift_magnitude: float
     pr_profile_count: int
     latest_pr_semantic_distance: float
+    latest_pr_risk_level: str | None
     latest_pr_capability_shift: float
     latest_pr_guardrail_shift: float
     latest_pr_governance_shift: float = 0.0
@@ -449,6 +451,7 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
                 latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
                 pr_profile_count=metrics["pr_profile_count"],
                 latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
+                latest_pr_risk_level=metrics["latest_pr_risk_level"],
                 latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
                 latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
                 latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
@@ -460,6 +463,12 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
 
     artifact_entries.sort(
         key=lambda entry: (
+            {"review_now": 0, "watch": 1, "baseline_review": 2}[ 
+                priority_from_fused_signals(
+                    _insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
+                    risk_level=entry.latest_pr_risk_level,
+                )
+            ],
             -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
             -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
             entry.artifact_path,
@@ -510,6 +519,7 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "latest_historical_drift_magnitude": 0.0,
         "pr_profile_count": 0,
         "latest_pr_semantic_distance": 0.0,
+        "latest_pr_risk_level": None,
         "latest_pr_capability_shift": 0.0,
         "latest_pr_guardrail_shift": 0.0,
         "latest_pr_governance_shift": 0.0,
@@ -577,7 +587,7 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
 
         pr_profile_rows = conn.execute(
             """
-            SELECT sap.artifact_path, sap.semantic_distance, sap.attribute_deltas_json, sap.created_at
+            SELECT sap.artifact_path, sap.semantic_distance, sap.attribute_deltas_json, sap.created_at, pra.suggested_risk_level
             FROM static_artifact_profiles sap
             INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
             WHERE pra.repo_full = ?
@@ -590,6 +600,7 @@ def _load_repo_artifact_metrics(db_path: str, repo_full: str) -> dict[str, dict[
             metrics["pr_profile_count"] = int(metrics["pr_profile_count"]) + 1
             attribute_deltas = {key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()}
             metrics["latest_pr_semantic_distance"] = float(row["semantic_distance"])
+            metrics["latest_pr_risk_level"] = row["suggested_risk_level"]
             metrics["latest_pr_capability_shift"] = attribute_deltas.get("capability_risk", 0.0)
             metrics["latest_pr_guardrail_shift"] = attribute_deltas.get("guardrail_robustness", 0.0)
             metrics["latest_pr_governance_shift"] = attribute_deltas.get("governance_strength", 0.0)
@@ -744,12 +755,13 @@ def _build_repo_insights(
     baseline_by_path,
     profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
 ) -> tuple[list[RepoDashboardInsightEntry], list[RepoDashboardInsightEntry]]:
+    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     primary_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     lower_confidence_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     for artifact in artifacts:
         evidence_bundle = profile_context_by_path.get(artifact.artifact_path)
         score = _insight_score(artifact, evidence_bundle)
-        priority = "review_now" if score >= 1.25 else "watch" if score >= 0.6 else "baseline_review"
+        priority = priority_from_fused_signals(score, risk_level=artifact.latest_pr_risk_level)
         baseline = baseline_by_path.get(artifact.artifact_path)
         context = _preferred_profile_context(evidence_bundle)
         queue_lane = _insight_queue_lane(artifact, priority, score)
@@ -787,7 +799,12 @@ def _build_repo_insights(
             )
         )
 
-    sort_key = lambda item: (-item[0], -(item[1].updated_at or 0.0), item[1].artifact_path)
+    sort_key = lambda item: (
+        priority_rank.get(item[1].priority, 9),
+        -item[0],
+        -(item[1].updated_at or 0.0),
+        item[1].artifact_path,
+    )
     primary_ranked.sort(key=sort_key)
     lower_confidence_ranked.sort(key=sort_key)
     return [entry for _, entry in primary_ranked[:8]], [entry for _, entry in lower_confidence_ranked[:6]]

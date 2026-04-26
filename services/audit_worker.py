@@ -9,6 +9,7 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 
 from engine.analysis import DiffAnalysis, analyze_diff
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
+from .signal_fusion import fuse_risk_levels, normalize_risk_level
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
@@ -367,12 +368,7 @@ def _semantic_recommendation_requires_escalation(recommendation: str) -> bool:
 
 
 def _fuse_risk_levels(deterministic_risk: str, semantic_risk: str) -> str:
-    normalized_deterministic = _normalize_risk_level(deterministic_risk)
-    normalized_semantic = _normalize_risk_level(semantic_risk)
-    order = {"Low": 0, "Medium": 1, "High": 2}
-    if order[normalized_semantic] >= order[normalized_deterministic]:
-        return normalized_semantic
-    return normalized_deterministic
+    return fuse_risk_levels(deterministic_risk, semantic_risk)
 
 
 def _build_signal_fusion_assessment(
@@ -509,12 +505,7 @@ def _extract_risk_level(comment_body: str, *, default: str) -> str:
 
 
 def _normalize_risk_level(risk_level: str) -> str:
-    lowered = risk_level.strip().lower()
-    if lowered == "low":
-        return "Low"
-    if lowered == "medium":
-        return "Medium"
-    return "High"
+    return normalize_risk_level(risk_level, default="High")
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
