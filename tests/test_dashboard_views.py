@@ -7,7 +7,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
-from services.signal_fusion import priority_from_fused_signals
+from services.signal_fusion import priority_from_fused_signals, priority_sort_rank
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -185,6 +185,13 @@ def test_priority_from_fused_signals_raises_dashboard_priority_for_high_risk_aud
     assert priority_from_fused_signals(0.41, risk_level="High") == "review_now"
     assert priority_from_fused_signals(0.41, risk_level="Medium") == "watch"
     assert priority_from_fused_signals(1.31, risk_level="Low") == "review_now"
+
+
+def test_priority_sort_rank_matches_dashboard_lane_order():
+    assert priority_sort_rank("review_now") == 0
+    assert priority_sort_rank("watch") == 1
+    assert priority_sort_rank("baseline_review") == 2
+    assert priority_sort_rank("unexpected") == 9
 
 
 def test_build_repo_dashboard_view_uses_fused_pr_risk_for_priority(tmp_path):

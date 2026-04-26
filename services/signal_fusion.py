@@ -43,3 +43,14 @@ def priority_from_fused_signals(score: float, *, risk_level: str | None = None) 
     if PRIORITY_ORDER[risk_priority] > PRIORITY_ORDER[base_priority]:
         return risk_priority
     return base_priority
+
+
+def priority_sort_rank(priority: str | None) -> int:
+    normalized_priority = (priority or "").strip().lower()
+    if normalized_priority == "review_now":
+        return 0
+    if normalized_priority == "watch":
+        return 1
+    if normalized_priority == "baseline_review":
+        return 2
+    return 9

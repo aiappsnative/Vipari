@@ -22,7 +22,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
-from .signal_fusion import priority_from_fused_signals
+from .signal_fusion import priority_from_fused_signals, priority_sort_rank
 from .onboarding_records import (
     RepositoryOnboardingRecord,
     get_latest_repository_onboarding,
@@ -463,12 +463,12 @@ def build_repo_dashboard_view(db_path: str, repo_full: str) -> RepoDashboardView
 
     artifact_entries.sort(
         key=lambda entry: (
-            {"review_now": 0, "watch": 1, "baseline_review": 2}[ 
+            priority_sort_rank(
                 priority_from_fused_signals(
                     _insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
                     risk_level=entry.latest_pr_risk_level,
                 )
-            ],
+            ),
             -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
             -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
             entry.artifact_path,
@@ -755,7 +755,6 @@ def _build_repo_insights(
     baseline_by_path,
     profile_context_by_path: dict[str, _RepoArtifactEvidenceBundle],
 ) -> tuple[list[RepoDashboardInsightEntry], list[RepoDashboardInsightEntry]]:
-    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     primary_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     lower_confidence_ranked: list[tuple[float, RepoDashboardInsightEntry]] = []
     for artifact in artifacts:
@@ -800,7 +799,7 @@ def _build_repo_insights(
         )
 
     sort_key = lambda item: (
-        priority_rank.get(item[1].priority, 9),
+        priority_sort_rank(item[1].priority),
         -item[0],
         -(item[1].updated_at or 0.0),
         item[1].artifact_path,
@@ -1801,12 +1800,11 @@ def _build_repo_design_profiles(
 
 
 def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewAttentionRepo]:
-    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     attention_repos: list[DashboardOverviewAttentionRepo] = []
     for view in repo_views:
         sorted_insights = sorted(
             view.insights,
-            key=lambda insight: (priority_rank.get(insight.priority, 9), -insight.score, insight.artifact_path),
+            key=lambda insight: (priority_sort_rank(insight.priority), -insight.score, insight.artifact_path),
         )
         top_insight = sorted_insights[0] if sorted_insights else None
         attention_repos.append(
@@ -1839,7 +1837,7 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
 
     attention_repos.sort(
         key=lambda repo: (
-            priority_rank.get(repo.highest_priority, 9),
+            priority_sort_rank(repo.highest_priority),
             -repo.review_now_count,
             -repo.top_drift_magnitude,
             repo.repo_full,
@@ -2102,10 +2100,9 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                 )
             )
 
-    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     items.sort(
         key=lambda item: (
-            priority_rank.get(item.priority, 9),
+            priority_sort_rank(item.priority),
             -max(item.drift_magnitude, item.capability_shift, abs(min(item.guardrail_shift, 0.0))),
             item.repo_full,
             item.artifact_path,
