@@ -22,7 +22,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
-from .signal_fusion import priority_from_fused_signals, priority_sort_rank
+from .signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from .onboarding_records import (
     RepositoryOnboardingRecord,
     get_latest_repository_onboarding,
@@ -2129,8 +2129,14 @@ def _build_overview_control_surface_risk(repo_views: list[RepoDashboardView]) ->
             )
             group["repo_set"].add(view.repo_full)
             group["artifact_count"] = int(group["artifact_count"]) + 1
-            group["weighted_risk"] = float(group["weighted_risk"]) + _insight_score(artifact)
             insight = insight_by_path.get(artifact.artifact_path)
+            if insight is not None:
+                group["weighted_risk"] = float(group["weighted_risk"]) + priority_weighted_risk(
+                    insight.score,
+                    insight.priority,
+                )
+            else:
+                group["weighted_risk"] = float(group["weighted_risk"]) + priority_weighted_risk(_insight_score(artifact))
             if insight is not None and insight.priority == "review_now":
                 group["review_now_artifact_count"] = int(group["review_now_artifact_count"]) + 1
 

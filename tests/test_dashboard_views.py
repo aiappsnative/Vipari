@@ -7,7 +7,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
-from services.signal_fusion import priority_from_fused_signals, priority_sort_rank
+from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -194,6 +194,12 @@ def test_priority_sort_rank_matches_dashboard_lane_order():
     assert priority_sort_rank("unexpected") == 9
 
 
+def test_priority_weighted_risk_biases_toward_review_now_groups():
+    assert priority_weighted_risk(0.4, "review_now") == 1.4
+    assert priority_weighted_risk(0.4, "watch") == 0.75
+    assert priority_weighted_risk(0.4, "baseline_review") == 0.4
+
+
 def test_build_repo_dashboard_view_uses_fused_pr_risk_for_priority(tmp_path):
     db_path = str(tmp_path / "dashboard-fused-risk.db")
     init_db(db_path)
@@ -310,6 +316,8 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.risk_state.status in {"high_attention", "watch", "baseline"}
     assert len(overview.highest_risk_items) >= 1
     assert len(overview.control_surface_risk) >= 1
+    assert overview.control_surface_risk[0].group_key == "prompts"
+    assert overview.control_surface_risk[0].review_now_artifact_count >= 1
     assert len(overview.regression_patterns) >= 1
     assert overview.metrics[0].label == "Onboarded repositories"
     assert overview.metrics[0].value == 2

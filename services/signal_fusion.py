@@ -3,6 +3,7 @@ from __future__ import annotations
 
 RISK_ORDER = {"Low": 0, "Medium": 1, "High": 2}
 PRIORITY_ORDER = {"baseline_review": 0, "watch": 1, "review_now": 2}
+PRIORITY_WEIGHT_BONUS = {"baseline_review": 0.0, "watch": 0.35, "review_now": 1.0}
 
 
 def normalize_risk_level(risk_level: str | None, *, default: str = "Low") -> str:
@@ -54,3 +55,9 @@ def priority_sort_rank(priority: str | None) -> int:
     if normalized_priority == "baseline_review":
         return 2
     return 9
+
+
+def priority_weighted_risk(score: float, priority: str | None = None) -> float:
+    normalized_priority = (priority or "baseline_review").strip().lower()
+    bonus = PRIORITY_WEIGHT_BONUS.get(normalized_priority, 0.0)
+    return round(score + bonus, 4)
