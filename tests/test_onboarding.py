@@ -72,6 +72,60 @@ def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_cand
     assert result.onboarding.discovered_artifact_count == 2
 
 
+def test_onboard_repository_groups_low_signal_candidates_by_directory(tmp_path):
+    db_path = str(tmp_path / "onboarding.db")
+    init_db(db_path)
+
+    files = {
+        "notes/assistant-checklist.md": "Assistant operator checklist.",
+        "notes/assistant-faq.md": "Assistant frequently asked questions.",
+        "notes/assistant-runbook.md": "Assistant runbook for reviewers.",
+        "prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert result.onboarding.discovered_artifact_count == 2
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["notes/assistant-checklist.md", "prompts/system.txt"]
+    assert result.artifacts[0].confidence == 0.72
+    assert "Grouped 3 low-signal candidates under assistant" in result.artifacts[0].discovery_reason
+    assert [baseline.artifact_path for baseline in result.baseline_versions] == ["notes/assistant-checklist.md", "prompts/system.txt"]
+
+
+def test_onboard_repository_groups_low_signal_candidates_across_adjacent_text_paths(tmp_path):
+    db_path = str(tmp_path / "onboarding.db")
+    init_db(db_path)
+
+    files = {
+        "notes/assistant-checklist.md": "Assistant operator checklist.",
+        "guides/assistant-faq.md": "Assistant frequently asked questions.",
+        "config/assistant-index.json": '{"assistant": "routing notes"}',
+        "prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert result.onboarding.discovered_artifact_count == 2
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["guides/assistant-faq.md", "prompts/system.txt"]
+    assert "Grouped 3 low-signal candidates under assistant" in result.artifacts[0].discovery_reason
+
+
 def test_plan_repository_history_backfill_creates_jobs_for_onboarded_artifacts(tmp_path):
     db_path = str(tmp_path / "onboarding.db")
     init_db(db_path)

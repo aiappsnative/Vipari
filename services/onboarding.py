@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
@@ -60,6 +61,16 @@ SECONDARY_DISCOVERY_HINTS = {
     "evaluation",
 }
 TEXT_HEAVY_DISCOVERY_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".toml"}
+GROUP_REPRESENTATIVE_EXTENSION_RANK = {
+    ".md": 0,
+    ".txt": 1,
+    ".yaml": 2,
+    ".yml": 2,
+    ".toml": 3,
+    ".json": 4,
+    ".py": 5,
+}
+LOW_SIGNAL_DISCOVERY_CONFIDENCE = 0.78
 NOISY_DISCOVERY_SEGMENTS = {
     ".github",
     "__pycache__",
@@ -143,6 +154,70 @@ def _discovery_confidence(path: str, reason: str) -> float:
     return 0.72
 
 
+def _low_signal_group_key(artifact: DiscoveredArtifactInput) -> tuple[str, str] | None:
+    if artifact.confidence >= LOW_SIGNAL_DISCOVERY_CONFIDENCE:
+        return None
+
+    if any(artifact.artifact_path.lower().endswith(ext) for ext in TEXT_HEAVY_DISCOVERY_EXTENSIONS):
+        family = _low_signal_family_label(artifact.artifact_path)
+        if family is not None:
+            return artifact.artifact_type, family
+
+    segments = _path_segments(artifact.artifact_path)
+    parent = "/".join(segments[:-1]) if len(segments) > 1 else "."
+    return artifact.artifact_type, parent
+
+
+def _low_signal_family_label(path: str) -> str | None:
+    tokens = [token for token in re.split(r"[^a-z0-9]+", path.lower()) if token]
+    for hint in STRONG_DISCOVERY_HINTS:
+        if hint in tokens:
+            return hint
+    for hint in SECONDARY_DISCOVERY_HINTS:
+        if hint in tokens:
+            return hint
+    return None
+
+
+def _group_low_signal_artifacts(discovered: list[DiscoveredArtifactInput]) -> list[DiscoveredArtifactInput]:
+    grouped: list[DiscoveredArtifactInput] = []
+    buffered: dict[tuple[str, str], list[DiscoveredArtifactInput]] = {}
+
+    for artifact in discovered:
+        group_key = _low_signal_group_key(artifact)
+        if group_key is None:
+            grouped.append(artifact)
+            continue
+        buffered.setdefault(group_key, []).append(artifact)
+
+    for (_, group_label), artifacts in sorted(buffered.items(), key=lambda item: item[0]):
+        if len(artifacts) == 1:
+            grouped.append(artifacts[0])
+            continue
+
+        representative = min(artifacts, key=_group_representative_sort_key)
+        grouped.append(
+            replace(
+                representative,
+                discovery_reason=(
+                    f"{representative.discovery_reason} "
+                    f"Grouped {len(artifacts)} low-signal candidates under {group_label} to reduce exploratory queue noise."
+                ),
+            )
+        )
+
+    return sorted(grouped, key=lambda artifact: artifact.artifact_path)
+
+
+def _group_representative_sort_key(artifact: DiscoveredArtifactInput) -> tuple[int, str]:
+    lowered = artifact.artifact_path.lower()
+    extension_rank = min(
+        (rank for ext, rank in GROUP_REPRESENTATIVE_EXTENSION_RANK.items() if lowered.endswith(ext)),
+        default=9,
+    )
+    return extension_rank, artifact.artifact_path
+
+
 def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtifactInput]:
     discovered: list[DiscoveredArtifactInput] = []
     for path, content in sorted(file_contents.items()):
@@ -159,7 +234,7 @@ def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtif
                 baseline_content=content,
             )
         )
-    return discovered
+    return _group_low_signal_artifacts(discovered)
 
 
 def onboard_repository(

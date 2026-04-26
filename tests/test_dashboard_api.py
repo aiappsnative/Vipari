@@ -270,3 +270,42 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is False
     assert payload["insights"][0]["evidence_label"] == "baseline only"
     assert payload["insights"][0]["evidence_summary"] == "No stored PR or merged-history evidence yet."
+
+
+def test_dashboard_api_groups_low_signal_artifacts_into_one_lower_confidence_item(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-grouped-low-signal.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    files = {
+        "notes/assistant-checklist.md": "Assistant operator checklist.",
+        "guides/assistant-faq.md": "Assistant frequently asked questions.",
+        "config/assistant-index.json": '{"assistant": "routing notes"}',
+        "prompts/system.txt": PROMPT_BASELINE,
+    }
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["onboarding"]["discovered_artifact_count"] == 2
+    assert {artifact["artifact_path"] for artifact in payload["artifacts"]} == {
+        "guides/assistant-faq.md",
+        "prompts/system.txt",
+    }
+    assert len(payload["insights"]) == 1
+    assert payload["insights"][0]["artifact_path"] == "prompts/system.txt"
+    assert len(payload["lower_confidence_insights"]) == 1
+    assert payload["lower_confidence_insights"][0]["artifact_path"] == "guides/assistant-faq.md"

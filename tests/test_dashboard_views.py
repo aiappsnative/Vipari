@@ -294,6 +294,39 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert dashboard.insights[0].evidence_summary == "No stored PR or merged-history evidence yet."
 
 
+def test_build_repo_dashboard_view_groups_low_signal_text_artifacts_into_one_queue_item(tmp_path):
+    db_path = str(tmp_path / "dashboard-grouped-low-signal.db")
+    init_db(db_path)
+
+    files = {
+        "notes/assistant-checklist.md": "Assistant operator checklist.",
+        "guides/assistant-faq.md": "Assistant frequently asked questions.",
+        "config/assistant-index.json": '{"assistant": "routing notes"}',
+        "prompts/system.txt": PROMPT_BASELINE,
+    }
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert dashboard.onboarding is not None
+    assert dashboard.onboarding.discovered_artifact_count == 2
+    assert {artifact.artifact_path for artifact in dashboard.artifacts} == {"guides/assistant-faq.md", "prompts/system.txt"}
+    assert len(dashboard.insights) == 1
+    assert dashboard.insights[0].artifact_path == "prompts/system.txt"
+    assert len(dashboard.lower_confidence_insights) == 1
+    assert dashboard.lower_confidence_insights[0].artifact_path == "guides/assistant-faq.md"
+    assert len(dashboard.control_surface_groups) == 2
+
+
 def test_build_repo_dashboard_view_uses_history_target_when_pr_evidence_is_missing(tmp_path):
     db_path = str(tmp_path / "dashboard-history-only.db")
     init_db(db_path)
