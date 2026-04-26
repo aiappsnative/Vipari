@@ -1,0 +1,10 @@
+services:
+  api:
+    ports:
+      - "8011:8002"
+    environment:
+      APP_BASE_URL: http://127.0.0.1:8011
+      DATABASE_URL: postgresql://pd:pd@db:5432/driftguard
+      GITHUB_APP_ID: ""
+      GITHUB_PRIVATE_KEY_PATH: ""
+      GITHUB_APP_PRIVATE_KEY: ""

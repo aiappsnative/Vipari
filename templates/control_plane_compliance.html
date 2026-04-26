@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Compliance | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
+</head>
+<body class="control-page compliance-page" data-theme="{{THEME_PREFERENCE}}">
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
+                <span class="sidebar-logo-mark">D</span>
+            </a>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="{{AUDIT_HREF}}" class="sidebar-nav-item" aria-label="Audit Logs">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
+                </a>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
+                </a>
+                <a href="/app/compliance" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+                    <span>Policies</span>
+                </a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
+                </a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
+                </a>
+            </div>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="User profile">D</a>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            <main class="page-scroll control-page-shell" id="top">
+                <section class="control-page-hero">
+                    <div class="control-page-hero-copy">
+                        <p class="control-page-eyebrow">Compliance workspace</p>
+                        <h1>{{WORKSPACE_NAME}}</h1>
+                        <p>{{STATUS_NOTE}}</p>
+                    </div>
+                    <div class="control-page-hero-note">
+                        <span class="control-page-note-label">Current scope</span>
+                        <span class="control-page-note-copy">Centralize export workflows and repo-level governance visibility here. AI Act output remains evidence-backed guidance rather than legal classification.</span>
+                    </div>
+                </section>
+
+                <section class="control-page-stat-grid">
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Plan</span>
+                        <strong>{{PLAN_LABEL}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Tracked repos</span>
+                        <strong>{{TRACKED_REPO_COUNT}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Approved baselines</span>
+                        <strong>{{BASELINE_APPROVED_REPO_COUNT}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Exports ready / pending</span>
+                        <strong>{{EXPORT_READY_COUNT}} / {{EXPORT_PENDING_COUNT}}</strong>
+                    </article>
+                </section>
+
+                <section class="control-page-sections">
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Standards views</div>
+                        <h2 class="control-page-section-title">Shared evidence across frameworks</h2>
+                        <div class="compliance-framework-grid">
+                            <div class="compliance-framework-card">
+                                <strong>EU AI Act</strong>
+                                <p>Use evidence-backed relevance and oversight signals. No legal risk-classification claim is made here.</p>
+                            </div>
+                            <div class="compliance-framework-card">
+                                <strong>SOC 2</strong>
+                                <p>Reuse baseline review, traceability, and change evidence for control follow-up and auditor prep.</p>
+                            </div>
+                            <div class="compliance-framework-card">
+                                <strong>ISO 27001</strong>
+                                <p>Reuse policy, governance, and change-monitoring evidence from the same repository audit model.</p>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">EU AI Act relevance assessment</div>
+                        <h2 class="control-page-section-title">Evidence-backed oversight signals</h2>
+                        <p class="control-page-copy">This view summarizes stored repository evidence that may matter for AI governance review. It highlights AI control surfaces, tool and model/config presence, governance artifacts, and baseline-review state. It does not classify systems under the EU AI Act and should not be treated as legal advice.</p>
+                        {{AI_ACT_ASSESSMENT}}
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Evidence gaps</div>
+                        <h2 class="control-page-section-title">Next actions for stronger review packs</h2>
+                        <p class="control-page-copy">Use these repo-level gaps to decide what should be reviewed, approved, or added before relying on the exported evidence package for governance workflows.</p>
+                        {{EVIDENCE_GAPS}}
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Evidence freshness</div>
+                        <h2 class="control-page-section-title">How current the stored review evidence is</h2>
+                        <p class="control-page-copy">Freshness does not change legal interpretation, but it does affect how much confidence teams should place in a repo when preparing review packs or auditor-facing evidence bundles.</p>
+                        {{EVIDENCE_FRESHNESS}}
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Central export</div>
+                        <h2 class="control-page-section-title">Create evidence packages</h2>
+                        <p class="control-page-copy">Run the existing compliance export flow across one repo, selected repos, or all repos in this workspace. Each selected repository produces its normal evidence package and appears below in the shared history table.</p>
+                        <form method="post" action="/app/compliance/export" class="control-page-form">
+                            {{CSRF_INPUT}}
+                            <fieldset class="control-page-choice-group" aria-labelledby="export-preset-title">
+                                <legend class="control-page-label" id="export-preset-title">Selection preset</legend>
+                                <div class="form-group export-form-group export-form-group-wide">
+                                    <label for="compliance-export-preset">Optional server-side preset</label>
+                                    <select id="compliance-export-preset" name="export_preset">
+                                        <option value="none" selected>No preset</option>
+                                        <option value="review_ready">Review-ready repos only</option>
+                                        <option value="fresh_review_ready">Fresh review-ready repos only</option>
+                                    </select>
+                                </div>
+                            </fieldset>
+                            <fieldset class="control-page-choice-group" aria-labelledby="export-scope-title">
+                                <legend class="control-page-label" id="export-scope-title">Repo scope</legend>
+                                <div class="control-page-choice-grid">
+                                    <label class="control-page-choice">
+                                        <input type="radio" name="export_scope" value="all" checked />
+                                        <span class="control-page-choice-card">
+                                            <span class="control-page-choice-title">All visible repos</span>
+                                            <span class="control-page-choice-copy">Generate one export per repo using the current workspace evidence model.</span>
+                                        </span>
+                                    </label>
+                                    <label class="control-page-choice">
+                                        <input type="radio" name="export_scope" value="selected" />
+                                        <span class="control-page-choice-card">
+                                            <span class="control-page-choice-title">Selected repos only</span>
+                                            <span class="control-page-choice-copy">Pick a subset below when you want a tighter review bundle.</span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <p class="control-page-copy">Presets only narrow the export set to repos already visible in this workspace. They never expand access beyond your current repo visibility.</p>
+                            </fieldset>
+                            <fieldset class="export-mode-group export-form-group export-form-group-wide">
+                                <legend>Export mode</legend>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="compliance" checked>
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Compliance Evidence</span>
+                                        <span class="export-mode-description">Lean evidence package for oversight and auditor follow-up.</span>
+                                    </span>
+                                </label>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="compliance_plus_drift">
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Compliance + Drift Intelligence</span>
+                                        <span class="export-mode-description">Adds repo posture and drift context for deeper governance review.</span>
+                                    </span>
+                                </label>
+                            </fieldset>
+                            <div class="form-group export-form-group">
+                                <label for="compliance-from-date">From Date</label>
+                                <input type="date" id="compliance-from-date" name="from_date" required>
+                            </div>
+                            <div class="form-group export-form-group">
+                                <label for="compliance-to-date">To Date</label>
+                                <input type="date" id="compliance-to-date" name="to_date" required>
+                            </div>
+                            <div class="form-group export-form-group export-form-group-wide">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="include_artifact_content">
+                                    Include raw artifact content with provenance labels when available
+                                </label>
+                            </div>
+                            <div class="secondary-panel-title">Repo selection</div>
+                            <div class="compliance-repo-list">
+                                {{REPO_ROWS}}
+                            </div>
+                            <div class="export-actions">
+                                <button type="submit" class="export-submit-button">Run compliance exports</button>
+                            </div>
+                        </form>
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Workspace export history</div>
+                        <h2 class="control-page-section-title">Recent exports</h2>
+                        <p class="control-page-copy">These downloads remain requester-scoped and workspace-scoped. This page simply brings them together in one place.</p>
+                        {{EXPORT_HISTORY}}
+                    </article>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
+</body>
+</html>

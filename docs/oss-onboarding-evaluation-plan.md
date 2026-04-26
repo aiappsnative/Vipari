@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document now defines the evaluation foundation for real-repository validation and the future `feature/oss-eval-harness-v1` slice.
+This document now defines the evaluation foundation for real-repository validation and the next hardening phase of `feature/oss-eval-harness-v1`.
 
 It should be read as a bridge between:
 
@@ -10,16 +10,23 @@ It should be read as a bridge between:
 - the next product-first iterations (`feature/repo-evidence-v1`, `feature/signal-fusion-v1`, and `feature/discovery-precision-v1`)
 - the later need for a repeatable evaluation harness that keeps those improvements honest
 
-The goal is no longer to prove that PromptDrift can touch a public repository at all.
+The goal is no longer to prove that DriftGuard can touch a public repository at all.
 That proof now exists.
 
-The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop.
+The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop, building on the harness groundwork that already exists on `main`.
+
+Shipped groundwork on `main` already includes:
+
+- CLI-driven eval candidate listing and eval runs
+- repeatable saved run packages under `artifacts/oss-evals/`
+- saved repo and overview dashboard payload snapshots
+- branch-to-branch comparison summaries for eval packages
 
 ---
 
 ## Current validated baseline
 
-PromptDrift has already validated meaningful OSS onboarding behavior on real repositories.
+DriftGuard has already validated meaningful OSS onboarding behavior on real repositories.
 
 Confirmed on `main` today:
 
@@ -36,15 +43,15 @@ Known completed live validations:
 
 Current takeaway:
 
-- PromptDrift is already past the "toy demo" stage for OSS onboarding
-- the biggest remaining trust gaps are discovery precision, PR-linked evidence density, and repeatability of evaluation outputs
+- DriftGuard is already past the "toy demo" stage for OSS onboarding
+- the biggest remaining trust gaps are discovery precision, proposal-vs-landed evidence synthesis, and repeatability of evaluation outputs
 - the harness should therefore optimize for product usefulness, not only ingest success
 
 ---
 
 ## Evaluation objective
 
-For each selected OSS repository, PromptDrift should be able to answer these questions with useful, reviewable evidence:
+For each selected OSS repository, DriftGuard should be able to answer these questions with useful, reviewable evidence:
 
 - where are the likely AI control surfaces?
 - which discovered artifacts look authoritative enough to baseline?
@@ -57,7 +64,7 @@ For each selected OSS repository, PromptDrift should be able to answer these que
 
 ## Harness contract
 
-The future harness should produce a stable package of evaluation artifacts for each candidate repo.
+The harness should continue producing a stable package of evaluation artifacts for each candidate repo, with the next work focused on expanding coverage quality rather than inventing the mechanism from scratch.
 
 ### Required inputs
 
@@ -95,31 +102,31 @@ The purpose of the harness is not only replayability. It is comparability across
 ## Product capabilities this evaluation must validate
 
 ### 1. Discovery quality
-PromptDrift should:
+DriftGuard should:
 - detect likely prompts, policies, tool definitions, model-routing config, and agent wiring
 - keep obviously generic code out of the primary artifact set
 - expose confidence or lower-confidence handling when discovery is uncertain
 
 ### 2. Baseline-first onboarding quality
-PromptDrift should:
+DriftGuard should:
 - persist a usable initial artifact inventory
 - store baseline versions for discovered control surfaces
 - distinguish stronger findings from weaker discovery guesses
 
 ### 3. Historical/backfill usefulness
-PromptDrift should:
+DriftGuard should:
 - build enough artifact history to explain meaningful drift
 - avoid replaying irrelevant repository history
 - preserve clear lineage and provenance for stored versions
 
 ### 4. Reviewer usefulness
-PromptDrift should:
+DriftGuard should:
 - surface plausible high-priority artifacts
 - explain why an artifact is risky or important
 - avoid letting urgency come only from noisy history accumulation
 
 ### 5. Dashboard usefulness
-PromptDrift should:
+DriftGuard should:
 - make `/dashboard` useful as a triage surface
 - make `/dashboard/{owner/repo}` useful as a case file
 - help a reviewer decide what to inspect next in GitHub
@@ -261,18 +268,18 @@ Recommended components:
 - a fixed evaluator rubric stored alongside run results
 - one branch-comparison summary that calls out product regressions or improvements
 
-It should not become a heavyweight benchmarking platform before PromptDrift has stronger repo evidence and discovery quality.
+It should not become a heavyweight benchmarking platform before DriftGuard has stronger repo evidence and discovery quality.
 
 ---
 
 ## Summary
 
-PromptDrift has already shown it can onboard and render real OSS repositories.
+DriftGuard has already shown it can onboard and render real OSS repositories.
 
 The next step is to make that proof repeatable.
 
 This evaluation plan exists to ensure that future product work is judged by whether it improves discovery trust, reviewer-target quality, and real decision usefulness on repositories we do not control.
 
-**a real public repository installs PromptDrift, PromptDrift discovers its AI control surface, digests enough history to build drift intelligence, and produces PR and dashboard outputs that are actually useful.**
+**a real public repository installs DriftGuard, DriftGuard discovers its AI control surface, digests enough history to build drift intelligence, and produces PR and dashboard outputs that are actually useful.**
 
 That is the correct end-goal test for this feature.

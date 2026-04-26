@@ -14,8 +14,8 @@ This branch was created from `main` on 2026-03-21 to begin the planned slice des
 
 Make the pull-request review workflow the clear product wedge by adding a high-signal escalation path:
 
-- PromptDrift should still post a managed PR comment
-- PromptDrift should also apply a GitHub label when escalation is warranted
+- DriftGuard should still post a managed PR comment
+- DriftGuard should also apply a GitHub label when escalation is warranted
 - the first version should prefer precision over coverage
 - avoid hard merge blocking for now
 

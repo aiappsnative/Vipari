@@ -36,14 +36,14 @@ Strategic source:
 
 The PR wedge is now materially real:
 
-- PromptDrift can detect risky AI control-surface changes
+- DriftGuard can detect risky AI control-surface changes
 - it can escalate in the PR itself
 - it can label high-confidence cases
 - it now presents comments in a stable canonical format
 
 The next trust gap is baseline ambiguity.
 
-Right now PromptDrift can show drift, but the product becomes much more credible when it can clearly answer:
+Right now DriftGuard can show drift, but the product becomes much more credible when it can clearly answer:
 
 - drift relative to what?
 - was that baseline explicitly approved?
@@ -51,7 +51,7 @@ Right now PromptDrift can show drift, but the product becomes much more credible
 
 ## Product target for this slice
 
-PromptDrift should move from:
+DriftGuard should move from:
 
 - "this changed from an earlier stored version"
 

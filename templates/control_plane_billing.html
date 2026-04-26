@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Billing | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+    <script defer src="/static/theme-toggle.js"></script>
+</head>
+<body data-theme="dark">
+    <main class="page-shell">
+        <section class="page-header">
+            <p class="eyebrow">Billing</p>
+            <h1>{{WORKSPACE_NAME}}</h1>
+            <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
+            <p class="page-note">{{CHECKOUT_STATUS_NOTE}}</p>
+        </section>
+        <section class="card-grid">
+            {{PLAN_CARDS}}
+            <article class="action-card">
+                <div class="eyebrow">Portal</div>
+                <h2>Manage billing</h2>
+                <p>Open the customer portal to update payment details or resume service.</p>
+                {{PORTAL_ACTION}}
+            </article>
+        </section>
+    </main>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
+</body>
+</html>

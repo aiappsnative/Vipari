@@ -5,9 +5,9 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, compare_attribute_profiles
+from .persistence import connect_sqlite
 from .baseline_provenance import (
     BaselineProvenance,
     approved_onboarding_provenance,
@@ -49,6 +49,8 @@ class RepositoryOnboardingRecord:
     default_branch: str
     status: str
     discovered_artifact_count: int
+    approved_by: str | None
+    approved_at: float | None
     created_at: float
     updated_at: float
 
@@ -77,8 +79,28 @@ class OnboardingBaselineVersionRecord:
     signal_terms: list[str]
     line_count: int
     profile: AgentAttributeProfile
+    approval_status: str
+    approved_by: str | None
+    approved_at: float | None
+    approval_note: str | None
     created_at: float
     content_text: str | None = None
+
+
+@dataclass(frozen=True)
+class BaselineAuditLogRecord:
+    id: int
+    repo_full: str
+    onboarding_id: int
+    artifact_path: str | None
+    action: str
+    decision_type: str | None
+    actor_login: str | None
+    note: str | None
+    linked_findings: list[str]
+    baseline_version_id: int | None
+    snapshot_id: int | None
+    created_at: float
 
 
 @dataclass(frozen=True)
@@ -89,6 +111,7 @@ class HistoricalBackfillJobRecord:
     repo_full: str
     artifact_path: str
     artifact_type: str
+    job_kind: str
     status: str
     commit_count: int
     completed_commit_count: int
@@ -135,18 +158,16 @@ class HistoricalStaticProfileRecord:
     attribute_deltas: dict[str, float]
     narrative: list[str]
     signal_terms: list[str]
+    branch_ref: str | None
+    triggered_by: str | None
     created_at: float
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    return connect_sqlite(db_path, foreign_keys=True)
 
 
 def init_onboarding_record_db(db_path: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -157,6 +178,8 @@ def init_onboarding_record_db(db_path: str) -> None:
                 default_branch TEXT NOT NULL,
                 status TEXT NOT NULL,
                 discovered_artifact_count INTEGER NOT NULL,
+                approved_by TEXT,
+                approved_at REAL,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
@@ -191,9 +214,33 @@ def init_onboarding_record_db(db_path: str) -> None:
                 line_count INTEGER NOT NULL,
                 content_text TEXT,
                 profile_json TEXT NOT NULL,
+                approval_status TEXT NOT NULL DEFAULT 'pending',
+                approved_by TEXT,
+                approved_at REAL,
+                approval_note TEXT,
                 created_at REAL NOT NULL,
                 FOREIGN KEY(onboarding_id) REFERENCES repository_onboardings(id) ON DELETE CASCADE,
                 FOREIGN KEY(onboarded_artifact_id) REFERENCES onboarded_artifacts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS baseline_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full TEXT NOT NULL,
+                onboarding_id INTEGER NOT NULL,
+                artifact_path TEXT,
+                action TEXT NOT NULL,
+                decision_type TEXT,
+                actor_login TEXT,
+                note TEXT,
+                linked_findings_json TEXT NOT NULL DEFAULT '[]',
+                baseline_version_id INTEGER,
+                snapshot_id INTEGER,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(onboarding_id) REFERENCES repository_onboardings(id) ON DELETE CASCADE,
+                FOREIGN KEY(baseline_version_id) REFERENCES onboarding_baseline_versions(id) ON DELETE SET NULL
             )
             """
         )
@@ -206,6 +253,7 @@ def init_onboarding_record_db(db_path: str) -> None:
                 repo_full TEXT NOT NULL,
                 artifact_path TEXT NOT NULL,
                 artifact_type TEXT NOT NULL,
+                job_kind TEXT NOT NULL DEFAULT 'historical_backfill',
                 status TEXT NOT NULL,
                 commit_count INTEGER NOT NULL,
                 completed_commit_count INTEGER NOT NULL DEFAULT 0,
@@ -255,6 +303,8 @@ def init_onboarding_record_db(db_path: str) -> None:
                 artifact_type TEXT NOT NULL,
                 commit_sha TEXT NOT NULL,
                 profile_json TEXT NOT NULL,
+                branch_ref TEXT,
+                triggered_by TEXT NOT NULL DEFAULT 'historical_backfill',
                 baseline_profile_id INTEGER,
                 baseline_provenance_json TEXT,
                 semantic_similarity REAL NOT NULL,
@@ -285,12 +335,34 @@ def init_onboarding_record_db(db_path: str) -> None:
         baseline_columns = {row["name"] for row in conn.execute("PRAGMA table_info(onboarding_baseline_versions)").fetchall()}
         if "content_text" not in baseline_columns:
             conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN content_text TEXT")
+        if "approval_status" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending'")
+        if "approved_by" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approved_by TEXT")
+        if "approved_at" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approved_at REAL")
+        if "approval_note" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approval_note TEXT")
+
+        baseline_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(baseline_audit_log)").fetchall()}
+        if "decision_type" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN decision_type TEXT")
+        if "linked_findings_json" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN linked_findings_json TEXT NOT NULL DEFAULT '[]'")
+
+        onboarding_columns = {row["name"] for row in conn.execute("PRAGMA table_info(repository_onboardings)").fetchall()}
+        if "approved_by" not in onboarding_columns:
+            conn.execute("ALTER TABLE repository_onboardings ADD COLUMN approved_by TEXT")
+        if "approved_at" not in onboarding_columns:
+            conn.execute("ALTER TABLE repository_onboardings ADD COLUMN approved_at REAL")
 
         historical_version_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_artifact_versions)").fetchall()}
         if "content_text" not in historical_version_columns:
             conn.execute("ALTER TABLE historical_artifact_versions ADD COLUMN content_text TEXT")
 
         historical_backfill_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_backfill_jobs)").fetchall()}
+        if "job_kind" not in historical_backfill_columns:
+            conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'historical_backfill'")
         if "completed_commit_count" not in historical_backfill_columns:
             conn.execute("ALTER TABLE historical_backfill_jobs ADD COLUMN completed_commit_count INTEGER NOT NULL DEFAULT 0")
         if "last_error" not in historical_backfill_columns:
@@ -299,6 +371,10 @@ def init_onboarding_record_db(db_path: str) -> None:
         historical_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_static_profiles)").fetchall()}
         if "baseline_provenance_json" not in historical_profile_columns:
             conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN baseline_provenance_json TEXT")
+        if "branch_ref" not in historical_profile_columns:
+            conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN branch_ref TEXT")
+        if "triggered_by" not in historical_profile_columns:
+            conn.execute("ALTER TABLE historical_static_profiles ADD COLUMN triggered_by TEXT NOT NULL DEFAULT 'historical_backfill'")
 
 
 def record_repository_onboarding(
@@ -318,9 +394,10 @@ def record_repository_onboarding(
             """
             INSERT INTO repository_onboardings (
                 repo_full, installation_id, default_branch, status, discovered_artifact_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            , approved_by, approved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (repo_full, installation_id, default_branch, status, len(discovered_artifacts), now, now),
+            (repo_full, installation_id, default_branch, status, len(discovered_artifacts), now, now, None, None),
         )
         onboarding_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
@@ -349,7 +426,8 @@ def record_repository_onboarding(
                 INSERT INTO onboarding_baseline_versions (
                     onboarding_id, onboarded_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
                     version_hash, signal_terms_json, line_count, content_text, profile_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                , approval_status, approved_by, approved_at, approval_note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     onboarding_id,
@@ -363,6 +441,10 @@ def record_repository_onboarding(
                     artifact.baseline_content,
                     json.dumps(_profile_to_json(profile)),
                     now,
+                    "approved",
+                    None,
+                    now,
+                    None,
                 ),
             )
 
@@ -411,6 +493,51 @@ def list_onboarded_artifacts_for_onboarding(db_path: str, onboarding_id: int) ->
     return [_row_to_onboarded_artifact(row) for row in rows]
 
 
+def add_onboarded_artifact(
+    db_path: str,
+    *,
+    onboarding_id: int,
+    repo_full: str,
+    artifact_path: str,
+    artifact_type: str,
+    discovery_reason: str,
+    confidence: float,
+) -> OnboardedArtifactRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO onboarded_artifacts (
+                onboarding_id, repo_full, artifact_path, artifact_type, discovery_reason, confidence, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (onboarding_id, repo_full, artifact_path, artifact_type, discovery_reason, confidence, now),
+        )
+        rowid = int(cursor.lastrowid)
+        row = conn.execute("SELECT * FROM onboarded_artifacts WHERE id = ?", (rowid,)).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to add onboarded artifact")
+    return _row_to_onboarded_artifact(row)
+
+
+def delete_onboarded_artifact_by_path(db_path: str, onboarding_id: int, artifact_path: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM onboarded_artifacts WHERE onboarding_id = ? AND artifact_path = ?",
+            (onboarding_id, artifact_path),
+        )
+
+
+def refresh_onboarding_discovered_count(db_path: str, onboarding_id: int) -> None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(1) as cnt FROM onboarded_artifacts WHERE onboarding_id = ?", (onboarding_id,)).fetchone()
+        count = int(row["cnt"]) if row is not None else 0
+        conn.execute(
+            "UPDATE repository_onboardings SET discovered_artifact_count = ?, updated_at = ? WHERE id = ?",
+            (count, time.time(), onboarding_id),
+        )
+
+
 def list_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardingBaselineVersionRecord]:
     with _connect(db_path) as conn:
         rows = conn.execute(
@@ -420,24 +547,284 @@ def list_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id
     return [_row_to_onboarding_baseline_version(row) for row in rows]
 
 
+def list_latest_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardingBaselineVersionRecord]:
+    latest_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
+        latest_by_path[baseline.artifact_path] = baseline
+    return [latest_by_path[path] for path in sorted(latest_by_path)]
+
+
+def select_effective_onboarding_baseline_versions(
+    baselines: list[OnboardingBaselineVersionRecord],
+) -> list[OnboardingBaselineVersionRecord]:
+    latest_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    latest_approved_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    for baseline in baselines:
+        latest_by_path[baseline.artifact_path] = baseline
+        if baseline.approval_status == "approved":
+            latest_approved_by_path[baseline.artifact_path] = baseline
+
+    effective_by_path = {
+        artifact_path: latest_approved_by_path.get(artifact_path, latest_baseline)
+        for artifact_path, latest_baseline in latest_by_path.items()
+    }
+    return [effective_by_path[path] for path in sorted(effective_by_path)]
+
+
+def list_effective_onboarding_baseline_versions_for_onboarding(
+    db_path: str,
+    onboarding_id: int,
+) -> list[OnboardingBaselineVersionRecord]:
+    return select_effective_onboarding_baseline_versions(
+        list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id)
+    )
+
+
+def list_latest_approved_onboarding_baseline_versions_for_onboarding(
+    db_path: str,
+    onboarding_id: int,
+) -> list[OnboardingBaselineVersionRecord]:
+    latest_approved_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
+        if baseline.approval_status == "approved":
+            latest_approved_by_path[baseline.artifact_path] = baseline
+    return [latest_approved_by_path[path] for path in sorted(latest_approved_by_path)]
+
+
 def get_latest_onboarding_baseline_for_repo_artifact(
     db_path: str,
     repo_full: str,
     artifact_path: str,
+    *,
+    only_approved: bool = False,
 ) -> OnboardingBaselineVersionRecord | None:
     normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
     with _connect(db_path) as conn:
+        if only_approved:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM onboarding_baseline_versions
+                WHERE normalized_artifact_id = ? AND approval_status = 'approved'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (normalized_artifact_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM onboarding_baseline_versions
+                WHERE normalized_artifact_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (normalized_artifact_id,),
+            ).fetchone()
+    return _row_to_onboarding_baseline_version(row) if row is not None else None
+
+
+def get_onboarding_baseline_version(db_path: str, baseline_version_id: int) -> OnboardingBaselineVersionRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM onboarding_baseline_versions WHERE id = ?", (baseline_version_id,)).fetchone()
+    return _row_to_onboarding_baseline_version(row) if row is not None else None
+
+
+def create_onboarding_baseline_version(
+    db_path: str,
+    *,
+    onboarding_id: int,
+    onboarded_artifact_id: int,
+    repo_full: str,
+    artifact_path: str,
+    artifact_type: str,
+    content_text: str,
+    profile: AgentAttributeProfile,
+    signal_terms: list[str],
+    approval_status: str = "pending",
+    approved_by: str | None = None,
+    approved_at: float | None = None,
+    approval_note: str | None = None,
+) -> OnboardingBaselineVersionRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO onboarding_baseline_versions (
+                onboarding_id, onboarded_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
+                version_hash, signal_terms_json, line_count, content_text, profile_json,
+                approval_status, approved_by, approved_at, approval_note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                onboarding_id,
+                onboarded_artifact_id,
+                _build_normalized_artifact_id(repo_full, artifact_path),
+                artifact_path,
+                artifact_type,
+                hashlib.sha256(content_text.encode("utf-8")).hexdigest(),
+                json.dumps(signal_terms),
+                len([line for line in content_text.splitlines() if line.strip()]),
+                content_text,
+                json.dumps(_profile_to_json(profile)),
+                approval_status,
+                approved_by,
+                approved_at,
+                approval_note,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM onboarding_baseline_versions WHERE id = last_insert_rowid()").fetchone()
+    if row is None:
+        raise RuntimeError("Failed to create onboarding baseline version.")
+    return _row_to_onboarding_baseline_version(row)
+
+
+def update_onboarding_baseline_review(
+    db_path: str,
+    *,
+    baseline_version_id: int,
+    approval_status: str,
+    actor_login: str | None,
+    approval_note: str | None,
+) -> OnboardingBaselineVersionRecord:
+    approved_at = time.time() if approval_status == "approved" else None
+    approved_by = actor_login if approval_status == "approved" else None
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE onboarding_baseline_versions
+            SET approval_status = ?,
+                approved_by = ?,
+                approved_at = ?,
+                approval_note = ?
+            WHERE id = ?
+            """,
+            (approval_status, approved_by, approved_at, approval_note, baseline_version_id),
+        )
+        row = conn.execute("SELECT * FROM onboarding_baseline_versions WHERE id = ?", (baseline_version_id,)).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to update onboarding baseline review.")
+    return _row_to_onboarding_baseline_version(row)
+
+
+def update_repository_onboarding_approval_status(
+    db_path: str,
+    *,
+    onboarding_id: int,
+    status: str,
+    approved_by: str | None,
+    approved_at: float | None,
+) -> RepositoryOnboardingRecord:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE repository_onboardings
+            SET status = ?,
+                approved_by = ?,
+                approved_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (status, approved_by, approved_at, time.time(), onboarding_id),
+        )
+        row = conn.execute("SELECT * FROM repository_onboardings WHERE id = ?", (onboarding_id,)).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to update repository onboarding status.")
+    return _row_to_repository_onboarding(row)
+
+
+def record_baseline_audit_log(
+    db_path: str,
+    *,
+    repo_full: str,
+    onboarding_id: int,
+    artifact_path: str | None,
+    action: str,
+    actor_login: str | None,
+    note: str | None,
+    decision_type: str | None = None,
+    linked_findings: list[str] | None = None,
+    baseline_version_id: int | None = None,
+    snapshot_id: int | None = None,
+) -> BaselineAuditLogRecord:
+    now = time.time()
+    decision_type = decision_type or action
+    linked_findings_json = json.dumps(linked_findings or [])
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO baseline_audit_log (
+                repo_full, onboarding_id, artifact_path, action, decision_type, actor_login, note,
+                linked_findings_json, baseline_version_id, snapshot_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                repo_full,
+                onboarding_id,
+                artifact_path,
+                action,
+                decision_type,
+                actor_login,
+                note,
+                linked_findings_json,
+                baseline_version_id,
+                snapshot_id,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM baseline_audit_log WHERE id = last_insert_rowid()").fetchone()
+    if row is None:
+        raise RuntimeError("Failed to write baseline audit log.")
+    return _row_to_baseline_audit_log(row)
+
+
+def list_baseline_audit_log_for_onboarding(db_path: str, onboarding_id: int) -> list[BaselineAuditLogRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM baseline_audit_log WHERE onboarding_id = ? ORDER BY created_at ASC",
+            (onboarding_id,),
+        ).fetchall()
+    return [_row_to_baseline_audit_log(row) for row in rows]
+
+
+def get_latest_baseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: int) -> int | None:
+    with _connect(db_path) as conn:
         row = conn.execute(
             """
-            SELECT *
-            FROM onboarding_baseline_versions
-            WHERE normalized_artifact_id = ?
+            SELECT snapshot_id
+            FROM baseline_audit_log
+            WHERE onboarding_id = ?
+              AND action = 'approve_repo_baseline'
+              AND snapshot_id IS NOT NULL
             ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
-            (normalized_artifact_id,),
+            (onboarding_id,),
         ).fetchone()
-    return _row_to_onboarding_baseline_version(row) if row is not None else None
+    if row is None or row["snapshot_id"] is None:
+        return None
+    return int(row["snapshot_id"])
+
+
+def get_latest_rebaseline_snapshot_id_for_onboarding(db_path: str, onboarding_id: int) -> int | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT snapshot_id
+            FROM baseline_audit_log
+            WHERE onboarding_id = ?
+              AND action = 'rebaseline'
+              AND snapshot_id IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (onboarding_id,),
+        ).fetchone()
+    if row is None or row["snapshot_id"] is None:
+        return None
+    return int(row["snapshot_id"])
 
 
 def promote_latest_source_to_onboarding_baseline(
@@ -486,21 +873,7 @@ def promote_latest_source_to_onboarding_baseline(
             """,
             (normalized_artifact_id,),
         ).fetchone()
-        latest_pr = conn.execute(
-            """
-            SELECT av.artifact_type, av.version_hash, av.signal_terms_json, av.line_count, av.content_text,
-                   sap.profile_json, sap.created_at
-            FROM static_artifact_profiles sap
-            INNER JOIN artifact_versions av ON av.id = sap.artifact_version_id
-            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
-            WHERE pra.repo_full = ? AND sap.artifact_path = ?
-            ORDER BY sap.created_at DESC, sap.id DESC
-            LIMIT 1
-            """,
-            (repo_full, artifact_path),
-        ).fetchone()
-
-        latest_source = latest_pr if latest_pr is not None else latest_historical
+        latest_source = latest_historical
 
         if latest_source is None:
             return None
@@ -517,36 +890,30 @@ def promote_latest_source_to_onboarding_baseline(
         ).fetchone()
         if latest_baseline is not None and latest_baseline["version_hash"] == latest_source["version_hash"]:
             return _row_to_onboarding_baseline_version(latest_baseline)
-
         conn.execute(
             """
-            INSERT INTO onboarding_baseline_versions (
-                onboarding_id, onboarded_artifact_id, normalized_artifact_id, artifact_path, artifact_type,
-                version_hash, signal_terms_json, line_count, content_text, profile_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            UPDATE repository_onboardings
+            SET status = 'baseline_approved',
+                approved_by = NULL,
+                approved_at = ?,
+                updated_at = ?
+            WHERE id = ?
             """,
-            (
-                onboarding["id"],
-                onboarded_artifact["id"],
-                normalized_artifact_id,
-                artifact_path,
-                latest_source["artifact_type"],
-                latest_source["version_hash"],
-                latest_source["signal_terms_json"],
-                latest_source["line_count"],
-                latest_source["content_text"],
-                latest_source["profile_json"],
-                now,
-            ),
+            (now, now, onboarding["id"]),
         )
-        conn.execute(
-            "UPDATE repository_onboardings SET updated_at = ? WHERE id = ?",
-            (now, onboarding["id"]),
-        )
-        row = conn.execute(
-            "SELECT * FROM onboarding_baseline_versions WHERE id = last_insert_rowid()"
-        ).fetchone()
-    return _row_to_onboarding_baseline_version(row) if row is not None else None
+    return create_onboarding_baseline_version(
+        db_path,
+        onboarding_id=onboarding["id"],
+        onboarded_artifact_id=onboarded_artifact["id"],
+        repo_full=repo_full,
+        artifact_path=artifact_path,
+        artifact_type=latest_source["artifact_type"],
+        content_text=latest_source["content_text"],
+        profile=_profile_from_json(latest_source["profile_json"]),
+        signal_terms=json.loads(latest_source["signal_terms_json"]),
+        approval_status="approved",
+        approved_at=now,
+    )
 
 
 def create_historical_backfill_jobs(
@@ -556,6 +923,7 @@ def create_historical_backfill_jobs(
     repo_full: str,
     jobs: list[HistoricalBackfillJobInput],
     status: str = "planned",
+    job_kind: str = "historical_backfill",
 ) -> list[HistoricalBackfillJobRecord]:
     now = time.time()
     created: list[HistoricalBackfillJobRecord] = []
@@ -565,8 +933,8 @@ def create_historical_backfill_jobs(
                 """
                 INSERT INTO historical_backfill_jobs (
                     onboarding_id, onboarded_artifact_id, repo_full, artifact_path, artifact_type,
-                    status, commit_count, completed_commit_count, commit_shas_json, last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    job_kind, status, commit_count, completed_commit_count, commit_shas_json, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     onboarding_id,
@@ -574,6 +942,7 @@ def create_historical_backfill_jobs(
                     repo_full,
                     job.artifact_path,
                     job.artifact_type,
+                    job_kind,
                     status,
                     len(job.commit_shas),
                     0,
@@ -589,12 +958,23 @@ def create_historical_backfill_jobs(
     return created
 
 
-def list_historical_backfill_jobs_for_repo(db_path: str, repo_full: str) -> list[HistoricalBackfillJobRecord]:
+def list_historical_backfill_jobs_for_repo(
+    db_path: str,
+    repo_full: str,
+    *,
+    job_kind: str | None = "historical_backfill",
+) -> list[HistoricalBackfillJobRecord]:
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? ORDER BY created_at ASC, id ASC",
-            (repo_full,),
-        ).fetchall()
+        if job_kind is None:
+            rows = conn.execute(
+                "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? ORDER BY created_at ASC, id ASC",
+                (repo_full,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM historical_backfill_jobs WHERE repo_full = ? AND job_kind = ? ORDER BY created_at ASC, id ASC",
+                (repo_full, job_kind),
+            ).fetchall()
     return [_row_to_historical_backfill_job(row) for row in rows]
 
 
@@ -655,6 +1035,8 @@ def record_historical_backfill_versions(
     snapshots: list[HistoricalArtifactSnapshotInput],
     extract_signal_terms_fn,
     build_profile_fn,
+    branch_ref: str | None = None,
+    triggered_by: str = "historical_backfill",
 ) -> tuple[list[HistoricalArtifactVersionRecord], list[HistoricalStaticProfileRecord]]:
     if not snapshots:
         return [], []
@@ -705,6 +1087,19 @@ def record_historical_backfill_versions(
 
         base_time = time.time()
         for index, snapshot in enumerate(snapshots):
+            existing_version_row = conn.execute(
+                """
+                SELECT id
+                FROM historical_artifact_versions
+                WHERE normalized_artifact_id = ? AND commit_sha = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (normalized_artifact_id, snapshot.commit_sha),
+            ).fetchone()
+            if existing_version_row is not None:
+                continue
+
             version_hash = hashlib.sha256(snapshot.content.encode("utf-8")).hexdigest()
             if version_hash == previous_version_hash:
                 continue
@@ -754,7 +1149,14 @@ def record_historical_backfill_versions(
             narrative = ["No approved baseline available; stored snapshot with no explicit comparison baseline."]
 
             if onboarding_baseline is not None:
-                baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
+                baseline_provenance = approved_onboarding_provenance(
+                    onboarding_baseline.id,
+                    is_authoritative=onboarding_baseline.approval_status == "approved",
+                    approval_status=onboarding_baseline.approval_status,
+                    approved_by=onboarding_baseline.approved_by,
+                    approved_at=onboarding_baseline.approved_at,
+                    approval_note=onboarding_baseline.approval_note,
+                )
                 semantic_similarity = _term_similarity(signal_terms, onboarding_baseline.signal_terms)
                 drift_delta = compare_attribute_profiles(
                     onboarding_baseline.profile,
@@ -781,10 +1183,10 @@ def record_historical_backfill_versions(
                 """
                 INSERT INTO historical_static_profiles (
                     backfill_job_id, historical_artifact_version_id, onboarding_id, onboarded_artifact_id,
-                    normalized_artifact_id, artifact_path, artifact_type, commit_sha, profile_json,
+                    normalized_artifact_id, artifact_path, artifact_type, commit_sha, profile_json, branch_ref, triggered_by,
                     baseline_profile_id, baseline_provenance_json, semantic_similarity, semantic_distance, attribute_deltas_json,
                     narrative_json, signal_terms_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     backfill_job_id,
@@ -796,6 +1198,8 @@ def record_historical_backfill_versions(
                     artifact_type,
                     snapshot.commit_sha,
                     json.dumps(_profile_to_json(profile)),
+                    branch_ref,
+                    triggered_by,
                     baseline_profile_id,
                     baseline_provenance_to_json(baseline_provenance),
                     semantic_similarity,
@@ -850,6 +1254,8 @@ def record_historical_backfill_versions(
                     attribute_deltas=attribute_deltas,
                     narrative=narrative,
                     signal_terms=signal_terms,
+                    branch_ref=branch_ref,
+                    triggered_by=triggered_by,
                     created_at=created_at,
                 )
             )
@@ -903,6 +1309,8 @@ def _row_to_repository_onboarding(row: sqlite3.Row) -> RepositoryOnboardingRecor
         default_branch=row["default_branch"],
         status=row["status"],
         discovered_artifact_count=row["discovered_artifact_count"],
+        approved_by=row["approved_by"] if "approved_by" in row.keys() else None,
+        approved_at=row["approved_at"] if "approved_at" in row.keys() else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -934,6 +1342,27 @@ def _row_to_onboarding_baseline_version(row: sqlite3.Row) -> OnboardingBaselineV
         line_count=row["line_count"],
         content_text=row["content_text"],
         profile=_profile_from_json(row["profile_json"]),
+        approval_status=row["approval_status"] if "approval_status" in row.keys() else "pending",
+        approved_by=row["approved_by"] if "approved_by" in row.keys() else None,
+        approved_at=row["approved_at"] if "approved_at" in row.keys() else None,
+        approval_note=row["approval_note"] if "approval_note" in row.keys() else None,
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_baseline_audit_log(row: sqlite3.Row) -> BaselineAuditLogRecord:
+    return BaselineAuditLogRecord(
+        id=row["id"],
+        repo_full=row["repo_full"],
+        onboarding_id=row["onboarding_id"],
+        artifact_path=row["artifact_path"],
+        action=row["action"],
+        decision_type=row["decision_type"] if "decision_type" in row.keys() else row["action"],
+        actor_login=row["actor_login"],
+        note=row["note"],
+        linked_findings=json.loads(row["linked_findings_json"]) if "linked_findings_json" in row.keys() and row["linked_findings_json"] else [],
+        baseline_version_id=row["baseline_version_id"],
+        snapshot_id=row["snapshot_id"],
         created_at=row["created_at"],
     )
 
@@ -946,6 +1375,7 @@ def _row_to_historical_backfill_job(row: sqlite3.Row) -> HistoricalBackfillJobRe
         repo_full=row["repo_full"],
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],
+        job_kind=row["job_kind"],
         status=row["status"],
         commit_count=row["commit_count"],
         completed_commit_count=row["completed_commit_count"],
@@ -1000,6 +1430,8 @@ def _row_to_historical_static_profile(row: sqlite3.Row) -> HistoricalStaticProfi
         attribute_deltas={key: float(value) for key, value in json.loads(row["attribute_deltas_json"]).items()},
         narrative=json.loads(row["narrative_json"]),
         signal_terms=json.loads(row["signal_terms_json"]),
+        branch_ref=row["branch_ref"],
+        triggered_by=row["triggered_by"],
         created_at=row["created_at"],
     )
 

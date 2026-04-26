@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+
 import re
 from dataclasses import dataclass, replace
 
@@ -211,10 +212,7 @@ def _group_low_signal_artifacts(discovered: list[DiscoveredArtifactInput]) -> li
 
 def _group_representative_sort_key(artifact: DiscoveredArtifactInput) -> tuple[int, str]:
     lowered = artifact.artifact_path.lower()
-    extension_rank = min(
-        (rank for ext, rank in GROUP_REPRESENTATIVE_EXTENSION_RANK.items() if lowered.endswith(ext)),
-        default=9,
-    )
+    extension_rank = min((rank for ext, rank in GROUP_REPRESENTATIVE_EXTENSION_RANK.items() if lowered.endswith(ext)), default=9)
     return extension_rank, artifact.artifact_path
 
 
@@ -262,13 +260,16 @@ def onboard_repository(
         repo_full=repo_full,
         installation_id=installation_id,
         default_branch=default_branch,
-        status="completed",
+        status="baseline_approved",
         discovered_artifacts=discovered,
         extract_signal_terms_fn=extract_signal_terms_from_text,
         build_profile_fn=build_attribute_profile,
     )
     artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baselines = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
     return RepositoryOnboardingResult(onboarding=onboarding, artifacts=artifacts, baseline_versions=baselines)
 
 
@@ -396,4 +397,70 @@ def execute_repository_history_backfill(
 
         execution_results.append(HistoricalBackfillExecutionResult(job=updated_job, versions=versions, profiles=profiles))
 
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
     return execution_results
+
+
+def sync_on_pr_merge_artifact_changes(
+    db_path: str,
+    *,
+    repo_full: str,
+    artifact_snapshots: dict[str, str] | None = None,
+    added_paths: set[str] | None = None,
+    removed_paths: set[str] | None = None,
+) -> RepositoryOnboardingResult | None:
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        return None
+
+    artifact_snapshots = artifact_snapshots or {}
+    added_paths = added_paths or set()
+    removed_paths = removed_paths or set()
+
+    existing_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
+    existing_baselines = {
+        baseline.artifact_path: baseline
+        for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    }
+
+    discovered_by_path: dict[str, DiscoveredArtifactInput] = {}
+    for artifact in existing_artifacts:
+        if artifact.artifact_path in removed_paths:
+            continue
+        baseline = existing_baselines.get(artifact.artifact_path)
+        if baseline is None or baseline.content_text is None:
+            continue
+        discovered_by_path[artifact.artifact_path] = DiscoveredArtifactInput(
+            artifact_path=artifact.artifact_path,
+            artifact_type=artifact.artifact_type,
+            discovery_reason=artifact.discovery_reason,
+            confidence=artifact.confidence,
+            baseline_content=baseline.content_text,
+        )
+
+    added_file_contents = {
+        path: artifact_snapshots[path]
+        for path in sorted(added_paths)
+        if path not in removed_paths and path in artifact_snapshots and _is_candidate_path(path)
+    }
+    for discovered in discover_ai_artifacts(added_file_contents):
+        discovered_by_path[discovered.artifact_path] = discovered
+
+    updated_onboarding = record_repository_onboarding(
+        db_path,
+        repo_full=repo_full,
+        installation_id=onboarding.installation_id,
+        default_branch=onboarding.default_branch,
+        status="baseline_approved",
+        discovered_artifacts=sorted(discovered_by_path.values(), key=lambda artifact: artifact.artifact_path),
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    artifacts = list_onboarded_artifacts_for_onboarding(db_path, updated_onboarding.id)
+    baselines = list_onboarding_baseline_versions_for_onboarding(db_path, updated_onboarding.id)
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
+    return RepositoryOnboardingResult(onboarding=updated_onboarding, artifacts=artifacts, baseline_versions=baselines)
