@@ -25,6 +25,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
+from .signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
@@ -727,6 +728,7 @@ def _build_repo_dashboard_view_uncached(
 
     artifact_entries.sort(
         key=lambda entry: (
+            priority_sort_rank(priority_from_fused_signals(_insight_score(entry, profile_context_by_path.get(entry.artifact_path)))),
             -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
             -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
             entry.artifact_path,
@@ -1425,14 +1427,10 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
 def _preferred_profile_context(bundle: _RepoArtifactEvidenceBundle | None) -> _RepoArtifactProfileContext | None:
     if bundle is None:
         return None
-    return bundle.latest_pull_request or bundle.latest_historical
+    return bundle.latest_historical
 
 
 def _supporting_profile_context(bundle: _RepoArtifactEvidenceBundle | None) -> _RepoArtifactProfileContext | None:
-    if bundle is None:
-        return None
-    if bundle.latest_pull_request is not None and bundle.latest_historical is not None:
-        return bundle.latest_historical
     return None
 
 
@@ -1508,7 +1506,7 @@ def _build_repo_insights(
     for artifact in artifacts:
         evidence_bundle = profile_context_by_path.get(artifact.artifact_path)
         score = _insight_score(artifact, evidence_bundle)
-        priority = "review_now" if score >= 1.25 else "watch" if score >= 0.6 else "baseline_review"
+        priority = priority_from_fused_signals(score)
         baseline = baseline_by_path.get(artifact.artifact_path)
         context = _preferred_profile_context(evidence_bundle)
         attribute_profile = None
@@ -1553,7 +1551,12 @@ def _build_repo_insights(
             )
         )
 
-    sort_key = lambda item: (-item[0], -(item[1].updated_at or 0.0), item[1].artifact_path)
+    sort_key = lambda item: (
+        priority_sort_rank(item[1].priority),
+        -item[0],
+        -(item[1].updated_at or 0.0),
+        item[1].artifact_path,
+    )
     primary_ranked.sort(key=sort_key)
     lower_confidence_ranked.sort(key=sort_key)
     primary_entries = [entry for _, entry in primary_ranked[:8]]
@@ -1625,7 +1628,6 @@ def _insight_score(
     confidence_bonus = artifact.discovery_confidence * 0.14
     recency_bonus = 0.12 if artifact.latest_activity_at > 0 else 0.0
     history_bonus = min(artifact.historical_version_count, 5) * 0.04
-    history_only_penalty = 0.0
     return round(
         type_weight
         + blast_radius
@@ -1637,7 +1639,7 @@ def _insight_score(
         + confidence_bonus
         + recency_bonus
         + history_bonus
-        - history_only_penalty,
+        ,
         4,
     )
 
@@ -1819,11 +1821,8 @@ def _evidence_summary(evidence_bundle: _RepoArtifactEvidenceBundle | None) -> st
     if evidence_bundle is None:
         return "No merged-history evidence yet."
     preferred = _preferred_profile_context(evidence_bundle)
-    supporting = _supporting_profile_context(evidence_bundle)
     if preferred is None:
         return "No merged-history evidence yet."
-    if supporting is not None:
-        return f"Open {preferred.source_ref or preferred.label} first; supporting merged history is available from {supporting.source_ref or supporting.label}."
     return f"Only merged-history evidence is available right now; start with {preferred.source_ref or preferred.label}."
 
 
@@ -3345,12 +3344,11 @@ def _build_repo_design_profiles(
 
 
 def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list[DashboardOverviewAttentionRepo]:
-    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     attention_repos: list[DashboardOverviewAttentionRepo] = []
     for view in repo_views:
         sorted_insights = sorted(
             view.insights,
-            key=lambda insight: (priority_rank.get(insight.priority, 9), -insight.score, insight.artifact_path),
+            key=lambda insight: (priority_sort_rank(insight.priority), -insight.score, insight.artifact_path),
         )
         top_insight = sorted_insights[0] if sorted_insights else None
         attention_repos.append(
@@ -3383,7 +3381,7 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
 
     attention_repos.sort(
         key=lambda repo: (
-            priority_rank.get(repo.highest_priority, 9),
+            priority_sort_rank(repo.highest_priority),
             -repo.review_now_count,
             -repo.top_drift_magnitude,
             repo.repo_full,
@@ -3647,10 +3645,9 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                 )
             )
 
-    priority_rank = {"review_now": 0, "watch": 1, "baseline_review": 2}
     items.sort(
         key=lambda item: (
-            priority_rank.get(item.priority, 9),
+            priority_sort_rank(item.priority),
             -max(item.drift_magnitude, item.capability_shift, abs(min(item.guardrail_shift, 0.0))),
             item.repo_full,
             item.artifact_path,
@@ -3677,8 +3674,14 @@ def _build_overview_control_surface_risk(repo_views: list[RepoDashboardView]) ->
             )
             group["repo_set"].add(view.repo_full)
             group["artifact_count"] = int(group["artifact_count"]) + 1
-            group["weighted_risk"] = float(group["weighted_risk"]) + _insight_score(artifact)
             insight = insight_by_path.get(artifact.artifact_path)
+            if insight is not None:
+                group["weighted_risk"] = float(group["weighted_risk"]) + priority_weighted_risk(
+                    insight.score,
+                    insight.priority,
+                )
+            else:
+                group["weighted_risk"] = float(group["weighted_risk"]) + priority_weighted_risk(_insight_score(artifact))
             if insight is not None and insight.priority == "review_now":
                 group["review_now_artifact_count"] = int(group["review_now_artifact_count"]) + 1
 

@@ -9,6 +9,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
@@ -190,7 +191,13 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
         finding.attribute_key == "stability_vs_creativity"
         for finding in dashboard.design_profiles[0].attribute_findings
     )
-    assert dashboard.design_profiles[0].risk_tags[0] in {"capability expanded", "guardrails weakened", "autonomy increased", "historical hotspot", "baseline only"}
+    assert dashboard.design_profiles[0].risk_tags[0] in {
+        "capability expanded",
+        "guardrails weakened",
+        "autonomy increased",
+        "historical hotspot",
+        "baseline only",
+    }
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 3
     assert dashboard.artifacts[0].pr_profile_count == 0
@@ -305,6 +312,24 @@ def test_live_branch_head_scan_removes_deleted_artifacts(tmp_path):
     assert dashboard.onboarding is not None
     assert dashboard.onboarding.discovered_artifact_count == 1
 
+def test_priority_from_fused_signals_raises_dashboard_priority_for_high_risk_audits():
+    assert priority_from_fused_signals(0.41, risk_level="High") == "review_now"
+    assert priority_from_fused_signals(0.41, risk_level="Medium") == "watch"
+    assert priority_from_fused_signals(1.31, risk_level="Low") == "review_now"
+
+
+def test_priority_sort_rank_matches_dashboard_lane_order():
+    assert priority_sort_rank("review_now") == 0
+    assert priority_sort_rank("watch") == 1
+    assert priority_sort_rank("baseline_review") == 2
+    assert priority_sort_rank("unexpected") == 9
+
+
+def test_priority_weighted_risk_biases_toward_review_now_groups():
+    assert priority_weighted_risk(0.4, "review_now") == 1.4
+    assert priority_weighted_risk(0.4, "watch") == 0.75
+    assert priority_weighted_risk(0.4, "baseline_review") == 0.4
+
 
 def test_list_repo_dashboard_index_returns_latest_onboarded_repositories(tmp_path):
     db_path = str(tmp_path / "dashboard.db")
@@ -414,6 +439,8 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.risk_state.status in {"high_attention", "watch", "baseline"}
     assert len(overview.highest_risk_items) >= 1
     assert len(overview.control_surface_risk) >= 1
+    assert overview.control_surface_risk[0].group_key == "prompts"
+    assert overview.control_surface_risk[0].review_now_artifact_count >= 1
     assert len(overview.regression_patterns) >= 1
     assert overview.metrics[0].label == "Onboarded repositories"
     assert overview.metrics[0].value == 2
