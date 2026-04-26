@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 import re
+import time
 from dataclasses import dataclass, replace
 
 from engine.diff_parser import extract_signal_terms_from_text
@@ -11,6 +12,9 @@ from engine.models import ChangedFile
 from engine.relevance import PATH_RULES, classify_changed_file
 from .github_integration import fetch_file_content, get_repo_default_branch, list_file_commits, list_repository_files
 from .onboarding_records import (
+    add_onboarded_artifact,
+    create_onboarding_baseline_version,
+    delete_onboarded_artifact_by_path,
     DiscoveredArtifactInput,
     HistoricalArtifactSnapshotInput,
     HistoricalBackfillJobInput,
@@ -24,10 +28,13 @@ from .onboarding_records import (
     get_historical_backfill_job,
     get_latest_repository_onboarding,
     list_historical_backfill_jobs_for_repo,
+    list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
+    refresh_onboarding_discovered_count,
     record_historical_backfill_versions,
     record_repository_onboarding,
+    update_repository_onboarding_approval_status,
     update_historical_backfill_job_status,
 )
 
@@ -420,16 +427,64 @@ def sync_on_pr_merge_artifact_changes(
     removed_paths = removed_paths or set()
 
     existing_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
-    existing_baselines = {
-        baseline.artifact_path: baseline
-        for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    }
+    existing_paths = {artifact.artifact_path for artifact in existing_artifacts}
 
-    discovered_by_path: dict[str, DiscoveredArtifactInput] = {}
-    for artifact in existing_artifacts:
-        if artifact.artifact_path in removed_paths:
+    for path in sorted(removed_paths):
+        if path not in existing_paths:
             continue
-        baseline = existing_baselines.get(artifact.artifact_path)
+        delete_onboarded_artifact_by_path(db_path, onboarding.id, path)
+
+    added_file_contents = {
+        path: artifact_snapshots[path]
+        for path in sorted(added_paths)
+        if path not in removed_paths and path not in existing_paths and path in artifact_snapshots and _is_candidate_path(path)
+    }
+    added_discovered = discover_ai_artifacts(added_file_contents)
+
+    for discovered in added_discovered:
+        added_artifact = add_onboarded_artifact(
+            db_path,
+            onboarding_id=onboarding.id,
+            repo_full=repo_full,
+            artifact_path=discovered.artifact_path,
+            artifact_type=discovered.artifact_type,
+            discovery_reason=discovered.discovery_reason,
+            confidence=discovered.confidence,
+        )
+        create_onboarding_baseline_version(
+            db_path,
+            onboarding_id=onboarding.id,
+            onboarded_artifact_id=added_artifact.id,
+            repo_full=repo_full,
+            artifact_path=discovered.artifact_path,
+            artifact_type=discovered.artifact_type,
+            content_text=discovered.baseline_content,
+            profile=build_attribute_profile(discovered.baseline_content),
+            signal_terms=extract_signal_terms_from_text(discovered.baseline_content),
+            approval_status="approved",
+            approved_at=time.time(),
+        )
+
+    refresh_onboarding_discovered_count(db_path, onboarding.id)
+    latest_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
+    latest_paths = {artifact.artifact_path for artifact in latest_artifacts}
+    latest_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    approved_paths = {
+        baseline.artifact_path for baseline in latest_versions if baseline.approval_status == "approved"
+    }
+    onboarding = update_repository_onboarding_approval_status(
+        db_path,
+        onboarding_id=onboarding.id,
+        status=("baseline_approved" if latest_paths and approved_paths == latest_paths else "pending_baseline_approval"),
+        approved_by=None,
+        approved_at=max((baseline.approved_at for baseline in latest_versions if baseline.approval_status == "approved"), default=None),
+    )
+
+    baselines = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    current_baselines = {baseline.artifact_path: baseline for baseline in baselines}
+    discovered_by_path: dict[str, DiscoveredArtifactInput] = {}
+    for artifact in latest_artifacts:
+        baseline = current_baselines.get(artifact.artifact_path)
         if baseline is None or baseline.content_text is None:
             continue
         discovered_by_path[artifact.artifact_path] = DiscoveredArtifactInput(
@@ -440,27 +495,7 @@ def sync_on_pr_merge_artifact_changes(
             baseline_content=baseline.content_text,
         )
 
-    added_file_contents = {
-        path: artifact_snapshots[path]
-        for path in sorted(added_paths)
-        if path not in removed_paths and path in artifact_snapshots and _is_candidate_path(path)
-    }
-    for discovered in discover_ai_artifacts(added_file_contents):
-        discovered_by_path[discovered.artifact_path] = discovered
-
-    updated_onboarding = record_repository_onboarding(
-        db_path,
-        repo_full=repo_full,
-        installation_id=onboarding.installation_id,
-        default_branch=onboarding.default_branch,
-        status="baseline_approved",
-        discovered_artifacts=sorted(discovered_by_path.values(), key=lambda artifact: artifact.artifact_path),
-        extract_signal_terms_fn=extract_signal_terms_from_text,
-        build_profile_fn=build_attribute_profile,
-    )
-    artifacts = list_onboarded_artifacts_for_onboarding(db_path, updated_onboarding.id)
-    baselines = list_onboarding_baseline_versions_for_onboarding(db_path, updated_onboarding.id)
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
-    return RepositoryOnboardingResult(onboarding=updated_onboarding, artifacts=artifacts, baseline_versions=baselines)
+    return RepositoryOnboardingResult(onboarding=onboarding, artifacts=latest_artifacts, baseline_versions=baselines)

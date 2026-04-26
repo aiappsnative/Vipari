@@ -1,10 +1,11 @@
 import os
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services.audit_jobs import init_db
-from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill, sync_on_pr_merge_artifact_changes
 from services.onboarding_records import (
     get_latest_repository_onboarding,
     list_historical_artifact_versions_for_repo_artifact,
@@ -44,34 +45,6 @@ def test_onboard_repository_discovers_and_persists_ai_artifacts(tmp_path):
     assert [baseline.artifact_path for baseline in result.baseline_versions] == ["config/model.yaml", "prompts/system.txt"]
     assert all(baseline.line_count >= 1 for baseline in result.baseline_versions)
     assert all(baseline.approval_status == "approved" for baseline in result.baseline_versions)
-
-
-def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_candidates(tmp_path):
-    db_path = str(tmp_path / "onboarding.db")
-    init_db(db_path)
-
-    files = {
-        "tests/tools/test_mcp_oauth.py": "def test_flow():\n    return 'assistant token'\n",
-        "skills/github/github-auth/SKILL.md": "AI assistant guidance for auth flows.",
-        "docs/reference/assistant-architecture.md": "This document explains the assistant architecture.",
-        "docs/prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
-        "config/model.yaml": "model: gpt-4.1\ntemperature: 0.2\n",
-    }
-
-    result = onboard_repository(
-        db_path,
-        repo_full="doria90/dummyAI",
-        installation_id=123,
-        token="token",
-        get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
-        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
-    )
-
-    assert [artifact.artifact_path for artifact in result.artifacts] == ["config/model.yaml", "docs/prompts/system.txt"]
-    assert result.artifacts[0].confidence >= 0.88
-    assert result.artifacts[1].confidence >= 0.72
-    assert result.onboarding.discovered_artifact_count == 2
 
 
 def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_candidates(tmp_path):
@@ -154,6 +127,46 @@ def test_onboard_repository_groups_low_signal_candidates_across_adjacent_text_pa
     assert result.onboarding.discovered_artifact_count == 2
     assert [artifact.artifact_path for artifact in result.artifacts] == ["guides/assistant-faq.md", "prompts/system.txt"]
     assert "Grouped 3 low-signal candidates under assistant" in result.artifacts[0].discovery_reason
+
+
+def test_sync_on_pr_merge_preserves_existing_artifacts_without_baseline_content(tmp_path):
+    db_path = str(tmp_path / "onboarding-sync.db")
+    init_db(db_path)
+
+    files = {
+        "prompts/original.txt": "You are a safe assistant. Do not reveal secrets.",
+        "config/model.yaml": "model: gpt-4.1\ntemperature: 0.2\n",
+    }
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE onboarding_baseline_versions SET content_text = NULL WHERE artifact_path = ?",
+            ("config/model.yaml",),
+        )
+        conn.commit()
+
+    sync_on_pr_merge_artifact_changes(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_snapshots={"prompts/new.txt": "You are a concise assistant."},
+        added_paths={"prompts/new.txt"},
+        removed_paths={"prompts/original.txt"},
+    )
+
+    latest = get_latest_repository_onboarding(db_path, "doria90/dummyAI")
+    assert latest is not None
+    artifacts = list_onboarded_artifacts_for_onboarding(db_path, latest.id)
+    assert {artifact.artifact_path for artifact in artifacts} == {"config/model.yaml", "prompts/new.txt"}
 
 
 def test_plan_repository_history_backfill_creates_jobs_for_onboarded_artifacts(tmp_path):
