@@ -32,7 +32,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, dashboard audit/performance, live default-branch tracking, baseline approval workflow, and customer control-plane slices.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, and customer control-plane slices.
 
 In practical terms, DriftGuard currently provides:
 
@@ -65,6 +65,7 @@ In practical terms, DriftGuard currently provides:
 - additive SQLite repair migrations for legacy control-plane databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys that now correctly target `github_installations.installation_id`
 - setup-state persistence that now recomputes `workspaces.setup_state` from entitlement, install, and onboarding facts
 - dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes, including JSON API routes when the control plane is active
+- production deployments always gate `/dashboard` through login, while true localhost operator mode can still expose the dashboard directly for local seeded inspection
 - webhook gating that suppresses PR audits/comments for managed repos that are installed but not allocated or not entitled for comments, while leaving unmanaged legacy installs compatible with queued audits
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
 - actionable setup-state, free-tier, and active-state app shells so `/app` always exposes a real continuation path
@@ -75,15 +76,10 @@ In practical terms, DriftGuard currently provides:
 - Stripe webhook ownership hardening so paid-plan activation now resolves through stored Stripe customer/subscription bindings instead of trusting workspace metadata alone
 - worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
 
-Latest merge validation on 2026-04-12:
+Latest merged validation on 2026-04-27:
 
-- full automated suite passed locally after merge cleanup: `204 passed`
-- focused baseline/dashboard/journey regression slice passed locally: `71 passed`
-
-- merged dashboard/control-plane/webhook regression slice passed locally: `55 passed`
-
-- targeted billing/control-plane/webhook/worker regression slice passed locally: `73 passed`
-- full automated suite previously passed locally before the final webhook/worker and billing-ownership hardening pass: `167 passed`
+- full automated suite passed locally after the repo-evidence merge and auth-gating hardening: `285 passed`
+- merged dashboard/control-plane slice passed locally after the final review fix: `95 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
