@@ -2139,6 +2139,25 @@ def test_dashboard_requires_session_in_production_even_without_workspaces(tmp_pa
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_dashboard_requires_session_when_local_env_uses_non_local_base_url(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    original_app_base_url = main.settings.app_base_url
+    main.AUDIT_DB_PATH = str(tmp_path / "remote-local.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "local"
+    main.settings.app_base_url = "https://driftguard.example.com"
+
+    response = client.get("/dashboard", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    main.settings.app_base_url = original_app_base_url
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_persistence_api_requires_dashboard_access_when_control_plane_is_active(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "persistence-guard.db")
