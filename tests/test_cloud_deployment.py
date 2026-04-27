@@ -16,7 +16,7 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import create_audit_job, init_db
 from services.branch_scan_jobs import claim_next_branch_scan_job
 from services.audit_records import record_audit_result
-from services.cloud_worker import _message_still_authorized, _process_message
+from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.observability import configure_logging
 from services.control_plane_records import (
     allocate_repo_to_workspace,
@@ -259,6 +259,43 @@ def test_api_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     assert any(check["name"] == "config" and check["status"] == "ok" for check in ready_payload["checks"])
 
 
+def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("API_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    _reset_settings_cache()
+
+    applied_migration = type("AppliedMigration", (), {"version": "0001_bootstrap_relational_schema"})()
+    with patch("services.api_service.init_db") as init_db_mock, patch(
+        "services.runtime_guardrails.connect_sqlite"
+    ) as connect, patch(
+        "services.runtime_guardrails.list_applied_migrations", return_value=[applied_migration]
+    ):
+        with TestClient(create_api_app()) as client:
+            health_response = client.get("/health")
+            ready_response = client.get("/health/ready")
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok", "service_role": "api"}
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert ready_payload["status"] == "ok"
+    assert any(
+        check["name"] == "persistence" and check["status"] == "ok" and "PostgreSQL connectivity verified." in check["detail"]
+        for check in ready_payload["checks"]
+    )
+    assert any(check["name"] == "migrations" and check["status"] == "ok" for check in ready_payload["checks"])
+    init_db_mock.assert_called_once_with(locator)
+    connect.assert_called_once_with(locator)
+
+
 def test_api_service_persistence_status_redacts_database_path(tmp_path, monkeypatch):
     db_path = str(tmp_path / "api-persistence.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -297,6 +334,63 @@ def test_webhook_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     assert ready_payload["status"] == "ok"
     assert ready_payload["service_role"] == "webhook"
     assert any(check["name"] == "config" and check["status"] == "ok" for check in ready_payload["checks"])
+
+
+def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypatch):
+    class _FakeQueue:
+        def __init__(self):
+            self.closed = False
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            self.closed = True
+
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("SERVICE_ROLE", "webhook")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    _reset_settings_cache()
+
+    queue = _FakeQueue()
+    applied_migration = type("AppliedMigration", (), {"version": "0001_bootstrap_relational_schema"})()
+    with patch("services.webhook_service.init_db") as init_db_mock, patch(
+        "services.webhook_service.init_webhook_delivery_db"
+    ) as init_delivery_db_mock, patch(
+        "services.webhook_service.cleanup_webhook_deliveries"
+    ) as cleanup_deliveries_mock, patch(
+        "services.runtime_guardrails.connect_sqlite"
+    ) as connect, patch(
+        "services.runtime_guardrails.list_applied_migrations", return_value=[applied_migration]
+    ):
+        with TestClient(create_webhook_app(queue)) as client:
+            health_response = client.get("/health")
+            ready_response = client.get("/health/ready")
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok", "service_role": "webhook"}
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert ready_payload["status"] == "ok"
+    assert any(
+        check["name"] == "persistence" and check["status"] == "ok" and "PostgreSQL connectivity verified." in check["detail"]
+        for check in ready_payload["checks"]
+    )
+    assert any(check["name"] == "migrations" and check["status"] == "ok" for check in ready_payload["checks"])
+    assert any(check["name"] == "queue" and check["status"] == "ok" for check in ready_payload["checks"])
+    init_db_mock.assert_called_once_with(locator)
+    init_delivery_db_mock.assert_called_once_with(locator)
+    cleanup_deliveries_mock.assert_called_once_with(locator)
+    connect.assert_called_once_with(locator)
+    assert queue.closed is True
 
 
 def test_message_authorization_respects_workspace_pr_comments_setting(tmp_path, monkeypatch):
@@ -580,6 +674,81 @@ def test_token_cache_falls_back_to_in_process_cache(monkeypatch):
         assert await get_installation_token(321) == "cached-token"
 
     asyncio.run(exercise_cache())
+
+
+def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):
+    class ClosableQueue:
+        def __init__(self):
+            self.closed = False
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, _receipt_handle):
+            return None
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            self.closed = True
+
+    class FakeTask:
+        def cancel(self):
+            return None
+
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "inline-test-key")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    queue = ClosableQueue()
+    created_tasks = []
+
+    def fake_create_task(coro):
+        coro.close()
+        task = FakeTask()
+        created_tasks.append(task)
+        return task
+
+    async def fake_gather(*_tasks):
+        return None
+
+    with patch("services.runtime_guardrails._validate_github_app_private_key"), patch(
+        "services.cloud_worker.init_db"
+    ) as init_db_mock, patch(
+        "services.cloud_worker.cleanup_webhook_deliveries"
+    ) as cleanup_mock, patch(
+        "services.cloud_worker.OpenAI"
+    ) as openai_mock, patch(
+        "services.cloud_worker.asyncio.create_task", side_effect=fake_create_task
+    ), patch(
+        "services.cloud_worker.asyncio.gather", side_effect=fake_gather
+    ):
+        asyncio.run(run_worker(queue))
+
+    init_db_mock.assert_called_once_with(locator)
+    cleanup_mock.assert_called_once_with(locator)
+    openai_mock.assert_called_once_with(api_key="test-key", base_url=None)
+    assert len(created_tasks) == max(1, get_settings().worker_concurrency) + 2
+    assert queue.closed is True
 
 
 def test_close_queue_backend_ignores_none_and_closes_when_supported():

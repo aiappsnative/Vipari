@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import scripts.railway_preflight as railway_preflight
+from services.queue import LocalSQLiteQueue
 
 
 def test_railway_preflight_returns_failure_when_readiness_fails(capsys):
@@ -45,3 +47,30 @@ def test_railway_preflight_returns_success_when_readiness_passes(capsys):
     assert exit_code == 0
     assert "Preflight passed" in captured.out
     assert '"status": "ok"' in captured.out
+
+
+def test_preflight_does_not_build_sqlite_queue_for_invalid_production_worker():
+    settings = SimpleNamespace(
+        service_role="worker",
+        queue_backend="sqlite",
+        is_production=True,
+        resolved_db_path="./promptdrift.db",
+    )
+
+    backend = railway_preflight._build_queue_backend(settings)
+
+    assert backend is None
+
+
+def test_preflight_still_builds_sqlite_queue_for_local_worker(tmp_path):
+    settings = SimpleNamespace(
+        service_role="worker",
+        queue_backend="sqlite",
+        is_production=False,
+        resolved_db_path=str(tmp_path / "queue.db"),
+    )
+
+    backend = railway_preflight._build_queue_backend(settings)
+
+    assert isinstance(backend, LocalSQLiteQueue)
+    assert backend.db_path == str(tmp_path / "queue.db")

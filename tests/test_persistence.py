@@ -1,10 +1,15 @@
 import os
 import sqlite3
 import sys
+from dataclasses import dataclass
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
+import pytest
+
+from config import get_settings
+from scripts import db_migrate as db_migrate_script
 from services.audit_jobs import init_db
 from services.persistence import PostgresConnection, get_persistence_status, persistence_status_payload, resolve_db_path
 from services.schema_migrations import list_applied_migrations, migrate_database
@@ -68,6 +73,57 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
     assert result.applied_versions == ["0001_bootstrap_relational_schema"]
     assert result.pending_versions == []
     assert [item.version for item in applied] == ["0001_bootstrap_relational_schema"]
+
+
+def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    get_settings.cache_clear()
+
+    with patch.object(sys, "argv", ["db_migrate.py", "--db", "sqlite:///./unsafe.db"]), patch(
+        "scripts.db_migrate.migrate_database"
+    ) as migrate_database_mock:
+        with pytest.raises(RuntimeError) as exc_info:
+            db_migrate_script.main()
+
+    assert "cannot target SQLite persistence" in str(exc_info.value)
+    migrate_database_mock.assert_not_called()
+
+
+def test_db_migrate_allows_postgres_target_in_production(monkeypatch):
+    @dataclass
+    class _MigrationRecord:
+        version: str
+        description: str
+        applied_at: float
+
+    @dataclass
+    class _MigrationResult:
+        backend: str
+        database_locator: str
+        applied_versions: list[str]
+        pending_versions: list[str]
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    get_settings.cache_clear()
+
+    with patch.object(sys, "argv", ["db_migrate.py"]), patch(
+        "scripts.db_migrate.migrate_database",
+        return_value=_MigrationResult(
+            backend="postgresql",
+            database_locator="postgresql://user:pass@db.example.com/driftguard",
+            applied_versions=["0001_bootstrap_relational_schema"],
+            pending_versions=[],
+        ),
+    ) as migrate_database_mock, patch(
+        "scripts.db_migrate.list_applied_migrations",
+        return_value=[_MigrationRecord("0001_bootstrap_relational_schema", "bootstrap", 123.0)],
+    ):
+        exit_code = db_migrate_script.main()
+
+    assert exit_code == 0
+    migrate_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
 
 
 def test_postgres_connection_translates_last_insert_lookup():
