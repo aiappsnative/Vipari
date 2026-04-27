@@ -6,9 +6,10 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
+from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
-from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.branch_scan_jobs import create_branch_scan_job
@@ -73,6 +74,28 @@ def _record_pr_profile(db_path: str):
     )
 
 
+def _profile() -> AgentAttributeProfile:
+    return AgentAttributeProfile(
+        guardrail_robustness=0.7,
+        capability_risk=0.2,
+        autonomy_level=0.3,
+        stability_vs_creativity=0.8,
+        governance_strength=0.6,
+        change_frequency=0.1,
+        semantic_density=0.4,
+        signals=StaticSignals(
+            token_count=10,
+            char_count=40,
+            section_count=1,
+            example_count=0,
+            instruction_density=0.2,
+            constraint_count=2,
+            explicit_limit_count=1,
+            ambiguity_count=0,
+        ),
+    )
+
+
 def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(tmp_path):
     db_path = str(tmp_path / "dashboard.db")
     init_db(db_path)
@@ -128,18 +151,21 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.insights[0].queue_lane == "primary"
     assert dashboard.insights[0].priority in {"review_now", "watch", "baseline_review"}
     assert dashboard.insights[0].confidence_label in {"high confidence", "medium confidence", "lower confidence"}
-    assert dashboard.insights[0].evidence_label == "history only"
-    assert dashboard.insights[0].evidence_summary == "Only merged-history evidence is available right now; start with commit sha-3."
+    assert dashboard.insights[0].evidence_label == "proposal + history"
+    assert dashboard.insights[0].evidence_summary == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-3."
     assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
-    assert dashboard.insights[0].provenance_summary == "From · commit sha-3 · Historical snapshot from backfill"
-    assert dashboard.insights[0].review_target == "commit sha-3"
-    assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-3"
-    assert dashboard.insights[0].supporting_review_target is None
-    assert dashboard.insights[0].supporting_review_url is None
+    assert dashboard.insights[0].provenance_summary == "From · PR #42 · full semantic review · semantic complete · risk low · supporting merged history commit sha-3"
+    assert dashboard.insights[0].review_target == "PR #42"
+    assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert dashboard.insights[0].supporting_review_target == "commit sha-3"
+    assert dashboard.insights[0].supporting_review_url == "https://github.com/doria90/dummyAI/commit/sha-3"
     assert dashboard.insights[0].change_summary
     assert dashboard.insights[0].flag_summary.startswith("Flagged because")
+    assert dashboard.insights[0].rationale == "The current PR proposal broadens authority relative to the current baseline, increasing blast radius and review urgency."
+    assert dashboard.insights[0].recommended_action == "Escalate this surface to the AI platform owner, inspect the linked PR first, then compare it against the supporting merged history."
     assert "historical hotspot" in dashboard.insights[0].risk_reasons
-    assert "history-only evidence" in dashboard.insights[0].risk_reasons
+    assert "proposal evidence" in dashboard.insights[0].risk_reasons
+    assert "history-backed" in dashboard.insights[0].risk_reasons
     assert len(dashboard.control_surface_groups) == 1
     assert dashboard.control_surface_groups[0].group_key == "prompts"
     assert len(dashboard.history_timelines) == 1
@@ -200,7 +226,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     }
     assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.artifacts[0].historical_version_count == 3
-    assert dashboard.artifacts[0].pr_profile_count == 0
+    assert dashboard.artifacts[0].pr_profile_count == 1
     assert dashboard.history_timelines[0].points[-1].baseline_provenance is not None
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.source_type == "approved_baseline"
     assert dashboard.history_timelines[0].points[-1].baseline_provenance.is_authoritative is True
@@ -448,19 +474,19 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert len(overview.attention_repos) == 2
     assert overview.attention_repos[0].repo_full == "doria90/dummyAI"
     assert overview.attention_repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
-    assert overview.attention_repos[0].highest_evidence_label == "history only"
-    assert overview.attention_repos[0].highest_evidence_summary == "Only merged-history evidence is available right now; start with commit sha-1."
+    assert overview.attention_repos[0].highest_evidence_label == "proposal + history"
+    assert overview.attention_repos[0].highest_evidence_summary == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-1."
     assert overview.attention_repos[0].highest_baseline_label is not None
-    assert overview.attention_repos[0].highest_review_target == "commit sha-1"
-    assert overview.attention_repos[0].highest_review_url == "https://github.com/doria90/dummyAI/commit/sha-1"
+    assert overview.attention_repos[0].highest_review_target == "PR #42"
+    assert overview.attention_repos[0].highest_review_url == "https://github.com/doria90/dummyAI/pull/42"
     assert overview.attention_repos[0].highest_change_summary
     assert (overview.attention_repos[0].highest_flag_summary or "").startswith("Flagged because")
     assert overview.attention_repos[0].lower_confidence_count == 0
     assert overview.highest_risk_items[0].baseline_label.startswith("Baseline: Approved")
-    assert overview.highest_risk_items[0].evidence_label == "history only"
-    assert overview.highest_risk_items[0].evidence_summary == "Only merged-history evidence is available right now; start with commit sha-1."
-    assert overview.highest_risk_items[0].review_target == "commit sha-1"
-    assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-1"
+    assert overview.highest_risk_items[0].evidence_label == "proposal + history"
+    assert overview.highest_risk_items[0].evidence_summary == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-1."
+    assert overview.highest_risk_items[0].review_target == "PR #42"
+    assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
     assert overview.highest_risk_items[0].change_summary
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
 
@@ -905,6 +931,90 @@ def test_build_repo_dashboard_view_uses_history_target_when_pr_evidence_is_missi
     assert dashboard.insights[0].review_target == "commit sha-2"
     assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert dashboard.insights[0].supporting_review_target is None
+    assert dashboard.insights[0].rationale == "A critical control surface broadened authority relative to the current baseline, increasing blast radius and review urgency."
+    assert dashboard.insights[0].recommended_action == "Escalate this surface to the AI platform owner and inspect the linked merged commit first."
     assert "history-only evidence" in dashboard.insights[0].risk_reasons
     assert dashboard.featured_storyline is not None
     assert dashboard.featured_storyline.episodes[1].source_ref == "commit sha-1"
+
+
+def test_build_repo_dashboard_view_uses_pr_target_when_only_proposal_evidence_exists(tmp_path):
+    db_path = str(tmp_path / "dashboard-pr-only.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_pr_profile(db_path)
+
+    dashboard = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert dashboard.insights[0].priority == "review_now"
+    assert dashboard.insights[0].title == "Critical control surface expanded authority"
+    assert dashboard.insights[0].evidence_label == "proposal only"
+    assert dashboard.insights[0].evidence_summary == "Only PR proposal evidence is available right now; start with PR #42."
+    assert dashboard.insights[0].review_target == "PR #42"
+    assert dashboard.insights[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert dashboard.insights[0].supporting_review_target is None
+    assert dashboard.insights[0].supporting_review_url is None
+    assert dashboard.insights[0].rationale == "The current PR proposal broadens authority relative to the current baseline, increasing blast radius and review urgency."
+    assert dashboard.insights[0].recommended_action == "Escalate this surface to the AI platform owner and inspect the linked PR before accepting the change."
+    assert "proposal-only evidence" in dashboard.insights[0].risk_reasons
+
+
+def test_insight_title_uses_proposal_wording_for_pr_only_drift_hotspots():
+    artifact = RepoDashboardArtifactEntry(
+        artifact_path="prompts/refund.txt",
+        artifact_type="prompt",
+        discovery_reason="ai_keyword",
+        discovery_confidence=0.92,
+        baseline_line_count=12,
+        historical_version_count=0,
+        historical_profile_count=0,
+        latest_historical_semantic_distance=0.0,
+        latest_historical_drift_magnitude=0.0,
+        latest_historical_capability_shift=0.0,
+        latest_historical_guardrail_shift=0.0,
+        latest_historical_governance_shift=0.0,
+        latest_historical_autonomy_shift=0.0,
+        pr_profile_count=1,
+        latest_pr_semantic_distance=0.34,
+        latest_pr_capability_shift=0.01,
+        latest_pr_guardrail_shift=0.0,
+        latest_pr_governance_shift=0.0,
+        latest_pr_autonomy_shift=0.02,
+        leaderboard_drift_magnitude=0.0,
+        latest_activity_at=1.0,
+        provenance_kind="ai_control_surface",
+        provenance_label="AI control surface",
+    )
+    evidence_bundle = _RepoArtifactEvidenceBundle(
+        latest_pull_request=_RepoArtifactProfileContext(
+            profile=_profile(),
+            source_type="pull_request",
+            label="Pull request proposal",
+            source_ref="PR #42",
+            source_url="https://github.com/doria90/dummyAI/pull/42",
+            review_context="full semantic review · semantic complete · risk low",
+            created_at=1.0,
+            baseline_provenance=None,
+            semantic_distance=0.34,
+            attribute_deltas={
+                "capability_risk": 0.01,
+                "guardrail_robustness": 0.0,
+                "governance_strength": 0.0,
+                "autonomy_level": 0.02,
+            },
+            narrative=[],
+            signal_terms=[],
+            content_text=PROMPT_CURRENT,
+        ),
+    )
+
+    assert _insight_title(artifact, "watch", evidence_bundle) == "Design drift hotspot needs review"

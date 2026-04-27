@@ -48,27 +48,25 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/approved-baseline-v1` slice
 	- includes the merged `feature/repo-provenance-v1` slice
 	- includes the merged `feature/dashboard-ux-v1` slice
+	- includes the merged `feature/dashboard-redesign-v2` slice
+	- includes the merged `feature/drift-storyline-v1` slice
 	- includes the merged `feature/pr-comment-v2-tuning` slice
+	- includes the merged `feature/signal-fusion-v1` slice
+	- includes the merged `feature/discovery-precision-v1` slice
 	- now includes the merged `feature/driftguard-base44-stripe-handoff-v1` slice
-	- is green at the targeted hardening-slice level (`73 passed` on the latest local verification)
+	- is green at the full-suite level (`282 passed` on the latest local verification)
 	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
+	- now includes the triage-first operator shell, repo case-file split-pane dashboard flow, artifact storyline APIs and rendering, repo journey snapshots, fused dashboard priority ordering, and grouped low-signal onboarding discovery for larger OSS repositories
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, and the final Stripe billing-ownership and webhook/worker hardening pass
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-storyline-v1`
-- Purpose: active planning branch for turning artifact history into a first-class case-file storyline surface
-- Planned scope on this branch:
-	- define a normalized `DriftEpisode` read model spanning approved-baseline promotions, historical backfill points, and PR-side drift episodes
-	- upgrade repo case files from lightweight history timelines to a decision-useful `Drift storyline` with baseline milestone, major episodes, latest posture, and safe sparse-history fallback
-	- add artifact-level episode inspection APIs and dashboard rendering hooks without redesigning PR comments
-	- surface small repo-level history cues for repeated drift, stale baselines, mixed-direction changes, and latest high-severity episodes
-	- preserve current dashboard split boundaries by keeping storyline product logic in read models plus versioned frontend assets instead of inline route code
-- Exit criteria for the first implementation slice:
-	- repo case files show a visible storyline for the featured artifact
-	- storyline items expose date, episode type, top attribute deltas, and provenance
-	- sparse-history repos degrade honestly without fabricating continuity
-	- read-side and dashboard regression coverage exist for sparse, repeated-drift, and mixed-history scenarios
+- Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
+- Final status at merge:
+	- `DriftEpisode` read models, featured artifact storyline rendering, artifact-level storyline API responses, and repo-level history cues are now on `main`
+	- sparse-history fallback, provenance links, baseline/current posture markers, and storyline regression coverage are now part of the canonical repo dashboard surface
+	- storyline work is now a dependency for future repo-evidence improvements rather than a pending roadmap slice
 
 ### `feature/compliance-export-package`
 - Purpose: completed branch for turning the compliance export from a structural archive into a persisted-evidence package with explicit scope boundaries
@@ -261,7 +259,7 @@ Completed on `feature/dashboard-ux-v1` after the triage-first redesign:
 
 Current validation status:
 
-- full automated suite passes locally (`98 passed`)
+- full automated suite passes locally (`282 passed`)
 - dashboard API/read-model regression coverage passed during final hardening
 - operator/onboarding/static-profile regression coverage passed during final hardening
 
@@ -273,35 +271,65 @@ Current validation status:
 - `feature/approved-baseline-v1`
 - `feature/repo-provenance-v1`
 - `feature/dashboard-ux-v1`
+- `feature/dashboard-redesign-v2`
+- `feature/drift-storyline-v1`
+- `feature/signal-fusion-v1`
+- `feature/discovery-precision-v1`
 - cloud deployment scaffolding split with secured webhook/worker/api service boundaries
 
-#### 0. `feature/dashboard-redesign-v2`
+#### Open issue alignment refresh (April 2026)
 
-Purpose:
-- turn the current dashboard from a card-heavy document layout into a triage-first operator shell with a fixed left rail, sticky posture strip, split-pane review flow, and de-emphasized secondary context
+The live GitHub issue queue no longer matches the old ordering in this section.
 
-Planned scope:
-- replace the current index and repo page wrappers with a shared `app-shell` layout, icon-only sidebar, sticky posture strip, and fixed-height main columns
-- adapt `static/dashboard-index.js` and `static/dashboard-repo.js` to render into the new triage list, detail panel, secondary-row panels, and compact repo table without changing API shapes
-- replace the current CSS language with the issue-defined token system while deleting obsolete mode-switch, hero, wrap, and collapsible-layout classes that belong to the previous document-style UI
-- preserve the existing data-fetching logic and read models while introducing keyboard selection, auto-select-first-item behavior, and skeleton loading states for the new shell
-- remove repo-detail deep-history and artifact inventory from the primary view so the default surface answers what needs attention now with one obvious next action
+Verified against repo state and open issues:
 
-Implementation notes:
-- issue `#20` is explicitly frontend-only, so this slice should avoid Python, service, route, and payload changes unless a blocker is discovered and re-scoped intentionally
-- the work should be phased by shared shell first, then dashboard index migration, then repo-detail migration, then CSS deletion/cleanup so regressions stay understandable
-- the existing JS files contain useful data and rendering helpers, but many are coupled to the old `Triage` / `Coverage` mode split and should be adapted rather than transplanted mechanically
-- the current roadmap numbering above uses `20` for a different optimization item; when discussing next work with GitHub issue numbers, refer to this slice explicitly as GitHub issue `#20` to avoid ambiguity
+- GitHub issue `#20` (`feature/dashboard-redesign-v2`) is effectively completed and merged to `main`.
+- GitHub issue `#17` (`feature/drift-storyline-v1`) is effectively completed and merged to `main`.
+- GitHub issue `#42` (`feature/signal-fusion-v1`) is still open on GitHub, but the feature is already merged to `main`; treat that issue as stale until it is closed or repurposed.
+- `feature/discovery-precision-v1` is merged to `main` and should no longer appear in the near-term execution queue.
+- The remaining open issues that align with real unfinished work are `#41` (`feature/repo-evidence-v1`), `#44` (`feature/oss-eval-harness-v1`), `#45` (`feature/production-persistence-v1`), `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
 
-#### 1. `feature/repo-evidence-v1`
+#### Remaining work analysis
+
+Current repository state suggests the product has moved past dashboard shell redesign, storyline basics, signal fusion, and discovery precision.
+
+What still looks unfinished on `main`:
+
+- reviewer-target quality now has proposal-only vs landed-history separation and PR-first review targets on this branch, but still needs broader real-repo validation and tuning on history-heavy repositories
+- OSS evaluation needs to become more repeatable and branch-comparable instead of remaining partly manual
+- production persistence and deployment hardening are still documented as partially complete rather than fully proven end to end
+- attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
+
+What should come next:
+
+1. `feature/repo-evidence-v1`
+	- best fit for the current product gap because the triage shell and storyline are already shipped, but review targets and source attribution still need stronger actionability
+2. `feature/oss-eval-harness-v1`
+	- should follow immediately after or in parallel as the validation harness for reviewer-target quality across real repositories
+3. `feature/production-persistence-v1`
+	- should be prioritized ahead of broad launch claims because the codebase is now feature-rich enough that durability and restart correctness matter more than more dashboard chrome
+4. `feature/railway-launch-hardening`
+	- should stay close behind persistence because launch readiness depends on the production data-path actually being proven
+5. `feature/attribute-profile-ui-v1`
+	- now becomes more leverageable because the dashboard and storyline surfaces already expose rich profile payloads
+6. `feature/governance-signals-v1`
+	- should follow once reviewer-target quality and attribute-profile presentation are stable enough to support another first-class dimension
+
+#### 0. `feature/repo-evidence-v1`
 
 Purpose:
 - strengthen reviewer-target quality on real repositories where historical drift exists and proposal-only PR audits need clearer separation and synthesis
 
+Current branch progress:
+- dashboard read models now distinguish `proposal only`, `proposal + history`, and `history only` evidence labels
+- repo and overview queues now prefer the PR as the primary review target when proposal evidence exists, while retaining merged history as supporting context when both are available
+- rationale, recommended action, score, and title selection now use proposal evidence when it is the reviewer’s best next stop
+- landed posture still remains history-backed, preserving the separation between review guidance and merged drift state
+
 Planned scope:
 - preserve the landed-only rule for dashboard posture while making proposal-only PR audit context easier to interpret in reviewer queues
-- improve merged-commit and PR linkage so repo case files route to better review targets
-- enrich history-backed insights with stronger source attribution and reviewer-facing context
+- complete broader validation and tuning on real repositories where merged history is noisy or sparse
+- enrich history-backed insights with stronger source attribution and reviewer-facing context where the latest linked commit is still not the most useful reviewer stop
 - keep the read-model focused on actionable evidence rather than new top-level dashboard chrome
 
 #### Completed: `feature/drift-storyline-v1`
@@ -321,7 +349,7 @@ Implementation notes:
 - the first slice should keep timeline displays compact on the main repo page and reserve full episode history for artifact-level expansion or a dedicated API
 - performance should be treated as a read-model concern from the start because larger OSS repos can accumulate many profile-history rows quickly
 
-#### 2. `feature/signal-fusion-v1`
+#### Completed: `feature/signal-fusion-v1`
 
 Purpose:
 - tighten the relationship between deterministic findings and semantic review output
@@ -331,7 +359,7 @@ Planned scope:
 - improve final reviewer explanations when the two channels disagree
 - add regression fixtures for common conflict cases
 
-#### 3. `feature/discovery-precision-v1`
+#### Completed: `feature/discovery-precision-v1`
 
 Purpose:
 - reduce onboarding and backfill noise on larger OSS repositories
@@ -341,7 +369,7 @@ Planned scope:
 - reduce low-value artifact discovery without missing true AI control surfaces
 - improve repo-level summaries so noisy discovery does not pollute reviewer prioritization
 
-#### 4. `feature/oss-eval-harness-v1`
+#### 2. `feature/oss-eval-harness-v1`
 
 Purpose:
 - make future changes safer by evaluating the engine against representative OSS repos and curated scenarios
@@ -351,7 +379,7 @@ Planned scope:
 - record expected overview and repo-detail outputs for key scenarios
 - turn recent manual OSS validation into lightweight automated coverage
 
-#### 5. `feature/production-persistence-v1`
+#### 3. `feature/production-persistence-v1`
 
 Purpose:
 - harden local-stage persistence and deployment assumptions toward a production-ready posture
@@ -361,7 +389,7 @@ Planned scope:
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
 - document a production-oriented path without overbuilding the local developer workflow or weakening the current fail-closed deployment defaults
 
-#### 6. `feature/railway-launch-hardening`
+#### 4. `feature/railway-launch-hardening`
 
 Purpose:
 - turn the current cloud-oriented scaffolding into an operator-safe Railway deployment shape for launch preparation
@@ -372,6 +400,26 @@ Planned scope:
 - introduce Redis-backed queue support for worker/webhook production use
 - document Railway service topology, env matrix, launch checklist, and rollback guidance
 - explicitly fail closed on unsafe production persistence assumptions until the deeper Postgres migration lands
+
+#### 5. `feature/attribute-profile-ui-v1`
+
+Purpose:
+- make the already-shipped attribute-profile data first-class in dashboard and review surfaces instead of leaving it mostly implicit inside detail payloads
+
+Planned scope:
+- surface attribute-profile dimensions and shifts more clearly in repo case files and reviewer-facing outputs
+- tighten how attribute deltas drive explanations, labels, and prioritization cues
+- add explicit regression coverage for the promoted profile surfaces
+
+#### 6. `feature/governance-signals-v1`
+
+Purpose:
+- add first-class governance anomaly detection and governance posture surfaces now that baseline, storyline, and fused-priority foundations exist on `main`
+
+Planned scope:
+- model governance-specific drift as an explicit reviewer-facing dimension instead of a secondary side effect of other signals
+- surface governance-related anomalies in dashboard prioritization and evidence summaries
+- keep the first slice additive and explainable rather than expanding into a generic compliance suite
 
 ### Trial success criteria for the next version
 

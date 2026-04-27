@@ -883,6 +883,52 @@ def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):
     assert payload["baseline"]["content_text"] == PROMPT_MEDIUM
 
 
+def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-pr-evidence.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+    _record_pr_profile(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["insights"][0]["evidence_label"] == "proposal + history"
+    assert payload["insights"][0]["evidence_summary"] == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-2."
+    assert payload["insights"][0]["review_target"] == "PR #42"
+    assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert payload["insights"][0]["supporting_review_target"] == "commit sha-2"
+    assert payload["insights"][0]["supporting_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+
+
 def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)

@@ -433,7 +433,14 @@ function attributeScore(entry, keyPrefix) {
 }
 
 function renderInsightChips(item, profile) {
-    const reasons = [...new Set([...(item.risk_reasons || []), ...((profile?.risk_tags) || [])])];
+    const mergedReasons = [...new Set([...(item.risk_reasons || []), ...((profile?.risk_tags) || [])])];
+    const reasons = mergedReasons.filter((reason) => {
+        const normalized = String(reason).toLowerCase();
+        if (normalized !== "baseline only") {
+            return true;
+        }
+        return String(item?.evidence_label || "").toLowerCase() === "baseline only";
+    });
     return reasons.slice(0, 4).map((reason) => {
         const normalized = String(reason).toLowerCase();
         const className = normalized.includes("guardrail")

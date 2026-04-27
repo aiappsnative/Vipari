@@ -277,6 +277,8 @@ class ComplianceExportRequest(BaseModel):
 
 
 def _control_plane_active() -> bool:
+    if settings.is_production:
+        return True
     try:
         return count_workspaces(AUDIT_DB_PATH) > 0
     except sqlite3.Error:
