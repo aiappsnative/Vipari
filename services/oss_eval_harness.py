@@ -12,6 +12,9 @@ from services.onboarding import execute_repository_history_backfill, onboard_rep
 
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 DEFAULT_TOP_REVIEW_TARGET_LIMIT = 5
+DEFAULT_EVAL_CANDIDATE_SOURCE = "oss"
+DEFAULT_EVAL_SCENARIO_SOURCE = "seeded"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,21 @@ class OssEvalCandidate:
     commit_limit_per_artifact: int = 10
     notes: str | None = None
     expected_control_surfaces: list[str] = field(default_factory=list)
+    candidate_source: str = DEFAULT_EVAL_CANDIDATE_SOURCE
+
+
+@dataclass(frozen=True)
+class EvalScenario:
+    key: str
+    repo_full: str
+    notes: str | None = None
+    expected_control_surfaces: list[str] = field(default_factory=list)
+    expected_high_confidence_baseline_coverage_min: float | None = None
+    expected_top_review_target_present: bool | None = None
+    expected_top_review_target_path: str | None = None
+    expected_lower_confidence_queue_max: int | None = None
+    reference_package_path: str | None = None
+    scenario_source: str = DEFAULT_EVAL_SCENARIO_SOURCE
 
 
 @dataclass(frozen=True)
@@ -31,6 +49,10 @@ class OssEvalRunResult:
     repo_dashboard_path: str
     overview_dashboard_path: str
     comparison_path: str | None = None
+
+
+EvalCandidate = OssEvalCandidate
+EvalRunResult = OssEvalRunResult
 
 
 DEFAULT_OSS_EVAL_CANDIDATES = (
@@ -53,6 +75,32 @@ DEFAULT_OSS_EVAL_CANDIDATES = (
 )
 
 
+DEFAULT_EVAL_SCENARIOS = (
+    EvalScenario(
+        key="dummyai-review-target",
+        repo_full="doria90/dummyAI",
+        notes="Seeded reviewer-target scenario for checking repeatable queue/actionability output.",
+        expected_control_surfaces=["prompts", "model configuration"],
+        expected_high_confidence_baseline_coverage_min=0.5,
+        expected_top_review_target_present=True,
+        expected_top_review_target_path="prompts/refund.txt",
+        expected_lower_confidence_queue_max=2,
+        reference_package_path="fixtures/eval-harness/dummyai-review-target-baseline.json",
+    ),
+    EvalScenario(
+        key="dummyai-strict-lower-confidence",
+        repo_full="doria90/dummyAI",
+        notes="Strict seeded scenario that intentionally fails when lower-confidence queue noise appears.",
+        expected_control_surfaces=["prompts", "model configuration"],
+        expected_high_confidence_baseline_coverage_min=0.5,
+        expected_top_review_target_present=True,
+        expected_top_review_target_path="prompts/refund.txt",
+        expected_lower_confidence_queue_max=0,
+        reference_package_path="fixtures/eval-harness/dummyai-strict-lower-confidence-baseline.json",
+    ),
+)
+
+
 def list_oss_eval_candidates() -> list[OssEvalCandidate]:
     return list(DEFAULT_OSS_EVAL_CANDIDATES)
 
@@ -63,6 +111,53 @@ def resolve_oss_eval_target(target: str) -> OssEvalCandidate:
         if normalized in {candidate.key.lower(), candidate.repo_full.lower()}:
             return candidate
     return OssEvalCandidate(key=target.replace("/", "-"), repo_full=target)
+
+
+def list_eval_candidates() -> list[EvalCandidate]:
+    return list_oss_eval_candidates()
+
+
+def list_eval_scenarios() -> list[EvalScenario]:
+    return list(DEFAULT_EVAL_SCENARIOS)
+
+
+def resolve_eval_target(target: str) -> EvalCandidate:
+    normalized = target.strip().lower()
+    for scenario in DEFAULT_EVAL_SCENARIOS:
+        if normalized == scenario.key.lower():
+            return OssEvalCandidate(
+                key=scenario.key,
+                repo_full=scenario.repo_full,
+                notes=scenario.notes,
+                expected_control_surfaces=list(scenario.expected_control_surfaces),
+                candidate_source=scenario.scenario_source,
+            )
+    return resolve_oss_eval_target(target)
+
+
+def resolve_eval_scenario(target: str) -> EvalScenario | None:
+    normalized = target.strip().lower()
+    for scenario in DEFAULT_EVAL_SCENARIOS:
+        if normalized == scenario.key.lower():
+            return scenario
+    return None
+
+
+def resolve_eval_reference_package_path(scenario_key: str) -> str | None:
+    scenario = resolve_eval_scenario(scenario_key)
+    if scenario is None or not scenario.reference_package_path:
+        return None
+    reference_path = PROJECT_ROOT / scenario.reference_package_path
+    if not reference_path.exists():
+        return None
+    return str(reference_path)
+
+
+def load_eval_reference_package(scenario_key: str) -> dict[str, Any] | None:
+    reference_path = resolve_eval_reference_package_path(scenario_key)
+    if reference_path is None:
+        return None
+    return load_eval_package(reference_path)
 
 
 def _serialize(value: Any) -> Any:
@@ -200,6 +295,114 @@ def _build_top_review_targets(repo_dashboard_payload: dict[str, Any], limit: int
     return top_targets
 
 
+def _assertion_result(*, assertion_id: str, passed: bool, expected: Any, actual: Any, message: str) -> dict[str, Any]:
+    return {
+        "assertion_id": assertion_id,
+        "passed": passed,
+        "expected": expected,
+        "actual": actual,
+        "message": message,
+    }
+
+
+def _build_eval_assertions(
+    *,
+    scenario: EvalScenario | None,
+    baseline_coverage_summary: dict[str, Any],
+    repo_dashboard_payload: dict[str, Any],
+    top_review_targets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if scenario is None:
+        return []
+
+    assertions: list[dict[str, Any]] = []
+    coverage = baseline_coverage_summary.get("high_confidence_baseline_coverage")
+    if scenario.expected_high_confidence_baseline_coverage_min is not None:
+        expected = scenario.expected_high_confidence_baseline_coverage_min
+        actual = float(coverage) if coverage is not None else None
+        passed = actual is not None and actual >= expected
+        assertions.append(
+            _assertion_result(
+                assertion_id="high_confidence_baseline_coverage_min",
+                passed=passed,
+                expected={"minimum": expected},
+                actual=actual,
+                message=(
+                    f"High-confidence baseline coverage should be at least {expected:.0%}."
+                    if passed
+                    else f"High-confidence baseline coverage fell below the expected minimum of {expected:.0%}."
+                ),
+            )
+        )
+
+    if scenario.expected_top_review_target_present is not None:
+        actual = bool(top_review_targets)
+        expected = scenario.expected_top_review_target_present
+        passed = actual == expected
+        assertions.append(
+            _assertion_result(
+                assertion_id="top_review_target_present",
+                passed=passed,
+                expected=expected,
+                actual=actual,
+                message=(
+                    "Top review target presence matched expectation."
+                    if passed
+                    else "Top review target presence did not match expectation."
+                ),
+            )
+        )
+
+    if scenario.expected_top_review_target_path is not None:
+        actual = top_review_targets[0].get("artifact_path") if top_review_targets else None
+        expected = scenario.expected_top_review_target_path
+        passed = actual == expected
+        assertions.append(
+            _assertion_result(
+                assertion_id="top_review_target_path",
+                passed=passed,
+                expected=expected,
+                actual=actual,
+                message=(
+                    f"Top review target matched expected artifact path {expected}."
+                    if passed
+                    else f"Top review target did not match expected artifact path {expected}."
+                ),
+            )
+        )
+
+    if scenario.expected_lower_confidence_queue_max is not None:
+        actual = len((repo_dashboard_payload.get("lower_confidence_insights") or []))
+        expected = scenario.expected_lower_confidence_queue_max
+        passed = actual <= expected
+        assertions.append(
+            _assertion_result(
+                assertion_id="lower_confidence_queue_max",
+                passed=passed,
+                expected={"maximum": expected},
+                actual=actual,
+                message=(
+                    f"Lower-confidence queue stayed within the expected max of {expected}."
+                    if passed
+                    else f"Lower-confidence queue exceeded the expected max of {expected}."
+                ),
+            )
+        )
+
+    return assertions
+
+
+def _build_assertion_summary(assertions: list[dict[str, Any]]) -> dict[str, Any]:
+    passed_count = sum(1 for item in assertions if item.get("passed"))
+    failed_count = sum(1 for item in assertions if not item.get("passed"))
+    return {
+        "total_count": len(assertions),
+        "passed_count": passed_count,
+        "failed_count": failed_count,
+        "all_passed": failed_count == 0,
+    }
+
+
 def _write_json_file(path: Path, payload: dict[str, Any]) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -208,6 +411,10 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> str:
 
 def load_oss_eval_package(path: str) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def load_eval_package(path: str) -> dict[str, Any]:
+    return load_oss_eval_package(path)
 
 
 def compare_oss_eval_packages(current_package: dict[str, Any], baseline_package: dict[str, Any]) -> dict[str, Any]:
@@ -219,6 +426,8 @@ def compare_oss_eval_packages(current_package: dict[str, Any], baseline_package:
     baseline_lower_confidence = len((baseline_package.get("repo_dashboard_snapshot") or {}).get("lower_confidence_insights") or [])
     current_targets = current_package.get("top_artifacts_requiring_review") or []
     baseline_targets = baseline_package.get("top_artifacts_requiring_review") or []
+    current_assertions = current_package.get("assertions") or []
+    baseline_assertions = baseline_package.get("assertions") or []
 
     improvements: list[str] = []
     regressions: list[str] = []
@@ -272,16 +481,37 @@ def compare_oss_eval_packages(current_package: dict[str, Any], baseline_package:
                 f"Top review target changed from {baseline_top or 'unset'} to {current_top or 'unset'} for manual reviewer inspection."
             )
 
+    current_failed_assertions = sum(1 for item in current_assertions if not item.get("passed"))
+    baseline_failed_assertions = sum(1 for item in baseline_assertions if not item.get("passed"))
+    if current_assertions or baseline_assertions:
+        if current_failed_assertions < baseline_failed_assertions:
+            improvements.append(
+                f"Explicit assertion failures improved from {baseline_failed_assertions} to {current_failed_assertions}."
+            )
+        elif current_failed_assertions > baseline_failed_assertions:
+            regressions.append(
+                f"Explicit assertion failures regressed from {baseline_failed_assertions} to {current_failed_assertions}."
+            )
+        else:
+            unchanged.append(f"Explicit assertion failures held at {current_failed_assertions}.")
+
     return {
         "repo_full": current_package.get("repo_full"),
         "current_run_id": current_package.get("run_id"),
         "baseline_run_id": baseline_package.get("run_id"),
         "current_branch": current_package.get("branch_name"),
         "baseline_branch": baseline_package.get("branch_name"),
+        "scenario_key": current_package.get("scenario_key") or baseline_package.get("scenario_key"),
         "improvements": improvements,
         "regressions": regressions,
         "unchanged": unchanged,
+        "current_assertion_summary": _build_assertion_summary(current_assertions),
+        "baseline_assertion_summary": _build_assertion_summary(baseline_assertions),
     }
+
+
+def compare_eval_packages(current_package: dict[str, Any], baseline_package: dict[str, Any]) -> dict[str, Any]:
+    return compare_oss_eval_packages(current_package, baseline_package)
 
 
 def compare_oss_eval_package_files(current_package_path: str, baseline_package_path: str) -> dict[str, Any]:
@@ -289,6 +519,10 @@ def compare_oss_eval_package_files(current_package_path: str, baseline_package_p
         load_oss_eval_package(current_package_path),
         load_oss_eval_package(baseline_package_path),
     )
+
+
+def compare_eval_package_files(current_package_path: str, baseline_package_path: str) -> dict[str, Any]:
+    return compare_oss_eval_package_files(current_package_path, baseline_package_path)
 
 
 def run_oss_evaluation(
@@ -306,6 +540,7 @@ def run_oss_evaluation(
     manual_notes: str | None = None,
     run_label: str | None = None,
     compare_to_package_path: str | None = None,
+    scenario_key: str | None = None,
     onboard_repository_fn=onboard_repository,
     plan_repository_history_backfill_fn=plan_repository_history_backfill,
     execute_repository_history_backfill_fn=execute_repository_history_backfill,
@@ -316,6 +551,11 @@ def run_oss_evaluation(
     effective_run_label = run_label or _timestamp_label(now)
     branch_label = branch_name or "unknown"
     expected = list(expected_control_surfaces or [])
+    scenario = resolve_eval_scenario(scenario_key) if scenario_key else None
+    candidate_source = scenario.scenario_source if scenario is not None else DEFAULT_EVAL_CANDIDATE_SOURCE
+    effective_compare_to_package_path = compare_to_package_path
+    if effective_compare_to_package_path is None and scenario is not None:
+        effective_compare_to_package_path = resolve_eval_reference_package_path(scenario.key)
 
     onboarding_result = onboard_repository_fn(
         db_path,
@@ -349,15 +589,26 @@ def run_oss_evaluation(
     backfill_execution_summary = _build_backfill_execution_summary(planned_jobs, execution_results, repo_dashboard_payload)
     top_review_targets = _build_top_review_targets(repo_dashboard_payload)
     evaluator_rubric = _build_evaluator_rubric(expected_control_surfaces=expected, manual_notes=manual_notes)
+    assertions = _build_eval_assertions(
+        scenario=scenario,
+        baseline_coverage_summary=baseline_coverage_summary,
+        repo_dashboard_payload=repo_dashboard_payload,
+        top_review_targets=top_review_targets,
+    )
+    assertion_summary = _build_assertion_summary(assertions)
 
     package = {
         "run_id": effective_run_label,
+        "package_type": "evaluation_run",
         "repo_full": repo_full,
         "installation_id": installation_id,
         "candidate_key": candidate_key,
+        "candidate_source": candidate_source,
+        "scenario_key": scenario.key if scenario else scenario_key,
         "branch_name": branch_label,
         "mode": mode,
         "generated_at": now,
+        "comparison_baseline_package_path": effective_compare_to_package_path,
         "expected_control_surfaces": expected,
         "manual_notes": manual_notes,
         "onboarding_summary": {
@@ -373,6 +624,8 @@ def run_oss_evaluation(
         "repo_dashboard_snapshot": repo_dashboard_payload,
         "overview_dashboard_snapshot": overview_dashboard_payload,
         "evaluator_rubric": evaluator_rubric,
+        "assertions": assertions,
+        "assertion_summary": assertion_summary,
     }
 
     run_directory = Path(output_root) / _slug(branch_label) / _slug(repo_full) / effective_run_label
@@ -381,8 +634,8 @@ def run_oss_evaluation(
     overview_dashboard_path = _write_json_file(run_directory / "overview-dashboard.json", overview_dashboard_payload)
 
     comparison_path: str | None = None
-    if compare_to_package_path:
-        comparison = compare_oss_eval_package_files(package_path, compare_to_package_path)
+    if effective_compare_to_package_path:
+        comparison = compare_oss_eval_package_files(package_path, effective_compare_to_package_path)
         comparison_path = _write_json_file(run_directory / "comparison-summary.json", comparison)
 
     return OssEvalRunResult(
@@ -392,3 +645,10 @@ def run_oss_evaluation(
         overview_dashboard_path=overview_dashboard_path,
         comparison_path=comparison_path,
     )
+
+
+def run_evaluation(
+    db_path: str,
+    **kwargs: Any,
+) -> EvalRunResult:
+    return run_oss_evaluation(db_path, **kwargs)

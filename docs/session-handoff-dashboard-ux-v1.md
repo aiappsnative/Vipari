@@ -690,7 +690,7 @@ When work resumes, the fastest useful restart path is:
   - provenance enrichment
   - PR-linked evidence density
   - discovery precision on OSS repos
-  - lightweight OSS evaluation harness
+  - lightweight evaluation harness
 
 Recommended first implementation target at the time:
 

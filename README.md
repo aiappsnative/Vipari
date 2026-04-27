@@ -472,11 +472,22 @@ python scripts/repo_ops.py dashboard owner/repo
 python scripts/repo_ops.py onboard owner/repo <installation_id> --plan-backfill --execute-backfill
 python scripts/repo_ops.py backfill owner/repo <installation_id>
 python scripts/repo_ops.py list-eval-candidates
-python scripts/repo_ops.py eval-run openfang <installation_id> --run-label main-openfang --compare-to artifacts/oss-evals/main/doria90-openfang/main-openfang/run-package.json
+python scripts/repo_ops.py list-eval-scenarios
+python scripts/repo_ops.py eval-run openfang <installation_id> --run-label main-openfang --compare-to artifacts/eval-runs/main/doria90-openfang/main-openfang/run-package.json
+python scripts/repo_ops.py eval-run doria90/dummyAI <installation_id> --scenario dummyai-review-target --run-label seeded-dummyai
+python scripts/repo_ops.py eval-run doria90/dummyAI <installation_id> --scenario dummyai-review-target --compare-to-scenario dummyai-review-target --run-label compare-seeded-dummyai
 python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to/baseline-run-package.json
 ```
 
-The OSS evaluation harness writes repeatable run packages under `artifacts/oss-evals/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, and a fixed evaluator rubric so branch-to-branch comparison stays lightweight but reproducible.
+The evaluation harness writes repeatable run packages under `artifacts/eval-runs/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, a fixed evaluator rubric, and an assertion summary so branch-to-branch comparison stays lightweight but reproducible. The built-in candidate registry currently starts with OSS repositories, but the harness itself also supports ad hoc owner/repo targets and seeded scenarios through the same contract.
+
+This harness is internal infrastructure for developers, operators, and later CI or release-check automation. It is not a customer-facing product workflow, and the CLI is intended to provide a deterministic non-UI control surface for evaluation runs rather than a public user experience.
+
+Seeded scenarios let you pin explicit expectations such as minimum baseline coverage, expected top review target presence/path, and maximum lower-confidence queue size. When a run uses `--scenario`, those assertions are saved into the package and surfaced again in `eval-compare` output.
+
+Built-in scenarios can also point at checked-in reference packages under `fixtures/eval-harness/`. When you pass `--compare-to-scenario`, the harness resolves that scenario's reference package automatically and writes a comparison summary without requiring you to hand-type a `run-package.json` path.
+
+For the same reason, isolated local databases are useful during eval runs: they keep seeded or branch-comparison state separate from whatever normal local dashboard or onboarding data already exists, so evaluation results stay reviewable and disposable.
 
 Checked-in reference artifacts for past live validation can also appear under `live/oss-evals/` when a snapshot is intentionally preserved for handoff or comparison.
 

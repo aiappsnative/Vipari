@@ -18,9 +18,15 @@ from services.dashboard_views import build_repo_dashboard_view, list_repo_dashbo
 from services.github_integration import generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.oss_eval_harness import (
+    compare_eval_package_files,
     compare_oss_eval_package_files,
+    list_eval_candidates,
+    list_eval_scenarios,
+    resolve_eval_reference_package_path,
     list_oss_eval_candidates,
+    resolve_eval_target,
     resolve_oss_eval_target,
+    run_evaluation,
     run_oss_evaluation,
 )
 from services.persistence import get_persistence_status, persistence_status_payload, resolve_db_path
@@ -48,7 +54,7 @@ def _write_json(payload: object) -> None:
 
 
 def _default_eval_output_root() -> str:
-    return str(PROJECT_ROOT / "artifacts" / "oss-evals")
+    return str(PROJECT_ROOT / "artifacts" / "eval-runs")
 
 
 def _detect_git_branch() -> str:
@@ -154,14 +160,19 @@ def cmd_backfill(args: argparse.Namespace) -> int:
 
 
 def cmd_list_eval_candidates(_: argparse.Namespace) -> int:
-    _write_json({"candidates": [asdict(candidate) for candidate in list_oss_eval_candidates()]})
+    _write_json({"candidates": [asdict(candidate) for candidate in list_eval_candidates()]})
+    return 0
+
+
+def cmd_list_eval_scenarios(_: argparse.Namespace) -> int:
+    _write_json({"scenarios": [asdict(scenario) for scenario in list_eval_scenarios()]})
     return 0
 
 
 def cmd_eval_run(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
     migrate_database(db_path)
-    target = resolve_oss_eval_target(args.target)
+    target = resolve_eval_target(args.target)
     token = _require_installation_token(args.installation_id)
     output_root = args.output_dir or _default_eval_output_root()
     branch_name = args.branch or _detect_git_branch()
@@ -170,6 +181,9 @@ def cmd_eval_run(args: argparse.Namespace) -> int:
     expected_control_surfaces = list(target.expected_control_surfaces)
     if args.expect_control_surface:
         expected_control_surfaces.extend(args.expect_control_surface)
+    compare_to_package_path = args.compare_to
+    if compare_to_package_path is None and args.compare_to_scenario:
+        compare_to_package_path = resolve_eval_reference_package_path(args.compare_to_scenario)
 
     result = run_oss_evaluation(
         db_path,
@@ -184,7 +198,8 @@ def cmd_eval_run(args: argparse.Namespace) -> int:
         expected_control_surfaces=expected_control_surfaces,
         manual_notes=args.notes or target.notes,
         run_label=args.run_label,
-        compare_to_package_path=args.compare_to,
+        compare_to_package_path=compare_to_package_path,
+        scenario_key=args.scenario,
     )
     payload = {
         "repo_full": target.repo_full,
@@ -207,6 +222,18 @@ def cmd_eval_compare(args: argparse.Namespace) -> int:
         output_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     _write_json(summary)
     return 0
+
+
+def cmd_list_oss_eval_candidates(args: argparse.Namespace) -> int:
+    return cmd_list_eval_candidates(args)
+
+
+def cmd_oss_eval_run(args: argparse.Namespace) -> int:
+    return cmd_eval_run(args)
+
+
+def cmd_oss_eval_compare(args: argparse.Namespace) -> int:
+    return cmd_eval_compare(args)
 
 
 def cmd_migrate_db(args: argparse.Namespace) -> int:
@@ -250,10 +277,13 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     backfill_parser.set_defaults(func=cmd_backfill)
 
-    eval_candidates_parser = subparsers.add_parser("list-eval-candidates", help="List curated OSS evaluation candidates")
+    eval_candidates_parser = subparsers.add_parser("list-eval-candidates", help="List curated evaluation candidates")
     eval_candidates_parser.set_defaults(func=cmd_list_eval_candidates)
 
-    eval_run_parser = subparsers.add_parser("eval-run", help="Run the repeatable OSS evaluation harness for a curated candidate or owner/repo")
+    eval_scenarios_parser = subparsers.add_parser("list-eval-scenarios", help="List curated seeded evaluation scenarios")
+    eval_scenarios_parser.set_defaults(func=cmd_list_eval_scenarios)
+
+    eval_run_parser = subparsers.add_parser("eval-run", help="Run the repeatable evaluation harness for a curated candidate or owner/repo")
     eval_run_parser.add_argument("target", help="Candidate key or owner/repo name to evaluate")
     eval_run_parser.add_argument("installation_id", type=int, help="GitHub App installation id")
     eval_run_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
@@ -267,6 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run_parser.add_argument("--branch", help="Branch label to store in the saved evaluation package")
     eval_run_parser.add_argument("--run-label", help="Stable label for the saved evaluation package")
     eval_run_parser.add_argument("--notes", help="Manual reviewer notes to store alongside the run package")
+    eval_run_parser.add_argument("--scenario", help="Optional seeded scenario key that adds explicit assertions to the run package")
+    eval_run_parser.add_argument("--compare-to-scenario", help="Optional seeded scenario key whose checked-in reference package should be used for comparison")
     eval_run_parser.add_argument(
         "--expect-control-surface",
         action="append",
@@ -275,11 +307,24 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run_parser.add_argument("--compare-to", help="Path to a previously saved run-package.json to compare against")
     eval_run_parser.set_defaults(func=cmd_eval_run)
 
-    eval_compare_parser = subparsers.add_parser("eval-compare", help="Compare two saved OSS evaluation packages")
+    eval_compare_parser = subparsers.add_parser("eval-compare", help="Compare two saved evaluation packages")
     eval_compare_parser.add_argument("current_package", help="Path to the newer run-package.json")
     eval_compare_parser.add_argument("baseline_package", help="Path to the baseline run-package.json")
     eval_compare_parser.add_argument("--output", help="Optional path for saving the comparison summary JSON")
     eval_compare_parser.set_defaults(func=cmd_eval_compare)
+
+    oss_eval_candidates_parser = subparsers.add_parser("list-oss-eval-candidates", help="Compatibility alias for listing curated OSS evaluation candidates")
+    oss_eval_candidates_parser.set_defaults(func=cmd_list_oss_eval_candidates)
+
+    oss_eval_run_parser = subparsers.add_parser("oss-eval-run", help="Compatibility alias for running the OSS-focused evaluation harness")
+    for action in eval_run_parser._actions[1:]:
+        oss_eval_run_parser._add_action(action)
+    oss_eval_run_parser.set_defaults(func=cmd_oss_eval_run)
+
+    oss_eval_compare_parser = subparsers.add_parser("oss-eval-compare", help="Compatibility alias for comparing saved OSS evaluation packages")
+    for action in eval_compare_parser._actions[1:]:
+        oss_eval_compare_parser._add_action(action)
+    oss_eval_compare_parser.set_defaults(func=cmd_oss_eval_compare)
 
     return parser
 

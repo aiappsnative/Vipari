@@ -1,0 +1,187 @@
+{
+  "assertion_summary": {
+    "all_passed": true,
+    "failed_count": 0,
+    "passed_count": 4,
+    "total_count": 4
+  },
+  "assertions": [
+    {
+      "actual": 1.0,
+      "assertion_id": "high_confidence_baseline_coverage_min",
+      "expected": {
+        "minimum": 0.5
+      },
+      "message": "High-confidence baseline coverage should be at least 50%.",
+      "passed": true
+    },
+    {
+      "actual": true,
+      "assertion_id": "top_review_target_present",
+      "expected": true,
+      "message": "Top review target presence matched expectation.",
+      "passed": true
+    },
+    {
+      "actual": "prompts/refund.txt",
+      "assertion_id": "top_review_target_path",
+      "expected": "prompts/refund.txt",
+      "message": "Top review target matched expected artifact path prompts/refund.txt.",
+      "passed": true
+    },
+    {
+      "actual": 1,
+      "assertion_id": "lower_confidence_queue_max",
+      "expected": {
+        "maximum": 2
+      },
+      "message": "Lower-confidence queue stayed within the expected max of 2.",
+      "passed": true
+    }
+  ],
+  "backfill_execution_summary": {
+    "completed_job_count": 1,
+    "dashboard_completed_job_count": 1,
+    "dashboard_total_historical_profiles": 3,
+    "dashboard_total_historical_versions": 3,
+    "executed_job_count": 1,
+    "failed_job_count": 0,
+    "planned_job_count": 1
+  },
+  "baseline_coverage_summary": {
+    "baseline_version_count": 1,
+    "discovered_artifact_count": 2,
+    "high_confidence_artifact_count": 1,
+    "high_confidence_baseline_coverage": 1.0,
+    "high_confidence_baseline_count": 1
+  },
+  "branch_name": "main",
+  "candidate_key": "dummy-ai",
+  "candidate_source": "seeded",
+  "discovered_artifacts": [
+    {
+      "artifact_path": "config/model.yaml",
+      "artifact_type": "model_config",
+      "confidence": 0.95,
+      "discovery_reason": "Path indicates a model configuration artifact."
+    },
+    {
+      "artifact_path": "docs/prompts/system.txt",
+      "artifact_type": "prompt",
+      "confidence": 0.72,
+      "discovery_reason": "Path indicates a prompt artifact."
+    }
+  ],
+  "evaluator_rubric": [
+    {
+      "dimension": "discovery",
+      "notes": "prompts, model configuration",
+      "question": "Did DriftGuard discover the major AI control surfaces without letting false positives dominate?",
+      "status": "pending_human_review"
+    },
+    {
+      "dimension": "baseline",
+      "notes": null,
+      "question": "Did the most authoritative discovered artifacts receive usable baselines?",
+      "status": "pending_human_review"
+    },
+    {
+      "dimension": "history",
+      "notes": null,
+      "question": "Did optional backfill produce coherent, bounded lineage on the important artifacts?",
+      "status": "pending_human_review"
+    },
+    {
+      "dimension": "reviewer_output",
+      "notes": null,
+      "question": "Do the top-ranked review targets feel plausible and actionable to a human reviewer?",
+      "status": "pending_human_review"
+    },
+    {
+      "dimension": "dashboard",
+      "notes": "Seeded reviewer-target scenario baseline.",
+      "question": "Do the overview and repo case-file outputs help decide what to inspect next?",
+      "status": "pending_human_review"
+    }
+  ],
+  "expected_control_surfaces": [
+    "prompts",
+    "model configuration"
+  ],
+  "generated_at": 1761513600.0,
+  "installation_id": 123,
+  "manual_notes": "Seeded reviewer-target scenario baseline.",
+  "mode": "baseline_plus_backfill",
+  "onboarding_summary": {
+    "baseline_version_count": 1,
+    "discovered_artifact_count": 2,
+    "record": {
+      "default_branch": "main",
+      "discovered_artifact_count": 2,
+      "id": 1,
+      "repo_full": "doria90/dummyAI",
+      "status": "completed"
+    }
+  },
+  "overview_dashboard_snapshot": {
+    "attention_repos": [
+      {
+        "repo_full": "doria90/dummyAI"
+      }
+    ],
+    "risk_state": {
+      "headline": "1 repo needs attention"
+    }
+  },
+  "package_type": "evaluation_run",
+  "repo_dashboard_snapshot": {
+    "backfill": {
+      "completed_job_count": 1,
+      "total_historical_profiles": 3,
+      "total_historical_versions": 3
+    },
+    "insights": [
+      {
+        "artifact_path": "prompts/refund.txt",
+        "artifact_type": "prompt",
+        "confidence_label": "high confidence",
+        "evidence_summary": "Only merged-history evidence is available right now; start with commit sha-2.",
+        "priority": "review_now",
+        "queue_lane": "primary",
+        "recommended_action": "Inspect the latest drift and escalation posture.",
+        "review_target": "commit sha-2",
+        "review_url": "https://github.com/doria90/dummyAI/commit/sha-2",
+        "title": "Review the production refund prompt"
+      }
+    ],
+    "lower_confidence_insights": [
+      {
+        "artifact_path": "misc/0.txt"
+      }
+    ],
+    "repo_full": "doria90/dummyAI"
+  },
+  "repo_full": "doria90/dummyAI",
+  "run_id": "baseline-reference",
+  "scenario_key": "dummyai-review-target",
+  "top_artifacts_requiring_review": [
+    {
+      "artifact_path": "prompts/refund.txt",
+      "artifact_type": "prompt",
+      "confidence_label": "high confidence",
+      "evidence_summary": "Only merged-history evidence is available right now; start with commit sha-2.",
+      "priority": "review_now",
+      "queue_lane": "primary",
+      "recommended_action": "Inspect the latest drift and escalation posture.",
+      "review_target": "commit sha-2",
+      "review_url": "https://github.com/doria90/dummyAI/commit/sha-2",
+      "title": "Review the production refund prompt"
+    }
+  ],
+  "baseline_versions": [
+    {
+      "artifact_path": "config/model.yaml",
+      "artifact_type": "model_config"
+    }
+  ]
+}

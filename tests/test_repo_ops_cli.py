@@ -4,6 +4,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+from io import StringIO
+from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -144,6 +146,21 @@ def test_repo_ops_list_eval_candidates_cli_outputs_curated_candidates(tmp_path):
     assert any(candidate["key"] == "hermes-agent" for candidate in payload["candidates"])
 
 
+def test_repo_ops_list_eval_scenarios_cli_outputs_seeded_scenarios(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "scripts/repo_ops.py", "list-eval-scenarios"],
+        cwd=os.path.abspath(os.path.dirname(os.path.dirname(__file__))),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["scenarios"][0]["key"] == "dummyai-review-target"
+    assert payload["scenarios"][0]["scenario_source"] == "seeded"
+    assert any(item["key"] == "dummyai-strict-lower-confidence" for item in payload["scenarios"])
+
+
 def test_repo_ops_eval_compare_cli_summarizes_saved_packages(tmp_path):
     current_path = tmp_path / "current-run.json"
     baseline_path = tmp_path / "baseline-run.json"
@@ -205,8 +222,10 @@ def test_repo_ops_eval_run_uses_candidate_defaults_when_flags_omitted(tmp_path):
         branch=None,
         run_label="run-001",
         notes=None,
+        scenario="dummyai-review-target",
         expect_control_surface=None,
         compare_to=None,
+        compare_to_scenario="dummyai-review-target",
     )
 
     captured: dict[str, object] = {}
@@ -234,3 +253,45 @@ def test_repo_ops_eval_run_uses_candidate_defaults_when_flags_omitted(tmp_path):
     assert captured["kwargs"]["mode"] == "baseline_plus_backfill"
     assert captured["kwargs"]["commit_limit_per_artifact"] == 12
     assert captured["kwargs"]["expected_control_surfaces"] == ["prompts", "guardrails", "model configuration"]
+    assert captured["kwargs"]["scenario_key"] == "dummyai-review-target"
+    assert captured["kwargs"]["compare_to_package_path"].endswith("fixtures\\eval-harness\\dummyai-review-target-baseline.json")
+
+
+def test_repo_ops_eval_run_emits_comparison_path_for_compare_to_scenario(tmp_path):
+    args = SimpleNamespace(
+        db=str(tmp_path / "eval.db"),
+        target="openfang",
+        installation_id=123,
+        output_dir=None,
+        commit_limit=None,
+        mode=None,
+        branch=None,
+        run_label="run-compare",
+        notes=None,
+        scenario="dummyai-review-target",
+        expect_control_surface=None,
+        compare_to=None,
+        compare_to_scenario="dummyai-review-target",
+    )
+
+    with patch("scripts.repo_ops.init_db"), patch(
+        "scripts.repo_ops._require_installation_token", return_value="token"
+    ), patch(
+        "scripts.repo_ops._detect_git_branch", return_value="feature/eval-harness-v1"
+    ), patch(
+        "scripts.repo_ops.run_oss_evaluation",
+        return_value=SimpleNamespace(
+            package={"run_id": "run-compare", "scenario_key": "dummyai-review-target"},
+            package_path="package.json",
+            repo_dashboard_path="repo-dashboard.json",
+            overview_dashboard_path="overview-dashboard.json",
+            comparison_path="comparison-summary.json",
+        ),
+    ):
+        buffer = StringIO()
+        with redirect_stdout(buffer):
+            repo_ops.cmd_eval_run(args)
+
+    payload = json.loads(buffer.getvalue())
+    assert payload["comparison_path"] == "comparison-summary.json"
+    assert payload["run"]["scenario_key"] == "dummyai-review-target"
