@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -277,10 +277,20 @@ class ComplianceExportRequest(BaseModel):
 
 
 def _control_plane_active() -> bool:
+    if settings.is_production:
+        return True
     try:
-        return count_workspaces(AUDIT_DB_PATH) > 0
+        has_workspaces = count_workspaces(AUDIT_DB_PATH) > 0
     except sqlite3.Error:
-        return False
+        has_workspaces = False
+    if has_workspaces:
+        return True
+    if settings.service_role != "monolith":
+        return True
+    if settings.app_env not in {"local", "test"}:
+        return True
+    app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
+    return app_base_host not in {"127.0.0.1", "localhost", "::1"}
 
 
 def _get_session(request: Request):

@@ -46,6 +46,7 @@ In practical terms, DriftGuard currently provides:
 - explicit repo and artifact baseline approval review, including pending candidate state, approval history, and snapshot-driven rebaseline proposals
 - live default-branch posture tracking driven by push-triggered branch scans so landed drift stays current between PRs
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
+- reviewer queues now distinguish `proposal only`, `proposal + history`, and `history only` evidence so the repo case file can route reviewers to the right PR or merged commit without contaminating landed posture
 - repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
 - baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
@@ -91,6 +92,12 @@ The dashboard should now be read as two linked product surfaces:
 
 - `/dashboard` is the portfolio decision surface for triage, hotspots, and coverage trust, with a secondary coverage mode for inventory and pattern scans
 - `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, artifact-level evidence, and approved-baseline promotion
+
+The active repo-evidence slice also sharpens the ranked queue inside those surfaces:
+
+- proposal-only PR evidence can drive the primary review target, rationale, recommended action, and queue priority when no merged-history snapshot is the right first stop
+- mixed evidence now points reviewers to the PR first while preserving the latest merged commit as supporting context
+- landed posture remains history-backed, so proposal context improves reviewer actionability without being mistaken for merged drift
 
 ## What DriftGuard does today
 
@@ -500,7 +507,7 @@ Operational note:
 - larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
 - cloud deployment scaffolding is now landed, but the deployed shape is still SQLite-first, effectively single-tenant, and not yet a full production control plane
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
-- PR review, dashboard prioritization, and landed-history narratives still need tighter synthesis so proposal-only evidence is visible without contaminating merged-history drift
+- reviewer-target quality and queue tuning still need broader real-repo validation on history-heavy repositories, even though proposal-only and mixed evidence are now separated in the dashboard read models
 
 ## Safe repo practices
 
