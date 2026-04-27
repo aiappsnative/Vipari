@@ -163,7 +163,7 @@ This framing should shape roadmap decisions:
 1. Dashboard redesign v2 for triage-first shell, split-pane detail, and reduced scroll depth
 2. Signal fusion improvements between deterministic and semantic findings
 3. Discovery precision improvements for large OSS onboarding and backfill
-4. Expanded OSS evaluation harness coverage for seeded and real-repo scenarios
+4. Expanded evaluation harness coverage for seeded and real-repo scenarios
 5. Production-oriented persistence and deployment hardening beyond the current split-service scaffolding
 
 Suggested next branch sequence:
@@ -171,7 +171,7 @@ Suggested next branch sequence:
 - `feature/drift-storyline-v1`
 - `feature/signal-fusion-v1`
 - `feature/discovery-precision-v1`
-- `feature/oss-eval-harness-v1`
+- `feature/eval-harness-v1`
 - `feature/production-persistence-v1`
 
 ### What not to build yet
@@ -286,7 +286,7 @@ Verified against repo state and open issues:
 - GitHub issue `#41` (`feature/repo-evidence-v1`) is now merged to `main`.
 - GitHub issue `#42` (`feature/signal-fusion-v1`) is still open on GitHub, but the feature is already merged to `main`; treat that issue as stale until it is closed or repurposed.
 - `feature/discovery-precision-v1` is merged to `main` and should no longer appear in the near-term execution queue.
-- The remaining open issues that align with real unfinished work are `#44` (`feature/oss-eval-harness-v1`), `#45` (`feature/production-persistence-v1`), `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
+- The remaining open issues that align with real unfinished work are `#44` (`feature/eval-harness-v1`, currently filed on GitHub as `feature/oss-eval-harness-v1`), `#45` (`feature/production-persistence-v1`), `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
 
 #### Remaining work analysis
 
@@ -295,14 +295,14 @@ Current repository state suggests the product has moved past dashboard shell red
 What still looks unfinished on `main`:
 
 - reviewer-target quality now has merged proposal-only vs landed-history separation and PR-first review targets, but still needs broader real-repo validation and tuning on history-heavy repositories
-- OSS evaluation needs to become more repeatable and branch-comparable instead of remaining partly manual
+- evaluation coverage needs to become more repeatable and branch-comparable instead of remaining partly manual
 - production persistence and deployment hardening are still documented as partially complete rather than fully proven end to end
 - attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
 
 What should come next:
 
-1. `feature/oss-eval-harness-v1`
-	- should follow immediately after or in parallel as the validation harness for reviewer-target quality across real repositories
+1. `feature/eval-harness-v1`
+	- should follow immediately after or in parallel as the validation harness for reviewer-target quality across real repositories, with OSS candidates as the first built-in target set rather than the full scope boundary
 2. `feature/production-persistence-v1`
 	- should be prioritized ahead of broad launch claims because the codebase is now feature-rich enough that durability and restart correctness matter more than more dashboard chrome
 3. `feature/railway-launch-hardening`
@@ -326,7 +326,7 @@ Final status at merge:
 - production deployments now always gate `/dashboard` through login, while localhost operator mode still supports seeded no-auth inspection during local development
 
 Exit note:
-- this slice is merged and directionally complete for the current feature goal; remaining work should focus on broader OSS evaluation and further review-target tuning rather than reopening the core proposal-vs-history routing logic
+- this slice is merged and directionally complete for the current feature goal; remaining work should focus on broader evaluation coverage and further review-target tuning rather than reopening the core proposal-vs-history routing logic
 
 #### Completed: `feature/drift-storyline-v1`
 
@@ -365,15 +365,16 @@ Planned scope:
 - reduce low-value artifact discovery without missing true AI control surfaces
 - improve repo-level summaries so noisy discovery does not pollute reviewer prioritization
 
-#### 2. `feature/oss-eval-harness-v1`
+#### 2. `feature/eval-harness-v1`
 
 Purpose:
-- make future changes safer by evaluating the engine against representative OSS repos and curated scenarios
+- make future changes safer by evaluating the engine against representative real repositories and curated scenarios
 
 Planned scope:
-- add repeatable seeded-repo runs
+- preserve the current OSS candidates as the first built-in evaluation registry
+- add repeatable seeded and ad hoc real-repository runs through one shared harness contract
 - record expected overview and repo-detail outputs for key scenarios
-- turn recent manual OSS validation into lightweight automated coverage
+- turn recent manual validation into lightweight automated coverage
 
 #### 3. `feature/production-persistence-v1`
 

@@ -1,8 +1,8 @@
-# OSS Onboarding Evaluation Plan
+# Evaluation Harness Plan
 
 ## Purpose
 
-This document now defines the evaluation foundation for real-repository validation and the next hardening phase of `feature/oss-eval-harness-v1`.
+This document now defines the evaluation foundation for repeatable real-repository validation and the next hardening phase of `feature/eval-harness-v1`.
 
 It should be read as a bridge between:
 
@@ -13,12 +13,15 @@ It should be read as a bridge between:
 The goal is no longer to prove that DriftGuard can touch a public repository at all.
 That proof now exists.
 
-The current goal is to turn ad hoc OSS validation into a repeatable product-evaluation loop, building on the harness groundwork that already exists on `main`.
+The current goal is to turn ad hoc real-repository validation into a repeatable product-evaluation loop, building on the harness groundwork that already exists on `main`.
+
+This harness should be treated as internal developer/operator infrastructure. It exists so product and engine changes can be evaluated repeatably by humans and later by CI, not as a customer-facing workflow that repository owners are expected to run themselves.
 
 Shipped groundwork on `main` already includes:
 
 - CLI-driven eval candidate listing and eval runs
-- repeatable saved run packages under `artifacts/oss-evals/`
+- seeded scenario listing for machine-checkable comparison targets
+- repeatable saved run packages under `artifacts/eval-runs/`
 - saved repo and overview dashboard payload snapshots
 - branch-to-branch comparison summaries for eval packages
 
@@ -26,7 +29,7 @@ Shipped groundwork on `main` already includes:
 
 ## Current validated baseline
 
-DriftGuard has already validated meaningful OSS onboarding behavior on real repositories.
+DriftGuard has already validated meaningful onboarding behavior on real repositories.
 
 Confirmed on `main` today:
 
@@ -43,7 +46,7 @@ Known completed live validations:
 
 Current takeaway:
 
-- DriftGuard is already past the "toy demo" stage for OSS onboarding
+- DriftGuard is already past the "toy demo" stage for real-repository onboarding
 - the biggest remaining trust gaps are discovery precision, proposal-vs-landed evidence synthesis, and repeatability of evaluation outputs
 - the harness should therefore optimize for product usefulness, not only ingest success
 
@@ -51,7 +54,7 @@ Current takeaway:
 
 ## Evaluation objective
 
-For each selected OSS repository, DriftGuard should be able to answer these questions with useful, reviewable evidence:
+For each selected evaluation target, DriftGuard should be able to answer these questions with useful, reviewable evidence:
 
 - where are the likely AI control surfaces?
 - which discovered artifacts look authoritative enough to baseline?
@@ -64,7 +67,7 @@ For each selected OSS repository, DriftGuard should be able to answer these ques
 
 ## Harness contract
 
-The harness should continue producing a stable package of evaluation artifacts for each candidate repo, with the next work focused on expanding coverage quality rather than inventing the mechanism from scratch.
+The harness should continue producing a stable package of evaluation artifacts for each candidate target, with the next work focused on expanding coverage quality rather than inventing the mechanism from scratch.
 
 ### Required inputs
 
@@ -73,6 +76,7 @@ The harness should continue producing a stable package of evaluation artifacts f
 - onboarding mode (`baseline_only` or `baseline_plus_backfill`)
 - optional backfill limits or filters
 - optional notes about expected AI control surfaces for manual comparison
+- optional seeded scenario key for explicit assertions
 
 ### Required workflow steps
 
@@ -94,8 +98,33 @@ Each run should save or emit:
 - overview dashboard payload snapshot
 - top artifacts requiring review
 - manual evaluation notes against a fixed rubric
+- explicit assertions and pass/fail summary when a seeded scenario is attached
 
 The purpose of the harness is not only replayability. It is comparability across branches.
+
+That is why the current implementation relies on a scriptable CLI and isolated local persistence for many runs. The CLI is the cheapest deterministic control surface for internal evaluation, and isolated databases keep one run's onboarding/history artifacts from contaminating another run or a developer's normal local state.
+
+### Seeded scenario registry
+
+The harness should support a small built-in registry of seeded scenarios in addition to live repository candidates.
+
+Each scenario should:
+
+- point at a real or seeded target repo
+- carry a stable scenario key
+- define explicit assertions for expected behavior
+- optionally point at a checked-in reference package for stable branch-to-reference comparison
+
+Examples of useful assertions:
+
+- minimum high-confidence baseline coverage
+- top review target must exist
+- top review target should match a known artifact path
+- lower-confidence queue must stay below a defined ceiling
+
+This turns scenario runs into something stronger than saved snapshots alone: they become lightweight regression checks that can fail explicitly when ranking or discovery quality drifts.
+
+When a scenario also carries a checked-in reference package, the CLI can compare a new run directly against that baseline without requiring a manually supplied package path. That keeps seeded regressions reproducible across branches and local environments.
 
 ---
 
@@ -194,7 +223,7 @@ Fail when:
 
 ---
 
-## Candidate repository strategy
+## Candidate target strategy
 
 The harness should keep a small but diverse candidate set.
 
@@ -202,6 +231,8 @@ The harness should keep a small but diverse candidate set.
 
 - `doria90/openfang`
 - `doria90/hermes-agent`
+
+These are the initial built-in OSS candidates, not the full product boundary. The harness itself should stay generic enough to evaluate any repository or seeded comparison target we choose to route through the same onboarding, dashboard, and comparison contract.
 
 ### Target expansion shape
 
@@ -256,7 +287,7 @@ That means the harness should preserve enough output to compare branch-to-branch
 
 ---
 
-## Implementation notes for `feature/oss-eval-harness-v1`
+## Implementation notes for `feature/eval-harness-v1`
 
 The future harness slice should stay lightweight.
 
