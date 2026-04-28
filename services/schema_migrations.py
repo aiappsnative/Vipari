@@ -41,12 +41,24 @@ def _bootstrap_relational_schema(db_path: str) -> None:
     bootstrap_application_schema(db_path)
 
 
+def _ensure_pull_request_audit_fused_confidence(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+        if "fused_confidence" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
         "0001_bootstrap_relational_schema",
         "Create and repair the relational application schema for the active backend.",
         _bootstrap_relational_schema,
+    ),
+    (
+        "0002_add_pull_request_audits_fused_confidence",
+        "Ensure pull_request_audits includes fused_confidence for legacy databases bootstrapped before the column existed.",
+        _ensure_pull_request_audit_fused_confidence,
     ),
 )
 

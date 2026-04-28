@@ -1189,6 +1189,7 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
 
 
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
+    fused_confidence = row["fused_confidence"] if "fused_confidence" in row.keys() else None
     return PullRequestAuditRecord(
         id=row["id"],
         job_id=row["job_id"],
@@ -1207,7 +1208,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         output_mode=row["output_mode"],
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
-        fused_confidence=row["fused_confidence"],
+        fused_confidence=fused_confidence,
         semantic_review_completed=bool(row["semantic_review_completed"]),
         error_message=row["error_message"],
         created_at=row["created_at"],
