@@ -16,7 +16,7 @@ from config import get_settings
 from engine.analysis import analyze_diff
 from services.audit_jobs import create_audit_job, init_db
 from services.branch_scan_jobs import claim_next_branch_scan_job
-from services.audit_records import record_audit_result
+from services.audit_records import has_completed_audit, record_audit_result
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.observability import configure_logging
 from services.control_plane_records import (
@@ -758,6 +758,127 @@ def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
     with patch("services.cloud_worker.fetch_diff_with_retry") as fetch_diff:
         asyncio.run(exercise_worker())
     fetch_diff.assert_not_called()
+
+
+def test_worker_completed_pr_audit_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+    backing_db_path = tmp_path / "worker-audit-postgres-sim.db"
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    init_db(str(backing_db_path))
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+
+        async def enqueue(self, _message):
+            return "message-1"
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            return None
+
+    def fake_connect_sqlite(_db_path: str, *, foreign_keys: bool = False):
+        connection = sqlite3.connect(backing_db_path)
+        connection.row_factory = sqlite3.Row
+        if foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def fake_process_job(job, _settings):
+        analysis = analyze_diff(job.diff_text)
+        from services.audit_jobs import mark_job_completed
+
+        mark_job_completed(locator, job.id, comment_body="done")
+        record_audit_result(
+            locator,
+            job_id=job.id,
+            repo_full=job.repo_full,
+            pr_number=job.pr_number,
+            installation_id=job.installation_id,
+            head_sha=job.head_sha,
+            deterministic_analysis=analysis,
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_review",
+            comment_body="done",
+            comment_mode="full_review",
+            semantic_review_completed=True,
+        )
+        return "completed"
+
+    queue = AckQueue()
+    initial_message = QueueMessage(
+        message_id="msg-pr-1",
+        receipt_handle="receipt-pr-1",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 11,
+            "head_sha": "sha-pr-11",
+        },
+        attempt_count=1,
+    )
+    restarted_message = QueueMessage(
+        message_id="msg-pr-2",
+        receipt_handle="receipt-pr-2",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 11,
+            "head_sha": "sha-pr-11",
+        },
+        attempt_count=1,
+    )
+
+    with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
+        "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
+        "services.cloud_worker._get_installation_token_for_worker",
+        return_value="installation-token",
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n+system prompt\n",
+    ) as fetch_diff, patch(
+        "services.cloud_worker.process_job", side_effect=fake_process_job
+    ):
+        asyncio.run(_process_message(queue, initial_message, get_settings(), configure_logging("worker-test"), Mock()))
+
+        assert has_completed_audit(locator, repo_full="doria90/dummyAI", pr_number=11, head_sha="sha-pr-11") is True
+
+        asyncio.run(_process_message(queue, restarted_message, get_settings(), configure_logging("worker-test"), Mock()))
+
+    assert queue.acked == ["receipt-pr-1", "receipt-pr-2"]
+    assert fetch_diff.call_count == 1
 
 
 def test_worker_skips_message_for_inactive_allocation(tmp_path, monkeypatch):
