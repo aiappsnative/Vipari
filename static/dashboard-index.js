@@ -87,6 +87,63 @@ function profileEntries(repo) {
     return asArray(matched?.attribute_profile).filter((entry) => entry.attribute_key !== "control_surface_type");
 }
 
+function overviewAttributeLabel(key) {
+    return {
+        guardrail_robustness: "Guardrails",
+        capability_risk: "Capability",
+        autonomy_level: "Autonomy",
+        governance_strength: "Governance",
+        model_config_posture: "Model/config",
+    }[key] || key;
+}
+
+function buildOverviewUnknownAttributeRow(key) {
+    return {
+        attribute_key: key,
+        label: overviewAttributeLabel(key),
+        baseline_value: "unknown",
+        current_value: "unknown",
+        reason: "No normalized attribute evidence is available yet.",
+        state: "unknown",
+    };
+}
+
+function normalizedOverviewAttributeRows(repo) {
+    const preferredOrder = ["guardrail_robustness", "capability_risk", "autonomy_level", "governance_strength", "model_config_posture"];
+    const entriesByKey = new Map(profileEntries(repo).map((entry) => [entry.attribute_key, entry]));
+    const rows = preferredOrder
+        .map((key) => entriesByKey.get(key))
+        .filter((entry) => entry && entry.state !== "no_change");
+    for (const key of preferredOrder) {
+        if (rows.length >= 2) {
+            break;
+        }
+        const entry = entriesByKey.get(key) || buildOverviewUnknownAttributeRow(key);
+        if (!rows.some((candidate) => candidate.attribute_key === entry.attribute_key)) {
+            rows.push(entry);
+        }
+    }
+    if (!rows.length) {
+        return [buildOverviewUnknownAttributeRow("guardrail_robustness"), buildOverviewUnknownAttributeRow("capability_risk")];
+    }
+    return rows.slice(0, 2);
+}
+
+function renderOverviewAttributeBlock(repo) {
+    const rows = normalizedOverviewAttributeRows(repo);
+    return `
+        <div class="triage-attribute-block">
+            ${rows.map((entry) => `
+                <div class="triage-attribute-row">
+                    <span class="triage-attribute-label">${escapeHtml(entry.label || overviewAttributeLabel(entry.attribute_key))}</span>
+                    <span class="triage-attribute-transition">${escapeHtml(`${entry.baseline_value || "unknown"} -> ${entry.current_value || "unknown"}`)}</span>
+                    <span class="triage-attribute-reason">${escapeHtml(entry.reason || "No normalized attribute evidence is available yet.")}</span>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
 function attributeScore(entry, keyPrefix) {
     const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
     const value = Number(entry?.[scoreKey]);
@@ -707,6 +764,7 @@ function renderUrgentRow(repo, index) {
                 <span>${escapeHtml(triageSummary(repo))}</span>
                 <span>${escapeHtml(repoSubtitle(repo))}</span>
             </div>
+            ${renderOverviewAttributeBlock(repo)}
             <div class="triage-row-chips">
                 ${chips.map((chip) => `<span class="drift-chip chip-governance">${escapeHtml(chip)}</span>`).join("")}
             </div>

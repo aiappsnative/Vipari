@@ -33,6 +33,15 @@ window.__artifactQuery = "";
 window.__artifactsCollapsed = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
+window.__attributeProfileActiveTab = "guardrail_regressions";
+
+const ATTRIBUTE_PROFILE_TAB_CONFIG = [
+    { key: "guardrail_regressions", label: "Guardrail regressions", dimensionKeys: ["guardrail_robustness"] },
+    { key: "capability_expansions", label: "Capability expansions", dimensionKeys: ["capability_risk"] },
+    { key: "autonomy_increases", label: "Autonomy increases", dimensionKeys: ["autonomy_level"] },
+    { key: "governance_anomalies", label: "Governance anomalies", dimensionKeys: ["governance_strength"] },
+    { key: "model_config_changes", label: "Model/config changes", dimensionKeys: ["model_config_posture"] },
+];
 
 function asArray(value) {
     return Array.isArray(value) ? value : [];
@@ -458,6 +467,127 @@ function renderInsightChips(item, profile) {
     }).join("");
 }
 
+function profileDimensionLabel(key) {
+    return {
+        guardrail_robustness: "Guardrails",
+        capability_risk: "Capability",
+        autonomy_level: "Autonomy",
+        governance_strength: "Governance",
+        model_config_posture: "Model/config",
+        control_surface_type: "Control surface",
+    }[key] || key.replaceAll("_", " ");
+}
+
+function fallbackProfileDimension(key) {
+    return {
+        attribute_key: key,
+        label: profileDimensionLabel(key),
+        baseline_value: "unknown",
+        current_value: "unknown",
+        direction: "unknown",
+        state: "unknown",
+        confidence_label: "low confidence",
+        confidence_score: 0.4,
+        reason: "No normalized attribute evidence was available for this dimension.",
+    };
+}
+
+function normalizedProfileDimensions(profile) {
+    const desiredOrder = [
+        "guardrail_robustness",
+        "capability_risk",
+        "autonomy_level",
+        "governance_strength",
+        "model_config_posture",
+        "control_surface_type",
+    ];
+    const entriesByKey = new Map(asArray(profile?.attribute_profile || []).map((entry) => [entry.attribute_key, entry]));
+    return desiredOrder.map((key) => entriesByKey.get(key) || fallbackProfileDimension(key));
+}
+
+function profileStateClass(entry) {
+    if (entry.state === "unknown") {
+        return "attribute-profile-row-unknown";
+    }
+    if (entry.state === "no_change") {
+        return "attribute-profile-row-neutral";
+    }
+    if (["weakened", "expanded", "increased", "more exploratory"].includes(String(entry.direction || "").toLowerCase())) {
+        return "attribute-profile-row-regression";
+    }
+    return "attribute-profile-row-improvement";
+}
+
+function renderAttributeProfileSummaryCards(profile) {
+    return normalizedProfileDimensions(profile).map((entry) => `
+        <div class="attribute-profile-summary-card ${profileStateClass(entry)}">
+            <span class="attribute-profile-summary-label">${escapeHtml(entry.label || profileDimensionLabel(entry.attribute_key))}</span>
+            <strong class="attribute-profile-summary-transition">${escapeHtml(`${entry.baseline_value || "unknown"} -> ${entry.current_value || "unknown"}`)}</strong>
+            <span class="attribute-profile-summary-confidence">${escapeHtml(entry.confidence_label || "low confidence")}</span>
+        </div>
+    `).join("");
+}
+
+function renderAttributeProfileTableRows(profile, activeTabKey) {
+    const tab = ATTRIBUTE_PROFILE_TAB_CONFIG.find((item) => item.key === activeTabKey) || ATTRIBUTE_PROFILE_TAB_CONFIG[0];
+    const rows = normalizedProfileDimensions(profile).filter((entry) => tab.dimensionKeys.includes(entry.attribute_key));
+    return rows.map((entry) => `
+        <tr class="${profileStateClass(entry)}">
+            <td>${escapeHtml(entry.label || profileDimensionLabel(entry.attribute_key))}</td>
+            <td>${escapeHtml(`${entry.baseline_value || "unknown"} -> ${entry.current_value || "unknown"}`)}</td>
+            <td>${escapeHtml(entry.reason || "No normalized attribute evidence was available for this dimension.")}</td>
+            <td>${escapeHtml(entry.confidence_label || "low confidence")}</td>
+        </tr>
+    `).join("");
+}
+
+function renderAttributeProfilePanel(profile, activeTabKey = window.__attributeProfileActiveTab || ATTRIBUTE_PROFILE_TAB_CONFIG[0].key) {
+    const activeTab = ATTRIBUTE_PROFILE_TAB_CONFIG.find((item) => item.key === activeTabKey) || ATTRIBUTE_PROFILE_TAB_CONFIG[0];
+    const controlSurface = normalizedProfileDimensions(profile).find((entry) => entry.attribute_key === "control_surface_type");
+    return `
+        <div class="attribute-profile-panel">
+            <div class="attribute-profile-summary-grid">
+                ${renderAttributeProfileSummaryCards(profile)}
+            </div>
+            <div class="attribute-profile-tabs" role="tablist" aria-label="Attribute profile filters">
+                ${ATTRIBUTE_PROFILE_TAB_CONFIG.map((tab) => `
+                    <button type="button" class="attribute-profile-tab ${tab.key === activeTab.key ? "active" : ""}" data-attribute-profile-tab="${escapeHtml(tab.key)}" role="tab" aria-selected="${tab.key === activeTab.key ? "true" : "false"}">${escapeHtml(tab.label)}</button>
+                `).join("")}
+            </div>
+            <div class="attribute-profile-control-surface">Control surface: ${escapeHtml(controlSurface?.current_value || "unknown")}</div>
+            <div class="attribute-profile-table-wrap">
+                <table class="attribute-profile-table">
+                    <thead>
+                        <tr>
+                            <th>Attribute</th>
+                            <th>Baseline -> Current</th>
+                            <th>Reason</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${renderAttributeProfileTableRows(profile, activeTab.key)}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function bindAttributeProfileTabs(profile) {
+    document.querySelectorAll("[data-attribute-profile-tab]").forEach((button) => {
+        if (button.dataset.boundAttributeProfileTab === "true") {
+            return;
+        }
+        button.dataset.boundAttributeProfileTab = "true";
+        button.addEventListener("click", () => {
+            window.__attributeProfileActiveTab = button.getAttribute("data-attribute-profile-tab") || ATTRIBUTE_PROFILE_TAB_CONFIG[0].key;
+            setSectionHtml("detail-attributes", renderAttributeProfilePanel(profile, window.__attributeProfileActiveTab));
+            bindAttributeProfileTabs(profile);
+        });
+    });
+}
+
 function renderRepoTriageRow(item, index) {
     const severity = severityForPriority(item.priority);
     const profile = findDesignProfile(item.artifact_path);
@@ -474,37 +604,6 @@ function renderRepoTriageRow(item, index) {
             <div class="triage-row-reason">${escapeHtml(item.change_summary || item.flag_summary || item.rationale || item.title)}</div>
         </div>
     `;
-}
-
-function renderAttributeBars(profile) {
-    const attributes = asArray(profile?.attribute_profile || []).filter((entry) => entry.attribute_key !== "control_surface_type");
-    if (!attributes.length) {
-        return '<div class="muted">No attribute-level baseline comparison is available for this artifact yet.</div>';
-    }
-    return attributes.map((entry) => {
-        const baseline = attributeScore(entry, "baseline");
-        const current = attributeScore(entry, "current");
-        const direction = String(entry.direction || "").toLowerCase();
-        const tone = ["weaker", "reduced", "decreased"].includes(direction)
-            ? "declined"
-            : ["stronger", "expanded", "increased"].includes(direction)
-                ? "expanded"
-                : "stable";
-        return `
-            <div class="attr-row">
-                <span class="attr-label">${escapeHtml(entry.label || entry.attribute_key || "Attribute")}</span>
-                <div class="attr-bars">
-                    <div class="attr-bar-track"><div class="attr-bar attr-bar-baseline" style="width:${baseline * 100}%"></div></div>
-                    <div class="attr-bar-track"><div class="attr-bar attr-bar-current attr-bar-${tone}" style="width:${current * 100}%"></div></div>
-                </div>
-                <div class="attr-counts">
-                    <span class="attr-count-baseline">${baseline.toFixed(2)}</span>
-                    <span class="attr-arrow">→</span>
-                    <span class="attr-count-current attr-count-${tone}">${current.toFixed(2)}</span>
-                </div>
-            </div>
-        `;
-    }).join("");
 }
 
 function averageProfileScore(profile, key) {
@@ -571,7 +670,8 @@ function applyRepoDetail(item) {
         deltaElement.className = `score-delta ${delta > 0.02 ? "score-delta-up" : delta < -0.02 ? "score-delta-down" : "score-delta-flat"}`;
     }
 
-    setSectionHtml("detail-attributes", renderAttributeBars(profile));
+    setSectionHtml("detail-attributes", renderAttributeProfilePanel(profile));
+    bindAttributeProfileTabs(profile);
     setSectionHtml("detail-evidence-list", renderEvidenceList(item, profile));
     setText("detail-recommendation-body", item.recommended_action || profile?.headline_summary || "Inspect the selected artifact before merge and confirm the changed control surface is still acceptable.");
 

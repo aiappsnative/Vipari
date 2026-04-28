@@ -1492,6 +1492,35 @@ strong {
     color: var(--color-text-muted);
 }
 
+.triage-attribute-block {
+    display: grid;
+    gap: 6px;
+    margin-bottom: var(--space-2);
+}
+
+.triage-attribute-row {
+    display: grid;
+    grid-template-columns: minmax(72px, 92px) minmax(110px, 150px) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+}
+
+.triage-attribute-label {
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.triage-attribute-transition {
+    color: var(--color-text-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.triage-attribute-reason {
+    min-width: 0;
+}
+
 .severity-badge {
     display: inline-flex;
     align-items: center;
@@ -1644,6 +1673,112 @@ strong {
 .detail-attributes {
     display: grid;
     gap: var(--space-1);
+}
+
+.attribute-profile-panel {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.attribute-profile-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.attribute-profile-summary-card {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+}
+
+.attribute-profile-summary-card.attribute-profile-row-regression {
+    border-color: rgba(224, 92, 92, 0.24);
+    background: rgba(224, 92, 92, 0.06);
+}
+
+.attribute-profile-summary-card.attribute-profile-row-improvement {
+    border-color: rgba(109, 170, 69, 0.22);
+    background: rgba(109, 170, 69, 0.06);
+}
+
+.attribute-profile-summary-card.attribute-profile-row-unknown {
+    border-style: dashed;
+}
+
+.attribute-profile-summary-label,
+.attribute-profile-summary-confidence,
+.attribute-profile-control-surface,
+.attribute-profile-table td {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+}
+
+.attribute-profile-summary-transition {
+    color: var(--color-text);
+    font-size: var(--text-base);
+}
+
+.attribute-profile-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.attribute-profile-tab {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 6px 10px;
+    font-size: var(--text-sm);
+}
+
+.attribute-profile-tab.active,
+.attribute-profile-tab:hover {
+    border-color: var(--color-primary-outline);
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+}
+
+.attribute-profile-table-wrap {
+    overflow-x: auto;
+}
+
+.attribute-profile-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.attribute-profile-table th,
+.attribute-profile-table td {
+    padding: 10px 8px;
+    border-top: 1px solid var(--color-row-border);
+    text-align: left;
+    vertical-align: top;
+}
+
+.attribute-profile-table th {
+    color: var(--color-text-faint);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.attribute-profile-table tbody tr.attribute-profile-row-regression td:first-child {
+    color: var(--color-high);
+}
+
+.attribute-profile-table tbody tr.attribute-profile-row-improvement td:first-child {
+    color: var(--color-low);
+}
+
+.attribute-profile-table tbody tr.attribute-profile-row-neutral td:first-child {
+    color: var(--color-text);
 }
 
 .attr-row {
@@ -2401,6 +2536,11 @@ strong {
     .attr-row {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .attribute-profile-summary-grid,
+    .triage-attribute-row {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .attr-counts {

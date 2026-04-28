@@ -103,6 +103,7 @@ class PrCommentReview:
     risk_level: str
     confidence: str | None
     context_line: str
+    attribute_table_rows: tuple[tuple[str, str, str], ...]
     what_changed: tuple[str, ...]
     key_deltas: tuple[str, ...]
     evidence: tuple[str, ...]
@@ -230,6 +231,7 @@ def _build_pr_comment_review(
         risk_level=normalized_risk,
         confidence=confidence,
         context_line=_build_context_line(normalized_risk, primary_profile, confidence=confidence),
+        attribute_table_rows=_build_attribute_table_rows(profiles),
         what_changed=_build_what_changed_lines(summary, fusion_summary, decision, primary_profile),
         key_deltas=_build_key_delta_bullets(selected_key_deltas, deterministic_analysis),
         evidence=_build_evidence_bullets(selected_key_deltas, deterministic_analysis),
@@ -249,8 +251,20 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         "",
         review.context_line,
         "",
-        "### What changed",
+        "### Attribute profile",
+        "| Attribute | Baseline -> Current | Reason |",
+        "| --- | --- | --- |",
     ]
+    lines.extend(
+        f"| {_markdown_table_cell(attribute)} | {_markdown_table_cell(transition)} | {_markdown_table_cell(reason)} |"
+        for attribute, transition, reason in review.attribute_table_rows
+    )
+    lines.extend(
+        [
+            "",
+        "### What changed",
+        ]
+    )
     lines.extend(review.what_changed)
     lines.extend(
         [
@@ -393,6 +407,44 @@ def _build_key_delta_bullets(
     if not bullets:
         bullets.append("No material attribute shift was detected beyond the files touched in this PR.")
     return tuple(bullets[:3])
+
+
+def _build_attribute_table_rows(attribute_profiles: list[ArtifactAttributeProfile]) -> tuple[tuple[str, str, str], ...]:
+    row_specs = (
+        ("guardrail_robustness", "Guardrails"),
+        ("capability_risk", "Capability"),
+        ("autonomy_level", "Autonomy"),
+        ("governance_strength", "Governance"),
+        ("model_config_posture", "Model/config"),
+    )
+    primary_profile = _select_primary_attribute_profile(attribute_profiles)
+    dimensions_by_key = {
+        dimension.attribute_key: dimension
+        for dimension in (primary_profile.dimensions if primary_profile is not None else [])
+    }
+    rows: list[tuple[str, str, str]] = []
+    for attribute_key, label in row_specs:
+        dimension = dimensions_by_key.get(attribute_key)
+        if dimension is None:
+            rows.append((label, "unknown -> unknown", "No normalized attribute evidence was available for this dimension; treat it as low-confidence unknown."))
+            continue
+        rows.append((label, _attribute_table_transition(dimension), _attribute_table_reason(dimension)))
+    return tuple(rows)
+
+
+def _attribute_table_transition(dimension) -> str:
+    baseline_value = (dimension.baseline_value or "unknown").strip() or "unknown"
+    current_value = (dimension.current_value or "unknown").strip() or "unknown"
+    return f"{baseline_value} -> {current_value}"
+
+
+def _attribute_table_reason(dimension) -> str:
+    reason = _normalize_sentence(dimension.reason, default=dimension.reason).rstrip(".")
+    return reason or "No normalized attribute evidence was available."
+
+
+def _markdown_table_cell(value: str) -> str:
+    return str(value or "").replace("|", "\\|")
 
 
 def _format_key_delta_bullet(dimension) -> str:
