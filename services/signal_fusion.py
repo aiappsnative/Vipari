@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 RISK_ORDER = {"Low": 0, "Medium": 1, "High": 2}
+RISK_LEVELS = ("Low", "Medium", "High")
 PRIORITY_ORDER = {"baseline_review": 0, "watch": 1, "review_now": 2}
 PRIORITY_WEIGHT_BONUS = {"baseline_review": 0.0, "watch": 0.35, "review_now": 1.0}
 
@@ -17,14 +18,25 @@ def normalize_risk_level(risk_level: str | None, *, default: str = "Low") -> str
     return normalize_risk_level(default, default="Low")
 
 
-def fuse_risk_levels(deterministic_risk: str | None, semantic_risk: str | None) -> str:
+def fuse_risk_levels(
+    deterministic_risk: str | None,
+    semantic_risk: str | None,
+    *,
+    semantic_requires_escalation: bool = False,
+) -> str:
     normalized_deterministic = normalize_risk_level(deterministic_risk)
     normalized_semantic = normalize_risk_level(semantic_risk)
+    deterministic_order = RISK_ORDER[normalized_deterministic]
+    semantic_order = RISK_ORDER[normalized_semantic]
 
     if normalized_deterministic == normalized_semantic == "Medium":
         return "High"
 
-    if RISK_ORDER[normalized_semantic] >= RISK_ORDER[normalized_deterministic]:
+    if semantic_order > deterministic_order and not semantic_requires_escalation:
+        bounded_order = min(deterministic_order + 1, semantic_order)
+        return RISK_LEVELS[bounded_order]
+
+    if semantic_order >= deterministic_order:
         return normalized_semantic
     return normalized_deterministic
 

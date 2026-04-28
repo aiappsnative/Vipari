@@ -707,8 +707,17 @@ def _semantic_recommendation_requires_escalation(recommendation: str) -> bool:
     return any(hint in lowered for hint in escalation_hints)
 
 
-def _fuse_risk_levels(deterministic_risk: str, semantic_risk: str) -> str:
-    return fuse_risk_levels(deterministic_risk, semantic_risk)
+def _fuse_risk_levels(
+    deterministic_risk: str,
+    semantic_risk: str,
+    *,
+    semantic_requires_escalation: bool = False,
+) -> str:
+    return fuse_risk_levels(
+        deterministic_risk,
+        semantic_risk,
+        semantic_requires_escalation=semantic_requires_escalation,
+    )
 
 
 def _build_signal_fusion_assessment(
@@ -717,15 +726,20 @@ def _build_signal_fusion_assessment(
 ) -> SignalFusionAssessment:
     deterministic_risk = deterministic_analysis.suggested_risk_level.value
     semantic_risk = _extract_risk_level(comment_body, default=deterministic_risk)
-    fused_risk = _fuse_risk_levels(deterministic_risk, semantic_risk)
     semantic_recommendation = _extract_recommendation(
         comment_body,
-        default=_default_recommendation_for_risk(fused_risk),
+        default=_default_recommendation_for_risk(semantic_risk),
+    )
+    semantic_requires_escalation = _semantic_recommendation_requires_escalation(semantic_recommendation)
+    fused_risk = _fuse_risk_levels(
+        deterministic_risk,
+        semantic_risk,
+        semantic_requires_escalation=semantic_requires_escalation,
     )
 
     base_recommendation = _build_escalation_recommendation(deterministic_analysis)
     reasons = list(base_recommendation.reasons)
-    if fused_risk == "High" and _semantic_recommendation_requires_escalation(semantic_recommendation):
+    if fused_risk == "High" and semantic_requires_escalation:
         semantic_reason = "semantic review flagged merge-blocking risk"
         if semantic_reason not in reasons:
             reasons.append(semantic_reason)

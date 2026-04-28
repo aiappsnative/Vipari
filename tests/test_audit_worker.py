@@ -55,6 +55,23 @@ def test_build_signal_fusion_assessment_escalates_on_medium_medium_agreement():
     assert assessment.escalation_recommendation.decision == "normal_review"
 
 
+def test_build_signal_fusion_assessment_bounds_semantic_only_high_without_merge_blocking_recommendation():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: High\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+    )
+
+    assert assessment.risk_level == "Medium"
+    assert assessment.escalation_recommendation.decision == "normal_review"
+
+
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
