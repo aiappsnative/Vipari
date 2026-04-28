@@ -1,6 +1,6 @@
 # Railway Launch Readiness Plan
 
-Branch: `feature/railway-launch-hardening`
+Branch lineage: `feature/railway-launch-hardening` planning document, updated after the merge of `feature/production-persistence-v1` into `main`
 
 Issue: `#36 [Launch Blocker] Production-hardening and Railway deployment readiness for DriftGuard`
 
@@ -20,7 +20,7 @@ The critical engineering principle for this branch is:
 
 ## Current-state audit findings
 
-Status refresh: the original audit captured a pre-hardening snapshot. The findings below reflect the current branch state after PostgreSQL-capable persistence, Redis queue support, split-service packaging, and readiness guardrails landed.
+Status refresh: the original audit captured a pre-hardening snapshot. The findings below now reflect `main` after PostgreSQL-capable persistence hardening, Redis queue support, split-service packaging, readiness guardrails, and the merged `feature/production-persistence-v1` slice.
 
 ### 1. Production persistence is PostgreSQL-capable, with mixed adapter-level and simulated lifecycle coverage
 

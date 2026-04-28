@@ -60,6 +60,7 @@ This framing should shape roadmap decisions:
 	- now includes the triage-first operator shell, repo case-file split-pane dashboard flow, artifact storyline APIs and rendering, repo journey snapshots, fused dashboard priority ordering, and grouped low-signal onboarding discovery for larger OSS repositories
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, production-safe dashboard auth gating, and the final Stripe billing-ownership and webhook/worker hardening pass
+	- now includes the merged `feature/production-persistence-v1` slice, including production fail-closed migration/runtime guardrails, Redis-first production queue contracts, split-service smoke tooling, and broader PostgreSQL-locator persistence regression coverage for restart, idempotency, and retry paths
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-storyline-v1`
@@ -288,7 +289,8 @@ Verified against repo state and open issues:
 - GitHub issue `#44` (`feature/oss-eval-harness-v1`) is now merged to `main` via the broader `feature/eval-harness-v1` slice.
 - GitHub issue `#42` (`feature/signal-fusion-v1`) is still open on GitHub, but the feature is already merged to `main`; treat that issue as stale until it is closed or repurposed.
 - `feature/discovery-precision-v1` is merged to `main` and should no longer appear in the near-term execution queue.
-- The remaining open issues that align with real unfinished work are `#45` (`feature/production-persistence-v1`), `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
+- GitHub issue `#45` (`feature/production-persistence-v1`) is now merged to `main`.
+- The remaining open issues that align with real unfinished work are `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
 
 #### Remaining work analysis
 
@@ -297,18 +299,16 @@ Current repository state suggests the product has moved past dashboard shell red
 What still looks unfinished on `main`:
 
 - reviewer-target quality now has merged proposal-only vs landed-history separation and PR-first review targets, but still needs broader real-repo validation and tuning on history-heavy repositories
-- production persistence and deployment hardening are still documented as partially complete rather than fully proven end to end
+- production persistence hardening is now merged, but live Railway/operator validation is still needed before broader launch claims
 - attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
 
 What should come next:
 
-1. `feature/production-persistence-v1`
-	- should be prioritized ahead of broad launch claims because the codebase is now feature-rich enough that durability and restart correctness matter more than more dashboard chrome
-2. `feature/railway-launch-hardening`
+1. `feature/railway-launch-hardening`
 	- should stay close behind persistence because launch readiness depends on the production data-path actually being proven
-3. `feature/attribute-profile-ui-v1`
+2. `feature/attribute-profile-ui-v1`
 	- now becomes more leverageable because the dashboard and storyline surfaces already expose rich profile payloads
-4. `feature/governance-signals-v1`
+3. `feature/governance-signals-v1`
 	- should follow once reviewer-target quality and attribute-profile presentation are stable enough to support another first-class dimension
 
 #### Completed: `feature/eval-harness-v1`
@@ -378,12 +378,12 @@ Planned scope:
 - reduce low-value artifact discovery without missing true AI control surfaces
 - improve repo-level summaries so noisy discovery does not pollute reviewer prioritization
 
-#### 1. `feature/production-persistence-v1`
+#### Completed: `feature/production-persistence-v1`
 
 Purpose:
 - harden local-stage persistence and deployment assumptions toward a production-ready posture
 
-Current branch status:
+Final status at merge:
 - production runtime and migration guardrails now fail closed when SQLite is targeted in production
 - Railway preflight now rejects invalid production queue configuration before touching the local SQLite queue path
 - split-service startup and readiness smoke coverage now exists for API, webhook, and worker paths on the PostgreSQL deployment shape
@@ -395,15 +395,11 @@ Current branch status:
 	- webhook delivery dedupe survives split-service restart
 	- worker push processing persists a branch-scan job that can be claimed after restart
 
-Ready-for-review scope assessment:
-- the branch now has stronger executable coverage for the core production persistence seams, but most of the higher-level lifecycle proofs still simulate a PostgreSQL locator with a patched backing store rather than a live Postgres service
-- this is sufficient for review, but not for claiming that only live operator validation remains; real PostgreSQL integration confidence still depends on CI or explicit environment-backed validation
+Exit note:
+- this slice is now merged and directionally complete for the code-level persistence contract it targeted
+- the remaining work belongs to Railway/live-environment validation and release confidence rather than another obvious persistence-contract gap on `main`
 
-Remaining release-facing follow-through:
-- keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
-- validate the final operator-facing production path against a real PostgreSQL-backed environment without weakening the current fail-closed deployment defaults
-
-#### 2. `feature/railway-launch-hardening`
+#### 1. `feature/railway-launch-hardening`
 
 Purpose:
 - turn the current cloud-oriented scaffolding into an operator-safe Railway deployment shape for launch preparation

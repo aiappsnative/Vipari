@@ -518,7 +518,7 @@ Operational note:
 - the current backend is still SQLite, but persistence metadata now makes the logical boundary explicit: operational queue tables vs durable audit/history tables, with PostgreSQL remaining the production target
 - the dashboard is now structurally ready for OSS validation, but landed posture intentionally depends on approved baselines plus merged-history evidence rather than proposal-only PR audits
 - larger public repos now onboard successfully, but discovery precision and reviewer-target quality from merged-history evidence still need continued refinement
-- cloud deployment scaffolding is now landed, but the deployed shape is still SQLite-first, effectively single-tenant, and not yet a full production control plane
+- cloud deployment scaffolding and production-persistence hardening are now landed, but live PostgreSQL-backed Railway/operator validation is still needed before treating the deployment path as fully production-proven
 - AI relevance coverage and deterministic/semantic signal fusion still need refinement
 - reviewer-target quality and queue tuning still need broader real-repo validation on history-heavy repositories, even though proposal-only and mixed evidence are now separated in the dashboard read models
 
