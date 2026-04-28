@@ -731,6 +731,11 @@ This stage combines deterministic and semantic findings into one decision set.
 - repeated similar findings across recent history can increase confidence
 - recent improvements or repeated reversions can be surfaced as trend context without dominating core risk scoring
 
+Current implementation notes on the feature branch:
+- semantic review emits an explicit `Confidence: Low|Medium|High` line in the reviewer-note contract when the LLM path succeeds
+- missing structured semantic risk is treated as low-confidence advisory input rather than accidental corroboration
+- fused confidence is persisted with completed PR audits so later read models and evaluation workflows can inspect the final fusion decision
+
 ### Expected outputs
 - `FusedFindingSet`
 - `final_score`
@@ -754,6 +759,7 @@ This stage prepares the reviewer-facing output.
 - evidence-based
 - suitable for PR comments
 - not overly verbose
+- include fused confidence when semantic review completed and the final reviewer note depends on fusion rather than deterministic-only fallback
 
 ### Expected outputs
 - Markdown comment body

@@ -42,6 +42,7 @@ class PullRequestAuditRecord:
     output_mode: str
     deterministic_score: int
     suggested_risk_level: str
+    fused_confidence: str | None
     semantic_review_completed: bool
     error_message: str | None
     created_at: float
@@ -113,6 +114,7 @@ class ArtifactHistoryRecord:
     output_mode: str
     deterministic_score: int
     suggested_risk_level: str
+    fused_confidence: str | None
     semantic_review_completed: bool
     artifact_path: str
     artifact_type: str
@@ -228,6 +230,7 @@ def init_audit_record_db(db_path: str) -> None:
                 output_mode TEXT NOT NULL,
                 deterministic_score INTEGER NOT NULL,
                 suggested_risk_level TEXT NOT NULL,
+                fused_confidence TEXT,
                 semantic_review_completed INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
                 created_at REAL NOT NULL,
@@ -249,6 +252,8 @@ def init_audit_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merge_commit_sha TEXT")
         if "pr_updated_at" not in audit_columns:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
+        if "fused_confidence" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS changed_artifacts (
@@ -409,6 +414,7 @@ def record_audit_result(
     comment_mode: str | None,
     semantic_review_completed: bool,
     suggested_risk_level: str | None = None,
+    fused_confidence: str | None = None,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
@@ -448,9 +454,9 @@ def record_audit_result(
                     job_id, repo_full, pr_number, installation_id, head_sha,
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode,
-                    deterministic_score, suggested_risk_level, semantic_review_completed,
+                    deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -469,6 +475,7 @@ def record_audit_result(
                     output_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
+                    fused_confidence,
                     int(semantic_review_completed),
                     error_message,
                     now,
@@ -496,6 +503,7 @@ def record_audit_result(
                     output_mode = ?,
                     deterministic_score = ?,
                     suggested_risk_level = ?,
+                    fused_confidence = ?,
                     semantic_review_completed = ?,
                     error_message = ?,
                     updated_at = ?
@@ -517,6 +525,7 @@ def record_audit_result(
                     output_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
+                    fused_confidence,
                     int(semantic_review_completed),
                     error_message,
                     now,
@@ -878,6 +887,7 @@ def list_artifact_history_for_repo(db_path: str, repo_full: str, artifact_path: 
                 pra.output_mode AS output_mode,
                 pra.deterministic_score AS deterministic_score,
                 pra.suggested_risk_level AS suggested_risk_level,
+                pra.fused_confidence AS fused_confidence,
                 pra.semantic_review_completed AS semantic_review_completed,
                 ca.artifact_path AS artifact_path,
                 ca.artifact_type AS artifact_type,
@@ -1197,6 +1207,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         output_mode=row["output_mode"],
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
+        fused_confidence=row["fused_confidence"],
         semantic_review_completed=bool(row["semantic_review_completed"]),
         error_message=row["error_message"],
         created_at=row["created_at"],
@@ -1389,6 +1400,7 @@ def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
         output_mode=row["output_mode"],
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
+        fused_confidence=row["fused_confidence"],
         semantic_review_completed=bool(row["semantic_review_completed"]),
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],

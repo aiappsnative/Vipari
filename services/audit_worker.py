@@ -85,6 +85,8 @@ class CanonicalCommentDetails:
 class SignalFusionAssessment:
     risk_level: str
     confidence: str
+    semantic_risk: str
+    semantic_requires_escalation: bool
     escalation_recommendation: EscalationRecommendation
 
 
@@ -99,6 +101,7 @@ class PrCommentEpisodeContext:
 class PrCommentReview:
     decision: str
     risk_level: str
+    confidence: str | None
     context_line: str
     what_changed: tuple[str, ...]
     key_deltas: tuple[str, ...]
@@ -163,7 +166,15 @@ def build_llm_comment(
     review = _build_pr_comment_review(
         deterministic_analysis,
         risk_level=fusion_assessment.risk_level,
+        confidence=fusion_assessment.confidence,
         summary=summary,
+        fusion_summary=_build_signal_fusion_summary(
+            deterministic_analysis.suggested_risk_level.value,
+            fusion_assessment.semantic_risk,
+            fusion_assessment.risk_level,
+            confidence=fusion_assessment.confidence,
+            semantic_requires_escalation=fusion_assessment.semantic_requires_escalation,
+        ),
         semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
         attribute_profiles=attribute_profiles,
@@ -186,7 +197,9 @@ def build_fallback_comment(
     review = _build_pr_comment_review(
         deterministic_analysis,
         risk_level=deterministic_analysis.suggested_risk_level.value,
+        confidence=None,
         summary=summary,
+        fusion_summary=None,
         semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=recommendation,
         attribute_profiles=attribute_profiles,
@@ -199,7 +212,9 @@ def _build_pr_comment_review(
     deterministic_analysis: DiffAnalysis,
     *,
     risk_level: str,
+    confidence: str | None,
     summary: str,
+    fusion_summary: str | None,
     semantic_recommendation: str,
     escalation_recommendation: EscalationRecommendation,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
@@ -213,8 +228,9 @@ def _build_pr_comment_review(
     return PrCommentReview(
         decision=decision,
         risk_level=normalized_risk,
-        context_line=_build_context_line(normalized_risk, primary_profile),
-        what_changed=_build_what_changed_lines(summary, decision, primary_profile),
+        confidence=confidence,
+        context_line=_build_context_line(normalized_risk, primary_profile, confidence=confidence),
+        what_changed=_build_what_changed_lines(summary, fusion_summary, decision, primary_profile),
         key_deltas=_build_key_delta_bullets(selected_key_deltas, deterministic_analysis),
         evidence=_build_evidence_bullets(selected_key_deltas, deterministic_analysis),
         governance_signals=_build_governance_signals(profiles, decision),
@@ -293,23 +309,69 @@ def _decision_header(decision: str) -> str:
     return "Keep in normal review lane"
 
 
-def _build_context_line(risk_level: str, primary_profile: ArtifactAttributeProfile | None) -> str:
+def _build_context_line(
+    risk_level: str,
+    primary_profile: ArtifactAttributeProfile | None,
+    *,
+    confidence: str | None = None,
+) -> str:
     control_surface = (primary_profile.control_surface_label if primary_profile is not None else "Unknown control surface").lower()
     baseline_reference = primary_profile.baseline_reference if primary_profile is not None else "none-yet"
+    if confidence:
+        return f"{risk_level} risk · {confidence.lower()} confidence · {control_surface} · vs approved baseline `{baseline_reference}`"
     return f"{risk_level} risk · {control_surface} · vs approved baseline `{baseline_reference}`"
 
 
 def _build_what_changed_lines(
     summary: str,
+    fusion_summary: str | None,
     decision: str,
     primary_profile: ArtifactAttributeProfile | None,
 ) -> tuple[str, ...]:
     lines = [_normalize_summary(summary, default=summary)]
+    if fusion_summary:
+        lines.append(_normalize_sentence(fusion_summary, default=fusion_summary))
     if primary_profile is None or not primary_profile.has_authoritative_baseline:
         lines.append("No approved baseline exists yet for this control surface, so treat the accepted version as a baseline candidate after review.")
     elif decision == "escalate_before_merge":
         lines.append("It moves the control surface farther from the approved baseline rather than tightening it.")
-    return tuple(lines[:2])
+    return tuple(lines[:3])
+
+
+def _build_signal_fusion_summary(
+    deterministic_risk: str,
+    semantic_risk: str,
+    fused_risk: str,
+    *,
+    confidence: str | None,
+    semantic_requires_escalation: bool,
+) -> str | None:
+    normalized_deterministic = _normalize_risk_level(deterministic_risk)
+    normalized_semantic = _normalize_risk_level(semantic_risk)
+    normalized_fused = _normalize_risk_level(fused_risk)
+    confidence_label = normalize_confidence_level(confidence, default="Medium").lower()
+
+    if confidence_label == "low" and normalized_semantic != normalized_deterministic and normalized_fused == normalized_deterministic:
+        return (
+            f"Signal fusion kept the deterministic {normalized_deterministic.lower()} risk assessment because the semantic escalation was only {confidence_label} confidence"
+        )
+
+    if normalized_deterministic == normalized_semantic == "Medium" and normalized_fused == "High":
+        return (
+            f"Signal fusion elevated this to high risk because deterministic and semantic review agreed on a medium-risk change with {confidence_label} confidence"
+        )
+
+    if semantic_requires_escalation and normalized_fused == "High":
+        return (
+            f"Signal fusion honored the semantic merge-blocking recommendation with {confidence_label} confidence"
+        )
+
+    if normalized_fused != normalized_deterministic and normalized_semantic != normalized_deterministic:
+        return (
+            f"Signal fusion raised this above the deterministic {normalized_deterministic.lower()} baseline because semantic review found materially riskier behavior with {confidence_label} confidence"
+        )
+
+    return None
 
 
 def _build_key_delta_bullets(
@@ -729,8 +791,11 @@ def _build_signal_fusion_assessment(
     deterministic_analysis: DiffAnalysis,
 ) -> SignalFusionAssessment:
     deterministic_risk = deterministic_analysis.suggested_risk_level.value
+    semantic_risk_explicit = _has_explicit_risk_level(comment_body)
     semantic_risk = _extract_risk_level(comment_body, default=deterministic_risk)
     semantic_confidence = _extract_confidence_level(comment_body, default="Medium")
+    if not semantic_risk_explicit:
+        semantic_confidence = "Low"
     semantic_recommendation = _extract_recommendation(
         comment_body,
         default=_default_recommendation_for_risk(semantic_risk),
@@ -762,6 +827,8 @@ def _build_signal_fusion_assessment(
     return SignalFusionAssessment(
         risk_level=fused_risk,
         confidence=semantic_confidence,
+        semantic_risk=semantic_risk,
+        semantic_requires_escalation=semantic_requires_escalation,
         escalation_recommendation=escalation_recommendation,
     )
 
@@ -843,6 +910,14 @@ def _extract_risk_level(comment_body: str, *, default: str) -> str:
     if context_match:
         return _normalize_risk_level(context_match.group(1))
     return _normalize_risk_level(default)
+
+
+def _has_explicit_risk_level(comment_body: str) -> bool:
+    if re.search(r"risk level\s*[:\-]\s*\**(low|medium|high)\**", comment_body, re.IGNORECASE):
+        return True
+    if re.search(r"^(low|medium|high) risk\b", comment_body, re.IGNORECASE | re.MULTILINE):
+        return True
+    return False
 
 
 def _extract_confidence_level(comment_body: str, *, default: str) -> str:
@@ -993,6 +1068,7 @@ def _persist_audit_result(
     comment_mode: str | None,
     semantic_review_completed: bool,
     suggested_risk_level: str | None = None,
+    fused_confidence: str | None = None,
     error_message: str | None = None,
     github_comment_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
@@ -1018,6 +1094,7 @@ def _persist_audit_result(
         comment_mode=comment_mode,
         semantic_review_completed=semantic_review_completed,
         suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
         error_message=error_message,
         artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
@@ -1188,6 +1265,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             comment_mode="full_review",
             semantic_review_completed=True,
             suggested_risk_level=fusion_assessment.risk_level,
+            fused_confidence=fusion_assessment.confidence,
             error_message=audit_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,

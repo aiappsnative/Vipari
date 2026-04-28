@@ -92,6 +92,24 @@ def test_build_signal_fusion_assessment_treats_low_confidence_semantic_high_as_a
     assert assessment.escalation_recommendation.decision == "normal_review"
 
 
+def test_build_signal_fusion_assessment_treats_missing_semantic_risk_as_low_confidence_advisory():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Medium"),
+        findings=[],
+    )
+
+    assessment = _build_signal_fusion_assessment(
+        "Summary: Accepted review without explicit structured risk output.\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+    )
+
+    assert assessment.risk_level == "Medium"
+    assert assessment.confidence == "Low"
+    assert assessment.escalation_recommendation.decision == "normal_review"
+
+
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
@@ -648,7 +666,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nConfidence: High\nRecommendation: Revert before merge."
                         )
                     )
                 ]
@@ -668,7 +686,7 @@ index 1..2
     )
 
     assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
-    assert "High risk · unknown control surface · vs approved baseline `none-yet`" in comment
+    assert "High risk · high confidence · unknown control surface · vs approved baseline `none-yet`" in comment
     assert "The prompt now allows disclosure of internal policy details" in comment
     assert "<details>" in comment
     assert "### Key deltas" in comment
@@ -695,7 +713,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="## Reviewer Notes\nThis change adds a clarifying-question instruction without materially expanding capability.\n\nRisk Level: Low\nRecommendation: Confirm the change is intended and keep the normal review lane."
+                            content="## Reviewer Notes\nThis change adds a clarifying-question instruction without materially expanding capability.\n\nRisk Level: Low\nConfidence: Medium\nRecommendation: Confirm the change is intended and keep the normal review lane."
                         )
                     )
                 ]
@@ -738,7 +756,7 @@ index 1..2
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="Summary: This PR expands the workflow while keeping the review lane manageable.\nRisk Level: Low\nRecommendation: Safe to merge after normal review."
+                            content="Summary: This PR expands the workflow while keeping the review lane manageable.\nRisk Level: Low\nConfidence: Medium\nRecommendation: Safe to merge after normal review."
                         )
                     )
                 ]
@@ -823,12 +841,54 @@ index 1..2
     )
 
     assert comment.startswith("## ✅ DriftGuard: Keep in normal review lane")
-    assert "Low risk · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
+    assert "Low risk · medium confidence · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment
     assert "- Added automatic refund issuance for requests under 500." in comment
     assert "Safe to merge after normal review." in comment
     assert "Previous DriftGuard analysis for `1234567` recommended restore explicit safety wording before merge" in comment
+
+
+def test_build_llm_comment_explains_low_confidence_semantic_disagreement():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++Ask one clarifying question before answering.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt may be riskier than it first appears.\nRisk Level: High\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="ghi123456", analyzed_at=1_700_000_300),
+    )
+
+    assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
+    assert "Low risk · low confidence · unknown control surface · vs approved baseline `none-yet`" in comment
+    assert "Signal fusion kept the deterministic low risk assessment because the semantic escalation was only low confidence." in comment
 
 
 def test_build_llm_comment_uses_reason_when_attribute_bucket_is_unchanged():
