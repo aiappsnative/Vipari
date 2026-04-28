@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import sys
 import time
 from unittest.mock import Mock, patch
@@ -148,6 +149,91 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert second.status_code == 202
     assert len(queue.messages) == 1
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
+def test_webhook_delivery_dedupe_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+    backing_db_path = tmp_path / "webhook-postgres-sim.db"
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "webhook")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("GITHUB_APP_ID", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    class RecordingQueue:
+        def __init__(self):
+            self.messages = []
+            self.closed = False
+
+        async def enqueue(self, message):
+            self.messages.append(message)
+            return f"message-{len(self.messages)}"
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, _receipt_handle):
+            return None
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return len(self.messages)
+
+        async def aclose(self):
+            self.closed = True
+
+    def fake_connect_sqlite(_db_path: str, *, foreign_keys: bool = False):
+        connection = sqlite3.connect(backing_db_path)
+        connection.row_factory = sqlite3.Row
+        if foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {"number": 7, "base": {"sha": "base"}, "head": {"sha": "head"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    headers = {
+        "X-Hub-Signature-256": signature,
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-postgres-restart",
+        "Content-Type": "application/json",
+    }
+
+    with patch("services.webhook_deliveries.connect_sqlite", side_effect=fake_connect_sqlite), patch(
+        "services.webhook_service.init_db"
+    ):
+        first_queue = RecordingQueue()
+        with TestClient(create_webhook_app(first_queue)) as client:
+            first = client.post("/webhook", content=body, headers=headers)
+
+        second_queue = RecordingQueue()
+        with TestClient(create_webhook_app(second_queue)) as client:
+            second = client.post("/webhook", content=body, headers=headers)
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(first_queue.messages) == 1
+    assert second.json() == {"message": "duplicate ignored"}
+    assert second_queue.messages == []
+    assert first_queue.closed is True
+    assert second_queue.closed is True
 
 
 def test_webhook_lifespan_closes_queue_backend(tmp_path, monkeypatch):
