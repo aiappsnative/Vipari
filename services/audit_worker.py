@@ -13,7 +13,7 @@ from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
-from .signal_fusion import fuse_risk_levels, normalize_risk_level
+from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normalize_risk_level
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
@@ -84,6 +84,7 @@ class CanonicalCommentDetails:
 @dataclass(frozen=True)
 class SignalFusionAssessment:
     risk_level: str
+    confidence: str
     escalation_recommendation: EscalationRecommendation
 
 
@@ -124,9 +125,10 @@ def build_llm_comment(
         "You are an AI Security Auditor. Analyze this code diff. "
         "You will receive deterministic pre-analysis findings, structured semantic review packages, and the raw diff. "
         "Use the semantic review packages as the primary review frame, use deterministic findings as grounding evidence, and use the raw diff as reference detail. "
-        "Return reviewer notes in Markdown using this structure exactly: 'Summary: ...', 'Risk Level: Low|Medium|High', 'Detailed Analysis:', 2-4 bullet points, and 'Recommendation: ...'. "
+        "Return reviewer notes in Markdown using this structure exactly: 'Summary: ...', 'Risk Level: Low|Medium|High', 'Confidence: Low|Medium|High', 'Detailed Analysis:', 2-4 bullet points, and 'Recommendation: ...'. "
         "Include a one-sentence line in the form 'Summary: ...' describing what changed and why the risk level fits. "
         "Include an explicit line in the form 'Risk Level: Low|Medium|High'. "
+        "Include an explicit line in the form 'Confidence: Low|Medium|High'. "
         "Under 'Detailed Analysis:' provide grounded reviewer reasoning, not generic advice. "
         "Include a short 'Recommendation:' line. "
         "Keep the detailed section compact but substantive, and do not use code fences."
@@ -712,11 +714,13 @@ def _fuse_risk_levels(
     semantic_risk: str,
     *,
     semantic_requires_escalation: bool = False,
+    semantic_confidence: str | None = None,
 ) -> str:
     return fuse_risk_levels(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
+        semantic_confidence=semantic_confidence,
     )
 
 
@@ -726,6 +730,7 @@ def _build_signal_fusion_assessment(
 ) -> SignalFusionAssessment:
     deterministic_risk = deterministic_analysis.suggested_risk_level.value
     semantic_risk = _extract_risk_level(comment_body, default=deterministic_risk)
+    semantic_confidence = _extract_confidence_level(comment_body, default="Medium")
     semantic_recommendation = _extract_recommendation(
         comment_body,
         default=_default_recommendation_for_risk(semantic_risk),
@@ -735,6 +740,7 @@ def _build_signal_fusion_assessment(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
+        semantic_confidence=semantic_confidence,
     )
 
     base_recommendation = _build_escalation_recommendation(deterministic_analysis)
@@ -755,6 +761,7 @@ def _build_signal_fusion_assessment(
 
     return SignalFusionAssessment(
         risk_level=fused_risk,
+        confidence=semantic_confidence,
         escalation_recommendation=escalation_recommendation,
     )
 
@@ -836,6 +843,13 @@ def _extract_risk_level(comment_body: str, *, default: str) -> str:
     if context_match:
         return _normalize_risk_level(context_match.group(1))
     return _normalize_risk_level(default)
+
+
+def _extract_confidence_level(comment_body: str, *, default: str) -> str:
+    match = re.search(r"confidence\s*[:\-]\s*\**(low|medium|high)\**", comment_body, re.IGNORECASE)
+    if match:
+        return normalize_confidence_level(match.group(1), default=default)
+    return normalize_confidence_level(default, default="Medium")
 
 
 def _normalize_risk_level(risk_level: str) -> str:

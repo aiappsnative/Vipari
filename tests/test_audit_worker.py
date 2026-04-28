@@ -47,11 +47,12 @@ def test_build_signal_fusion_assessment_escalates_on_medium_medium_agreement():
     )
 
     assessment = _build_signal_fusion_assessment(
-        "Risk Level: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        "Risk Level: Medium\nConfidence: High\nRecommendation: Review the changed AI control surface closely before merge.",
         deterministic_analysis,
     )
 
     assert assessment.risk_level == "High"
+    assert assessment.confidence == "High"
     assert assessment.escalation_recommendation.decision == "normal_review"
 
 
@@ -64,11 +65,30 @@ def test_build_signal_fusion_assessment_bounds_semantic_only_high_without_merge_
     )
 
     assessment = _build_signal_fusion_assessment(
-        "Risk Level: High\nRecommendation: Review the changed AI control surface closely before merge.",
+        "Risk Level: High\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
         deterministic_analysis,
     )
 
     assert assessment.risk_level == "Medium"
+    assert assessment.confidence == "Medium"
+    assert assessment.escalation_recommendation.decision == "normal_review"
+
+
+def test_build_signal_fusion_assessment_treats_low_confidence_semantic_high_as_advisory():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: High\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+    )
+
+    assert assessment.risk_level == "Low"
+    assert assessment.confidence == "Low"
     assert assessment.escalation_recommendation.decision == "normal_review"
 
 
