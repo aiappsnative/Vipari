@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
 from engine.analysis import analyze_diff
-from services.audit_jobs import create_audit_job, init_db
+from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db
 from services.branch_scan_jobs import claim_next_branch_scan_job
 from services.audit_records import get_audit_comment_episode_for_pr_head_sha, has_completed_audit, record_audit_result
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
@@ -993,6 +993,130 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator(tmp_path, m
     assert comment_episode.audit_comment.comment_body == "review comment"
     assert comment_episode.audit_status == "completed"
     assert comment_episode.audit_output_mode == "full_review"
+
+
+def test_audit_job_retry_wait_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+    backing_db_path = tmp_path / "worker-retry-postgres-sim.db"
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    init_db(str(backing_db_path))
+
+    class RetryQueue:
+        def __init__(self):
+            self.acked = []
+            self.nacks = []
+
+        async def enqueue(self, _message):
+            return "message-1"
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, receipt_handle, delay_seconds):
+            self.nacks.append((receipt_handle, delay_seconds))
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            return None
+
+    def fake_connect_sqlite(_db_path: str, *, foreign_keys: bool = False):
+        connection = sqlite3.connect(backing_db_path)
+        connection.row_factory = sqlite3.Row
+        if foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    retry_at = time.time() + 5
+
+    def fake_process_job(job, _settings):
+        from services.audit_jobs import mark_job_retry
+
+        mark_job_retry(locator, job.id, error_message="temporary llm issue", retry_at=retry_at)
+        return "retry_wait"
+
+    queue = RetryQueue()
+    message = QueueMessage(
+        message_id="msg-retry-1",
+        receipt_handle="receipt-retry-1",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 13,
+            "head_sha": "sha-pr-13",
+        },
+        attempt_count=1,
+    )
+
+    with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
+        "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
+        "services.cloud_worker._get_installation_token_for_worker",
+        return_value="installation-token",
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/prompts/test.txt b/prompts/test.txt\nindex 1..2\n+system prompt\n",
+    ), patch(
+        "services.cloud_worker.process_job", side_effect=fake_process_job
+    ):
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock()))
+
+        persisted_job = get_job(locator, 1)
+        reclaimed_job = claim_next_job(locator, now=retry_at + 1)
+
+        analysis = analyze_diff(reclaimed_job.diff_text)
+        from services.audit_jobs import mark_job_completed
+
+        mark_job_completed(locator, reclaimed_job.id, comment_body="retry recovered")
+        record_audit_result(
+            locator,
+            job_id=reclaimed_job.id,
+            repo_full=reclaimed_job.repo_full,
+            pr_number=reclaimed_job.pr_number,
+            installation_id=reclaimed_job.installation_id,
+            head_sha=reclaimed_job.head_sha,
+            deterministic_analysis=analysis,
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_review",
+            comment_body="retry recovered",
+            comment_mode="full_review",
+            semantic_review_completed=True,
+        )
+
+    assert queue.acked == []
+    assert len(queue.nacks) == 1
+    assert queue.nacks[0][0] == "receipt-retry-1"
+    assert persisted_job is not None
+    assert persisted_job.status == "retry_wait"
+    assert persisted_job.last_error == "temporary llm issue"
+    assert reclaimed_job is not None
+    assert reclaimed_job.status == "processing"
+    assert reclaimed_job.attempt_count == 2
+    with patch("services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite):
+        assert has_completed_audit(locator, repo_full="doria90/dummyAI", pr_number=13, head_sha="sha-pr-13") is True
 
 
 def test_worker_skips_message_for_inactive_allocation(tmp_path, monkeypatch):
