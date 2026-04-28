@@ -20,6 +20,10 @@ def normalize_risk_level(risk_level: str | None, *, default: str = "Low") -> str
 def fuse_risk_levels(deterministic_risk: str | None, semantic_risk: str | None) -> str:
     normalized_deterministic = normalize_risk_level(deterministic_risk)
     normalized_semantic = normalize_risk_level(semantic_risk)
+
+    if normalized_deterministic == normalized_semantic == "Medium":
+        return "High"
+
     if RISK_ORDER[normalized_semantic] >= RISK_ORDER[normalized_deterministic]:
         return normalized_semantic
     return normalized_deterministic

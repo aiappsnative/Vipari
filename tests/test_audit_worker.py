@@ -38,6 +38,23 @@ class FakeRateLimitError(Exception):
     pass
 
 
+def test_build_signal_fusion_assessment_escalates_on_medium_medium_agreement():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Medium"),
+        findings=[],
+    )
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+    )
+
+    assert assessment.risk_level == "High"
+    assert assessment.escalation_recommendation.decision == "normal_review"
+
+
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
