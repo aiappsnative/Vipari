@@ -390,7 +390,7 @@ Current branch status:
 - local runtime smoke tooling now exercises the real monolith, API, webhook, and worker entrypoints instead of only the monolith app
 - adapter-routed persistence seam simulations now cover webhook dedupe, branch-scan job persistence, completed-audit idempotency, persisted audit comment reads, and retry-wait reclamation when the app is configured with a PostgreSQL locator
 - separate adapter/unit coverage already exercises `PostgresConnection` translation behavior directly in the persistence test suite
-- restart durability is now proven for two production-relevant persistence seams on the PostgreSQL path:
+- restart durability is now proven for several production-relevant persistence seams on the PostgreSQL path:
 	- completed PR audit state now survives restart strongly enough to suppress a later redelivery through the worker's normal `has_completed_audit(...)` idempotency check
 	- webhook delivery dedupe survives split-service restart
 	- worker push processing persists a branch-scan job that can be claimed after restart
