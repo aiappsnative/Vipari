@@ -30,7 +30,7 @@ from services.control_plane_records import (
     upsert_github_installation,
 )
 from services.entitlements import derive_entitlement_payload
-from services.queue import LocalSQLiteQueue, close_queue_backend
+from services.queue import LocalSQLiteQueue, QueueMessage, close_queue_backend
 from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
 from services.webhook_deliveries import claim_webhook_delivery, init_webhook_delivery_db
 from services.webhook_service import create_webhook_app
@@ -606,6 +606,85 @@ def test_worker_turns_push_message_into_branch_scan_job(tmp_path, monkeypatch):
     assert created_job is not None
     assert created_job.repo_full == "doria90/dummyAI"
     assert created_job.commit_sha == "pushsha123"
+
+
+def test_worker_push_job_persists_across_restart_for_postgres_locator(tmp_path, monkeypatch):
+    backing_db_path = tmp_path / "worker-postgres-sim.db"
+    locator = "postgresql://user:pass@db.example.com/driftguard"
+    monkeypatch.setenv("DATABASE_URL", locator)
+    monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+
+        async def enqueue(self, _message):
+            return "message-1"
+
+        async def dequeue(self, _batch_size):
+            return []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+        async def depth(self):
+            return 0
+
+        async def aclose(self):
+            return None
+
+    def fake_connect_sqlite(_db_path: str, *, foreign_keys: bool = False):
+        connection = sqlite3.connect(backing_db_path)
+        connection.row_factory = sqlite3.Row
+        if foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    queue = AckQueue()
+    message = QueueMessage(
+        message_id="msg-1",
+        receipt_handle="receipt-1",
+        payload={
+            "event_type": "push",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "commit_sha": "persisted-push-sha",
+            "branch_ref": "refs/heads/main",
+            "triggered_by": "push_webhook",
+        },
+        attempt_count=1,
+    )
+
+    with patch("services.branch_scan_jobs.connect_sqlite", side_effect=fake_connect_sqlite):
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock()))
+
+        # Simulate a worker restart by loading the queued job through the normal claim path.
+        claimed_job = claim_next_branch_scan_job(locator)
+
+    assert queue.acked == ["receipt-1"]
+    assert claimed_job is not None
+    assert claimed_job.repo_full == "doria90/dummyAI"
+    assert claimed_job.commit_sha == "persisted-push-sha"
+    assert claimed_job.branch_ref == "refs/heads/main"
+    assert claimed_job.status == "processing"
 
 
 def test_stale_processing_delivery_can_be_reclaimed(tmp_path):

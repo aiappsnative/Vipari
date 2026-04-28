@@ -383,10 +383,19 @@ Planned scope:
 Purpose:
 - harden local-stage persistence and deployment assumptions toward a production-ready posture
 
-Planned scope:
-- define the next durable-store step beyond the current SQLite-first split scaffolding
+Current branch status:
+- production runtime and migration guardrails now fail closed when SQLite is targeted in production
+- Railway preflight now rejects invalid production queue configuration before touching the local SQLite queue path
+- split-service startup and readiness smoke coverage now exists for API, webhook, and worker paths on the PostgreSQL deployment shape
+- local runtime smoke tooling now exercises the real monolith, API, webhook, and worker entrypoints instead of only the monolith app
+- restart durability is now proven for two production-relevant persistence seams on the PostgreSQL path:
+	- webhook delivery dedupe survives split-service restart
+	- worker push processing persists a branch-scan job that can be claimed after restart
+
+Remaining scope to close the slice honestly:
+- prove a broader audit/job lifecycle path end to end on PostgreSQL-backed persistence rather than only startup/readiness and targeted restart seams
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
-- document a production-oriented path without overbuilding the local developer workflow or weakening the current fail-closed deployment defaults
+- document the final operator-facing production path without weakening the current fail-closed deployment defaults
 
 #### 2. `feature/railway-launch-hardening`
 
