@@ -129,7 +129,7 @@ This framing should shape roadmap decisions:
 	- merged to `main` after the retry-window regression was fixed and the full suite passed
 - Remaining limitations now inherited by `main`:
 	- queue is local in-process SQLite for this stage
-	- signal fusion still needs improvement
+	- signal-fusion follow-on work should now focus on downstream read-side presentation or evaluation depth rather than reopening the core confidence-aware fusion rules
 	- deterministic and semantic outputs still need tighter convergence work beyond the latest obvious negation false-positive fix
 	- docs and product framing need periodic refresh to match implementation
 	- onboarding discovery remains too noisy on some real OSS repositories and needs stronger prioritization and grouping
@@ -367,6 +367,16 @@ Planned scope:
 - make deterministic and semantic evidence reinforce or dampen each other more explicitly
 - improve final reviewer explanations when the two channels disagree
 - add regression fixtures for common conflict cases
+
+Final status on this branch:
+- fusion now treats deterministic and semantic agreement at `Medium` as a `High`-risk escalation case, while bounding semantic-only elevation unless the semantic review explicitly recommends merge-blocking action
+- low-confidence semantic findings are now advisory rather than decisive, and missing structured semantic risk output is treated as low-confidence input instead of accidental corroboration
+- reviewer comments now carry fused confidence in the context line and explain notable fusion outcomes such as held-low-confidence disagreements, agreement-based escalation, and merge-blocking semantic escalation
+- completed PR audits and artifact-history rows now persist fused confidence alongside fused risk so downstream read models and evaluation surfaces can inspect the final signal-fusion decision durably
+- focused helper, worker, comment-rendering, and audit-history regressions now cover the core conflict cases for this feature slice
+
+Exit note:
+- this slice is directionally complete for the current feature goal; remaining work should build on the persisted confidence signal in dashboards or evaluation flows rather than reopening the core fusion contract immediately
 
 #### Completed: `feature/discovery-precision-v1`
 

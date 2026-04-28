@@ -111,12 +111,14 @@ index 3..4 100644
     repo_audits = list_pull_request_audits_for_repo(db_path, "doria90/dummyAI")
     assert [audit.pr_number for audit in repo_audits] == [11, 12, 13]
     assert [audit.suggested_risk_level for audit in repo_audits] == ["Low", "Medium", "High"]
+    assert [audit.fused_confidence for audit in repo_audits] == ["Low", "Low", "Low"]
     assert [audit.deterministic_score for audit in repo_audits] == [0, 50, 85]
     assert all(audit.status == "completed" for audit in repo_audits)
 
     prompt_history = list_artifact_history_for_repo(db_path, "doria90/dummyAI", "prompts/system.txt")
     assert [entry.pr_number for entry in prompt_history] == [11, 13]
     assert prompt_history[-1].suggested_risk_level == "High"
+    assert prompt_history[-1].fused_confidence == "Low"
     assert prompt_history[-1].artifact_type == "prompt"
 
     prompt_findings = list_findings_for_repo_artifact(db_path, "doria90/dummyAI", "prompts/system.txt")
