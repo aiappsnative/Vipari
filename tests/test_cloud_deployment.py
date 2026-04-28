@@ -151,7 +151,7 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
 
 
-def test_webhook_delivery_dedupe_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+def test_webhook_delivery_dedupe_survives_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "webhook-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
     monkeypatch.setenv("DATABASE_URL", locator)
@@ -608,7 +608,7 @@ def test_worker_turns_push_message_into_branch_scan_job(tmp_path, monkeypatch):
     assert created_job.commit_sha == "pushsha123"
 
 
-def test_worker_push_job_persists_across_restart_for_postgres_locator(tmp_path, monkeypatch):
+def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
     monkeypatch.setenv("DATABASE_URL", locator)
@@ -760,7 +760,7 @@ def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):
     fetch_diff.assert_not_called()
 
 
-def test_worker_completed_pr_audit_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+def test_worker_completed_pr_audit_survives_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-audit-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
     monkeypatch.setenv("DATABASE_URL", locator)
@@ -881,7 +881,7 @@ def test_worker_completed_pr_audit_survives_restart_for_postgres_locator(tmp_pat
     assert fetch_diff.call_count == 1
 
 
-def test_audit_comment_episode_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+def test_audit_comment_episode_survives_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-comment-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
     monkeypatch.setenv("DATABASE_URL", locator)
@@ -995,7 +995,7 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator(tmp_path, m
     assert comment_episode.audit_output_mode == "full_review"
 
 
-def test_audit_job_retry_wait_survives_restart_for_postgres_locator(tmp_path, monkeypatch):
+def test_audit_job_retry_wait_survives_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-retry-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
     monkeypatch.setenv("DATABASE_URL", locator)

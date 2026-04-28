@@ -22,7 +22,7 @@ The critical engineering principle for this branch is:
 
 Status refresh: the original audit captured a pre-hardening snapshot. The findings below reflect the current branch state after PostgreSQL-capable persistence, Redis queue support, split-service packaging, and readiness guardrails landed.
 
-### 1. Production persistence is PostgreSQL-capable and now covered by restart/idempotency proofs on the critical code paths
+### 1. Production persistence is PostgreSQL-capable, with mixed adapter-level and simulated lifecycle coverage
 
 Observed facts:
 
@@ -31,11 +31,12 @@ Observed facts:
 - application bootstrap and schema repair now flow through `services.schema_migrations` and `scripts/db_migrate.py`
 - runtime guardrails fail closed in production when SQLite is configured
 - local/dev still defaults to SQLite and many persistence call sites continue to rely on SQLite-compatible semantics exercised through the adapter layer
-- restart durability is now covered on the PostgreSQL path for webhook delivery dedupe, worker-created branch-scan jobs, completed-audit idempotency, persisted audit comment episodes, and retry-wait job reclamation
+- `tests/test_persistence.py` covers `PostgresConnection` SQL translation behavior directly
+- `tests/test_cloud_deployment.py` now covers restart and idempotency seams while the app is configured with a PostgreSQL locator, but those higher-level lifecycle proofs still use patched SQLite backing stores rather than a live Postgres service
 
 Implication:
 
-- the branch now supports a PostgreSQL-backed production path with executable restart/idempotency coverage on the highest-risk persistence seams; the remaining gap is live deploy/operator validation rather than an obvious unproven persistence contract in code
+- the branch now supports a PostgreSQL-backed production path with stronger executable coverage on the highest-risk persistence seams, but real PostgreSQL integration confidence still depends on explicit environment-backed validation rather than these simulated lifecycle proofs alone
 
 ### 2. Queueing is aligned for production, but operational validation still matters
 
@@ -116,8 +117,8 @@ Required scope:
 
 Status update:
 
-- the branch now has targeted restart/reclaim/idempotency proofs for the main production persistence seams
-- the remaining Track B work is production-environment validation and release confidence, not the original adapter/contract gap
+- the branch now has targeted restart/reclaim/idempotency proofs for the main production persistence seams, plus direct adapter-level PostgresConnection tests
+- the remaining Track B work is real PostgreSQL environment validation and release confidence, not the original adapter/contract gap
 
 Important note:
 

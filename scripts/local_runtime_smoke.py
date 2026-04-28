@@ -63,11 +63,11 @@ def _run_worker_smoke(settings, migration_result) -> int:
 
     readiness, failed = asyncio.run(exercise())
     if failed:
-        print(f"Worker smoke test failed: {', '.join(failed)}", file=sys.stderr)
+        print(f"Worker readiness smoke test failed: {', '.join(failed)}", file=sys.stderr)
         return 1
 
     print(
-        "Worker smoke test passed: "
+        "Worker readiness smoke test passed: "
         f"ready={readiness.get('status')}, migrations={migration_result.applied_versions or 'already applied'}"
     )
     return 0

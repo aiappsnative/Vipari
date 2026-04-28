@@ -388,20 +388,20 @@ Current branch status:
 - Railway preflight now rejects invalid production queue configuration before touching the local SQLite queue path
 - split-service startup and readiness smoke coverage now exists for API, webhook, and worker paths on the PostgreSQL deployment shape
 - local runtime smoke tooling now exercises the real monolith, API, webhook, and worker entrypoints instead of only the monolith app
-- completed audit comment episodes now remain readable after restart on the PostgreSQL path through the same persisted audit-record queries used by reviewer-facing surfaces
-- audit jobs can now persist `retry_wait`, be reclaimed after restart through the normal `claim_next_job(...)` path, and then complete into durable audit state on the PostgreSQL path
+- adapter-routed persistence seam simulations now cover webhook dedupe, branch-scan job persistence, completed-audit idempotency, persisted audit comment reads, and retry-wait reclamation when the app is configured with a PostgreSQL locator
+- separate adapter/unit coverage already exercises `PostgresConnection` translation behavior directly in the persistence test suite
 - restart durability is now proven for two production-relevant persistence seams on the PostgreSQL path:
 	- completed PR audit state now survives restart strongly enough to suppress a later redelivery through the worker's normal `has_completed_audit(...)` idempotency check
 	- webhook delivery dedupe survives split-service restart
 	- worker push processing persists a branch-scan job that can be claimed after restart
 
 Ready-for-review scope assessment:
-- the branch now has executable proof for the core production persistence seams that were previously blocking honest PostgreSQL readiness claims
-- remaining work is primarily reviewer scrutiny, CI confirmation, and live Railway/operator validation rather than another obvious missing persistence contract in code
+- the branch now has stronger executable coverage for the core production persistence seams, but most of the higher-level lifecycle proofs still simulate a PostgreSQL locator with a patched backing store rather than a live Postgres service
+- this is sufficient for review, but not for claiming that only live operator validation remains; real PostgreSQL integration confidence still depends on CI or explicit environment-backed validation
 
 Remaining release-facing follow-through:
 - keep operational queue concerns and durable audit/history concerns logically separated as deployment hardening grows
-- validate the final operator-facing production path in a live Railway-style environment without weakening the current fail-closed deployment defaults
+- validate the final operator-facing production path against a real PostgreSQL-backed environment without weakening the current fail-closed deployment defaults
 
 #### 2. `feature/railway-launch-hardening`
 

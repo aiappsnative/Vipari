@@ -483,7 +483,7 @@ python scripts/repo_ops.py eval-run doria90/dummyAI <installation_id> --scenario
 python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to/baseline-run-package.json
 ```
 
-`local_runtime_smoke.py` now honors the requested service role instead of always loading the monolith app. Use it to smoke the split API and webhook services directly, or to run a worker readiness/startup smoke against the currently configured database and queue settings.
+`local_runtime_smoke.py` now honors the requested service role instead of always loading the monolith app. Use it to smoke the split API and webhook services directly, or to run a worker readiness smoke against the currently configured database and queue settings.
 
 The evaluation harness writes repeatable run packages under `artifacts/eval-runs/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, a fixed evaluator rubric, and an assertion summary so branch-to-branch comparison stays lightweight but reproducible. The built-in candidate registry currently starts with OSS repositories, but the harness itself also supports ad hoc owner/repo targets and seeded scenarios through the same contract.
 
