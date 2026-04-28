@@ -7,6 +7,7 @@ from jwt.exceptions import InvalidKeyError
 
 from config import Settings
 from .github_integration import generate_jwt
+from .persistence import is_sqlite_locator
 from .persistence import connect_sqlite
 from .schema_migrations import MIGRATIONS, list_applied_migrations
 
@@ -32,6 +33,19 @@ def _validate_github_app_private_key(settings: Settings) -> None:
         ) from exc
 
 
+def validate_migration_configuration(settings: Settings, *, resolved_db_path: str | None = None) -> None:
+    errors: list[str] = []
+    target_locator = resolved_db_path or settings.resolved_db_path
+
+    if settings.is_production and is_sqlite_locator(target_locator):
+        errors.append(
+            "Production migrations cannot target SQLite persistence; run scripts/db_migrate.py against the production PostgreSQL DATABASE_URL."
+        )
+
+    if errors:
+        raise RuntimeError(" ".join(errors))
+
+
 def validate_runtime_configuration(settings: Settings) -> None:
     errors: list[str] = []
 
@@ -55,14 +69,16 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append(str(exc))
 
     if settings.is_production:
+        try:
+            validate_migration_configuration(settings)
+        except RuntimeError as exc:
+            errors.append(str(exc))
         if not _is_https_url(settings.app_base_url):
             errors.append("Production requires APP_BASE_URL to be an HTTPS URL.")
         if settings.service_role in {"api", "monolith"} and not settings.session_cookie_secure:
             errors.append("Production API/control-plane services require SESSION_COOKIE_SECURE=true.")
         if settings.github_private_key_path and not settings.github_app_private_key:
             errors.append("Production must use inline GITHUB_APP_PRIVATE_KEY; GITHUB_PRIVATE_KEY_PATH is local-dev only.")
-        if settings.uses_sqlite:
-            errors.append("Production cannot use SQLite persistence; PostgreSQL-backed persistence is still required before launch.")
         if settings.service_role in {"worker", "webhook"} and settings.queue_backend != "redis":
             errors.append("Production worker and webhook services must use QUEUE_BACKEND=redis.")
 

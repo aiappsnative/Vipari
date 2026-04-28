@@ -466,6 +466,10 @@ Recommended 5-minute local inspection flow:
 You can also inspect or drive the workflow locally with the CLI:
 
 ```bash
+python scripts/local_runtime_smoke.py --service-role monolith
+python scripts/local_runtime_smoke.py --service-role api
+python scripts/local_runtime_smoke.py --service-role webhook
+python scripts/local_runtime_smoke.py --service-role worker
 python scripts/repo_ops.py list-repos
 python scripts/repo_ops.py persistence-status
 python scripts/repo_ops.py dashboard owner/repo
@@ -478,6 +482,8 @@ python scripts/repo_ops.py eval-run doria90/dummyAI <installation_id> --scenario
 python scripts/repo_ops.py eval-run doria90/dummyAI <installation_id> --scenario dummyai-review-target --compare-to-scenario dummyai-review-target --run-label compare-seeded-dummyai
 python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to/baseline-run-package.json
 ```
+
+`local_runtime_smoke.py` now honors the requested service role instead of always loading the monolith app. Use it to smoke the split API and webhook services directly, or to run a worker readiness smoke against the currently configured database and queue settings.
 
 The evaluation harness writes repeatable run packages under `artifacts/eval-runs/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, a fixed evaluator rubric, and an assertion summary so branch-to-branch comparison stays lightweight but reproducible. The built-in candidate registry currently starts with OSS repositories, but the harness itself also supports ad hoc owner/repo targets and seeded scenarios through the same contract.
 

@@ -16,6 +16,9 @@ from services.runtime_guardrails import build_runtime_readiness
 def _build_queue_backend(settings):
     if settings.service_role not in {"webhook", "worker"}:
         return None
+    if settings.is_production and settings.queue_backend not in {"redis", "sqs"}:
+        # Let readiness report the invalid config without touching the local SQLite queue path first.
+        return None
     if settings.queue_backend == "sqs":
         return SQSQueue(settings.sqs_queue_url, settings.sqs_dlq_url)
     if settings.queue_backend == "redis":

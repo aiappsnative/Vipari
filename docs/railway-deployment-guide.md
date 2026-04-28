@@ -108,12 +108,12 @@ These are starting values only; increase them once real job volume and latency a
 - set `SERVICE_ROLE` correctly on each service
 - set all required production secrets as env vars
 - confirm `worker`, `postgres`, and `redis` are not public
-- run `python scripts/db_migrate.py` against the production `DATABASE_URL` before first traffic
+- run `python scripts/db_migrate.py` against the production `DATABASE_URL` before first traffic; in `APP_ENV=production` the command now fails closed if it resolves to SQLite
 - run `python scripts/railway_preflight.py --service-role <role> --app-env production` locally against the production env set before deploy
 - confirm GitHub OAuth callback URL matches the API domain exactly
 - confirm GitHub App webhook URL matches the webhook domain exactly
 
-The Railway preflight helper checks both the production configuration contract and live readiness for the selected role. For `webhook` and `worker`, that includes queue reachability in addition to database connectivity.
+The Railway preflight helper checks both the production configuration contract and live readiness for the selected role. For `webhook` and `worker`, that includes queue reachability in addition to database connectivity. If production queue settings are invalid, preflight now fails the config contract before touching the local SQLite queue path.
 
 ## Rollback notes
 
@@ -146,5 +146,6 @@ The Railway preflight helper checks both the production configuration contract a
 ### Persistence checks
 
 - if production startup fails due to SQLite detection, do not bypass the guardrail casually
+- if `scripts/db_migrate.py` rejects the target in production, correct `DATABASE_URL` or the explicit `--db` override to Railway Postgres before retrying
 - production should point `DATABASE_URL` at Railway Postgres and let readiness confirm connectivity before cutting traffic
 - SQLite remains for local development only; it is not the production fallback path
