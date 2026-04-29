@@ -765,6 +765,13 @@ def record_audit_result(
     return _row_to_pull_request_audit(row)
 
 
+def get_pull_request_audit_by_id(db_path: str, audit_id: int) -> Optional[PullRequestAuditRecord]:
+    """Fetch a pull_request_audit record by its primary key."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
+    return _row_to_pull_request_audit(row) if row is not None else None
+
+
 def get_pull_request_audit_for_job(db_path: str, job_id: int) -> Optional[PullRequestAuditRecord]:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM pull_request_audits WHERE job_id = ?", (job_id,)).fetchone()
