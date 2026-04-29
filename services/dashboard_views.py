@@ -1768,11 +1768,11 @@ def _build_insight_attribute_profile(
     context: _RepoArtifactProfileContext | None,
 ) -> list[AttributeProfileDimension]:
     baseline_profile = baseline.profile if baseline is not None else None
-    current_profile = context.profile if context is not None else baseline_profile
+    current_profile = context.profile if context is not None else None
     baseline_signal_terms = baseline.signal_terms if baseline is not None else []
-    current_signal_terms = context.signal_terms if context is not None else baseline_signal_terms
+    current_signal_terms = context.signal_terms if context is not None else []
     baseline_content = baseline.content_text if baseline is not None else None
-    current_content = context.content_text if context is not None else baseline_content
+    current_content = context.content_text if context is not None else None
     return build_artifact_attribute_profile(
         artifact_path=artifact.artifact_path,
         artifact_type=artifact.artifact_type,

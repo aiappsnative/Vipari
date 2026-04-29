@@ -861,6 +861,15 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert len(dashboard.design_profiles[0].attribute_profile) == 6
     assert len(dashboard.insights[0].attribute_profile) == 6
     assert dashboard.insights[0].evidence_label == "baseline only"
+    capability = next(
+        dimension
+        for dimension in dashboard.insights[0].attribute_profile
+        if dimension.attribute_key == "capability_risk"
+    )
+    assert capability.baseline_value in {"low", "moderate", "high"}
+    assert capability.current_value == "unknown"
+    assert capability.state == "unknown"
+    assert capability.confidence_label == "lower confidence"
 
 
 def test_build_artifact_attribute_profile_degrades_with_partial_profile_data():
