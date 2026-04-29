@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import collections
 import hmac
 import io
 import secrets
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -106,6 +109,40 @@ class IssuePrincipalTokenRequest(BaseModel):
 class ClientCredentialsRequest(BaseModel):
     client_id: str
     client_secret: str
+
+
+class _SlidingWindowRateLimiter:
+    """Thread-safe in-process sliding-window rate limiter keyed by string.
+
+    Tracks request timestamps per key inside a fixed-size deque.  Any call
+    that would exceed ``limit`` requests within ``window_seconds`` returns
+    False; callers should respond with HTTP 429.
+    """
+
+    def __init__(self, limit: int, window_seconds: float) -> None:
+        self._limit = limit
+        self._window = window_seconds
+        self._buckets: dict[str, collections.deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - self._window
+        with self._lock:
+            if key not in self._buckets:
+                self._buckets[key] = collections.deque()
+            bucket = self._buckets[key]
+            # Evict timestamps outside the window
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= self._limit:
+                return False
+            bucket.append(now)
+            return True
+
+
+# 20 token-exchange attempts per IP per minute
+_token_endpoint_limiter = _SlidingWindowRateLimiter(limit=20, window_seconds=60.0)
 
 
 def _require_admin_token(request: Request, settings) -> None:
@@ -674,8 +711,19 @@ def create_api_app() -> FastAPI:
     # the cookie-session monolith.
 
     @app.post("/cp/auth/token")
-    async def cp_auth_token(payload: ClientCredentialsRequest):
+    async def cp_auth_token(payload: ClientCredentialsRequest, request: Request):
         """Exchange client credentials for a short-lived CP JWT."""
+        # Rate limit: 20 attempts per client IP per minute
+        client_ip = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        if not _token_endpoint_limiter.allow(client_ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please retry after 60 seconds.",
+                headers={"Retry-After": "60"},
+            )
+
         if not settings.has_internal_jwt_config:
             raise HTTPException(status_code=503, detail="Internal JWT auth is not configured.")
         if not settings.has_encryption_key:

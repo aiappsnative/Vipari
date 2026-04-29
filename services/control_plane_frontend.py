@@ -1106,8 +1106,18 @@ def _render_api_keys_section(
     entitlement_allows: bool,
     csrf_token: str,
     max_principals: int,
+    new_client_id: str | None = None,
 ) -> str:
     import json as _json
+    from datetime import datetime as _dt, timezone as _timezone
+
+    def _fmt_date(ts: float | None) -> str:
+        if not ts:
+            return "—"
+        try:
+            return _dt.fromtimestamp(ts, tz=_timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            return "—"
 
     rows_html = ""
     for p in principals:
@@ -1128,12 +1138,18 @@ def _render_api_keys_section(
                 <button type="submit" class="control-page-danger-btn">Revoke</button>
             </form>"""
         status_class = "control-page-badge-active" if p.status == "active" else "control-page-badge-revoked"
+        # Highlight the newly-created row
+        row_class = ' class="control-page-table-row-new"' if (new_client_id and p.client_id == new_client_id) else ""
+        # Show first 16 chars of client_id — not secret, but enough to match CI config
+        client_id_display = html_escape(p.client_id[:16]) + "&#8230;"
+        created_label = _fmt_date(getattr(p, "created_at", None))
         rows_html += f"""
-        <tr>
+        <tr{row_class}>
             <td><code>{html_escape(p.display_name)}</code></td>
-            <td><code class="control-page-monospace">{html_escape(p.client_id[:8])}&#8230;</code></td>
+            <td><code class="control-page-monospace" title="{html_escape(p.client_id)}">{client_id_display}</code></td>
             <td>{scope_badges}</td>
             <td><span class="control-page-badge {status_class}">{html_escape(p.status)}</span></td>
+            <td>{created_label}</td>
             <td>{revoke_form}</td>
         </tr>"""
 
@@ -1144,7 +1160,7 @@ def _render_api_keys_section(
             <table class="control-page-table">
                 <thead>
                     <tr>
-                        <th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th><th>Actions</th>
+                        <th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th><th>Created</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>{rows_html}</tbody>
@@ -1220,6 +1236,7 @@ def render_api_keys_settings_page(
     principals: list,
     one_time_secret: str | None,
     max_principals: int,
+    new_client_id: str | None = None,
 ) -> str:
     template = _load_template("control_plane_api_keys.html")
     admin_control = ""
@@ -1250,6 +1267,7 @@ def render_api_keys_settings_page(
         entitlement_allows=entitlement_allows,
         csrf_token=csrf_token,
         max_principals=max_principals,
+        new_client_id=new_client_id,
     )
 
     return (
@@ -1257,6 +1275,8 @@ def render_api_keys_settings_page(
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{ADMIN_CONTROL}}", admin_control)
-        .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
         .replace("{{API_KEYS_SECTION}}", api_keys_section)
+        # Replace ONE_TIME_SECRET_BLOCK last — its content contains the raw
+        # secret and must not be interpretable as another placeholder.
+        .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
     )

@@ -1010,6 +1010,7 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "workspaces", "pr_comments_setting_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
+        _ensure_column(conn, "user_sessions", "flash_json", "TEXT")
         _ensure_column(conn, "billing_customers", "billing_email", "TEXT")
         _ensure_column(conn, "subscriptions", "cancel_at_period_end", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "subscriptions", "current_period_start_at", "REAL")
@@ -2417,3 +2418,83 @@ def read_and_clear_session_flash(db_path: str, session_id: str, key: str) -> str
             (session_id,),
         )
     return value
+
+
+def pop_all_session_flash(db_path: str, session_id: str) -> dict[str, str]:
+    """Read all flash values for the session and atomically clear them.
+
+    Returns an empty dict if there is no flash data.
+    """
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT flash_json FROM user_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None or not row["flash_json"]:
+            return {}
+        try:
+            flash = json.loads(row["flash_json"])
+            if not isinstance(flash, dict):
+                flash = {}
+        except (ValueError, TypeError):
+            flash = {}
+        conn.execute(
+            "UPDATE user_sessions SET flash_json = NULL WHERE session_id = ?",
+            (session_id,),
+        )
+    return {k: v for k, v in flash.items() if isinstance(v, str)}
+
+
+def create_machine_principal_and_flash_secret(
+    db_path: str,
+    *,
+    workspace_id: int,
+    display_name: str,
+    principal_kind: str,
+    client_id: str,
+    client_secret_encrypted: str,
+    scopes: list[str],
+    created_by_user_id: int | None,
+    session_id: str,
+    raw_secret: str,
+) -> MachinePrincipalRecord:
+    """Create a machine principal and write the one-time secret flash in a single transaction.
+
+    Atomicity ensures that if the process crashes between creating the principal
+    and delivering the secret, the principal is never silently orphaned without
+    the caller receiving the secret.
+    """
+    now = time.time()
+    scopes_json = json.dumps(scopes)
+    # Store both secret and client_id so the UI can highlight the new row
+    flash_payload = json.dumps({"new_api_key_secret": raw_secret, "new_api_key_client_id": client_id})
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO machine_principals (
+                workspace_id, display_name, principal_kind, client_id,
+                client_secret_encrypted, scopes_json, status,
+                created_by_user_id, revoked_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)
+            """,
+            (
+                workspace_id,
+                display_name,
+                principal_kind,
+                client_id,
+                client_secret_encrypted,
+                scopes_json,
+                created_by_user_id,
+                now,
+                now,
+            ),
+        )
+        principal_row = conn.execute(
+            "SELECT * FROM machine_principals WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        # Write the flash in the same transaction so both succeed or both fail
+        conn.execute(
+            "UPDATE user_sessions SET flash_json = ? WHERE session_id = ?",
+            (flash_payload, session_id),
+        )
+    return _row_to_machine_principal(principal_row)

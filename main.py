@@ -85,6 +85,7 @@ from services.control_plane_records import (
     count_workspaces,
     create_billing_handoff_claim,
     create_machine_principal,
+    create_machine_principal_and_flash_secret,
     create_user,
     create_user_session,
     create_workspace,
@@ -118,6 +119,7 @@ from services.control_plane_records import (
     list_workspace_invites_for_workspace,
     list_workspace_memberships_for_user,
     read_and_clear_session_flash,
+    pop_all_session_flash,
     record_webhook_event,
     replace_repo_connections,
     revoke_machine_principal,
@@ -1861,7 +1863,9 @@ async def api_keys_page(request: Request):
 
     entitlement_allows = _has_cp_api_access(access_context)
     principals = list_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id)
-    one_time_secret = read_and_clear_session_flash(AUDIT_DB_PATH, session.session_id, "new_api_key_secret")
+    flash = pop_all_session_flash(AUDIT_DB_PATH, session.session_id)
+    one_time_secret = flash.get("new_api_key_secret")
+    new_client_id = flash.get("new_api_key_client_id")
 
     return HTMLResponse(
         render_api_keys_settings_page(
@@ -1875,6 +1879,7 @@ async def api_keys_page(request: Request):
             principals=principals,
             one_time_secret=one_time_secret,
             max_principals=settings.cp_max_principals_per_workspace,
+            new_client_id=new_client_id,
         )
     )
 
@@ -1903,6 +1908,13 @@ async def create_api_key(
     workspace = access_context["workspace"]
     session = access_context["session"]
 
+    # Validate name first so the user sees name errors before scope errors
+    normalized_name = (display_name or "").strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Display name is required.")
+    if len(normalized_name) > 120:
+        raise HTTPException(status_code=400, detail="Display name must be 120 characters or fewer.")
+
     # Build scopes from submitted checkboxes (only allow customer-safe scopes)
     requested_scopes: list[str] = []
     if scope_drift_read:
@@ -1928,18 +1940,14 @@ async def create_api_key(
             detail=f"Workspace has reached the maximum of {settings.cp_max_principals_per_workspace} API keys.",
         )
 
-    normalized_name = (display_name or "").strip()
-    if not normalized_name:
-        raise HTTPException(status_code=400, detail="Display name is required.")
-    if len(normalized_name) > 120:
-        raise HTTPException(status_code=400, detail="Display name must be 120 characters or fewer.")
-
     import uuid as _uuid
     client_id = str(_uuid.uuid4())
     raw_secret = secrets.token_urlsafe(32)
     encrypted_secret = encrypt_text(raw_secret, settings.app_encryption_key)
 
-    principal = create_machine_principal(
+    # If the process crashes between the two, the principal is never silently
+    # orphaned without the caller receiving the secret.
+    principal = create_machine_principal_and_flash_secret(
         AUDIT_DB_PATH,
         workspace_id=workspace.id,
         display_name=normalized_name,
@@ -1948,6 +1956,8 @@ async def create_api_key(
         client_secret_encrypted=encrypted_secret,
         scopes=requested_scopes,
         created_by_user_id=session.user_id,
+        session_id=session.session_id,
+        raw_secret=raw_secret,
     )
     create_control_plane_audit_log(
         AUDIT_DB_PATH,
@@ -1959,8 +1969,6 @@ async def create_api_key(
         payload={"scopes": requested_scopes, "source": "self_service"},
     )
 
-    # Deliver the secret exactly once via session flash — never in the URL
-    write_session_flash(AUDIT_DB_PATH, session.session_id, "new_api_key_secret", raw_secret)
     return RedirectResponse("/app/settings/api-keys", status_code=303)
 
 
