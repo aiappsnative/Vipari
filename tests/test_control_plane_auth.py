@@ -771,3 +771,96 @@ def test_legacy_admin_api_route_still_works(tmp_path, monkeypatch):
         )
     assert response.status_code == 200
     assert response.json()["backend"] == "sqlite"
+
+
+# ===========================================================================
+# Audit log emission tests
+# ===========================================================================
+
+
+def test_cp_create_principal_writes_audit_log(tmp_path, monkeypatch):
+    """POST /cp/principals must emit a principal.created audit entry."""
+    from services.control_plane_records import list_control_plane_audit_logs_for_workspace
+
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    _user_id, workspace_id = _seed_workspace(db_path)
+
+    with TestClient(create_api_app()) as client:
+        response = client.post(
+            "/cp/principals",
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+            json={
+                "workspace_id": workspace_id,
+                "display_name": "audit-bot",
+                "principal_kind": "service_account",
+                "scopes": [SCOPE_DRIFT_READ],
+            },
+        )
+    assert response.status_code == 200
+
+    entries = list_control_plane_audit_logs_for_workspace(db_path, workspace_id)
+    assert any(e.event_type == "principal.created" for e in entries)
+
+
+def test_cp_revoke_principal_writes_audit_log(tmp_path, monkeypatch):
+    """DELETE /cp/principals/{id} must emit a principal.revoked audit entry."""
+    from services.control_plane_records import list_control_plane_audit_logs_for_workspace
+
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    _user_id, workspace_id = _seed_workspace(db_path)
+
+    with TestClient(create_api_app()) as client:
+        create_resp = client.post(
+            "/cp/principals",
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+            json={
+                "workspace_id": workspace_id,
+                "display_name": "revoke-bot",
+                "principal_kind": "service_account",
+                "scopes": [SCOPE_DRIFT_READ],
+            },
+        )
+        assert create_resp.status_code == 200
+        client_id = create_resp.json()["client_id"]
+
+        revoke_resp = client.delete(
+            f"/cp/principals/{client_id}",
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+    assert revoke_resp.status_code == 200
+
+    entries = list_control_plane_audit_logs_for_workspace(db_path, workspace_id)
+    assert any(e.event_type == "principal.revoked" for e in entries)
+
+
+def test_cp_approve_baseline_writes_audit_log(tmp_path, monkeypatch):
+    """POST baseline/approve must emit a baseline.approved audit entry."""
+    from services.control_plane_records import list_control_plane_audit_logs_for_workspace
+
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-aud-bsl")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id, client_id="audit-bsl-client")
+    high_token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_WRITE_HIGH])
+
+    with patch("services.api_service.approve_repo_baseline", return_value=[]):
+        with patch(
+            "services.api_service.build_repo_dashboard_view",
+            return_value=_stub_dashboard(),
+        ):
+            with TestClient(create_api_app()) as client:
+                response = client.post(
+                    f"/cp/workspaces/{workspace_id}/repos/org/repo/baseline/approve",
+                    headers={"Authorization": f"Bearer {high_token}"},
+                    json={},
+                )
+    assert response.status_code == 200
+
+    entries = list_control_plane_audit_logs_for_workspace(db_path, workspace_id)
+    assert any(e.event_type == "baseline.approved" for e in entries)

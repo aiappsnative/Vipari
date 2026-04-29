@@ -107,6 +107,13 @@ def _ensure_machine_principals_schema(db_path: str) -> None:
         )
 
 
+def _ensure_session_flash_column(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(user_sessions)").fetchall()}
+        if columns and "flash_json" not in columns:
+            conn.execute("ALTER TABLE user_sessions ADD COLUMN flash_json TEXT")
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -128,6 +135,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0004_add_machine_principals",
         "Create the machine_principals table for workspace-bound service-account identities used by the internal control-plane auth layer.",
         _ensure_machine_principals_schema,
+    ),
+    (
+        "0005_add_session_flash",
+        "Add flash_json column to user_sessions for secure one-time secret delivery (session flash pattern).",
+        _ensure_session_flash_column,
     ),
 )
 

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     internal_jwt_ttl_seconds: int = 3600
     internal_jwt_issuer: str = "driftguard"
     internal_jwt_audience: str = "driftguard-cp"
+    cp_max_principals_per_workspace: int = 10
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

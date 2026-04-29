@@ -6,6 +6,7 @@ import html
 import hmac
 import json
 import re
+import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -72,15 +73,19 @@ from services.control_plane_frontend import (
     render_repo_onboarded_summary_cards,
     render_repo_onboarding_metrics,
     render_control_plane_workspace_new_page,
+    render_api_keys_settings_page,
 )
 from services.control_plane_records import (
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
+    count_machine_principals_for_workspace,
     create_control_plane_audit_log,
     get_billing_customer_by_stripe_customer_id,
     count_workspace_repo_allocations,
     count_workspaces,
     create_billing_handoff_claim,
+    create_machine_principal,
+    create_machine_principal_and_flash_secret,
     create_user,
     create_user_session,
     create_workspace,
@@ -102,17 +107,22 @@ from services.control_plane_records import (
     get_workspace_membership,
     get_workspace_subscription,
     get_subscription_by_stripe_subscription_id,
+    get_machine_principal_by_client_id,
     has_processed_webhook_event,
     list_admin_workspace_users,
     list_billing_handoff_claims,
+    list_machine_principals_for_workspace,
     list_recent_control_plane_audit_logs,
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
     list_unclaimed_installations,
     list_workspace_invites_for_workspace,
     list_workspace_memberships_for_user,
+    read_and_clear_session_flash,
+    pop_all_session_flash,
     record_webhook_event,
     replace_repo_connections,
+    revoke_machine_principal,
     revoke_user_session,
     accept_workspace_invites_for_github_login,
     update_repo_allocation_status,
@@ -129,6 +139,7 @@ from services.control_plane_records import (
     upsert_github_identity,
     upsert_github_installation,
     upsert_subscription,
+    write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
@@ -1808,6 +1819,190 @@ async def settings_invite_user(
         invited_by_user_id=access_context["session"].user_id,
     )
     return RedirectResponse("/app/settings?invite_added=1", status_code=303)
+
+
+def _has_cp_api_access(access_context: dict[str, object]) -> bool:
+    """Return True if the workspace is entitled to the CP API.
+
+    In local/test environments always returns True so tests run without
+    feature-flag plumbing.  In production, checks ``cp_api_enabled`` in
+    the entitlement's ``feature_flags_json``; absent key means True.
+    """
+    if not settings.is_production:
+        return True
+    entitlement = access_context.get("entitlement")
+    if entitlement is None:
+        return True
+    try:
+        flags = json.loads(entitlement.feature_flags_json) if entitlement.feature_flags_json else {}
+    except (ValueError, TypeError):
+        flags = {}
+    return flags.get("cp_api_enabled", True) is not False
+
+
+# Scopes that customer self-service is NOT allowed to assign.
+_ADMIN_SCOPES = {"admin.read", "admin.write"}
+_CUSTOMER_ALLOWED_SCOPES = {"drift.read", "drift.write.low", "drift.write.high"}
+
+
+@app.get("/app/settings/api-keys", response_class=HTMLResponse)
+async def api_keys_page(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _require_workspace_role(access_context, "owner", "admin")
+
+    workspace = access_context["workspace"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    session = access_context["session"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    membership = access_context["membership"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+
+    entitlement_allows = _has_cp_api_access(access_context)
+    principals = list_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id)
+    flash = pop_all_session_flash(AUDIT_DB_PATH, session.session_id)
+    one_time_secret = flash.get("new_api_key_secret")
+    new_client_id = flash.get("new_api_key_client_id")
+
+    return HTMLResponse(
+        render_api_keys_settings_page(
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            csrf_token=session.csrf_secret,
+            can_manage=bool(membership and membership.role in {"owner", "admin"}),
+            entitlement_allows=entitlement_allows,
+            principals=principals,
+            one_time_secret=one_time_secret,
+            max_principals=settings.cp_max_principals_per_workspace,
+            new_client_id=new_client_id,
+        )
+    )
+
+
+@app.post("/app/settings/api-keys")
+async def create_api_key(
+    request: Request,
+    display_name: str = Form(...),
+    csrf_token: str | None = Form(None),
+    scope_drift_read: str | None = Form(None),
+    scope_drift_write_low: str | None = Form(None),
+    scope_drift_write_high: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    if not _has_cp_api_access(access_context):
+        raise HTTPException(status_code=403, detail="Control plane API is not enabled for this workspace.")
+
+    if not settings.has_encryption_key:
+        raise HTTPException(status_code=503, detail="APP_ENCRYPTION_KEY must be configured.")
+
+    workspace = access_context["workspace"]
+    session = access_context["session"]
+
+    # Validate name first so the user sees name errors before scope errors
+    normalized_name = (display_name or "").strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Display name is required.")
+    if len(normalized_name) > 120:
+        raise HTTPException(status_code=400, detail="Display name must be 120 characters or fewer.")
+
+    # Build scopes from submitted checkboxes (only allow customer-safe scopes)
+    requested_scopes: list[str] = []
+    if scope_drift_read:
+        requested_scopes.append("drift.read")
+    if scope_drift_write_low:
+        requested_scopes.append("drift.write.low")
+    if scope_drift_write_high:
+        requested_scopes.append("drift.write.high")
+
+    if not requested_scopes:
+        raise HTTPException(status_code=400, detail="At least one scope must be selected.")
+
+    # Block admin scopes — admin.* may only be assigned by operators
+    forbidden = set(requested_scopes) & _ADMIN_SCOPES
+    if forbidden:
+        raise HTTPException(status_code=400, detail=f"Scopes not allowed in self-service: {sorted(forbidden)}.")
+
+    # Enforce per-workspace principal limit
+    count = count_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id)
+    if count >= settings.cp_max_principals_per_workspace:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workspace has reached the maximum of {settings.cp_max_principals_per_workspace} API keys.",
+        )
+
+    import uuid as _uuid
+    client_id = str(_uuid.uuid4())
+    raw_secret = secrets.token_urlsafe(32)
+    encrypted_secret = encrypt_text(raw_secret, settings.app_encryption_key)
+
+    # If the process crashes between the two, the principal is never silently
+    # orphaned without the caller receiving the secret.
+    principal = create_machine_principal_and_flash_secret(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        display_name=normalized_name,
+        principal_kind="service_account",
+        client_id=client_id,
+        client_secret_encrypted=encrypted_secret,
+        scopes=requested_scopes,
+        created_by_user_id=session.user_id,
+        session_id=session.session_id,
+        raw_secret=raw_secret,
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=session.user_id,
+        event_type="principal.created",
+        subject_type="machine_principal",
+        subject_id=principal.client_id,
+        payload={"scopes": requested_scopes, "source": "self_service"},
+    )
+
+    return RedirectResponse("/app/settings/api-keys", status_code=303)
+
+
+@app.post("/app/settings/api-keys/{client_id}/revoke")
+async def revoke_api_key(
+    client_id: str,
+    request: Request,
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    workspace = access_context["workspace"]
+    session = access_context["session"]
+
+    # IDOR guard — verify the principal belongs to this workspace
+    principal = get_machine_principal_by_client_id(AUDIT_DB_PATH, client_id)
+    if principal is None or principal.workspace_id != workspace.id:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
+    revoke_machine_principal(AUDIT_DB_PATH, client_id)
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=session.user_id,
+        event_type="principal.revoked",
+        subject_type="machine_principal",
+        subject_id=client_id,
+        payload={"source": "self_service"},
+    )
+    return RedirectResponse("/app/settings/api-keys", status_code=303)
 
 
 @app.get("/app/policies", response_class=HTMLResponse)

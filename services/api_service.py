@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import collections
 import hmac
 import io
 import secrets
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -18,9 +21,14 @@ from typing import Literal
 from config import get_settings
 from .cp_auth import require_cp_principal, require_cp_scope, require_cp_workspace_match
 from .control_plane_records import (
+    create_control_plane_audit_log,
     create_machine_principal,
+    count_machine_principals_for_workspace,
     get_machine_principal_by_client_id,
     get_repo_allocation_for_workspace,
+    get_workspace_by_id,
+    get_workspace_entitlement,
+    list_control_plane_audit_logs_for_workspace,
     list_machine_principals_for_workspace,
     revoke_machine_principal,
 )
@@ -29,11 +37,13 @@ from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .internal_auth import (
     ALL_SCOPES,
+    SCOPE_ADMIN_READ,
     SCOPE_ADMIN_WRITE,
     SCOPE_DRIFT_READ,
     SCOPE_DRIFT_WRITE_HIGH,
     SCOPE_DRIFT_WRITE_LOW,
     issue_cp_token,
+    validate_cp_token,
 )
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -50,7 +60,7 @@ from .export_jobs import create_export_job, get_export_job, list_export_jobs_for
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
-from .secure_store import encrypt_text
+from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
@@ -94,6 +104,45 @@ class CreatePrincipalRequest(BaseModel):
 
 class IssuePrincipalTokenRequest(BaseModel):
     workspace_id: int
+
+
+class ClientCredentialsRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+class _SlidingWindowRateLimiter:
+    """Thread-safe in-process sliding-window rate limiter keyed by string.
+
+    Tracks request timestamps per key inside a fixed-size deque.  Any call
+    that would exceed ``limit`` requests within ``window_seconds`` returns
+    False; callers should respond with HTTP 429.
+    """
+
+    def __init__(self, limit: int, window_seconds: float) -> None:
+        self._limit = limit
+        self._window = window_seconds
+        self._buckets: dict[str, collections.deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - self._window
+        with self._lock:
+            if key not in self._buckets:
+                self._buckets[key] = collections.deque()
+            bucket = self._buckets[key]
+            # Evict timestamps outside the window
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= self._limit:
+                return False
+            bucket.append(now)
+            return True
+
+
+# 20 token-exchange attempts per IP per minute
+_token_endpoint_limiter = _SlidingWindowRateLimiter(limit=20, window_seconds=60.0)
 
 
 def _require_admin_token(request: Request, settings) -> None:
@@ -456,6 +505,12 @@ def create_api_app() -> FastAPI:
                 status_code=503,
                 detail="APP_ENCRYPTION_KEY must be configured to create machine principals.",
             )
+        count = count_machine_principals_for_workspace(db_path, payload.workspace_id)
+        if count >= settings.cp_max_principals_per_workspace:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Workspace has reached the maximum of {settings.cp_max_principals_per_workspace} machine principals.",
+            )
         client_id = str(uuid.uuid4())
         raw_secret = secrets.token_urlsafe(32)
         encrypted_secret = encrypt_text(raw_secret, settings.app_encryption_key)
@@ -467,6 +522,15 @@ def create_api_app() -> FastAPI:
             client_id=client_id,
             client_secret_encrypted=encrypted_secret,
             scopes=payload.scopes,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=principal.workspace_id,
+            actor_user_id=None,
+            event_type="principal.created",
+            subject_type="machine_principal",
+            subject_id=principal.client_id,
+            payload={"scopes": payload.scopes, "workspace_id": principal.workspace_id},
         )
         return JSONResponse(
             {
@@ -513,6 +577,14 @@ def create_api_app() -> FastAPI:
             audience=settings.internal_jwt_audience,
             ttl_seconds=settings.internal_jwt_ttl_seconds,
         )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=principal.workspace_id,
+            actor_user_id=None,
+            event_type="token.issued",
+            subject_type="machine_principal",
+            subject_id=principal.client_id,
+        )
         return JSONResponse(
             {
                 "token": token,
@@ -529,6 +601,14 @@ def create_api_app() -> FastAPI:
         principal = revoke_machine_principal(db_path, client_id)
         if principal is None:
             raise HTTPException(status_code=404, detail="Machine principal not found.")
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=principal.workspace_id,
+            actor_user_id=None,
+            event_type="principal.revoked",
+            subject_type="machine_principal",
+            subject_id=principal.client_id,
+        )
         return JSONResponse(
             {
                 "client_id": principal.client_id,
@@ -605,12 +685,202 @@ def create_api_app() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="baseline.approved",
+            subject_type="repo",
+            subject_id=repo_full,
+            payload={"approved_count": len(baselines)},
+        )
         return JSONResponse(
             {
                 "repo_full": repo_full,
                 "workspace_id": workspace_id,
                 "approved_baseline_count": len(baselines),
                 "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
+            }
+        )
+
+    # -----------------------------------------------------------------------
+    # /cp/auth/token — machine client credentials token exchange
+    # -----------------------------------------------------------------------
+    # Machine clients present client_id + client_secret to obtain a short-
+    # lived JWT.  This route lives in api_service only; never dual-mounted on
+    # the cookie-session monolith.
+
+    @app.post("/cp/auth/token")
+    async def cp_auth_token(payload: ClientCredentialsRequest, request: Request):
+        """Exchange client credentials for a short-lived CP JWT."""
+        # Rate limit: 20 attempts per client IP per minute
+        client_ip = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        if not _token_endpoint_limiter.allow(client_ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please retry after 60 seconds.",
+                headers={"Retry-After": "60"},
+            )
+
+        if not settings.has_internal_jwt_config:
+            raise HTTPException(status_code=503, detail="Internal JWT auth is not configured.")
+        if not settings.has_encryption_key:
+            raise HTTPException(status_code=503, detail="APP_ENCRYPTION_KEY must be configured.")
+
+        _GENERIC_401 = "Invalid client credentials."
+
+        principal = get_machine_principal_by_client_id(db_path, payload.client_id)
+        if principal is None:
+            # timing-safe dummy compare — prevents client_id enumeration via timing
+            hmac.compare_digest(secrets.token_urlsafe(32).encode(), payload.client_secret.encode())
+            raise HTTPException(status_code=401, detail=_GENERIC_401)
+
+        decrypted = decrypt_text(principal.client_secret_encrypted, settings.app_encryption_key)
+        if not hmac.compare_digest(decrypted.encode(), payload.client_secret.encode()):
+            raise HTTPException(status_code=401, detail=_GENERIC_401)
+
+        if principal.status != "active":
+            raise HTTPException(status_code=401, detail=_GENERIC_401)
+
+        if settings.is_production:
+            entitlement = get_workspace_entitlement(db_path, principal.workspace_id)
+            flags = json.loads(entitlement.feature_flags_json) if entitlement and entitlement.feature_flags_json else {}
+            if flags.get("cp_api_enabled", True) is False:
+                raise HTTPException(status_code=403, detail="Control plane API is not enabled for this workspace.")
+
+        scopes = json.loads(principal.scopes_json)
+        token = issue_cp_token(
+            client_id=principal.client_id,
+            workspace_id=principal.workspace_id,
+            scopes=scopes,
+            secret=settings.internal_jwt_secret,
+            issuer=settings.internal_jwt_issuer,
+            audience=settings.internal_jwt_audience,
+            ttl_seconds=settings.internal_jwt_ttl_seconds,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=principal.workspace_id,
+            actor_user_id=None,
+            event_type="token.issued_via_client_credentials",
+            subject_type="machine_principal",
+            subject_id=principal.client_id,
+        )
+        return JSONResponse(
+            {
+                "token": token,
+                "client_id": principal.client_id,
+                "workspace_id": principal.workspace_id,
+                "ttl_seconds": settings.internal_jwt_ttl_seconds,
+            }
+        )
+
+    # -----------------------------------------------------------------------
+    # Extended /cp/* read routes — all require a valid CP JWT bearer token.
+    # -----------------------------------------------------------------------
+
+    @app.get("/cp/workspaces/{workspace_id}")
+    def cp_get_workspace(workspace_id: int, request: Request):
+        """Return workspace summary (no billing fields).
+
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        workspace = get_workspace_by_id(db_path, workspace_id)
+        if workspace is None:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        return JSONResponse(
+            {
+                "id": workspace.id,
+                "slug": workspace.slug,
+                "display_name": workspace.display_name,
+                "status": workspace.status,
+                "setup_state": workspace.setup_state,
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/repos")
+    def cp_list_workspace_repos(workspace_id: int, request: Request):
+        """Return repos allocated to the workspace.
+
+        Requires scope: ``drift.read``.  Billing fields are excluded.
+        """
+        from .control_plane_records import list_repo_allocations_for_workspace
+
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        allocations = list_repo_allocations_for_workspace(db_path, workspace_id)
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "repos": [
+                    {
+                        "repo_full": alloc.repo_full,
+                        "allocation_status": alloc.allocation_status,
+                    }
+                    for alloc in allocations
+                ],
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/principals")
+    def cp_list_workspace_principals(workspace_id: int, request: Request):
+        """Return machine principals for the workspace.
+
+        ``client_secret_encrypted`` is never included in the response.
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        principals = list_machine_principals_for_workspace(db_path, workspace_id)
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "principals": [
+                    {
+                        "client_id": p.client_id,
+                        "display_name": p.display_name,
+                        "principal_kind": p.principal_kind,
+                        "scopes": json.loads(p.scopes_json),
+                        "status": p.status,
+                        "created_at": p.created_at,
+                        "revoked_at": p.revoked_at,
+                    }
+                    for p in principals
+                ],
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/audit-log")
+    def cp_workspace_audit_log(workspace_id: int, request: Request):
+        """Return recent audit log entries for the workspace.
+
+        Requires scope: ``admin.read`` — only operator-provisioned principals
+        may carry this scope.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_ADMIN_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        entries = list_control_plane_audit_logs_for_workspace(db_path, workspace_id)
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "event_type": e.event_type,
+                        "subject_type": e.subject_type,
+                        "subject_id": e.subject_id,
+                        "created_at": e.created_at,
+                    }
+                    for e in entries
+                ],
             }
         )
 
