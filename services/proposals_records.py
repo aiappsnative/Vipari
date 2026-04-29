@@ -321,6 +321,21 @@ def list_baseline_proposals(
     return [_row_to_baseline_proposal(r) for r in rows]
 
 
+def list_pending_baseline_proposals_for_repo(
+    db_path: str,
+    repo_full: str,
+) -> list[BaselineProposalRecord]:
+    """List all pending baseline proposals for a repo regardless of workspace.
+    Intended for operator-level views where workspace context is not available.
+    """
+    with connect_sqlite(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM cp_baseline_proposals WHERE repo_full = ? AND status = ? ORDER BY created_at DESC",
+            (repo_full, PROPOSAL_STATUS_PENDING),
+        ).fetchall()
+    return [_row_to_baseline_proposal(r) for r in rows]
+
+
 def get_baseline_proposal(
     db_path: str,
     *,

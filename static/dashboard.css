@@ -5377,3 +5377,355 @@ body.control-page[data-theme="light"] {
         display: none;
     }
 }
+
+/* ==========================================================================
+   Control tower — workspace posture bar
+   ========================================================================== */
+
+.workspace-posture-bar {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+}
+
+.posture-bar-inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 24px;
+    width: 100%;
+    height: 38px;
+    font-size: 0.8rem;
+}
+
+.posture-bar-risk {
+    background: rgba(235, 87, 87, 0.10);
+    border-left: 3px solid rgba(235, 87, 87, 0.8);
+}
+
+.posture-bar-watch {
+    background: rgba(242, 153, 74, 0.08);
+    border-left: 3px solid rgba(242, 153, 74, 0.7);
+}
+
+.posture-bar-healthy {
+    background: rgba(39, 174, 96, 0.06);
+    border-left: 3px solid rgba(39, 174, 96, 0.5);
+}
+
+.posture-bar-indicator {
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    flex-shrink: 0;
+}
+
+.posture-bar-reasons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.posture-bar-reason {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.posture-bar-counts {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+/* ==========================================================================
+   Control tower — escalation queue table
+   ========================================================================== */
+
+.escalation-queue-section {
+    margin: 16px 20px 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.escalation-queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.escalation-queue-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    letter-spacing: 0.01em;
+}
+
+.escalation-table-header {
+    display: grid;
+    grid-template-columns: 36px 1fr 140px 120px;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.escalation-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 140px 120px;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    align-items: start;
+    transition: background 0.12s;
+}
+
+.escalation-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.escalation-row[data-escalation-priority="review_now"] {
+    border-left: 2px solid rgba(235, 87, 87, 0.5);
+}
+
+.escalation-row[data-escalation-priority="watch"] {
+    border-left: 2px solid rgba(242, 153, 74, 0.5);
+}
+
+.escalation-row-rank {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 3px;
+}
+
+.escalation-rank-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.07);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.escalation-row-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 3px;
+}
+
+.escalation-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.escalation-row-repo {
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    margin-bottom: 1px;
+}
+
+.escalation-row-artifact {
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.35);
+    font-family: "SF Mono", "Consolas", monospace;
+    margin-bottom: 4px;
+}
+
+.escalation-row-rationale {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin-bottom: 5px;
+}
+
+.escalation-deltas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.escalation-delta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 0.72rem;
+}
+
+.escalation-delta-label {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.escalation-delta-transition {
+    color: var(--text-secondary);
+}
+
+.escalation-row-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 3px;
+}
+
+.escalation-meta-label {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+}
+
+.escalation-meta-baseline {
+    font-size: 0.73rem;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.escalation-row-action {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 3px;
+}
+
+.escalation-action-btn {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 6px;
+    background: rgba(78, 103, 255, 0.15);
+    border: 1px solid rgba(78, 103, 255, 0.3);
+    color: rgba(120, 145, 255, 0.95);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 0.12s, border-color 0.12s;
+    cursor: pointer;
+}
+
+.escalation-action-btn:hover {
+    background: rgba(78, 103, 255, 0.25);
+    border-color: rgba(78, 103, 255, 0.5);
+}
+
+/* ==========================================================================
+   Control tower — repo decision section
+   ========================================================================== */
+
+.repo-decision-section {
+    margin: 16px 20px 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.repo-decision-header {
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.repo-decision-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+}
+
+.repo-decision-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+}
+
+.repo-decision-subtitle {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.repo-decision-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr 220px;
+    gap: 0;
+}
+
+.repo-decision-col {
+    padding: 14px 18px;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.repo-decision-col:last-child {
+    border-right: none;
+}
+
+.repo-decision-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+/* Repo proposal rows */
+.repo-proposal-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 0.76rem;
+}
+
+.repo-proposal-artifact {
+    font-family: "SF Mono", "Consolas", monospace;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.repo-proposal-rationale {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.72rem;
+    flex-shrink: 0;
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+    .escalation-table-header,
+    .escalation-row {
+        grid-template-columns: 36px 1fr 90px;
+    }
+    .escalation-row-action {
+        display: none;
+    }
+    .repo-decision-body {
+        grid-template-columns: 1fr;
+    }
+    .repo-decision-col {
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .repo-decision-col:last-child {
+        border-bottom: none;
+    }
+}

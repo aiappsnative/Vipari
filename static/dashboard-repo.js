@@ -1268,6 +1268,98 @@ function setRebaselineBusy(isBusy) {
     });
 }
 
+function renderDecisionSection(insights, payload) {
+    const topInsight = asArray(insights)[0] || null;
+    if (!topInsight) {
+        const badgeEl = document.getElementById("repo-decision-posture-badge");
+        if (badgeEl) {
+            badgeEl.textContent = "Healthy";
+            badgeEl.className = "severity-badge severity-low";
+        }
+        setText("repo-decision-subtitle", "No audit findings require immediate action.");
+        setSectionHtml("repo-decision-finding", '<div class="muted">No primary findings at this time.</div>');
+        setSectionHtml("repo-decision-action", '<div class="muted">—</div>');
+        return;
+    }
+
+    const severity = topInsight.priority === "review_now"
+        ? { label: "Review Now", className: "severity-high" }
+        : topInsight.priority === "watch"
+            ? { label: "Watch", className: "severity-medium" }
+            : { label: "Baseline Review", className: "severity-low" };
+
+    const badgeEl = document.getElementById("repo-decision-posture-badge");
+    if (badgeEl) {
+        badgeEl.textContent = severity.label;
+        badgeEl.className = `severity-badge ${severity.className}`;
+    }
+
+    const reviewCount = asArray(insights).filter((i) => i.priority === "review_now").length;
+    const watchCount = asArray(insights).filter((i) => i.priority === "watch").length;
+    setText("repo-decision-subtitle", `${reviewCount} review now · ${watchCount} watch · ${asArray(payload?.lower_confidence_insights).length} lower-confidence`);
+
+    const artifactName = String(topInsight.artifact_path || "").split("/").pop() || topInsight.artifact_path || "";
+    const deltas = asArray(topInsight.attribute_profile)
+        .filter((d) => d.state && d.state !== "no_change" && d.state !== "unknown")
+        .slice(0, 2);
+
+    setSectionHtml("repo-decision-finding", `
+        <div class="stack compact-stack">
+            <strong>${escapeHtml(topInsight.title || artifactName)}</strong>
+            <div class="muted">${escapeHtml(topInsight.rationale || "")}</div>
+            ${deltas.length ? `<div class="tag-row">${deltas.map((d) => `<span class="drift-chip chip-governance">${escapeHtml(d.label || d.attribute_key)}: ${escapeHtml(`${d.baseline_value || "?"} → ${d.current_value || "?"}`)}</span>`).join("")}</div>` : ""}
+        </div>
+    `);
+
+    setSectionHtml("repo-decision-action", `
+        <div class="stack compact-stack">
+            <div>${escapeHtml(topInsight.recommended_action || "Inspect before merge.")}</div>
+            ${topInsight.review_url ? `<a href="${escapeHtml(topInsight.review_url)}" class="escalation-action-btn">Open review</a>` : ""}
+        </div>
+    `);
+}
+
+async function loadPendingProposals() {
+    if (!repoFull) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/proposals/pending`);
+        if (!response.ok) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+            return;
+        }
+        const payload = await response.json();
+        const proposals = asArray(payload?.proposals || []);
+        const pendingCount = Number(payload?.pending_count || proposals.length);
+
+        if (!pendingCount) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">None pending</div>');
+            return;
+        }
+
+        const items = proposals.slice(0, 5).map((p) => {
+            const agentLabel = p.is_agent_proposal ? '<span class="drift-chip chip-model">Agent</span>' : '<span class="drift-chip chip-governance">Human</span>';
+            return `
+                <div class="repo-proposal-row">
+                    ${agentLabel}
+                    <span class="repo-proposal-artifact">${escapeHtml(p.artifact_path || String(p.artifact_id || ""))}</span>
+                    <span class="repo-proposal-rationale">${escapeHtml(String(p.rationale || "").slice(0, 80))}</span>
+                </div>
+            `;
+        }).join("");
+
+        setSectionHtml("repo-decision-proposals", `
+            <div>
+                <strong>${pendingCount}</strong> pending proposal${pendingCount !== 1 ? "s" : ""}
+                <div class="stack compact-stack" style="margin-top: 0.5rem;">${items}</div>
+            </div>
+        `);
+    } catch {
+        setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+    }
+}
+
 function applyDashboardPayload(payload) {
     const onboarding = payload.onboarding || null;
     const insights = asArray(payload.insights);
@@ -1314,6 +1406,9 @@ function applyDashboardPayload(payload) {
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
+
+    renderDecisionSection(insights, payload);
+    void loadPendingProposals();
 }
 
 async function submitRebaseline() {

@@ -81,7 +81,27 @@
                     <a href="/app/repos" class="filter-add">Open repositories</a>
                 </div>
             </section>
+
+            <div id="workspace-posture-bar" class="workspace-posture-bar loading-shell" aria-busy="true" aria-label="Workspace posture">
+                <span class="visually-hidden">Loading workspace posture...</span>
+            </div>
+
             <main class="page-scroll" id="top">
+                <section class="escalation-queue-section card-shell" id="escalation-queue-section" aria-label="Escalation queue">
+                    <div class="escalation-queue-header">
+                        <span class="escalation-queue-title">Escalation queue</span>
+                        <span class="triage-count" id="escalation-count-summary"><span class="skeleton-inline" aria-hidden="true"></span></span>
+                    </div>
+                    <div id="escalation-queue-table" class="loading-shell" role="table" aria-label="Ranked escalation items" aria-busy="true">
+                        <span class="visually-hidden">Loading escalation queue...</span>
+                        <div class="skeleton-stack skeleton-list" aria-hidden="true">
+                            <div class="skeleton-block"></div>
+                            <div class="skeleton-block"></div>
+                            <div class="skeleton-block"></div>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="secondary-row">
                     <div class="secondary-panel" id="repo-atlas-section">
                         <div class="secondary-panel-title">Repository map</div>

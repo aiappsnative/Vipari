@@ -459,6 +459,165 @@ class RepoDashboardView:
     export_jobs: list[dict[str, Any]] = None
 
 
+# ---------------------------------------------------------------------------
+# Escalation queue — workspace-wide flat ranked list
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EscalationQueueItem:
+    """A single item in the workspace escalation queue."""
+    repo_full: str
+    artifact_path: str
+    artifact_type: str
+    priority: str          # "review_now" | "watch"
+    score: float
+    title: str
+    rationale: str
+    recommended_action: str
+    evidence_label: str
+    provenance_summary: str
+    baseline_label: str
+    review_target: str | None
+    review_url: str | None
+    attribute_deltas: list[dict[str, Any]]  # top-2 changed dimensions
+    updated_at: float | None
+
+
+def build_workspace_escalation_queue(
+    db_path: str,
+    allowed_repo_fulls: set[str] | None = None,
+    *,
+    include_watch: bool = False,
+) -> dict[str, Any]:
+    """Return a ranked flat list of escalation items across all repos.
+
+    Returns a dict with:
+        workspace_posture: "risk" | "watch" | "healthy"
+        workspace_posture_reasons: list[str]  – top-3 deduplicated risk reasons
+        escalation_count: int  – review_now items
+        watch_count: int       – watch-priority items
+        items: list[EscalationQueueItem as dict]
+    """
+    repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
+    items: list[EscalationQueueItem] = []
+    for repo_entry in repos:
+        view = build_repo_dashboard_view(
+            db_path,
+            repo_entry.repo_full,
+            include_journey=False,
+            include_detail_sections=True,
+        )
+        for insight in (view.insights or []):
+            if insight.priority == "review_now" or (include_watch and insight.priority == "watch"):
+                # Collect top-2 changed attribute dimensions
+                deltas: list[dict[str, Any]] = []
+                for dim in (insight.attribute_profile or []):
+                    if dim.state not in ("no_change", "unknown") and len(deltas) < 2:
+                        deltas.append({
+                            "attribute_key": dim.attribute_key,
+                            "label": dim.label,
+                            "baseline_value": dim.baseline_value,
+                            "current_value": dim.current_value,
+                            "direction": dim.direction,
+                            "delta": dim.delta,
+                        })
+                items.append(EscalationQueueItem(
+                    repo_full=repo_entry.repo_full,
+                    artifact_path=insight.artifact_path,
+                    artifact_type=insight.artifact_type,
+                    priority=insight.priority,
+                    score=insight.score,
+                    title=insight.title,
+                    rationale=insight.rationale,
+                    recommended_action=insight.recommended_action,
+                    evidence_label=insight.evidence_label,
+                    provenance_summary=insight.provenance_summary,
+                    baseline_label=insight.baseline_label,
+                    review_target=insight.review_target,
+                    review_url=insight.review_url,
+                    attribute_deltas=deltas,
+                    updated_at=insight.updated_at,
+                ))
+
+    # Sort: review_now before watch, then by score descending within each tier
+    def _sort_key(item: EscalationQueueItem) -> tuple[int, float]:
+        tier = 0 if item.priority == "review_now" else 1
+        return (tier, -item.score)
+
+    items.sort(key=_sort_key)
+
+    review_now_items = [i for i in items if i.priority == "review_now"]
+    watch_items = [i for i in items if i.priority == "watch"]
+    escalation_count = len(review_now_items)
+    watch_count = len(watch_items)
+
+    # Workspace posture
+    if any(i.score > 2.0 for i in review_now_items):
+        workspace_posture = "risk"
+    elif review_now_items:
+        workspace_posture = "watch"
+    elif watch_items:
+        workspace_posture = "watch"
+    else:
+        workspace_posture = "healthy"
+
+    # Top-3 deduplicated reasons from the highest-scoring review_now items
+    seen_reasons: set[str] = set()
+    workspace_posture_reasons: list[str] = []
+    # Collect risk_reasons from top-scoring review_now insights
+    for item in items:
+        if item.priority != "review_now":
+            break
+        # Re-fetch the insight's risk_reasons from the view (already cached)
+        view = build_repo_dashboard_view(
+            db_path,
+            item.repo_full,
+            include_journey=False,
+            include_detail_sections=True,
+        )
+        for insight in (view.insights or []):
+            if insight.artifact_path == item.artifact_path and insight.priority == "review_now":
+                for reason in (insight.risk_reasons or []):
+                    if reason not in seen_reasons:
+                        seen_reasons.add(reason)
+                        workspace_posture_reasons.append(reason)
+                break
+        if len(workspace_posture_reasons) >= 3:
+            break
+
+    return {
+        "workspace_posture": workspace_posture,
+        "workspace_posture_reasons": workspace_posture_reasons[:3],
+        "escalation_count": escalation_count,
+        "watch_count": watch_count,
+        "items": [
+            {
+                "repo_full": item.repo_full,
+                "artifact_path": item.artifact_path,
+                "artifact_type": item.artifact_type,
+                "priority": item.priority,
+                "score": item.score,
+                "title": item.title,
+                "rationale": item.rationale,
+                "recommended_action": item.recommended_action,
+                "evidence_label": item.evidence_label,
+                "provenance_summary": item.provenance_summary,
+                "baseline_label": item.baseline_label,
+                "review_target": item.review_target,
+                "review_url": item.review_url,
+                "attribute_deltas": item.attribute_deltas,
+                "updated_at": item.updated_at,
+            }
+            for item in items
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Repo index
+# ---------------------------------------------------------------------------
+
+
 def list_repo_dashboard_index(
     db_path: str,
     allowed_repo_fulls: set[str] | None = None,

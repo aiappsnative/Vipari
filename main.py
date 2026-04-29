@@ -142,7 +142,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -2986,6 +2986,48 @@ def dashboard_overview(request: Request):
 def persistence_status(request: Request):
     _require_dashboard_access(request)
     return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
+
+
+@app.get("/api/dashboard/escalation-queue")
+def dashboard_escalation_queue(request: Request, include_watch: bool = False):
+    access_context = _require_dashboard_access(request)
+    visibility = _dashboard_repo_visibility(access_context)
+    result = build_workspace_escalation_queue(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visibility["allowed_repo_fulls"],
+        include_watch=include_watch,
+    )
+    return JSONResponse(result)
+
+
+@app.get("/api/repos/{repo_full:path}/proposals/pending")
+def list_pending_proposals_for_repo(request: Request, repo_full: str):
+    _require_dashboard_access(request)
+    from services.proposals_records import list_pending_baseline_proposals_for_repo
+    from services.onboarding_records import list_onboarded_artifacts_for_onboarding
+    proposals = list_pending_baseline_proposals_for_repo(AUDIT_DB_PATH, repo_full)
+    if not proposals:
+        return JSONResponse({"proposals": [], "pending_count": 0})
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+    artifact_path_by_id: dict[int, str] = {}
+    if onboarding:
+        for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id):
+            artifact_path_by_id[artifact.id] = artifact.artifact_path
+    proposals_out: list[dict] = []
+    for proposal in proposals:
+        proposals_out.append({
+            "proposal_id": proposal.id,
+            "artifact_id": proposal.artifact_id,
+            "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
+            "status": proposal.status,
+            "rationale": proposal.rationale,
+            "proposer_principal_id": proposal.proposer_principal_id,
+            "is_agent_proposal": False,
+            "created_at": proposal.created_at,
+            "expires_at": proposal.expires_at,
+        })
+    proposals_out.sort(key=lambda p: p["created_at"])
+    return JSONResponse({"proposals": proposals_out, "pending_count": len(proposals_out)})
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")

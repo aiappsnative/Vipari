@@ -93,11 +93,45 @@
             </section>
             <main class="page-scroll" id="top">
                 <section class="repo-audit-anchor-bar" aria-label="Audit sections">
+                    <a class="repo-audit-anchor" href="#repo-decision-section">Decision</a>
                     <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
                     <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
                     <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
                     <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
                     <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
+                </section>
+
+                <section class="repo-decision-section card-shell" id="repo-decision-section" aria-label="Decision summary">
+                    <div class="repo-decision-header">
+                        <div class="repo-decision-title-row">
+                            <span class="repo-decision-title">Decision</span>
+                            <span id="repo-decision-posture-badge" class="severity-badge severity-medium"><span class="skeleton-inline" aria-hidden="true"></span></span>
+                        </div>
+                        <div class="repo-decision-subtitle" id="repo-decision-subtitle"><span class="skeleton-line skeleton-line-medium" aria-hidden="true"></span></div>
+                    </div>
+                    <div class="repo-decision-body">
+                        <div class="repo-decision-col">
+                            <div class="repo-decision-label">Top finding</div>
+                            <div id="repo-decision-finding" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading top finding...</span>
+                                <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-long"></span><span class="skeleton-line skeleton-line-medium"></span></div>
+                            </div>
+                        </div>
+                        <div class="repo-decision-col">
+                            <div class="repo-decision-label">Recommended action</div>
+                            <div id="repo-decision-action" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading recommended action...</span>
+                                <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-medium"></span></div>
+                            </div>
+                        </div>
+                        <div class="repo-decision-col">
+                            <div class="repo-decision-label">Pending proposals</div>
+                            <div id="repo-decision-proposals" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading pending proposals...</span>
+                                <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-short"></span></div>
+                            </div>
+                        </div>
+                    </div>
                 </section>
 
                 <section class="main-columns" id="repo-triage-section">
