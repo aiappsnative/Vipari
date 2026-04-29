@@ -18,6 +18,7 @@ Baseline proposals — /cp/artifacts/{artifact_id}/baseline/proposals
   - POST /approve: requires human_operator kind → 403 with service_account
   - POST /approve: non-pending proposal → 409
   - POST /approve: expired proposal → 409
+  - POST /approve: same principal as proposer → 409 (four-eyes rule)
   - POST /approve: audit log entry is written
   - POST /reject: happy path returns 200 with rejected status
   - POST /reject: non-pending proposal → 409
@@ -29,6 +30,8 @@ Repo onboarding proposals — /cp/workspaces/{workspace_id}/repos/onboarding-pro
   - POST: missing scope → 403
   - POST: cross-workspace → 403
   - POST: flood limit (20 pending) → 409
+  - POST: duplicate pending proposal for same repo → 409
+  - POST: repo_full without slash → 422
   - GET: returns list, requires drift.read
   - POST /approve: happy path, requires human_operator
   - POST /approve: requires human_operator kind → 403 with service_account
@@ -1085,3 +1088,94 @@ def test_migration_0007_creates_proposal_tables(tmp_path):
 
     assert "cp_baseline_proposals" in tables
     assert "cp_repo_onboarding_proposals" in tables
+
+
+# ===========================================================================
+# Self-approval guard
+# ===========================================================================
+
+
+def test_approve_baseline_proposal_self_approval_returns_409(tmp_path, monkeypatch):
+    """Proposer and approver must be different principals (four-eyes rule)."""
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, ws_id = _seed_db(db_path)
+    _seed_allocation(db_path, ws_id, user_id)
+    artifact_id = _seed_onboarding_and_artifact(db_path)
+
+    # Single principal that holds BOTH low and high scopes — can create and approve.
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_LOW, SCOPE_DRIFT_WRITE_HIGH], "c-self-appr",
+                    principal_kind="human_operator")
+    token = _make_token("c-self-appr", ws_id, [SCOPE_DRIFT_WRITE_LOW, SCOPE_DRIFT_WRITE_HIGH])
+
+    with TestClient(create_api_app()) as client:
+        cr = client.post(
+            f"/cp/artifacts/{artifact_id}/baseline/proposals",
+            json={"rationale": "self-test"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cr.status_code == 201
+        pid = cr.json()["id"]
+
+        ar = client.post(
+            f"/cp/artifacts/{artifact_id}/baseline/proposals/{pid}/approve",
+            json={"decision_note": "I approve my own proposal"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert ar.status_code == 409
+    assert "four-eyes" in ar.json()["detail"].lower() or "different principals" in ar.json()["detail"].lower()
+
+
+# ===========================================================================
+# Duplicate pending onboarding proposal guard
+# ===========================================================================
+
+
+def test_create_onboarding_proposal_duplicate_pending_returns_409(tmp_path, monkeypatch):
+    """Two pending proposals for the same (workspace_id, repo_full) → 409 on second."""
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, ws_id = _seed_db(db_path)
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_LOW], "c-ob-dup")
+    token = _make_token("c-ob-dup", ws_id, [SCOPE_DRIFT_WRITE_LOW])
+
+    with TestClient(create_api_app()) as client:
+        r1 = client.post(
+            f"/cp/workspaces/{ws_id}/repos/onboarding-proposals",
+            json={"repo_full": "acme/duplicate-repo"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r1.status_code == 201
+
+        r2 = client.post(
+            f"/cp/workspaces/{ws_id}/repos/onboarding-proposals",
+            json={"repo_full": "acme/duplicate-repo"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert r2.status_code == 409
+    assert "pending" in r2.json()["detail"].lower()
+
+
+# ===========================================================================
+# repo_full format validation
+# ===========================================================================
+
+
+def test_create_onboarding_proposal_invalid_repo_full_returns_422(tmp_path, monkeypatch):
+    """repo_full without a slash is rejected with 422."""
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, ws_id = _seed_db(db_path)
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_LOW], "c-ob-badfmt")
+    token = _make_token("c-ob-badfmt", ws_id, [SCOPE_DRIFT_WRITE_LOW])
+
+    with TestClient(create_api_app()) as client:
+        response = client.post(
+            f"/cp/workspaces/{ws_id}/repos/onboarding-proposals",
+            json={"repo_full": "no-slash-here"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 422

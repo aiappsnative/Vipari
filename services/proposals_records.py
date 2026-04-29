@@ -219,7 +219,7 @@ def _validate_rationale(value: str) -> str:
     return value
 
 
-def _validate_metadata(value: dict[str, str]) -> str:
+def _validate_and_serialise_metadata(value: dict[str, str]) -> str:
     if len(value) > 20:
         raise HTTPException(status_code=422, detail="metadata must not exceed 20 keys.")
     for k, v in value.items():
@@ -262,18 +262,23 @@ def create_baseline_proposal(
     proposer_principal_id: int,
 ) -> BaselineProposalRecord:
     rationale = _validate_rationale(rationale)
-    metadata_json = _validate_metadata(metadata)
+    metadata_json = _validate_and_serialise_metadata(metadata)
     linked_json = _validate_linked_audit_ids(linked_audit_ids)
     now = time.time()
     expires_at = now + PROPOSAL_EXPIRY_SECONDS
 
     with connect_sqlite(db_path) as conn:
+        # Acquire an immediate write lock before the COUNT so the check and
+        # the INSERT are atomic — prevents concurrent requests from both
+        # passing the flood limit and racing to insert.
+        conn.execute("BEGIN IMMEDIATE")
         # Flood limit check
         pending_count = conn.execute(
             "SELECT COUNT(*) FROM cp_baseline_proposals WHERE artifact_id = ? AND status = ?",
             (artifact_id, PROPOSAL_STATUS_PENDING),
         ).fetchone()[0]
         if pending_count >= MAX_PENDING_BASELINE_PROPOSALS_PER_ARTIFACT:
+            conn.execute("ROLLBACK")
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -357,16 +362,35 @@ def approve_baseline_proposal(
             )
         if proposal.expires_at < now:
             raise HTTPException(status_code=409, detail="Proposal has expired and can no longer be approved.")
+        # Four-eyes: proposer and approver must be different principals.
+        if proposal.proposer_principal_id == decision_principal_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Proposer and approver must be different principals (four-eyes rule).",
+            )
 
-        conn.execute(
+        # Use a conditional UPDATE to guard against a TOCTOU race: if another
+        # request concurrently approved or rejected this proposal, rowcount=0.
+        result = conn.execute(
             """
             UPDATE cp_baseline_proposals
             SET status = ?, decision_principal_id = ?, decision_note = ?,
                 decided_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ?
             """,
-            (PROPOSAL_STATUS_APPROVED, decision_principal_id, decision_note, now, now, proposal_id),
+            (PROPOSAL_STATUS_APPROVED, decision_principal_id, decision_note, now, now,
+             proposal_id, PROPOSAL_STATUS_PENDING),
         )
+        if result.rowcount == 0:
+            # Race lost — re-read and surface the current status.
+            current_row = conn.execute(
+                "SELECT status FROM cp_baseline_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            current_status = current_row["status"] if current_row else "unknown"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal is already '{current_status}' and cannot be approved.",
+            )
         updated_row = conn.execute(
             "SELECT * FROM cp_baseline_proposals WHERE id = ?", (proposal_id,)
         ).fetchone()
@@ -398,16 +422,29 @@ def reject_baseline_proposal(
                 status_code=409,
                 detail=f"Proposal is already '{proposal.status}' and cannot be rejected.",
             )
+        # Note: rejection of an expired proposal is intentionally permitted so
+        # that operators can clean up stale proposals without being blocked.
 
-        conn.execute(
+        # Conditional UPDATE guards against concurrent approve/reject races.
+        result = conn.execute(
             """
             UPDATE cp_baseline_proposals
             SET status = ?, decision_principal_id = ?, decision_note = ?,
                 decided_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ?
             """,
-            (PROPOSAL_STATUS_REJECTED, decision_principal_id, decision_note, now, now, proposal_id),
+            (PROPOSAL_STATUS_REJECTED, decision_principal_id, decision_note, now, now,
+             proposal_id, PROPOSAL_STATUS_PENDING),
         )
+        if result.rowcount == 0:
+            current_row = conn.execute(
+                "SELECT status FROM cp_baseline_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            current_status = current_row["status"] if current_row else "unknown"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal is already '{current_status}' and cannot be rejected.",
+            )
         updated_row = conn.execute(
             "SELECT * FROM cp_baseline_proposals WHERE id = ?", (proposal_id,)
         ).fetchone()
@@ -430,17 +467,32 @@ def create_onboarding_proposal(
     proposer_principal_id: int,
 ) -> RepoOnboardingProposalRecord:
     rationale = _validate_rationale(rationale)
-    metadata_json = _validate_metadata(metadata)
+    metadata_json = _validate_and_serialise_metadata(metadata)
     now = time.time()
     expires_at = now + PROPOSAL_EXPIRY_SECONDS
 
     with connect_sqlite(db_path) as conn:
+        # Acquire an immediate write lock so COUNT + INSERT are atomic.
+        conn.execute("BEGIN IMMEDIATE")
+        # Duplicate-pending guard: reject a second proposal for the same repo
+        # while one is already pending, rather than silently accumulating duplicates.
+        existing = conn.execute(
+            "SELECT id FROM cp_repo_onboarding_proposals WHERE workspace_id = ? AND repo_full = ? AND status = ?",
+            (workspace_id, repo_full, PROPOSAL_STATUS_PENDING),
+        ).fetchone()
+        if existing is not None:
+            conn.execute("ROLLBACK")
+            raise HTTPException(
+                status_code=409,
+                detail="A pending onboarding proposal for this repository already exists.",
+            )
         # Flood limit check
         pending_count = conn.execute(
             "SELECT COUNT(*) FROM cp_repo_onboarding_proposals WHERE workspace_id = ? AND status = ?",
             (workspace_id, PROPOSAL_STATUS_PENDING),
         ).fetchone()[0]
         if pending_count >= MAX_PENDING_ONBOARDING_PROPOSALS_PER_WORKSPACE:
+            conn.execute("ROLLBACK")
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -523,16 +575,33 @@ def approve_onboarding_proposal(
             )
         if proposal.expires_at < now:
             raise HTTPException(status_code=409, detail="Proposal has expired and can no longer be approved.")
+        # Four-eyes: proposer and approver must be different principals.
+        if proposal.proposer_principal_id == decision_principal_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Proposer and approver must be different principals (four-eyes rule).",
+            )
 
-        conn.execute(
+        # Conditional UPDATE guards against concurrent approve/reject races.
+        result = conn.execute(
             """
             UPDATE cp_repo_onboarding_proposals
             SET status = ?, decision_principal_id = ?, decision_note = ?,
                 decided_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ?
             """,
-            (PROPOSAL_STATUS_APPROVED, decision_principal_id, decision_note, now, now, proposal_id),
+            (PROPOSAL_STATUS_APPROVED, decision_principal_id, decision_note, now, now,
+             proposal_id, PROPOSAL_STATUS_PENDING),
         )
+        if result.rowcount == 0:
+            current_row = conn.execute(
+                "SELECT status FROM cp_repo_onboarding_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            current_status = current_row["status"] if current_row else "unknown"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal is already '{current_status}' and cannot be approved.",
+            )
         updated_row = conn.execute(
             "SELECT * FROM cp_repo_onboarding_proposals WHERE id = ?", (proposal_id,)
         ).fetchone()
@@ -564,16 +633,29 @@ def reject_onboarding_proposal(
                 status_code=409,
                 detail=f"Proposal is already '{proposal.status}' and cannot be rejected.",
             )
+        # Note: rejection of an expired proposal is intentionally permitted so
+        # that operators can clean up stale proposals without being blocked.
 
-        conn.execute(
+        # Conditional UPDATE guards against concurrent approve/reject races.
+        result = conn.execute(
             """
             UPDATE cp_repo_onboarding_proposals
             SET status = ?, decision_principal_id = ?, decision_note = ?,
                 decided_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ?
             """,
-            (PROPOSAL_STATUS_REJECTED, decision_principal_id, decision_note, now, now, proposal_id),
+            (PROPOSAL_STATUS_REJECTED, decision_principal_id, decision_note, now, now,
+             proposal_id, PROPOSAL_STATUS_PENDING),
         )
+        if result.rowcount == 0:
+            current_row = conn.execute(
+                "SELECT status FROM cp_repo_onboarding_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+            current_status = current_row["status"] if current_row else "unknown"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal is already '{current_status}' and cannot be rejected.",
+            )
         updated_row = conn.execute(
             "SELECT * FROM cp_repo_onboarding_proposals WHERE id = ?", (proposal_id,)
         ).fetchone()

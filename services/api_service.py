@@ -71,7 +71,7 @@ from .baseline_approval_service import (
 )
 from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo
-from .onboarding_records import promote_latest_source_to_onboarding_baseline
+from .onboarding_records import get_onboarded_artifact_by_id, promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .secure_store import decrypt_text, encrypt_text
@@ -85,6 +85,9 @@ from .audit_feedback_records import (
     add_audit_triage,
 )
 from .audit_records import get_pull_request_audit_by_id
+
+# Module-level constant to avoid allocating a new frozenset on every approve request.
+_HUMAN_ONLY_KINDS: frozenset[str] = frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR})
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -135,7 +138,7 @@ class ProposalDecisionRequest(BaseModel):
 
 
 class OnboardingProposalRequest(BaseModel):
-    repo_full: str = Field(..., min_length=1, max_length=300)
+    repo_full: str = Field(..., min_length=1, max_length=300, pattern=r'^[^/]+/[^/]+$')
     installation_id: int | None = None
     proposed_category: str | None = Field(default=None, max_length=80)
     rationale: str = Field(default="", max_length=2000)
@@ -1121,7 +1124,6 @@ def create_api_app() -> FastAPI:
         """Submit a baseline promotion proposal for an artifact. Requires drift.write.low."""
         claims, principal = require_cp_principal(request, settings, db_path)
         require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
-        from .onboarding_records import get_onboarded_artifact_by_id
         artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
         if artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -1156,7 +1158,6 @@ def create_api_app() -> FastAPI:
         """List baseline proposals for an artifact. Requires drift.read."""
         claims, _principal = require_cp_principal(request, settings, db_path)
         require_cp_scope(claims, SCOPE_DRIFT_READ)
-        from .onboarding_records import get_onboarded_artifact_by_id
         artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
         if artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -1171,8 +1172,7 @@ def create_api_app() -> FastAPI:
         """Approve a baseline proposal. Requires drift.write.high and human_operator kind."""
         claims, principal = require_cp_principal(request, settings, db_path)
         require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
-        require_cp_principal_kind(principal, frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR}))
-        from .onboarding_records import get_onboarded_artifact_by_id
+        require_cp_principal_kind(principal, _HUMAN_ONLY_KINDS)
         artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
         if artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -1202,7 +1202,6 @@ def create_api_app() -> FastAPI:
         """Reject a baseline proposal. Requires drift.write.high."""
         claims, principal = require_cp_principal(request, settings, db_path)
         require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
-        from .onboarding_records import get_onboarded_artifact_by_id
         artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
         if artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -1272,7 +1271,7 @@ def create_api_app() -> FastAPI:
         """Approve a repo onboarding proposal. Requires drift.write.high and human_operator kind."""
         claims, principal = require_cp_principal(request, settings, db_path)
         require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
-        require_cp_principal_kind(principal, frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR}))
+        require_cp_principal_kind(principal, _HUMAN_ONLY_KINDS)
         require_cp_workspace_match(claims, workspace_id)
         proposal = approve_onboarding_proposal(
             db_path,
