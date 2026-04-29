@@ -74,6 +74,30 @@ def _ensure_onboarding_approval_columns(db_path: str) -> None:
             conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN linked_findings_json TEXT NOT NULL DEFAULT '[]'")
 
 
+def _ensure_machine_principals_schema(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS machine_principals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                display_name TEXT NOT NULL,
+                principal_kind TEXT NOT NULL DEFAULT 'service_account',
+                client_id TEXT NOT NULL UNIQUE,
+                client_secret_encrypted TEXT NOT NULL,
+                scopes_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_by_user_id INTEGER,
+                revoked_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -90,6 +114,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0003_add_onboarding_approval_columns",
         "Ensure legacy onboarding approval tables include the later approval and audit-log columns required by baseline review flows.",
         _ensure_onboarding_approval_columns,
+    ),
+    (
+        "0004_add_machine_principals",
+        "Create the machine_principals table for workspace-bound service-account identities used by the internal control-plane auth layer.",
+        _ensure_machine_principals_schema,
     ),
 )
 
