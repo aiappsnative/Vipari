@@ -98,6 +98,7 @@ Implemented today:
 - GitHub App auth hardening, transient opened-PR diff retry handling, and exact-SHA synchronize diff reconstruction
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 - landed dashboard posture derived from approved baselines plus merged-history evidence, while proposal-only PR audit evidence stays separate from landed drift views
+- human-gated proposal-and-approval flows for baseline promotions and repo onboarding: `cp_baseline_proposals` and `cp_repo_onboarding_proposals` tables managed by `services/proposals_records.py`; eight new `/cp/*` routes enforcing scope (`drift.write.low` / `drift.write.high`), principal-kind (`human_operator`-only approve gate), four-eyes rule, TOCTOU-safe conditional UPDATE, 30-day expiry, flood limits, and an `artifact_id` URL consistency guard to protect audit log integrity; service accounts structurally blocked from high-privilege scopes at both creation time (`validate_scope_kind_compatibility`) and route layer (`require_cp_principal_kind`)
 - shipped groundwork for repeatable OSS evaluation packages and CLI-driven branch-to-branch comparison
 - queue abstractions for local SQLite and SQS-style split execution, plus Redis-backed installation-token caching with in-process fallback
 - retry-safe webhook delivery deduplication so ingress failures do not permanently drop redelivered GitHub events

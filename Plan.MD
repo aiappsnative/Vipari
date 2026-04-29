@@ -65,7 +65,8 @@ This framing should shape roadmap decisions:
 	- now includes machine-principal identity management for workspace-bound service accounts: `machine_principals` table, CRUD records, HS256 JWT issuance and validation, `/cp/*` REST API routes, scope enforcement, runtime guardrails for `INTERNAL_JWT_SECRET` presence and minimum key length (RFC 7518 §3.2), and 33-test coverage in `test_control_plane_auth.py`
 	- now includes the merged `feature/control-plane-low-risk-actions-v1` slice (issue #60): three new control-plane endpoints — `POST /cp/audits/{audit_id}/feedback` (append-only structured feedback events), `POST /cp/audits/{audit_id}/triage` (append-only triage state transitions, never mutates `pull_request_audits`), and `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (export status without `result_blob`); all three enforce workspace isolation via 404-masking, require `drift.write.low` or `drift.read` scope respectively, and persist to two new migration-managed tables with validated input bounds
 	- now includes the merged `feature/control-plane-read-models-v1` slice (issue #58): authenticated, workspace-scoped internal `/cp/*` JSON read endpoints for workspace listing, repo inventory, repo posture, repo case file, artifact inventory, artifact detail, artifact storyline, repo audits, audit detail, and the escalation queue; all endpoints are read-only and JSON-only; this layer is the canonical structured data source for the dashboard and future MCP integrations
-	- is green at the full-suite level (`402 passed` on the latest local verification)
+	- now includes the merged `feature/control-plane-high-risk-proposals-v1` slice (issue #61): human-gated proposal-and-approval flows for the control plane; covers baseline-promote proposals (artifact-scoped) and repo-onboarding proposals (workspace-scoped); adds `services/proposals_records.py` as the full CRUD persistence layer, migration `0007_add_high_risk_proposal_tables`, 8 new API routes, `principal_kind` vocabulary and `validate_scope_kind_compatibility` in `internal_auth.py`, and `require_cp_principal_kind` in `cp_auth.py`; enforces four-eyes rule, TOCTOU-safe conditional UPDATE, flood limits, 30-day expiry, artifact_id/URL consistency guard (audit log integrity), and service-account-blocked-from-high-scope at both creation and route layer; 36 tests in `test_cp_high_risk_proposals.py`
+	- is green at the full-suite level (`438 passed` on the latest local verification)
 
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
@@ -107,6 +108,26 @@ This framing should shape roadmap decisions:
 	- 33 tests in `tests/test_control_plane_auth.py` (all passing)
 	- Security hardening commit resolved 7 issues: empty `aud` IndexError, key-length enforcement, production presence check, scope re-validation, input validation, import placement, and missing DB index
 	- Pre-existing failures from prior sprint (migration 0003 table-existence guard, stale JS assertion) also resolved in this PR
+
+### `feature/control-plane-high-risk-proposals-v1` (issue #61)
+- Purpose: completed branch for issue `#61`, human-gated proposal-and-approval flows for the control plane, now merged to `main`
+- Final status at merge:
+	- `POST /cp/artifacts/{artifact_id}/baseline/proposals` (`drift.write.low`) — create a baseline-promote proposal for an artifact; flood-limited to 5 pending per artifact; 30-day expiry; rationale (≤2000 chars), metadata (≤20 keys), linked_audit_ids (≤50, positive ints) validated; workspace isolation via allocation check plus `artifact_id` binding
+	- `GET /cp/artifacts/{artifact_id}/baseline/proposals` (`drift.read`) — list baseline proposals for an artifact with workspace isolation
+	- `POST /cp/artifacts/{artifact_id}/baseline/proposals/{proposal_id}/approve` (`drift.write.high`, `human_operator` only) — four-eyes rule; expiry enforced; TOCTOU-safe conditional UPDATE; `artifact_id` verified against proposal record so URL mismatch → 404 (audit log integrity guard)
+	- `POST /cp/artifacts/{artifact_id}/baseline/proposals/{proposal_id}/reject` (`drift.write.high`) — reject a pending proposal; expired proposals may still be rejected; same `artifact_id` consistency guard
+	- `POST /cp/workspaces/{workspace_id}/repos/onboarding-proposals` (`drift.write.low`) — create a repo-onboarding proposal; flood-limited to 20 pending per workspace; duplicate-pending guard per `(workspace_id, repo_full)`; 30-day expiry
+	- `GET /cp/workspaces/{workspace_id}/repos/onboarding-proposals` (`drift.read`) — list onboarding proposals for a workspace
+	- `POST /cp/workspaces/{workspace_id}/repos/onboarding-proposals/{proposal_id}/approve` (`drift.write.high`, `human_operator` only)
+	- `POST /cp/workspaces/{workspace_id}/repos/onboarding-proposals/{proposal_id}/reject` (`drift.write.high`) — service accounts permitted
+	- `POST /cp/principals` hardened with `validate_scope_kind_compatibility` — service accounts blocked from `drift.write.high` and `admin.write` at creation time
+	- new `services/proposals_records.py` with `BEGIN IMMEDIATE` flood-check + INSERT atomicity and conditional UPDATE approve/reject pattern
+	- migration `0007_add_high_risk_proposal_tables` creates `cp_baseline_proposals` and `cp_repo_onboarding_proposals` with indexes
+	- `PRINCIPAL_KIND_SERVICE_ACCOUNT`, `PRINCIPAL_KIND_HUMAN_OPERATOR`, `SCOPES_REQUIRING_HUMAN_OPERATOR`, `validate_scope_kind_compatibility` added to `internal_auth.py`
+	- `require_cp_principal_kind` added to `cp_auth.py` as the route-layer human-only gate
+	- 36 tests in `test_cp_high_risk_proposals.py`; post-review security audit found and fixed an IDOR-class audit-integrity gap (`artifact_id` URL not verified against proposal record) with two regression tests
+	- full suite green at `438 passed` after merge
+	- remote and local feature-branch cleanup is complete
 
 ### `feature/control-plane-low-risk-actions-v1` (issue #60)
 - Purpose: completed branch for issue `#60`, control-plane low-risk write actions, now merged to `main`
@@ -339,12 +360,12 @@ Verified against repo state and open issues:
 - GitHub issue `#57` (`feature/control-plane-foundation-v1`) is now merged to `main` via PR #63.
 - GitHub issue `#60` (`feature/control-plane-low-risk-actions-v1`) is now merged to `main`; feedback/triage write endpoints and export-status read endpoint are mainline functionality. Issue is closed.
 - GitHub issue `#58` (`feature/control-plane-read-models-v1`) is now merged to `main`; all `/cp/*` JSON read endpoints for workspaces, repos, posture, case file, artifacts, storyline, audits, and escalations are mainline functionality. Issue is closed.
+- GitHub issue `#61` (`feature/control-plane-high-risk-proposals-v1`) is now merged to `main`; human-gated proposal-and-approval flows for baseline promotions and repo onboarding are mainline functionality. Issue is closed.
 - The remaining open issues that align with real unfinished work are:
   - `#46` (`feature/railway-launch-hardening`) — production Railway deployment readiness
   - `#14` (`feature/attribute-profile-ui-v1`) — attribute profile as a first-class dashboard and review surface
   - `#15` (`feature/governance-signals-v1`) — first-class governance anomaly detection
   - `#59` (`feature/mcp-map-server-v1`) — brokered MCP server exposing curated PromptDrift tools to customer agents
-  - `#61` (`feature/control-plane-high-risk-proposals-v1`) — proposal-and-approval flows for baseline promotions, policy changes, and repo onboarding decisions
   - `#62` (`feature/dashboard-control-tower-v1`) — refactor dashboard and audit pages into a control-tower model centered on escalations, case files, and human oversight
 
 #### Remaining work analysis
