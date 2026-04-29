@@ -19,7 +19,9 @@ Baseline proposals — /cp/artifacts/{artifact_id}/baseline/proposals
   - POST /approve: non-pending proposal → 409
   - POST /approve: expired proposal → 409
   - POST /approve: same principal as proposer → 409 (four-eyes rule)
+  - POST /approve: proposal_id belongs to different artifact_id in URL → 404
   - POST /approve: audit log entry is written
+  - POST /reject: proposal_id belongs to different artifact_id in URL → 404
   - POST /reject: happy path returns 200 with rejected status
   - POST /reject: non-pending proposal → 409
   - POST /reject: does NOT require human_operator kind (service_account is fine)
@@ -1179,3 +1181,90 @@ def test_create_onboarding_proposal_invalid_repo_full_returns_422(tmp_path, monk
         )
 
     assert response.status_code == 422
+
+
+# ===========================================================================
+# artifact_id / proposal_id consistency guard
+# ===========================================================================
+
+
+def test_approve_baseline_proposal_wrong_artifact_returns_404(tmp_path, monkeypatch):
+    """Approving a proposal via the wrong artifact URL must return 404, not 200.
+
+    Without this guard, a principal could corrupt the audit trail by approving
+    proposal P (for artifact A1) via the URL for artifact A2 — the audit log
+    would record artifact_id=A2 for an approval that actually concerned A1.
+    """
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, ws_id = _seed_db(db_path)
+
+    # Two distinct repos, both allocated to the same workspace.
+    _seed_allocation(db_path, ws_id, user_id, REPO_FULL, installation_id=9100)
+    _seed_allocation(db_path, ws_id, user_id, REPO_FULL_OTHER, installation_id=9101)
+
+    artifact_id_1 = _seed_onboarding_and_artifact(db_path, REPO_FULL, installation_id=9100)
+    artifact_id_2 = _seed_onboarding_and_artifact(db_path, REPO_FULL_OTHER, installation_id=9101)
+
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_LOW], "c-prop-wa")
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_HIGH], "c-appr-wa",
+                    principal_kind="human_operator")
+
+    pt = _make_token("c-prop-wa", ws_id, [SCOPE_DRIFT_WRITE_LOW])
+    at = _make_token("c-appr-wa", ws_id, [SCOPE_DRIFT_WRITE_HIGH])
+
+    with TestClient(create_api_app()) as client:
+        # Create proposal for artifact_id_1
+        cr = client.post(
+            f"/cp/artifacts/{artifact_id_1}/baseline/proposals",
+            json={"rationale": "wrong-artifact test"},
+            headers={"Authorization": f"Bearer {pt}"},
+        )
+        assert cr.status_code == 201
+        proposal_id = cr.json()["id"]
+
+        # Try to approve that proposal via artifact_id_2's URL — must be 404
+        ar = client.post(
+            f"/cp/artifacts/{artifact_id_2}/baseline/proposals/{proposal_id}/approve",
+            json={},
+            headers={"Authorization": f"Bearer {at}"},
+        )
+
+    assert ar.status_code == 404
+
+
+def test_reject_baseline_proposal_wrong_artifact_returns_404(tmp_path, monkeypatch):
+    """Rejecting a proposal via the wrong artifact URL must return 404."""
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, ws_id = _seed_db(db_path)
+
+    _seed_allocation(db_path, ws_id, user_id, REPO_FULL, installation_id=9100)
+    _seed_allocation(db_path, ws_id, user_id, REPO_FULL_OTHER, installation_id=9101)
+
+    artifact_id_1 = _seed_onboarding_and_artifact(db_path, REPO_FULL, installation_id=9100)
+    artifact_id_2 = _seed_onboarding_and_artifact(db_path, REPO_FULL_OTHER, installation_id=9101)
+
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_LOW], "c-prop-wr")
+    _seed_principal(db_path, ws_id, [SCOPE_DRIFT_WRITE_HIGH], "c-rej-wr",
+                    principal_kind="service_account")
+
+    pt = _make_token("c-prop-wr", ws_id, [SCOPE_DRIFT_WRITE_LOW])
+    rt = _make_token("c-rej-wr", ws_id, [SCOPE_DRIFT_WRITE_HIGH])
+
+    with TestClient(create_api_app()) as client:
+        cr = client.post(
+            f"/cp/artifacts/{artifact_id_1}/baseline/proposals",
+            json={"rationale": "wrong-artifact reject test"},
+            headers={"Authorization": f"Bearer {pt}"},
+        )
+        assert cr.status_code == 201
+        proposal_id = cr.json()["id"]
+
+        rr = client.post(
+            f"/cp/artifacts/{artifact_id_2}/baseline/proposals/{proposal_id}/reject",
+            json={},
+            headers={"Authorization": f"Bearer {rt}"},
+        )
+
+    assert rr.status_code == 404

@@ -339,6 +339,7 @@ def approve_baseline_proposal(
     db_path: str,
     *,
     proposal_id: int,
+    artifact_id: int,
     workspace_id: int,
     decision_principal_id: int,
     decision_note: str | None,
@@ -348,8 +349,8 @@ def approve_baseline_proposal(
 
     with connect_sqlite(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM cp_baseline_proposals WHERE id = ? AND workspace_id = ?",
-            (proposal_id, workspace_id),
+            "SELECT * FROM cp_baseline_proposals WHERE id = ? AND workspace_id = ? AND artifact_id = ?",
+            (proposal_id, workspace_id, artifact_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Proposal not found.")
@@ -401,6 +402,7 @@ def reject_baseline_proposal(
     db_path: str,
     *,
     proposal_id: int,
+    artifact_id: int,
     workspace_id: int,
     decision_principal_id: int,
     decision_note: str | None,
@@ -410,8 +412,8 @@ def reject_baseline_proposal(
 
     with connect_sqlite(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM cp_baseline_proposals WHERE id = ? AND workspace_id = ?",
-            (proposal_id, workspace_id),
+            "SELECT * FROM cp_baseline_proposals WHERE id = ? AND workspace_id = ? AND artifact_id = ?",
+            (proposal_id, workspace_id, artifact_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Proposal not found.")

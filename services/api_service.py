@@ -1182,6 +1182,7 @@ def create_api_app() -> FastAPI:
         proposal = approve_baseline_proposal(
             db_path,
             proposal_id=proposal_id,
+            artifact_id=artifact_id,
             workspace_id=claims.workspace_id,
             decision_principal_id=principal.id,
             decision_note=payload.decision_note,
@@ -1211,6 +1212,7 @@ def create_api_app() -> FastAPI:
         proposal = reject_baseline_proposal(
             db_path,
             proposal_id=proposal_id,
+            artifact_id=artifact_id,
             workspace_id=claims.workspace_id,
             decision_principal_id=principal.id,
             decision_note=payload.decision_note,
