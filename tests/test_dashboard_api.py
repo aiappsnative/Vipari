@@ -14,8 +14,10 @@ from services.audit_records import record_audit_result
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
 from engine.analysis import analyze_diff
+from services.onboarding_records import list_baseline_audit_log_for_onboarding, record_baseline_audit_log
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.entitlements import derive_entitlement_payload
+from services.persistence import connect_sqlite
 from services.repo_journey import build_repo_journey
 from services.repo_journey_records import list_repo_posture_snapshots_for_repo
 
@@ -380,6 +382,114 @@ def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(t
         journey_response = client.get("/api/repos/doria90/dummyAI/journey")
 
     assert approve_repo.status_code == 200
+
+    def test_init_db_repairs_legacy_baseline_audit_log_columns(tmp_path):
+        db_path = str(tmp_path / "legacy-baseline-approval.db")
+
+        with connect_sqlite(db_path, foreign_keys=True) as conn:
+            conn.execute(
+                """
+                CREATE TABLE schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    applied_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                ("0001_bootstrap_relational_schema", "legacy bootstrap", 1.0),
+            )
+            conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                ("0002_add_pull_request_audits_fused_confidence", "legacy audit repair", 2.0),
+            )
+            conn.execute(
+                """
+                CREATE TABLE repository_onboardings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_full TEXT NOT NULL,
+                    installation_id INTEGER NOT NULL,
+                    default_branch TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    discovered_artifact_count INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    approved_by TEXT,
+                    approved_at REAL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE onboarding_baseline_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    onboarding_id INTEGER NOT NULL,
+                    onboarded_artifact_id INTEGER NOT NULL,
+                    normalized_artifact_id TEXT NOT NULL,
+                    artifact_path TEXT NOT NULL,
+                    artifact_type TEXT NOT NULL,
+                    version_hash TEXT NOT NULL,
+                    signal_terms_json TEXT NOT NULL,
+                    line_count INTEGER NOT NULL,
+                    profile_json TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    content_text TEXT,
+                    approval_status TEXT NOT NULL DEFAULT 'pending',
+                    approved_by TEXT,
+                    approved_at REAL,
+                    approval_note TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE baseline_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_full TEXT NOT NULL,
+                    onboarding_id INTEGER NOT NULL,
+                    artifact_path TEXT,
+                    action TEXT NOT NULL,
+                    actor_login TEXT,
+                    note TEXT,
+                    baseline_version_id INTEGER,
+                    snapshot_id INTEGER,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO repository_onboardings (
+                    id, repo_full, installation_id, default_branch, status, discovered_artifact_count, created_at, updated_at, approved_by, approved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (1, "doria90/hermes-agent", 123, "main", "pending_baseline_approval", 1, 10.0, 10.0, None, None),
+            )
+
+        init_db(db_path)
+
+        with connect_sqlite(db_path, foreign_keys=True) as conn:
+            baseline_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(baseline_audit_log)").fetchall()}
+        assert "decision_type" in baseline_audit_columns
+        assert "linked_findings_json" in baseline_audit_columns
+
+        record = record_baseline_audit_log(
+            db_path,
+            repo_full="doria90/hermes-agent",
+            onboarding_id=1,
+            artifact_path=None,
+            action="approve_repo_baseline",
+            decision_type="human_review_approved",
+            actor_login="reviewer",
+            note="Approved after review",
+            linked_findings=[],
+            snapshot_id=None,
+        )
+
+        assert record.decision_type == "human_review_approved"
+        assert record.linked_findings == []
+        assert list_baseline_audit_log_for_onboarding(db_path, 1)[-1].action == "approve_repo_baseline"
     current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
 
     def _fetch_content(repo, path, token, ref):

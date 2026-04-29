@@ -41,12 +41,55 @@ def _bootstrap_relational_schema(db_path: str) -> None:
     bootstrap_application_schema(db_path)
 
 
+def _ensure_pull_request_audit_fused_confidence(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+        if "fused_confidence" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
+    
+def _ensure_onboarding_approval_columns(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        onboarding_columns = {row["name"] for row in conn.execute("PRAGMA table_info(repository_onboardings)").fetchall()}
+        if "approved_by" not in onboarding_columns:
+            conn.execute("ALTER TABLE repository_onboardings ADD COLUMN approved_by TEXT")
+        if "approved_at" not in onboarding_columns:
+            conn.execute("ALTER TABLE repository_onboardings ADD COLUMN approved_at REAL")
+
+        baseline_columns = {row["name"] for row in conn.execute("PRAGMA table_info(onboarding_baseline_versions)").fetchall()}
+        if "content_text" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN content_text TEXT")
+        if "approval_status" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending'")
+        if "approved_by" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approved_by TEXT")
+        if "approved_at" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approved_at REAL")
+        if "approval_note" not in baseline_columns:
+            conn.execute("ALTER TABLE onboarding_baseline_versions ADD COLUMN approval_note TEXT")
+
+        baseline_audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(baseline_audit_log)").fetchall()}
+        if "decision_type" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN decision_type TEXT")
+        if "linked_findings_json" not in baseline_audit_columns:
+            conn.execute("ALTER TABLE baseline_audit_log ADD COLUMN linked_findings_json TEXT NOT NULL DEFAULT '[]'")
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
         "0001_bootstrap_relational_schema",
         "Create and repair the relational application schema for the active backend.",
         _bootstrap_relational_schema,
+    ),
+    (
+        "0002_add_pull_request_audits_fused_confidence",
+        "Ensure pull_request_audits includes fused_confidence for legacy databases bootstrapped before the column existed.",
+        _ensure_pull_request_audit_fused_confidence,
+    ),
+    (
+        "0003_add_onboarding_approval_columns",
+        "Ensure legacy onboarding approval tables include the later approval and audit-log columns required by baseline review flows.",
+        _ensure_onboarding_approval_columns,
     ),
 )
 

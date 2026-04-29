@@ -842,6 +842,9 @@ index 1..2
 
     assert comment.startswith("## ✅ DriftGuard: Keep in normal review lane")
     assert "Low risk · medium confidence · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
+    assert "### Attribute profile" in comment
+    assert "| Attribute | Baseline -> Current | Reason |" in comment
+    assert "| Capability | low -> moderate | Capability expanded because the workflow now issues refunds automatically |" in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment
     assert "- Added automatic refund issuance for requests under 500." in comment
@@ -888,6 +891,7 @@ index 1..2
 
     assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
     assert "Low risk · low confidence · unknown control surface · vs approved baseline `none-yet`" in comment
+    assert "| Guardrails | unknown -> unknown | No normalized attribute evidence was available for this dimension; treat it as low-confidence unknown. |" in comment
     assert "Signal fusion kept the deterministic low risk assessment because the semantic escalation was only low confidence." in comment
 
 

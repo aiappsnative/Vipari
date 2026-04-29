@@ -11,6 +11,7 @@ from services.audit_records import (
     list_findings_for_repo_artifact,
     list_pull_request_audits_for_repo,
 )
+from services.persistence import connect_sqlite
 from services.audit_worker import WorkerSettings, process_next_job_once
 
 
@@ -176,3 +177,93 @@ index 2..3 100644
 
     model_findings = list_findings_for_repo_artifact(db_path, "doria90/dummyAI", "config/model.yaml")
     assert [finding.rule_id for finding in model_findings] == ["model_drift"]
+
+
+def test_init_db_repairs_legacy_pull_request_audits_missing_fused_confidence(tmp_path):
+    db_path = str(tmp_path / "legacy-history.db")
+
+    with connect_sqlite(db_path, foreign_keys=True) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+            ("0001_bootstrap_relational_schema", "legacy bootstrap", 1.0),
+        )
+        conn.execute(
+            """
+            CREATE TABLE pull_request_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completion_mode TEXT NOT NULL,
+                output_mode TEXT NOT NULL,
+                deterministic_score INTEGER NOT NULL,
+                suggested_risk_level TEXT NOT NULL,
+                semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                pr_state TEXT,
+                pr_merged INTEGER,
+                pr_closed_at REAL,
+                pr_merged_at REAL,
+                pr_merge_commit_sha TEXT,
+                pr_updated_at REAL,
+                UNIQUE(repo_full, pr_number, head_sha)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO pull_request_audits (
+                job_id, repo_full, pr_number, installation_id, head_sha,
+                status, completion_mode, output_mode, deterministic_score, suggested_risk_level,
+                semantic_review_completed, error_message, created_at, updated_at,
+                pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                "doria90/dummyAI",
+                42,
+                123,
+                "sha-42",
+                "completed",
+                "completed",
+                "full_semantic_review",
+                20,
+                "Low",
+                1,
+                None,
+                10.0,
+                10.0,
+                "open",
+                0,
+                None,
+                None,
+                None,
+                10.0,
+            ),
+        )
+
+    init_db(db_path)
+
+    with connect_sqlite(db_path, foreign_keys=True) as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+    assert "fused_confidence" in columns
+
+    audits = list_pull_request_audits_for_repo(db_path, "doria90/dummyAI")
+    assert len(audits) == 1
+    assert audits[0].pr_number == 42
+    assert audits[0].fused_confidence is None

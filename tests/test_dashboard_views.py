@@ -9,7 +9,7 @@ from engine.analysis import analyze_diff
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
-from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.branch_scan_jobs import create_branch_scan_job
@@ -151,6 +151,7 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.insights[0].queue_lane == "primary"
     assert dashboard.insights[0].priority in {"review_now", "watch", "baseline_review"}
     assert dashboard.insights[0].confidence_label in {"high confidence", "medium confidence", "lower confidence"}
+    assert len(dashboard.insights[0].attribute_profile) == 6
     assert dashboard.insights[0].evidence_label == "proposal + history"
     assert dashboard.insights[0].evidence_summary == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-3."
     assert dashboard.insights[0].baseline_label.startswith("Baseline: Approved")
@@ -489,6 +490,7 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.highest_risk_items[0].review_url == "https://github.com/doria90/dummyAI/pull/42"
     assert overview.highest_risk_items[0].change_summary
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
+    assert len(overview.highest_risk_items[0].attribute_profile) == 6
 
 
 def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_path, monkeypatch):
@@ -857,8 +859,36 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert dashboard.design_profiles[0].provenance is None
     assert dashboard.design_profiles[0].can_promote_source_to_baseline is False
     assert len(dashboard.design_profiles[0].attribute_profile) == 6
+    assert len(dashboard.insights[0].attribute_profile) == 6
     assert dashboard.insights[0].evidence_label == "baseline only"
-    assert dashboard.insights[0].evidence_summary == "No merged-history evidence yet."
+    capability = next(
+        dimension
+        for dimension in dashboard.insights[0].attribute_profile
+        if dimension.attribute_key == "capability_risk"
+    )
+    assert capability.baseline_value in {"low", "moderate", "high"}
+    assert capability.current_value == "unknown"
+    assert capability.state == "unknown"
+    assert capability.confidence_label == "lower confidence"
+
+
+def test_build_artifact_attribute_profile_degrades_with_partial_profile_data():
+    profile = build_artifact_attribute_profile(
+        artifact_path="prompts/refund.txt",
+        artifact_type="prompt",
+        baseline_profile=None,
+        current_profile=_profile(),
+        attribute_deltas={"capability_risk": 0.3},
+        current_signal_terms=["refund"],
+        current_content=PROMPT_CURRENT,
+    )
+
+    assert len(profile.dimensions) == 6
+    guardrails = next(dimension for dimension in profile.dimensions if dimension.attribute_key == "guardrail_robustness")
+    assert guardrails.baseline_value == "unknown"
+    assert guardrails.current_value in {"strong", "moderate", "weak"}
+    assert guardrails.state == "unknown"
+    assert guardrails.confidence_label == "lower confidence"
 
 
 def test_build_repo_dashboard_view_groups_low_signal_text_artifacts_into_one_queue_item(tmp_path):

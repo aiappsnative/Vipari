@@ -1704,11 +1704,10 @@ def _build_repo_insights(
         context = _preferred_profile_context(evidence_bundle)
         review_context = _primary_review_context(evidence_bundle)
         attribute_profile = None
-        if baseline is not None and context is not None:
-            if attribute_profile_mode == "all":
-                attribute_profile = _build_insight_attribute_profile(artifact, baseline, context)
-            else:
-                enrichable_profiles[artifact.artifact_path] = (artifact, baseline, context)
+        if attribute_profile_mode == "all":
+            attribute_profile = _build_insight_attribute_profile(artifact, baseline, context)
+        else:
+            enrichable_profiles[artifact.artifact_path] = (artifact, baseline, context)
         queue_lane = _insight_queue_lane(artifact, priority, score)
         title = _insight_title(artifact, priority, evidence_bundle)
         rationale = _insight_rationale(artifact, priority, evidence_bundle)
@@ -1765,25 +1764,31 @@ def _build_repo_insights(
 
 def _build_insight_attribute_profile(
     artifact: RepoDashboardArtifactEntry,
-    baseline: Any,
-    context: _RepoArtifactProfileContext,
+    baseline: Any | None,
+    context: _RepoArtifactProfileContext | None,
 ) -> list[AttributeProfileDimension]:
+    baseline_profile = baseline.profile if baseline is not None else None
+    current_profile = context.profile if context is not None else None
+    baseline_signal_terms = baseline.signal_terms if baseline is not None else []
+    current_signal_terms = context.signal_terms if context is not None else []
+    baseline_content = baseline.content_text if baseline is not None else None
+    current_content = context.content_text if context is not None else None
     return build_artifact_attribute_profile(
         artifact_path=artifact.artifact_path,
         artifact_type=artifact.artifact_type,
-        baseline_profile=baseline.profile,
-        current_profile=context.profile,
-        attribute_deltas=context.attribute_deltas,
-        baseline_signal_terms=baseline.signal_terms,
-        current_signal_terms=context.signal_terms,
-        baseline_content=baseline.content_text,
-        current_content=context.content_text,
+        baseline_profile=baseline_profile,
+        current_profile=current_profile,
+        attribute_deltas=(context.attribute_deltas if context is not None else {}),
+        baseline_signal_terms=baseline_signal_terms,
+        current_signal_terms=current_signal_terms,
+        baseline_content=baseline_content,
+        current_content=current_content,
     ).dimensions
 
 
 def _enrich_ranked_insights_with_attribute_profiles(
     insights: list[RepoDashboardInsightEntry],
-    enrichable_profiles: dict[str, tuple[RepoDashboardArtifactEntry, Any, _RepoArtifactProfileContext | None]],
+    enrichable_profiles: dict[str, tuple[RepoDashboardArtifactEntry, Any | None, _RepoArtifactProfileContext | None]],
 ) -> list[RepoDashboardInsightEntry]:
     enriched: list[RepoDashboardInsightEntry] = []
     for insight in insights:
@@ -1792,9 +1797,6 @@ def _enrich_ranked_insights_with_attribute_profiles(
             enriched.append(insight)
             continue
         artifact, baseline, context = profile_parts
-        if context is None:
-            enriched.append(insight)
-            continue
         enriched.append(replace(insight, attribute_profile=_build_insight_attribute_profile(artifact, baseline, context)))
     return enriched
 
