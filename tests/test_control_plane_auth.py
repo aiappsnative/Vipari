@@ -317,8 +317,11 @@ def test_issue_and_validate_cp_token_roundtrip():
 
 def test_validate_cp_token_rejects_bad_signature():
     token = _make_token("client-1", workspace_id=42, scopes=[SCOPE_DRIFT_READ])
-    with pytest.raises(TokenValidationError, match="invalid or malformed"):
-        validate_cp_token(token, secret="wrong-secret", issuer=JWT_ISSUER, audience=JWT_AUDIENCE)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # expected: short wrong-secret triggers PyJWT InsecureKeyLengthWarning
+        with pytest.raises(TokenValidationError, match="invalid or malformed"):
+            validate_cp_token(token, secret="wrong-secret", issuer=JWT_ISSUER, audience=JWT_AUDIENCE)
 
 
 def test_validate_cp_token_rejects_expired_token():
@@ -361,7 +364,48 @@ def test_all_scopes_constant_is_complete():
     assert SCOPE_DRIFT_WRITE_HIGH in ALL_SCOPES
 
 
-# ===========================================================================
+def test_short_jwt_secret_fails_runtime_validation():
+    """INTERNAL_JWT_SECRET shorter than 32 bytes must be rejected at startup."""
+    from unittest.mock import MagicMock
+    from services.runtime_guardrails import validate_runtime_configuration
+
+    mock_settings = MagicMock()
+    mock_settings.queue_backend = "sqlite"
+    mock_settings.service_role = "api"
+    mock_settings.redis_url = ""
+    mock_settings.github_webhook_secret = ""
+    mock_settings.has_github_app_credentials = False
+    mock_settings.has_internal_jwt_config = True
+    mock_settings.internal_jwt_secret = "tooshort"  # 8 bytes — below minimum
+    mock_settings.is_production = False
+
+    with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET must be at least 32 bytes"):
+        validate_runtime_configuration(mock_settings)
+
+
+def test_production_api_requires_jwt_secret():
+    """Production API service must not start without INTERNAL_JWT_SECRET configured."""
+    from unittest.mock import MagicMock
+    from services.runtime_guardrails import validate_runtime_configuration
+
+    mock_settings = MagicMock()
+    mock_settings.queue_backend = "sqlite"
+    mock_settings.service_role = "api"
+    mock_settings.redis_url = ""
+    mock_settings.github_webhook_secret = ""
+    mock_settings.has_github_app_credentials = False
+    mock_settings.has_internal_jwt_config = False
+    mock_settings.internal_jwt_secret = ""
+    mock_settings.is_production = True
+    # Production checks
+    mock_settings.app_base_url = "https://app.example.com"
+    mock_settings.session_cookie_secure = True
+    mock_settings.github_private_key_path = ""
+
+    with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET"):
+        validate_runtime_configuration(mock_settings)
+
+
 # /cp/* operator routes (admin-token gated)
 # ===========================================================================
 

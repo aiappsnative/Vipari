@@ -68,6 +68,14 @@ def validate_runtime_configuration(settings: Settings) -> None:
         except RuntimeError as exc:
             errors.append(str(exc))
 
+    # JWT secret length is enforced in all environments — a short secret weakens HS256
+    # below the RFC 7518 §3.2 minimum of 256 bits / 32 bytes regardless of environment.
+    if settings.has_internal_jwt_config and len(settings.internal_jwt_secret.encode("utf-8")) < 32:
+        errors.append(
+            "INTERNAL_JWT_SECRET must be at least 32 bytes for HS256 (RFC 7518 §3.2). "
+            "Use a cryptographically random value, e.g.: openssl rand -hex 32"
+        )
+
     if settings.is_production:
         try:
             validate_migration_configuration(settings)
@@ -81,6 +89,8 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append("Production must use inline GITHUB_APP_PRIVATE_KEY; GITHUB_PRIVATE_KEY_PATH is local-dev only.")
         if settings.service_role in {"worker", "webhook"} and settings.queue_backend != "redis":
             errors.append("Production worker and webhook services must use QUEUE_BACKEND=redis.")
+        if settings.service_role in {"api", "monolith"} and not settings.has_internal_jwt_config:
+            errors.append("Production API service requires INTERNAL_JWT_SECRET to be configured.")
 
     if errors:
         raise RuntimeError(" ".join(errors))

@@ -148,6 +148,9 @@ def validate_cp_token(
     if not isinstance(scopes_raw, list):
         raise TokenValidationError("Token scopes claim is missing or not a list.")
 
+    aud_raw = payload.get("aud", "")
+    audience_str = aud_raw if isinstance(aud_raw, str) else (aud_raw[0] if aud_raw else "")
+
     return MachinePrincipalClaims(
         subject=subject,
         workspace_id=int(workspace_id_raw),
@@ -155,5 +158,5 @@ def validate_cp_token(
         issued_at=float(payload["iat"]),
         expires_at=float(payload["exp"]),
         issuer=payload["iss"],
-        audience=payload["aud"] if isinstance(payload["aud"], str) else payload["aud"][0],
+        audience=audience_str,
     )

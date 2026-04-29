@@ -96,6 +96,9 @@ def _ensure_machine_principals_schema(db_path: str) -> None:
             )
             """
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_machine_principals_workspace_id ON machine_principals(workspace_id)"
+        )
 
 
 MigrationHandler = Callable[[str], None]

@@ -8,9 +8,12 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 
+import json
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from config import get_settings
 from .cp_auth import require_cp_principal, require_cp_scope, require_cp_workspace_match
@@ -84,8 +87,8 @@ class ComplianceExportRequest(BaseModel):
 
 class CreatePrincipalRequest(BaseModel):
     workspace_id: int
-    display_name: str
-    principal_kind: str = "service_account"
+    display_name: str = Field(..., min_length=1, max_length=120)
+    principal_kind: Literal["service_account"] = "service_account"
     scopes: list[str]
 
 
@@ -494,8 +497,13 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Machine principal is not active.")
         if principal.workspace_id != payload.workspace_id:
             raise HTTPException(status_code=400, detail="workspace_id does not match principal's workspace.")
-        import json as _json
-        scopes = _json.loads(principal.scopes_json)
+        scopes = json.loads(principal.scopes_json)
+        unknown_scopes = set(scopes) - ALL_SCOPES
+        if unknown_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Principal has unrecognised scopes: {sorted(unknown_scopes)}. Revoke and recreate this principal.",
+            )
         token = issue_cp_token(
             client_id=principal.client_id,
             workspace_id=principal.workspace_id,
