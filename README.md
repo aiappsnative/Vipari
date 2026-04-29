@@ -80,7 +80,7 @@ In practical terms, DriftGuard currently provides:
 
 Latest merged validation on 2026-04-29:
 
-- full automated suite passed locally after the customer self-service API key management merge: `386 passed`
+- full automated suite passed locally after the control-plane low-risk write actions merge (issue #60): `402 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -129,6 +129,9 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
 - provides a customer-facing self-service API key management UI at `/app/settings/api-keys` where workspace owners and admins can create scope-gated machine principals, receive the one-time `client_secret` on creation, and revoke keys
 - exchanges client credentials for short-lived JWTs at `/cp/auth/token` with sliding-window rate limiting, constant-time secret verification, production entitlement gating, and per-exchange audit log entries
+- accepts structured feedback on PR audits at `POST /cp/audits/{audit_id}/feedback` (`drift.write.low`): append-only events with validated `kind` (six values), optional bounded `comment`, and bounded `metadata`; workspace isolation enforced via 404-masking
+- records triage state transitions on PR audits at `POST /cp/audits/{audit_id}/triage` (`drift.write.low`): append-only events with validated `state` (three values) and optional bounded `reason`; never mutates `pull_request_audits`
+- returns export job status (without `result_blob`) at `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`)
 
 ## High-level architecture
 
