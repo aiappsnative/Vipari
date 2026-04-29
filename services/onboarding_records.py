@@ -493,6 +493,15 @@ def list_onboarded_artifacts_for_onboarding(db_path: str, onboarding_id: int) ->
     return [_row_to_onboarded_artifact(row) for row in rows]
 
 
+def get_onboarded_artifact_by_id(db_path: str, artifact_id: int) -> OnboardedArtifactRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM onboarded_artifacts WHERE id = ?",
+            (artifact_id,),
+        ).fetchone()
+    return _row_to_onboarded_artifact(row) if row else None
+
+
 def add_onboarded_artifact(
     db_path: str,
     *,

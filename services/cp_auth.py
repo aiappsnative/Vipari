@@ -110,3 +110,25 @@ def require_cp_workspace_match(
             status_code=403,
             detail="Cross-workspace access is not permitted.",
         )
+
+
+def require_cp_principal_kind(
+    principal: MachinePrincipalRecord,
+    allowed_kinds: frozenset[str],
+) -> None:
+    """Assert the resolved principal's kind is in *allowed_kinds*.
+
+    This is the structural human-only gate for high-risk approval routes.
+    Service accounts that somehow hold a high-risk scope token are still
+    blocked here at the route layer.
+
+    Raises HTTP 403 when the principal kind is not in *allowed_kinds*.
+    """
+    if principal.principal_kind not in allowed_kinds:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"This action requires a principal of kind {sorted(allowed_kinds)}. "
+                f"Principal kind '{principal.principal_kind}' is not permitted."
+            ),
+        )

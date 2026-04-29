@@ -120,6 +120,12 @@ def _ensure_audit_feedback_and_triage_tables(db_path: str) -> None:
     init_audit_feedback_db(db_path)
 
 
+def _ensure_high_risk_proposal_tables(db_path: str) -> None:
+    from .proposals_records import bootstrap_proposal_tables
+
+    bootstrap_proposal_tables(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -151,6 +157,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0006_add_audit_feedback_and_triage_tables",
         "Create audit_feedback_events and audit_triage_events tables for low-risk control-plane write actions (issue #60).",
         _ensure_audit_feedback_and_triage_tables,
+    ),
+    (
+        "0007_add_high_risk_proposal_tables",
+        "Create cp_baseline_proposals and cp_repo_onboarding_proposals tables for human-gated high-risk change proposals (issue #61).",
+        _ensure_high_risk_proposal_tables,
     ),
 )
 
