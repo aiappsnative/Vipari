@@ -64,6 +64,7 @@ This framing should shape roadmap decisions:
 	- now includes the merged `feature/production-persistence-v1` slice, including production fail-closed migration/runtime guardrails, Redis-first production queue contracts, split-service smoke tooling, and broader PostgreSQL-locator persistence regression coverage for restart, idempotency, and retry paths
 	- now includes machine-principal identity management for workspace-bound service accounts: `machine_principals` table, CRUD records, HS256 JWT issuance and validation, `/cp/*` REST API routes, scope enforcement, runtime guardrails for `INTERNAL_JWT_SECRET` presence and minimum key length (RFC 7518 §3.2), and 33-test coverage in `test_control_plane_auth.py`
 	- now includes the merged `feature/control-plane-low-risk-actions-v1` slice (issue #60): three new control-plane endpoints — `POST /cp/audits/{audit_id}/feedback` (append-only structured feedback events), `POST /cp/audits/{audit_id}/triage` (append-only triage state transitions, never mutates `pull_request_audits`), and `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (export status without `result_blob`); all three enforce workspace isolation via 404-masking, require `drift.write.low` or `drift.read` scope respectively, and persist to two new migration-managed tables with validated input bounds
+	- now includes the merged `feature/control-plane-read-models-v1` slice (issue #58): authenticated, workspace-scoped internal `/cp/*` JSON read endpoints for workspace listing, repo inventory, repo posture, repo case file, artifact inventory, artifact detail, artifact storyline, repo audits, audit detail, and the escalation queue; all endpoints are read-only and JSON-only; this layer is the canonical structured data source for the dashboard and future MCP integrations
 	- is green at the full-suite level (`402 passed` on the latest local verification)
 
 ### `feature/drift-storyline-v1`
@@ -117,6 +118,21 @@ This framing should shape roadmap decisions:
 	- migration `0006_add_audit_feedback_and_triage_tables` wired into `schema_migrations.py`
 	- vocabulary validation enforced at both API layer (Pydantic `kind`/`state` checks + 422 response) and service layer (`add_audit_feedback` / `add_audit_triage` raise `ValueError` for unknown values)
 	- 16 tests across all three endpoints; post-review security hardening fixed unbounded inputs, asymmetric response bodies, and service-layer vocabulary guard
+	- remote and local feature-branch cleanup is complete
+
+### `feature/control-plane-read-models-v1` (issue #58)
+- Purpose: completed branch for issue `#58`, control-plane read model layer, now merged to `main`
+- Final status at merge:
+	- `GET /cp/workspaces` — workspace listing scoped to the caller
+	- `GET /cp/workspaces/{workspace_id}/repos` — repo inventory with lightweight posture metadata (posture, last_scan_at, open_audit_count, open_escalation_count)
+	- `GET /cp/repos/{workspace_id}/{owner}/{repo}/posture` — structured posture verdict (posture, top_reasons, attribute dimensions, trend summary)
+	- `GET /cp/repos/{workspace_id}/{owner}/{repo}/casefile` — expanded repo case file (featured_artifacts, open_audits, key_episodes, recent_prs, governance_flags, coverage_summary)
+	- `GET /cp/repos/{workspace_id}/{owner}/{repo}/artifacts` and `GET /cp/artifacts/{artifact_id}` — artifact inventory and detail
+	- `GET /cp/artifacts/{artifact_id}/storyline` — normalized, ordered artifact episode history for design-drift visibility over time
+	- `GET /cp/repos/{workspace_id}/{owner}/{repo}/audits` (with state/severity/artifact_id/recency filters) and `GET /cp/audits/{audit_id}` — audit list and full audit detail
+	- `GET /cp/workspaces/{workspace_id}/escalations` — flat escalation queue for "Needs review now" use cases
+	- all endpoints read-only, JSON-only, workspace-scoped, require appropriate `drift.read` scope
+	- this layer is the canonical structured data source for dashboard surfaces and future MCP integrations, decoupling product truth from page-assembly logic
 	- remote and local feature-branch cleanup is complete
 
 ### `feature/pr-comment-v2-tuning`
@@ -322,26 +338,41 @@ Verified against repo state and open issues:
 - GitHub issue `#45` (`feature/production-persistence-v1`) is now merged to `main`.
 - GitHub issue `#57` (`feature/control-plane-foundation-v1`) is now merged to `main` via PR #63.
 - GitHub issue `#60` (`feature/control-plane-low-risk-actions-v1`) is now merged to `main`; feedback/triage write endpoints and export-status read endpoint are mainline functionality. Issue is closed.
-- The remaining open issues that align with real unfinished work are `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), `#15` (`feature/governance-signals-v1`), and `#58` (`feature/customer-control-plane-v1` — the next control-plane tier building on top of the now-merged foundation).
+- GitHub issue `#58` (`feature/control-plane-read-models-v1`) is now merged to `main`; all `/cp/*` JSON read endpoints for workspaces, repos, posture, case file, artifacts, storyline, audits, and escalations are mainline functionality. Issue is closed.
+- The remaining open issues that align with real unfinished work are:
+  - `#46` (`feature/railway-launch-hardening`) — production Railway deployment readiness
+  - `#14` (`feature/attribute-profile-ui-v1`) — attribute profile as a first-class dashboard and review surface
+  - `#15` (`feature/governance-signals-v1`) — first-class governance anomaly detection
+  - `#59` (`feature/mcp-map-server-v1`) — brokered MCP server exposing curated PromptDrift tools to customer agents
+  - `#61` (`feature/control-plane-high-risk-proposals-v1`) — proposal-and-approval flows for baseline promotions, policy changes, and repo onboarding decisions
+  - `#62` (`feature/dashboard-control-tower-v1`) — refactor dashboard and audit pages into a control-tower model centered on escalations, case files, and human oversight
 
 #### Remaining work analysis
 
-Current repository state suggests the product has moved past dashboard shell redesign, storyline basics, signal fusion, and discovery precision.
+Current repository state suggests the product has moved past dashboard shell redesign, storyline basics, signal fusion, discovery precision, and the core control-plane read and write layers.
 
 What still looks unfinished on `main`:
 
 - reviewer-target quality now has merged proposal-only vs landed-history separation and PR-first review targets, but still needs broader real-repo validation and tuning on history-heavy repositories
 - production persistence hardening is now merged, but live Railway/operator validation is still needed before broader launch claims
 - attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
+- the control-plane read model (issue #58) and low-risk write layer (issue #60) are now merged, making the MCP server (issue #59) and high-risk proposal flows (issue #61) natural next-layer targets
+- dashboard control-tower refactor (issue #62) is the right UI direction once the underlying data models are proven in production
 
 What should come next:
 
-1. `feature/railway-launch-hardening`
+1. `feature/railway-launch-hardening` (issue #46)
 	- should stay close behind persistence because launch readiness depends on the production data-path actually being proven
-2. `feature/attribute-profile-ui-v1`
+2. `feature/mcp-map-server-v1` (issue #59)
+	- now directly buildable on top of the merged CP read models and machine-principal auth from issues #58 and #57
+3. `feature/control-plane-high-risk-proposals-v1` (issue #61)
+	- introduces the proposal-and-approval gate that separates low-risk automation from high-trust human decisions
+4. `feature/attribute-profile-ui-v1` (issue #14)
 	- now becomes more leverageable because the dashboard and storyline surfaces already expose rich profile payloads
-3. `feature/governance-signals-v1`
+5. `feature/governance-signals-v1` (issue #15)
 	- should follow once reviewer-target quality and attribute-profile presentation are stable enough to support another first-class dimension
+6. `feature/dashboard-control-tower-v1` (issue #62)
+	- the right dashboard end-state; should land after the underlying data models (#58, #61) are proven and the MCP layer (#59) is in place
 
 #### Completed: `feature/eval-harness-v1`
 
@@ -472,6 +503,44 @@ Planned scope:
 - model governance-specific drift as an explicit reviewer-facing dimension instead of a secondary side effect of other signals
 - surface governance-related anomalies in dashboard prioritization and evidence summaries
 - keep the first slice additive and explainable rather than expanding into a generic compliance suite
+
+#### 5. `feature/mcp-map-server-v1` (issue #59)
+
+Purpose:
+- build a brokered MCP server that exposes curated PromptDrift tools to customer agents without leaking internal credentials or collapsing the product boundary
+
+Planned scope:
+- create a dedicated MCP service or module with tool discovery and invocation, workspace binding, internal CP access via machine principals, and agent-shaped output formatting
+- bind every MCP session to a single workspace; no cross-workspace roaming
+- authenticate to `/cp/*` using short-lived internal JWTs from issue #57 machine-principal infrastructure
+- implement initial read-first tool set: `promptdrift.list_repos`, `get_repo_posture`, `get_repo_casefile`, `list_artifacts`, `get_artifact_storyline`, `list_escalations`, `get_audit`
+- shape outputs for agent usability (compact structured results, normalized enums, no UI-centric nesting)
+- no high-risk write tools, no polished customer onboarding UI in this slice
+
+#### 6. `feature/control-plane-high-risk-proposals-v1` (issue #61)
+
+Purpose:
+- add proposal-and-approval flows for high-risk actions so that sensitive changes (baseline promotions, policy changes, repo onboarding decisions) require human review rather than direct automation
+
+Planned scope:
+- `POST /cp/artifacts/{artifact_id}/baseline/proposals` — propose promoting current artifact state as new approved baseline
+- `POST /cp/artifacts/{artifact_id}/baseline/approve` — human-only, `drift.write.high` scope required; approves and applies the proposal; records approver and appends baseline history event
+- `POST /cp/workspaces/{workspace_id}/policy/proposals` and a separate human-only apply endpoint — policy change proposals for severity thresholds, reviewer requirements, enforcement behavior
+- `POST /cp/workspaces/{workspace_id}/repos/onboarding-proposals` and a separate human-only apply endpoint — repo onboarding/offboarding/category proposals
+- all proposals are stored with full state and approval history; no auto-approval permitted
+- UI integration is not the deliverable here; model should be designed so UI can consume it naturally later
+
+#### 7. `feature/dashboard-control-tower-v1` (issue #62)
+
+Purpose:
+- refactor the dashboard and audit pages into a control tower centered on escalations, repo case files, artifact storylines, and human oversight rather than chart density
+
+Planned scope:
+- main dashboard above-the-fold: portfolio posture strip, escalation queue ("Needs review now"), and repo posture list
+- repo audit pages structured into four explicit layers: Decision (posture + top reasons + open escalations + actions), Story (key episodes + artifact storyline drill-down), Evidence (snippets + governance notes + rationale), Actions (baseline proposals, exports, GitHub inspection, related audits)
+- demote secondary visuals (radar, coverage bars) to secondary tabs or expandable sections so they do not compete with the triage lane
+- make agent activity visible (proposal origin, triage assist, human override markers) for legibility of the human-in-the-loop model
+- surface baseline awareness and attribute deltas (guardrails, capability, autonomy, governance) explicitly as product-level language rather than engine internals
 
 ### Trial success criteria for the next version
 
