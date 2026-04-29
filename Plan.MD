@@ -55,12 +55,14 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/signal-fusion-v1` slice
 	- includes the merged `feature/discovery-precision-v1` slice
 	- now includes the merged `feature/driftguard-base44-stripe-handoff-v1` slice
-	- is green at the full-suite level (`285 passed` on the latest local verification)
+	- now includes the merged `feature/control-plane-foundation-v1-issue-57` slice (PR #63)
+	- is green at the full-suite level (`359 passed` on the latest local verification)
 	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
 	- now includes the triage-first operator shell, repo case-file split-pane dashboard flow, artifact storyline APIs and rendering, repo journey snapshots, fused dashboard priority ordering, and grouped low-signal onboarding discovery for larger OSS repositories
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
 	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, production-safe dashboard auth gating, and the final Stripe billing-ownership and webhook/worker hardening pass
 	- now includes the merged `feature/production-persistence-v1` slice, including production fail-closed migration/runtime guardrails, Redis-first production queue contracts, split-service smoke tooling, and broader PostgreSQL-locator persistence regression coverage for restart, idempotency, and retry paths
+	- now includes machine-principal identity management for workspace-bound service accounts: `machine_principals` table, CRUD records, HS256 JWT issuance and validation, `/cp/*` REST API routes, scope enforcement, runtime guardrails for `INTERNAL_JWT_SECRET` presence and minimum key length (RFC 7518 §3.2), and 33-test coverage in `test_control_plane_auth.py`
 - Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
 
 ### `feature/drift-storyline-v1`
@@ -89,6 +91,20 @@ This framing should shape roadmap decisions:
 	- remote and local feature-branch cleanup is complete
 - Historical note:
 	- keep [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) as archived branch context rather than a live restart target
+
+### `feature/control-plane-foundation-v1-issue-57`
+- Purpose: completed branch for issue `#57`, merged to `main` via PR #63
+- Final status at merge:
+	- `machine_principals` table and full CRUD records layer (`services/control_plane_records.py`)
+	- HS256 JWT issuance and validation via `services/internal_auth.py` and `services/cp_auth.py` FastAPI dependencies
+	- `/cp/*` REST routes: create principal, list principals, revoke principal, issue token (`services/api_service.py`)
+	- `ALL_SCOPES` registry with scope re-validation on every token-issuance call
+	- `CreatePrincipalRequest` Pydantic model with `Literal["service_account"]` kind and 1–120 char `display_name` bounds
+	- `INTERNAL_JWT_SECRET` runtime guardrails: ≥32-byte minimum (RFC 7518 §3.2) in all environments; production `api`/`monolith` roles require the secret to be present
+	- `0004_add_machine_principals` schema migration with `workspace_id` index
+	- 33 tests in `tests/test_control_plane_auth.py` (all passing)
+	- Security hardening commit resolved 7 issues: empty `aud` IndexError, key-length enforcement, production presence check, scope re-validation, input validation, import placement, and missing DB index
+	- Pre-existing failures from prior sprint (migration 0003 table-existence guard, stale JS assertion) also resolved in this PR
 
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
@@ -276,6 +292,7 @@ Current validation status:
 - `feature/discovery-precision-v1`
 proceed- `feature/eval-harness-v1`
 - cloud deployment scaffolding split with secured webhook/worker/api service boundaries
+- `feature/control-plane-foundation-v1-issue-57` (PR #63, April 2026): machine-principal identity layer, internal JWT auth, `/cp/*` API, scope enforcement, runtime guardrails
 
 #### Open issue alignment refresh (April 2026)
 
@@ -290,7 +307,8 @@ Verified against repo state and open issues:
 - GitHub issue `#42` (`feature/signal-fusion-v1`) is still open on GitHub, but the feature is already merged to `main`; treat that issue as stale until it is closed or repurposed.
 - `feature/discovery-precision-v1` is merged to `main` and should no longer appear in the near-term execution queue.
 - GitHub issue `#45` (`feature/production-persistence-v1`) is now merged to `main`.
-- The remaining open issues that align with real unfinished work are `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), and `#15` (`feature/governance-signals-v1`).
+- GitHub issue `#57` (`feature/control-plane-foundation-v1`) is now merged to `main` via PR #63.
+- The remaining open issues that align with real unfinished work are `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), `#15` (`feature/governance-signals-v1`), and `#58` (`feature/customer-control-plane-v1` — the next control-plane tier building on top of the now-merged foundation).
 
 #### Remaining work analysis
 
