@@ -170,7 +170,9 @@ def add_audit_feedback(
     comment: str | None = None,
     metadata: dict[str, str] | None = None,
 ) -> AuditFeedbackEvent:
-    """Append a feedback event.  Caller must validate *kind* before calling."""
+    """Append a feedback event.  Raises ValueError for an unrecognised *kind*."""
+    if kind not in VALID_FEEDBACK_KINDS:
+        raise ValueError(f"Invalid feedback kind: {kind!r}")
     now = time.time()
     metadata_json = json.dumps(metadata or {})
     with _connect(db_path) as conn:
@@ -197,7 +199,9 @@ def add_audit_triage(
     state: str,
     reason: str | None = None,
 ) -> AuditTriageEvent:
-    """Append a triage event.  Caller must validate *state* before calling."""
+    """Append a triage event.  Raises ValueError for an unrecognised *state*."""
+    if state not in VALID_TRIAGE_STATES:
+        raise ValueError(f"Invalid triage state: {state!r}")
     now = time.time()
     with _connect(db_path) as conn:
         cursor = conn.execute(

@@ -121,13 +121,22 @@ class ClientCredentialsRequest(BaseModel):
 class AuditFeedbackRequest(BaseModel):
     source: str = Field(..., min_length=1, max_length=80)
     kind: str
-    comment: str | None = None
+    comment: str | None = Field(default=None, max_length=2000)
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    def model_post_init(self, __context: object) -> None:
+        if len(self.metadata) > 20:
+            raise ValueError("metadata may contain at most 20 keys")
+        for k, v in self.metadata.items():
+            if len(k) > 80:
+                raise ValueError("metadata key must be ≤ 80 characters")
+            if len(v) > 500:
+                raise ValueError("metadata value must be ≤ 500 characters")
 
 
 class AuditTriageRequest(BaseModel):
     state: str
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class _SlidingWindowRateLimiter:
@@ -947,6 +956,7 @@ def create_api_app() -> FastAPI:
                 "audit_id": event.audit_id,
                 "kind": event.kind,
                 "source": event.source,
+                "comment": event.comment,
                 "created_at": event.created_at,
             }
         )
@@ -992,6 +1002,7 @@ def create_api_app() -> FastAPI:
                 "id": event.id,
                 "audit_id": event.audit_id,
                 "state": event.state,
+                "reason": event.reason,
                 "created_at": event.created_at,
             }
         )

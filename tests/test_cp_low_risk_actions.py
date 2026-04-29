@@ -210,7 +210,7 @@ def test_add_audit_feedback_valid_returns_200(tmp_path, monkeypatch):
     with TestClient(create_api_app()) as client:
         response = client.post(
             "/cp/audits/1/feedback",
-            json={"source": "human-reviewer", "kind": "helpful"},
+            json={"source": "human-reviewer", "kind": "helpful", "comment": "looks good"},
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -219,6 +219,7 @@ def test_add_audit_feedback_valid_returns_200(tmp_path, monkeypatch):
     assert body["audit_id"] == 1
     assert body["kind"] == "helpful"
     assert body["source"] == "human-reviewer"
+    assert body["comment"] == "looks good"
     assert "id" in body
     assert "created_at" in body
 
@@ -384,6 +385,7 @@ def test_triage_audit_valid_returns_200(tmp_path, monkeypatch):
     body = response.json()
     assert body["audit_id"] == 1
     assert body["state"] == "acknowledged"
+    assert body["reason"] == "reviewed by team"
     assert "id" in body
     assert "created_at" in body
 
