@@ -37,6 +37,40 @@ ALL_SCOPES: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
+# Principal kind vocabulary
+# ---------------------------------------------------------------------------
+
+PRINCIPAL_KIND_SERVICE_ACCOUNT = "service_account"
+PRINCIPAL_KIND_HUMAN_OPERATOR = "human_operator"
+
+ALL_PRINCIPAL_KINDS: frozenset[str] = frozenset(
+    {PRINCIPAL_KIND_SERVICE_ACCOUNT, PRINCIPAL_KIND_HUMAN_OPERATOR}
+)
+
+# Scopes that require a human_operator principal.  Service accounts must
+# never be granted these — enforcement happens at principal creation and
+# again at every route that requires human oversight.
+SCOPES_REQUIRING_HUMAN_OPERATOR: frozenset[str] = frozenset(
+    {SCOPE_DRIFT_WRITE_HIGH, SCOPE_ADMIN_WRITE}
+)
+
+
+def validate_scope_kind_compatibility(principal_kind: str, scopes: list[str] | frozenset[str]) -> None:
+    """Raise ValueError if *principal_kind* is incompatible with any scope in *scopes*.
+
+    Service accounts must never hold human-only scopes.  Callers should turn
+    ValueError into an appropriate HTTP 400 response.
+    """
+    if principal_kind == PRINCIPAL_KIND_SERVICE_ACCOUNT:
+        human_only = frozenset(scopes) & SCOPES_REQUIRING_HUMAN_OPERATOR
+        if human_only:
+            raise ValueError(
+                f"Scopes {sorted(human_only)} require principal_kind 'human_operator' and "
+                "cannot be granted to a 'service_account'."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Claims model
 # ---------------------------------------------------------------------------
 

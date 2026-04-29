@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from config import get_settings
-from .cp_auth import require_cp_principal, require_cp_scope, require_cp_workspace_match
+from .cp_auth import require_cp_principal, require_cp_principal_kind, require_cp_scope, require_cp_workspace_match
 from .control_plane_records import (
     create_control_plane_audit_log,
     create_machine_principal,
@@ -37,6 +37,7 @@ from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .internal_auth import (
     ALL_SCOPES,
+    PRINCIPAL_KIND_HUMAN_OPERATOR,
     SCOPE_ADMIN_READ,
     SCOPE_ADMIN_WRITE,
     SCOPE_DRIFT_READ,
@@ -44,6 +45,19 @@ from .internal_auth import (
     SCOPE_DRIFT_WRITE_LOW,
     issue_cp_token,
     validate_cp_token,
+    validate_scope_kind_compatibility,
+)
+from .proposals_records import (
+    approve_baseline_proposal,
+    approve_onboarding_proposal,
+    create_baseline_proposal,
+    create_onboarding_proposal,
+    get_baseline_proposal,
+    get_onboarding_proposal,
+    list_baseline_proposals,
+    list_onboarding_proposals,
+    reject_baseline_proposal,
+    reject_onboarding_proposal,
 )
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -57,7 +71,7 @@ from .baseline_approval_service import (
 )
 from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo
-from .onboarding_records import promote_latest_source_to_onboarding_baseline
+from .onboarding_records import get_onboarded_artifact_by_id, promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .secure_store import decrypt_text, encrypt_text
@@ -71,6 +85,9 @@ from .audit_feedback_records import (
     add_audit_triage,
 )
 from .audit_records import get_pull_request_audit_by_id
+
+# Module-level constant to avoid allocating a new frozenset on every approve request.
+_HUMAN_ONLY_KINDS: frozenset[str] = frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR})
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -105,8 +122,27 @@ class ComplianceExportRequest(BaseModel):
 class CreatePrincipalRequest(BaseModel):
     workspace_id: int
     display_name: str = Field(..., min_length=1, max_length=120)
-    principal_kind: Literal["service_account"] = "service_account"
+    principal_kind: Literal["service_account", "human_operator"] = "service_account"
     scopes: list[str]
+
+
+class BaselineProposalRequest(BaseModel):
+    snapshot_id: int | None = None
+    rationale: str = Field(default="", max_length=2000)
+    linked_audit_ids: list[int] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ProposalDecisionRequest(BaseModel):
+    decision_note: str | None = Field(default=None, max_length=2000)
+
+
+class OnboardingProposalRequest(BaseModel):
+    repo_full: str = Field(..., min_length=1, max_length=300, pattern=r'^[^/]+/[^/]+$')
+    installation_id: int | None = None
+    proposed_category: str | None = Field(default=None, max_length=80)
+    rationale: str = Field(default="", max_length=2000)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class IssuePrincipalTokenRequest(BaseModel):
@@ -528,6 +564,10 @@ def create_api_app() -> FastAPI:
                 status_code=400,
                 detail=f"Unknown scopes: {sorted(unknown_scopes)}. Valid scopes: {sorted(ALL_SCOPES)}",
             )
+        try:
+            validate_scope_kind_compatibility(payload.principal_kind, payload.scopes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not settings.has_encryption_key:
             raise HTTPException(
                 status_code=503,
@@ -1031,5 +1071,250 @@ def create_api_app() -> FastAPI:
                 "completed_at": job.completed_at,
             }
         )
+
+    # -----------------------------------------------------------------------
+    # /cp/* — high-risk change proposals (issue #61)
+    # -----------------------------------------------------------------------
+    # Baseline proposals — artifact-scoped
+    # -----------------------------------------------------------------------
+
+    def _baseline_proposal_json(p):
+        return {
+            "id": p.id,
+            "artifact_id": p.artifact_id,
+            "repo_full": p.repo_full,
+            "workspace_id": p.workspace_id,
+            "proposal_kind": p.proposal_kind,
+            "snapshot_id": p.snapshot_id,
+            "rationale": p.rationale,
+            "linked_audit_ids": p.linked_audit_ids,
+            "metadata": p.metadata,
+            "status": p.status,
+            "proposer_principal_id": p.proposer_principal_id,
+            "decision_principal_id": p.decision_principal_id,
+            "decision_note": p.decision_note,
+            "expires_at": p.expires_at,
+            "decided_at": p.decided_at,
+            "created_at": p.created_at,
+            "updated_at": p.updated_at,
+        }
+
+    def _onboarding_proposal_json(p):
+        return {
+            "id": p.id,
+            "workspace_id": p.workspace_id,
+            "repo_full": p.repo_full,
+            "proposal_kind": p.proposal_kind,
+            "installation_id": p.installation_id,
+            "proposed_category": p.proposed_category,
+            "rationale": p.rationale,
+            "metadata": p.metadata,
+            "status": p.status,
+            "proposer_principal_id": p.proposer_principal_id,
+            "decision_principal_id": p.decision_principal_id,
+            "decision_note": p.decision_note,
+            "expires_at": p.expires_at,
+            "decided_at": p.decided_at,
+            "created_at": p.created_at,
+            "updated_at": p.updated_at,
+        }
+
+    @app.post("/cp/artifacts/{artifact_id}/baseline/proposals")
+    def cp_create_baseline_proposal(artifact_id: int, payload: BaselineProposalRequest, request: Request):
+        """Submit a baseline promotion proposal for an artifact. Requires drift.write.low."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        # Resolve workspace isolation via repo allocation (same pattern as existing CP routes)
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, artifact.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        proposal = create_baseline_proposal(
+            db_path,
+            artifact_id=artifact_id,
+            repo_full=artifact.repo_full,
+            workspace_id=claims.workspace_id,
+            snapshot_id=payload.snapshot_id,
+            rationale=payload.rationale,
+            linked_audit_ids=payload.linked_audit_ids,
+            metadata=payload.metadata,
+            proposer_principal_id=principal.id,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=claims.workspace_id,
+            actor_user_id=None,
+            event_type="proposal.created",
+            subject_type="baseline_proposal",
+            subject_id=str(proposal.id),
+            payload={"artifact_id": artifact_id, "proposer_principal_id": principal.id},
+        )
+        return JSONResponse(_baseline_proposal_json(proposal), status_code=201)
+
+    @app.get("/cp/artifacts/{artifact_id}/baseline/proposals")
+    def cp_list_baseline_proposals(artifact_id: int, request: Request):
+        """List baseline proposals for an artifact. Requires drift.read."""
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, artifact.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        proposals = list_baseline_proposals(db_path, artifact_id=artifact_id, workspace_id=claims.workspace_id)
+        return JSONResponse({"proposals": [_baseline_proposal_json(p) for p in proposals]})
+
+    @app.post("/cp/artifacts/{artifact_id}/baseline/proposals/{proposal_id}/approve")
+    def cp_approve_baseline_proposal(artifact_id: int, proposal_id: int, payload: ProposalDecisionRequest, request: Request):
+        """Approve a baseline proposal. Requires drift.write.high and human_operator kind."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
+        require_cp_principal_kind(principal, _HUMAN_ONLY_KINDS)
+        artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, artifact.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        proposal = approve_baseline_proposal(
+            db_path,
+            proposal_id=proposal_id,
+            artifact_id=artifact_id,
+            workspace_id=claims.workspace_id,
+            decision_principal_id=principal.id,
+            decision_note=payload.decision_note,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=claims.workspace_id,
+            actor_user_id=None,
+            event_type="proposal.approved",
+            subject_type="baseline_proposal",
+            subject_id=str(proposal_id),
+            payload={"artifact_id": artifact_id, "decision_principal_id": principal.id},
+        )
+        return JSONResponse(_baseline_proposal_json(proposal))
+
+    @app.post("/cp/artifacts/{artifact_id}/baseline/proposals/{proposal_id}/reject")
+    def cp_reject_baseline_proposal(artifact_id: int, proposal_id: int, payload: ProposalDecisionRequest, request: Request):
+        """Reject a baseline proposal. Requires drift.write.high."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
+        artifact = get_onboarded_artifact_by_id(db_path, artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, artifact.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        proposal = reject_baseline_proposal(
+            db_path,
+            proposal_id=proposal_id,
+            artifact_id=artifact_id,
+            workspace_id=claims.workspace_id,
+            decision_principal_id=principal.id,
+            decision_note=payload.decision_note,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=claims.workspace_id,
+            actor_user_id=None,
+            event_type="proposal.rejected",
+            subject_type="baseline_proposal",
+            subject_id=str(proposal_id),
+            payload={"artifact_id": artifact_id, "decision_principal_id": principal.id},
+        )
+        return JSONResponse(_baseline_proposal_json(proposal))
+
+    # -----------------------------------------------------------------------
+    # Repo onboarding proposals — workspace-scoped
+    # -----------------------------------------------------------------------
+
+    @app.post("/cp/workspaces/{workspace_id}/repos/onboarding-proposals")
+    def cp_create_onboarding_proposal(workspace_id: int, payload: OnboardingProposalRequest, request: Request):
+        """Submit a repository onboarding proposal. Requires drift.write.low."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        require_cp_workspace_match(claims, workspace_id)
+        proposal = create_onboarding_proposal(
+            db_path,
+            workspace_id=workspace_id,
+            repo_full=payload.repo_full,
+            installation_id=payload.installation_id,
+            proposed_category=payload.proposed_category,
+            rationale=payload.rationale,
+            metadata=payload.metadata,
+            proposer_principal_id=principal.id,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="proposal.created",
+            subject_type="onboarding_proposal",
+            subject_id=str(proposal.id),
+            payload={"repo_full": payload.repo_full, "proposer_principal_id": principal.id},
+        )
+        return JSONResponse(_onboarding_proposal_json(proposal), status_code=201)
+
+    @app.get("/cp/workspaces/{workspace_id}/repos/onboarding-proposals")
+    def cp_list_onboarding_proposals(workspace_id: int, request: Request):
+        """List onboarding proposals for a workspace. Requires drift.read."""
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        proposals = list_onboarding_proposals(db_path, workspace_id=workspace_id)
+        return JSONResponse({"proposals": [_onboarding_proposal_json(p) for p in proposals]})
+
+    @app.post("/cp/workspaces/{workspace_id}/repos/onboarding-proposals/{proposal_id}/approve")
+    def cp_approve_onboarding_proposal(workspace_id: int, proposal_id: int, payload: ProposalDecisionRequest, request: Request):
+        """Approve a repo onboarding proposal. Requires drift.write.high and human_operator kind."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
+        require_cp_principal_kind(principal, _HUMAN_ONLY_KINDS)
+        require_cp_workspace_match(claims, workspace_id)
+        proposal = approve_onboarding_proposal(
+            db_path,
+            proposal_id=proposal_id,
+            workspace_id=workspace_id,
+            decision_principal_id=principal.id,
+            decision_note=payload.decision_note,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="proposal.approved",
+            subject_type="onboarding_proposal",
+            subject_id=str(proposal_id),
+            payload={"repo_full": proposal.repo_full, "decision_principal_id": principal.id},
+        )
+        return JSONResponse(_onboarding_proposal_json(proposal))
+
+    @app.post("/cp/workspaces/{workspace_id}/repos/onboarding-proposals/{proposal_id}/reject")
+    def cp_reject_onboarding_proposal(workspace_id: int, proposal_id: int, payload: ProposalDecisionRequest, request: Request):
+        """Reject a repo onboarding proposal. Requires drift.write.high."""
+        claims, principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
+        require_cp_workspace_match(claims, workspace_id)
+        proposal = reject_onboarding_proposal(
+            db_path,
+            proposal_id=proposal_id,
+            workspace_id=workspace_id,
+            decision_principal_id=principal.id,
+            decision_note=payload.decision_note,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="proposal.rejected",
+            subject_type="onboarding_proposal",
+            subject_id=str(proposal_id),
+            payload={"repo_full": proposal.repo_full, "decision_principal_id": principal.id},
+        )
+        return JSONResponse(_onboarding_proposal_json(proposal))
 
     return app
