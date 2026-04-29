@@ -75,11 +75,12 @@ In practical terms, DriftGuard currently provides:
 - a dedicated `scripts/control_plane_preflight.py` helper for tomorrow's provider-backed setup checks
 - Stripe webhook ownership hardening so paid-plan activation now resolves through stored Stripe customer/subscription bindings instead of trusting workspace metadata alone
 - worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
+- customer self-service API key management at `/app/settings/api-keys`: scope-gated machine principal creation with one-time secret flash delivery (atomic creation + flash in a single transaction, consumed on first GET), revocation, and per-workspace principal limits
+- client-credentials token exchange at `/cp/auth/token` with sliding-window rate limiting (20 req/60 s), constant-time secret comparison, and full audit logging per exchange
 
-Latest merged validation on 2026-04-27:
+Latest merged validation on 2026-04-29:
 
-- full automated suite passed locally after the repo-evidence merge and auth-gating hardening: `285 passed`
-- merged dashboard/control-plane slice passed locally after the final review fix: `95 passed`
+- full automated suite passed locally after the customer self-service API key management merge: `386 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -126,6 +127,8 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - persists audit, finding, artifact, and comment history for later analysis
 - updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
+- provides a customer-facing self-service API key management UI at `/app/settings/api-keys` where workspace owners and admins can create scope-gated machine principals, receive the one-time `client_secret` on creation, and revoke keys
+- exchanges client credentials for short-lived JWTs at `/cp/auth/token` with sliding-window rate limiting, constant-time secret verification, production entitlement gating, and per-exchange audit log entries
 
 ## High-level architecture
 
