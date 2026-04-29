@@ -63,7 +63,8 @@ This framing should shape roadmap decisions:
 	- now includes the GitHub OAuth customer control plane, Base44/Wix billing handoff flow, free-tier and Stripe fallback billing paths, setup-aware app shells, entitlement-gated dashboard/webhook behavior, production-safe dashboard auth gating, and the final Stripe billing-ownership and webhook/worker hardening pass
 	- now includes the merged `feature/production-persistence-v1` slice, including production fail-closed migration/runtime guardrails, Redis-first production queue contracts, split-service smoke tooling, and broader PostgreSQL-locator persistence regression coverage for restart, idempotency, and retry paths
 	- now includes machine-principal identity management for workspace-bound service accounts: `machine_principals` table, CRUD records, HS256 JWT issuance and validation, `/cp/*` REST API routes, scope enforcement, runtime guardrails for `INTERNAL_JWT_SECRET` presence and minimum key length (RFC 7518 §3.2), and 33-test coverage in `test_control_plane_auth.py`
-- Merge policy: keep future work in smaller milestone branches that extend the merged engine rather than reviving long-lived integration drift on `main`
+	- now includes the merged `feature/control-plane-low-risk-actions-v1` slice (issue #60): three new control-plane endpoints — `POST /cp/audits/{audit_id}/feedback` (append-only structured feedback events), `POST /cp/audits/{audit_id}/triage` (append-only triage state transitions, never mutates `pull_request_audits`), and `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (export status without `result_blob`); all three enforce workspace isolation via 404-masking, require `drift.write.low` or `drift.read` scope respectively, and persist to two new migration-managed tables with validated input bounds
+	- is green at the full-suite level (`402 passed` on the latest local verification)
 
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
@@ -105,6 +106,18 @@ This framing should shape roadmap decisions:
 	- 33 tests in `tests/test_control_plane_auth.py` (all passing)
 	- Security hardening commit resolved 7 issues: empty `aud` IndexError, key-length enforcement, production presence check, scope re-validation, input validation, import placement, and missing DB index
 	- Pre-existing failures from prior sprint (migration 0003 table-existence guard, stale JS assertion) also resolved in this PR
+
+### `feature/control-plane-low-risk-actions-v1` (issue #60)
+- Purpose: completed branch for issue `#60`, control-plane low-risk write actions, now merged to `main`
+- Final status at merge:
+	- `POST /cp/audits/{audit_id}/feedback` (`drift.write.low`) — append-only structured feedback events on PR audits with six validated `kind` values, optional free-text `comment` (max 2 000 chars), bounded `metadata` dict (max 20 keys, key ≤ 80 chars, value ≤ 500 chars), workspace isolation via audit→repo_full→allocation lookup (404 on miss), and CP audit log entry on every write
+	- `POST /cp/audits/{audit_id}/triage` (`drift.write.low`) — append-only triage state transitions with three validated `state` values, optional `reason` (max 2 000 chars); writes only to `audit_triage_events`, never mutates `pull_request_audits`
+	- `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`) — returns export job status fields; `result_blob` is never included in the response
+	- new `services/audit_feedback_records.py` service module with dataclasses, schema bootstrap, and CRUD for both new tables
+	- migration `0006_add_audit_feedback_and_triage_tables` wired into `schema_migrations.py`
+	- vocabulary validation enforced at both API layer (Pydantic `kind`/`state` checks + 422 response) and service layer (`add_audit_feedback` / `add_audit_triage` raise `ValueError` for unknown values)
+	- 16 tests across all three endpoints; post-review security hardening fixed unbounded inputs, asymmetric response bodies, and service-layer vocabulary guard
+	- remote and local feature-branch cleanup is complete
 
 ### `feature/pr-comment-v2-tuning`
 - Purpose: completed review-surface slice retained as the merge lineage for PR comment content tuning and label lifecycle hardening
@@ -308,6 +321,7 @@ Verified against repo state and open issues:
 - `feature/discovery-precision-v1` is merged to `main` and should no longer appear in the near-term execution queue.
 - GitHub issue `#45` (`feature/production-persistence-v1`) is now merged to `main`.
 - GitHub issue `#57` (`feature/control-plane-foundation-v1`) is now merged to `main` via PR #63.
+- GitHub issue `#60` (`feature/control-plane-low-risk-actions-v1`) is now merged to `main`; feedback/triage write endpoints and export-status read endpoint are mainline functionality. Issue is closed.
 - The remaining open issues that align with real unfinished work are `#46` (`feature/railway-launch-hardening`), `#14` (`feature/attribute-profile-ui-v1`), `#15` (`feature/governance-signals-v1`), and `#58` (`feature/customer-control-plane-v1` — the next control-plane tier building on top of the now-merged foundation).
 
 #### Remaining work analysis
