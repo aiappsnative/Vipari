@@ -64,6 +64,13 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
+from .audit_feedback_records import (
+    VALID_FEEDBACK_KINDS,
+    VALID_TRIAGE_STATES,
+    add_audit_feedback,
+    add_audit_triage,
+)
+from .audit_records import get_pull_request_audit_by_id
 
 
 class RepositoryOnboardingRequest(BaseModel):
@@ -109,6 +116,27 @@ class IssuePrincipalTokenRequest(BaseModel):
 class ClientCredentialsRequest(BaseModel):
     client_id: str
     client_secret: str
+
+
+class AuditFeedbackRequest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=80)
+    kind: str
+    comment: str | None = Field(default=None, max_length=2000)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+    def model_post_init(self, __context: object) -> None:
+        if len(self.metadata) > 20:
+            raise ValueError("metadata may contain at most 20 keys")
+        for k, v in self.metadata.items():
+            if len(k) > 80:
+                raise ValueError("metadata key must be ≤ 80 characters")
+            if len(v) > 500:
+                raise ValueError("metadata value must be ≤ 500 characters")
+
+
+class AuditTriageRequest(BaseModel):
+    state: str
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class _SlidingWindowRateLimiter:
@@ -881,6 +909,126 @@ def create_api_app() -> FastAPI:
                     }
                     for e in entries
                 ],
+            }
+        )
+
+    @app.post("/cp/audits/{audit_id}/feedback")
+    def cp_add_audit_feedback(audit_id: int, payload: AuditFeedbackRequest, request: Request):
+        """Append structured feedback to an audit record. Requires drift.write.low.
+
+        Workspace isolation: derived from audit ownership (audit → repo_full →
+        allocation). Returns 404 for unknown audits **and** for audits that
+        belong to a different workspace (avoids leaking audit existence).
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        if payload.kind not in VALID_FEEDBACK_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid kind. Valid values: {sorted(VALID_FEEDBACK_KINDS)}",
+            )
+        audit = get_pull_request_audit_by_id(db_path, audit_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, audit.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        event = add_audit_feedback(
+            db_path,
+            audit_id=audit_id,
+            workspace_id=claims.workspace_id,
+            source=payload.source,
+            kind=payload.kind,
+            comment=payload.comment,
+            metadata=payload.metadata,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=claims.workspace_id,
+            actor_user_id=None,
+            event_type="audit.feedback_added",
+            subject_type="audit",
+            subject_id=str(audit_id),
+        )
+        return JSONResponse(
+            {
+                "id": event.id,
+                "audit_id": event.audit_id,
+                "kind": event.kind,
+                "source": event.source,
+                "comment": event.comment,
+                "created_at": event.created_at,
+            }
+        )
+
+    @app.post("/cp/audits/{audit_id}/triage")
+    def cp_triage_audit(audit_id: int, payload: AuditTriageRequest, request: Request):
+        """Record a triage state transition for an audit. Requires drift.write.low.
+
+        Writes only to audit_triage_events — does NOT modify pull_request_audits.
+        Workspace isolation same as the feedback endpoint.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        if payload.state not in VALID_TRIAGE_STATES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid state. Valid values: {sorted(VALID_TRIAGE_STATES)}",
+            )
+        audit = get_pull_request_audit_by_id(db_path, audit_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, audit.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        event = add_audit_triage(
+            db_path,
+            audit_id=audit_id,
+            workspace_id=claims.workspace_id,
+            state=payload.state,
+            reason=payload.reason,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=claims.workspace_id,
+            actor_user_id=None,
+            event_type="audit.triage_state_changed",
+            subject_type="audit",
+            subject_id=str(audit_id),
+            payload={"state": payload.state},
+        )
+        return JSONResponse(
+            {
+                "id": event.id,
+                "audit_id": event.audit_id,
+                "state": event.state,
+                "reason": event.reason,
+                "created_at": event.created_at,
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/exports/{export_id}")
+    def cp_get_export(workspace_id: int, export_id: int, request: Request):
+        """Return export job status. Requires drift.read. Never returns result_blob."""
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        job = get_export_job(db_path, export_id)
+        if job is None or job.workspace_id != workspace_id:
+            raise HTTPException(status_code=404, detail="Export not found.")
+        return JSONResponse(
+            {
+                "id": job.id,
+                "repo_full": job.repo_full,
+                "workspace_id": workspace_id,
+                "status": job.status,
+                "export_mode": job.export_mode,
+                "from_ts": job.from_ts,
+                "to_ts": job.to_ts,
+                "attempt_count": job.attempt_count,
+                "created_at": job.created_at,
+                "updated_at": job.updated_at,
+                "completed_at": job.completed_at,
             }
         )
 

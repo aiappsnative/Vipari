@@ -75,6 +75,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0003_add_onboarding_approval_columns",
         "0004_add_machine_principals",
         "0005_add_session_flash",
+        "0006_add_audit_feedback_and_triage_tables",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
