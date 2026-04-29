@@ -1098,3 +1098,165 @@ def render_control_plane_admin_page(
         .replace("{{UNCLAIMED_INSTALL_ROWS}}", install_rows)
         .replace("{{CLAIM_ROWS}}", claim_rows)
     )
+
+
+def _render_api_keys_section(
+    principals: list,
+    can_manage: bool,
+    entitlement_allows: bool,
+    csrf_token: str,
+    max_principals: int,
+) -> str:
+    import json as _json
+
+    rows_html = ""
+    for p in principals:
+        try:
+            scopes = _json.loads(p.scopes_json)
+        except (ValueError, TypeError):
+            scopes = []
+        scope_badges = "".join(
+            f'<span class="control-page-badge">{html_escape(s)}</span>' for s in scopes
+        )
+        revoke_form = ""
+        if can_manage and p.status == "active":
+            revoke_form = f"""
+            <form method="post" action="/app/settings/api-keys/{html_escape(p.client_id)}/revoke"
+                  style="display:inline"
+                  onsubmit="return confirm('Revoke this API key? This cannot be undone.')">
+                <input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />
+                <button type="submit" class="control-page-danger-btn">Revoke</button>
+            </form>"""
+        status_class = "control-page-badge-active" if p.status == "active" else "control-page-badge-revoked"
+        rows_html += f"""
+        <tr>
+            <td><code>{html_escape(p.display_name)}</code></td>
+            <td><code class="control-page-monospace">{html_escape(p.client_id[:8])}&#8230;</code></td>
+            <td>{scope_badges}</td>
+            <td><span class="control-page-badge {status_class}">{html_escape(p.status)}</span></td>
+            <td>{revoke_form}</td>
+        </tr>"""
+
+    table_html = ""
+    if principals:
+        table_html = f"""
+        <div class="control-page-table-wrap">
+            <table class="control-page-table">
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+        </div>"""
+    else:
+        table_html = '<p class="control-page-copy">No API keys created yet.</p>'
+
+    create_form = ""
+    if can_manage and entitlement_allows:
+        active_count = sum(1 for p in principals if p.status == "active")
+        at_limit = active_count >= max_principals
+        disabled_attr = ' disabled' if at_limit else ''
+        limit_note = (
+            f'<p class="control-page-copy control-page-warning">Workspace limit of {max_principals} active API keys reached.</p>'
+            if at_limit else ""
+        )
+        create_form = f"""
+        <div class="control-page-form-divider"></div>
+        <div class="secondary-panel-title">Create API key</div>
+        {limit_note}
+        <form method="post" action="/app/settings/api-keys" class="control-page-form">
+            <input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />
+            <label class="control-page-label" for="api-key-name">Key name</label>
+            <input class="control-page-input" id="api-key-name" name="display_name"
+                   placeholder="e.g. CI pipeline" maxlength="120" required{disabled_attr} />
+            <fieldset class="control-page-choice-group" aria-labelledby="api-key-scopes-title">
+                <legend class="control-page-label" id="api-key-scopes-title">Scopes</legend>
+                <label class="control-page-choice">
+                    <input type="checkbox" name="scope_drift_read" value="1"{disabled_attr} />
+                    <span><strong>drift.read</strong> &mdash; Read drift data and dashboards</span>
+                </label>
+                <label class="control-page-choice">
+                    <input type="checkbox" name="scope_drift_write_low" value="1"{disabled_attr} />
+                    <span><strong>drift.write.low</strong> &mdash; Initiate compliance exports</span>
+                </label>
+                <label class="control-page-choice">
+                    <input type="checkbox" name="scope_drift_write_high" value="1"{disabled_attr} />
+                    <span><strong>drift.write.high</strong> &mdash; Approve baselines
+                        <em class="control-page-warning">(Baseline approval is a permanent governance action &mdash; assign only to trusted automation)</em>
+                    </span>
+                </label>
+            </fieldset>
+            <button type="submit" class="control-page-submit"{disabled_attr}>Create API key</button>
+        </form>"""
+    elif not entitlement_allows:
+        create_form = '<p class="control-page-copy">Control plane API access is not enabled for this workspace. Contact support to enable it.</p>'
+    else:
+        create_form = '<p class="control-page-copy">Only workspace owners and admins can create API keys.</p>'
+
+    return f"""
+    <article class="control-page-section">
+        <div class="secondary-panel-title">Workspace API keys</div>
+        <h2 class="control-page-section-title">Machine principal credentials</h2>
+        <p class="control-page-copy">
+            API keys let trusted automation access the DriftGuard control plane API without user credentials.
+            Each key is scoped to this workspace. Store secrets securely &mdash; they are shown only once.
+        </p>
+        {table_html}
+        {create_form}
+    </article>"""
+
+
+def render_api_keys_settings_page(
+    *,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    csrf_token: str,
+    can_manage: bool,
+    entitlement_allows: bool,
+    principals: list,
+    one_time_secret: str | None,
+    max_principals: int,
+) -> str:
+    template = _load_template("control_plane_api_keys.html")
+    admin_control = ""
+    if admin_url:
+        admin_control = f'<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'
+
+    if one_time_secret:
+        secret_block = f"""
+        <section class="control-page-flash-secret" role="alert" aria-live="polite">
+            <div class="control-page-flash-secret-inner">
+                <p class="control-page-flash-secret-title">&#128274; API key created — copy your secret now</p>
+                <p class="control-page-copy">This secret will not be shown again. Store it securely.</p>
+                <div class="control-page-secret-reveal">
+                    <code id="api-key-secret" class="control-page-monospace">{html_escape(one_time_secret)}</code>
+                    <button type="button" class="control-page-copy-btn"
+                            onclick="navigator.clipboard.writeText(document.getElementById('api-key-secret').textContent)">
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </section>"""
+    else:
+        secret_block = ""
+
+    api_keys_section = _render_api_keys_section(
+        principals=principals,
+        can_manage=can_manage,
+        entitlement_allows=entitlement_allows,
+        csrf_token=csrf_token,
+        max_principals=max_principals,
+    )
+
+    return (
+        template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
+        .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
+        .replace("{{API_KEYS_SECTION}}", api_keys_section)
+    )

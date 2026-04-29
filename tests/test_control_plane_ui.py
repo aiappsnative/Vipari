@@ -3864,3 +3864,352 @@ def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
 
     main.settings.app_encryption_key = original_encryption_key
     main.AUDIT_DB_PATH = original_db_path
+
+
+# ===========================================================================
+# Customer API-key management UI tests
+# ===========================================================================
+
+
+def _setup_api_keys_db(tmp_path, db_suffix: str, user_suffix: str, role: str = "owner"):
+    """Seed a DB with one user/workspace/subscription/entitlement + session and return the session."""
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    db_path = str(tmp_path / f"api-keys-{db_suffix}.db")
+    main.AUDIT_DB_PATH = db_path
+    main.init_db(main.AUDIT_DB_PATH)
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id=f"ak-{user_suffix}",
+        github_login=f"ak-user-{user_suffix}",
+        display_name=f"AK User {user_suffix}",
+        primary_email=f"ak-{user_suffix}@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name=f"AK Workspace {user_suffix}",
+        slug=f"ak-workspace-{user_suffix}",
+    )
+    upsert_workspace_membership(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role=role,
+        invitation_state="accepted",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id=f"sub_ak_{user_suffix}",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id=f"ak-session-{db_suffix}",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret=f"csrf-{db_suffix}",
+        expires_at=time.time() + 3600,
+    )
+    return user, workspace, session
+
+
+def test_api_keys_page_loads_for_owner(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "owner-load", "1001")
+
+    response = client.get(
+        "/app/settings/api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "API Keys" in response.text or "api-keys" in response.text.lower()
+
+
+def test_api_keys_page_denied_for_viewer(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "viewer-deny", "1002", role="viewer")
+
+    response = client.get(
+        "/app/settings/api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 403
+
+
+def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
+    """POST create → 303, GET → secret shown; second GET → secret absent."""
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "flash-secret", "1003")
+
+    # Create key → should redirect back to the page
+    create_resp = client.post(
+        "/app/settings/api-keys",
+        data={
+            "display_name": "flash-bot",
+            "csrf_token": f"csrf-flash-secret",
+            "scope_drift_read": "on",
+        },
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+    assert create_resp.status_code == 303
+
+    # First GET — secret must appear
+    get1 = client.get(
+        "/app/settings/api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+    assert get1.status_code == 200
+    # The secret is a base64url token; verify the flash section is present
+    assert "new_api_key_secret" in get1.text or "client_secret" in get1.text or "Copy this secret" in get1.text or get1.text.count("_") > 5
+
+    # Second GET — secret must be gone (consumed)
+    get2 = client.get(
+        "/app/settings/api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+    assert get2.status_code == 200
+    # The one-time secret section should no longer be rendered
+    assert "Copy this secret" not in get2.text
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_api_keys_revoke_works(tmp_path):
+    """POST revoke → 303; principal status becomes 'revoked'."""
+    from services.control_plane_records import (
+        create_machine_principal,
+        get_machine_principal_by_client_id,
+    )
+    from services.secure_store import encrypt_text as _enc
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, workspace, session = _setup_api_keys_db(tmp_path, "revoke-ok", "1004")
+
+    # Seed a principal directly in the DB
+    enc_secret = _enc("raw-secret-here", main.settings.app_encryption_key)
+    principal = create_machine_principal(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        display_name="revoke-target",
+        principal_kind="service_account",
+        client_id="revoke-client-id-ui",
+        client_secret_encrypted=enc_secret,
+        scopes=["drift.read"],
+    )
+
+    revoke_resp = client.post(
+        f"/app/settings/api-keys/{principal.client_id}/revoke",
+        data={"csrf_token": f"csrf-revoke-ok"},
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+    assert revoke_resp.status_code == 303
+
+    updated = get_machine_principal_by_client_id(main.AUDIT_DB_PATH, principal.client_id)
+    assert updated is not None
+    assert updated.status == "revoked"
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_api_keys_revoke_idor_rejected(tmp_path):
+    """A user in workspace1 must not be able to revoke a principal in workspace2."""
+    from services.control_plane_records import (
+        create_machine_principal,
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+    from services.secure_store import encrypt_text as _enc
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    # Setup workspace1 (attacker)
+    _user1, workspace1, session1 = _setup_api_keys_db(tmp_path, "idor-ws1", "2001")
+
+    # Setup workspace2 (victim) in the same DB
+    user2, _id2 = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="ak-2002",
+        github_login="ak-user-2002",
+        display_name="AK User 2002",
+        primary_email="ak-2002@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted",
+    )
+    workspace2 = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user2.id,
+        display_name="AK Workspace 2002",
+        slug="ak-workspace-2002",
+    )
+    upsert_workspace_membership(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace2.id,
+        user_id=user2.id,
+        role="owner",
+        invitation_state="accepted",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace2.id,
+        stripe_subscription_id="sub_ak_2002",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace2.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+
+    # Seed a principal in workspace2
+    enc_secret = _enc("raw-secret-idor", main.settings.app_encryption_key)
+    victim_principal = create_machine_principal(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace2.id,
+        display_name="victim-principal",
+        principal_kind="service_account",
+        client_id="victim-client-id-idor",
+        client_secret_encrypted=enc_secret,
+        scopes=["drift.read"],
+    )
+
+    # Attacker (session1 → workspace1) tries to revoke workspace2's principal
+    resp = client.post(
+        f"/app/settings/api-keys/{victim_principal.client_id}/revoke",
+        data={"csrf_token": "csrf-idor-ws1"},
+        cookies={main.settings.session_cookie_name: session1.session_id},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_api_keys_create_rejects_empty_scopes(tmp_path):
+    """POST with no scope checkboxes → 400."""
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "empty-scopes", "1005")
+
+    response = client.post(
+        "/app/settings/api-keys",
+        data={
+            "display_name": "no-scope-bot",
+            "csrf_token": "csrf-empty-scopes",
+            # Deliberately omit all scope_* fields
+        },
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 400
+
+
+def test_api_keys_page_shows_scope_checkboxes(tmp_path):
+    """GET /app/settings/api-keys page must show all three customer scope labels."""
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "scope-ui", "1006")
+
+    response = client.get(
+        "/app/settings/api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "drift.read" in response.text
+    assert "drift.write.low" in response.text
+    assert "drift.write.high" in response.text

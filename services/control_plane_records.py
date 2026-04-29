@@ -2364,3 +2364,56 @@ def revoke_machine_principal(
             "SELECT * FROM machine_principals WHERE client_id = ?", (client_id,)
         ).fetchone()
     return _row_to_machine_principal(row) if row is not None else None
+
+
+def count_machine_principals_for_workspace(db_path: str, workspace_id: int) -> int:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM machine_principals WHERE workspace_id = ? AND status = 'active'",
+            (workspace_id,),
+        ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def list_control_plane_audit_logs_for_workspace(
+    db_path: str, workspace_id: int, *, limit: int = 50
+) -> list[ControlPlaneAuditLogRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM control_plane_audit_logs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?",
+            (workspace_id, limit),
+        ).fetchall()
+    return [_row_to_control_plane_audit_log(row) for row in rows]
+
+
+def write_session_flash(db_path: str, session_id: str, key: str, value: str) -> None:
+    payload = json.dumps({key: value})
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE user_sessions SET flash_json = ? WHERE session_id = ?",
+            (payload, session_id),
+        )
+
+
+def read_and_clear_session_flash(db_path: str, session_id: str, key: str) -> str | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT flash_json FROM user_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None or not row["flash_json"]:
+            return None
+        try:
+            flash = json.loads(row["flash_json"])
+        except (ValueError, TypeError):
+            conn.execute(
+                "UPDATE user_sessions SET flash_json = NULL WHERE session_id = ?",
+                (session_id,),
+            )
+            return None
+        value = flash.get(key)
+        conn.execute(
+            "UPDATE user_sessions SET flash_json = NULL WHERE session_id = ?",
+            (session_id,),
+        )
+    return value
