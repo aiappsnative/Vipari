@@ -356,13 +356,20 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
     monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "test-internal-jwt-secret-32-bytes!")
     _reset_settings_cache()
 
-    applied_migration = type("AppliedMigration", (), {"version": "0001_bootstrap_relational_schema"})()
+    _all_versions = [
+        "0001_bootstrap_relational_schema",
+        "0002_add_pull_request_audits_fused_confidence",
+        "0003_add_onboarding_approval_columns",
+        "0004_add_machine_principals",
+    ]
+    applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.api_service.init_db") as init_db_mock, patch(
         "services.runtime_guardrails.connect_sqlite"
     ) as connect, patch(
-        "services.runtime_guardrails.list_applied_migrations", return_value=[applied_migration]
+        "services.runtime_guardrails.list_applied_migrations", return_value=applied_migrations
     ):
         with TestClient(create_api_app()) as client:
             health_response = client.get("/health")
@@ -447,7 +454,13 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
     _reset_settings_cache()
 
     queue = _FakeQueue()
-    applied_migration = type("AppliedMigration", (), {"version": "0001_bootstrap_relational_schema"})()
+    _all_versions = [
+        "0001_bootstrap_relational_schema",
+        "0002_add_pull_request_audits_fused_confidence",
+        "0003_add_onboarding_approval_columns",
+        "0004_add_machine_principals",
+    ]
+    applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.webhook_service.init_db") as init_db_mock, patch(
         "services.webhook_service.init_webhook_delivery_db"
     ) as init_delivery_db_mock, patch(
@@ -455,7 +468,7 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
     ) as cleanup_deliveries_mock, patch(
         "services.runtime_guardrails.connect_sqlite"
     ) as connect, patch(
-        "services.runtime_guardrails.list_applied_migrations", return_value=[applied_migration]
+        "services.runtime_guardrails.list_applied_migrations", return_value=applied_migrations
     ):
         with TestClient(create_webhook_app(queue)) as client:
             health_response = client.get("/health")
