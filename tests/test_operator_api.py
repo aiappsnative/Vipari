@@ -330,7 +330,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "audit page" in repo_text
     assert "governance attention" in repo_text
     assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
-    assert "attribute drift" in repo_text
+    assert "attribute profile" in repo_text
     assert "control surface coverage" in repo_text
     assert "drift storyline" in repo_text
     assert "baseline-review-panel" in repo_response.text
@@ -355,6 +355,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "renderRepoTriageRow" in repo_js_response.text
-    assert "renderAttributeBars" in repo_js_response.text
+    assert "renderAttributeProfilePanel" in repo_js_response.text
     assert "Unable to load repository dashboard" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text

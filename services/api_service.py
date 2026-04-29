@@ -2,18 +2,39 @@ from __future__ import annotations
 
 import hmac
 import io
+import secrets
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 
+import json
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from config import get_settings
+from .cp_auth import require_cp_principal, require_cp_scope, require_cp_workspace_match
+from .control_plane_records import (
+    create_machine_principal,
+    get_machine_principal_by_client_id,
+    get_repo_allocation_for_workspace,
+    list_machine_principals_for_workspace,
+    revoke_machine_principal,
+)
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
+from .internal_auth import (
+    ALL_SCOPES,
+    SCOPE_ADMIN_WRITE,
+    SCOPE_DRIFT_READ,
+    SCOPE_DRIFT_WRITE_HIGH,
+    SCOPE_DRIFT_WRITE_LOW,
+    issue_cp_token,
+)
 from .observability import configure_logging, instrument_fastapi
 from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from .baseline_approval_service import (
@@ -29,6 +50,7 @@ from .export_jobs import create_export_job, get_export_job, list_export_jobs_for
 from .onboarding_records import promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
+from .secure_store import encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
@@ -61,6 +83,17 @@ class ComplianceExportRequest(BaseModel):
     to_date: str    # YYYY-MM-DD
     export_mode: str  # "compliance" | "compliance_plus_drift"
     include_artifact_content: bool = False
+
+
+class CreatePrincipalRequest(BaseModel):
+    workspace_id: int
+    display_name: str = Field(..., min_length=1, max_length=120)
+    principal_kind: Literal["service_account"] = "service_account"
+    scopes: list[str]
+
+
+class IssuePrincipalTokenRequest(BaseModel):
+    workspace_id: int
 
 
 def _require_admin_token(request: Request, settings) -> None:
@@ -395,6 +428,190 @@ def create_api_app() -> FastAPI:
             io.BytesIO(result.zip_bytes),
             media_type="application/zip",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    # -----------------------------------------------------------------------
+    # /cp/* — internal control-plane surface (machine-principal JWT auth)
+    # -----------------------------------------------------------------------
+    # Operator bootstrap routes — use the shared admin token so operators can
+    # seed the first principal without needing an existing machine token.
+    # These are the *only* /cp/* routes that accept the legacy admin token.
+
+    @app.post("/cp/principals")
+    async def cp_create_principal(payload: CreatePrincipalRequest, request: Request):
+        """Create a workspace-bound machine principal (operator-only).
+
+        Returns the ``client_id`` and a plaintext ``client_secret``.  The
+        secret is returned exactly once; store it securely.
+        """
+        _require_admin_token(request, settings)
+        unknown_scopes = set(payload.scopes) - ALL_SCOPES
+        if unknown_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown scopes: {sorted(unknown_scopes)}. Valid scopes: {sorted(ALL_SCOPES)}",
+            )
+        if not settings.has_encryption_key:
+            raise HTTPException(
+                status_code=503,
+                detail="APP_ENCRYPTION_KEY must be configured to create machine principals.",
+            )
+        client_id = str(uuid.uuid4())
+        raw_secret = secrets.token_urlsafe(32)
+        encrypted_secret = encrypt_text(raw_secret, settings.app_encryption_key)
+        principal = create_machine_principal(
+            db_path,
+            workspace_id=payload.workspace_id,
+            display_name=payload.display_name,
+            principal_kind=payload.principal_kind,
+            client_id=client_id,
+            client_secret_encrypted=encrypted_secret,
+            scopes=payload.scopes,
+        )
+        return JSONResponse(
+            {
+                "client_id": principal.client_id,
+                "client_secret": raw_secret,
+                "workspace_id": principal.workspace_id,
+                "display_name": principal.display_name,
+                "principal_kind": principal.principal_kind,
+                "scopes": payload.scopes,
+                "status": principal.status,
+                "note": "Store client_secret securely — it will not be returned again.",
+            }
+        )
+
+    @app.post("/cp/principals/{client_id}/token")
+    async def cp_issue_principal_token(client_id: str, payload: IssuePrincipalTokenRequest, request: Request):
+        """Issue a short-lived JWT for an existing machine principal (operator-only)."""
+        _require_admin_token(request, settings)
+        if not settings.has_internal_jwt_config:
+            raise HTTPException(
+                status_code=503,
+                detail="Internal JWT auth (INTERNAL_JWT_SECRET) is not configured.",
+            )
+        principal = get_machine_principal_by_client_id(db_path, client_id)
+        if principal is None:
+            raise HTTPException(status_code=404, detail="Machine principal not found.")
+        if principal.status != "active":
+            raise HTTPException(status_code=400, detail="Machine principal is not active.")
+        if principal.workspace_id != payload.workspace_id:
+            raise HTTPException(status_code=400, detail="workspace_id does not match principal's workspace.")
+        scopes = json.loads(principal.scopes_json)
+        unknown_scopes = set(scopes) - ALL_SCOPES
+        if unknown_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Principal has unrecognised scopes: {sorted(unknown_scopes)}. Revoke and recreate this principal.",
+            )
+        token = issue_cp_token(
+            client_id=principal.client_id,
+            workspace_id=principal.workspace_id,
+            scopes=scopes,
+            secret=settings.internal_jwt_secret,
+            issuer=settings.internal_jwt_issuer,
+            audience=settings.internal_jwt_audience,
+            ttl_seconds=settings.internal_jwt_ttl_seconds,
+        )
+        return JSONResponse(
+            {
+                "token": token,
+                "client_id": client_id,
+                "workspace_id": principal.workspace_id,
+                "ttl_seconds": settings.internal_jwt_ttl_seconds,
+            }
+        )
+
+    @app.delete("/cp/principals/{client_id}")
+    async def cp_revoke_principal(client_id: str, request: Request):
+        """Revoke a machine principal (operator-only)."""
+        _require_admin_token(request, settings)
+        principal = revoke_machine_principal(db_path, client_id)
+        if principal is None:
+            raise HTTPException(status_code=404, detail="Machine principal not found.")
+        return JSONResponse(
+            {
+                "client_id": principal.client_id,
+                "workspace_id": principal.workspace_id,
+                "status": principal.status,
+                "revoked_at": principal.revoked_at,
+            }
+        )
+
+    # Machine-auth routes — all require a valid control-plane JWT bearer token.
+
+    @app.get("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/dashboard")
+    def cp_repo_dashboard(workspace_id: int, repo_full: str, request: Request):
+        """Return repo drift dashboard for the given workspace-allocated repo.
+
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
+
+    @app.post("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/export")
+    async def cp_create_export(workspace_id: int, repo_full: str, payload: ComplianceExportRequest, request: Request):
+        """Initiate a compliance export for the given workspace-allocated repo.
+
+        Requires scope: ``drift.write.low``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        try:
+            from_ts = datetime.fromisoformat(payload.from_date).timestamp()
+            to_ts = datetime.fromisoformat(payload.to_date).timestamp()
+            if payload.export_mode not in ["compliance", "compliance_plus_drift"]:
+                raise HTTPException(status_code=400, detail="Invalid export_mode")
+            job = create_export_job(
+                db_path,
+                repo_full=repo_full,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                export_mode=payload.export_mode,
+                include_artifact_content=payload.include_artifact_content,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"job_id": job.id, "workspace_id": workspace_id, "repo_full": repo_full})
+
+    @app.post("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/baseline/approve")
+    async def cp_approve_baseline(workspace_id: int, repo_full: str, payload: BaselineDecisionRequest, request: Request):
+        """Approve the pending baseline candidate for the given workspace-allocated repo.
+
+        Requires scope: ``drift.write.high`` because baseline approval changes
+        the accepted safety posture — it is an irreversible governance action.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_HIGH)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        try:
+            baselines = approve_repo_baseline(
+                db_path,
+                repo_full=repo_full,
+                actor_login=payload.actor_login,
+                approval_note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "repo_full": repo_full,
+                "workspace_id": workspace_id,
+                "approved_baseline_count": len(baselines),
+                "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
+            }
         )
 
     return app

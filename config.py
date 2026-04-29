@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     redis_url: str = ""
     api_admin_token: str = ""
 
+    internal_jwt_secret: str = ""
+    internal_jwt_ttl_seconds: int = 3600
+    internal_jwt_issuer: str = "driftguard"
+    internal_jwt_audience: str = "driftguard-cp"
+
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_portal_configuration_id: str = ""
@@ -105,6 +110,10 @@ class Settings(BaseSettings):
     @property
     def has_encryption_key(self) -> bool:
         return bool(self.app_encryption_key)
+
+    @property
+    def has_internal_jwt_config(self) -> bool:
+        return bool(self.internal_jwt_secret)
 
     @property
     def admin_github_login_set(self) -> set[str]:

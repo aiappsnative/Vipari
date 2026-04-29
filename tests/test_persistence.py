@@ -69,10 +69,16 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
     result = migrate_database(db_path)
     applied = list_applied_migrations(db_path)
 
+    _all_versions = [
+        "0001_bootstrap_relational_schema",
+        "0002_add_pull_request_audits_fused_confidence",
+        "0003_add_onboarding_approval_columns",
+        "0004_add_machine_principals",
+    ]
     assert result.backend == "sqlite"
-    assert result.applied_versions == ["0001_bootstrap_relational_schema"]
+    assert result.applied_versions == _all_versions
     assert result.pending_versions == []
-    assert [item.version for item in applied] == ["0001_bootstrap_relational_schema"]
+    assert [item.version for item in applied] == _all_versions
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

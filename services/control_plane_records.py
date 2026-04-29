@@ -24,6 +24,7 @@ CONTROL_PLANE_TABLES = (
     "billing_handoff_claims",
     "control_plane_audit_logs",
     "webhook_event_receipts",
+    "machine_principals",
 )
 
 
@@ -57,6 +58,22 @@ class GithubIdentityRecord:
     refresh_token_encrypted: str | None
     token_expires_at: float | None
     last_login_at: float | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class MachinePrincipalRecord:
+    id: int
+    workspace_id: int
+    display_name: str
+    principal_kind: str
+    client_id: str
+    client_secret_encrypted: str
+    scopes_json: str
+    status: str
+    created_by_user_id: int | None
+    revoked_at: float | None
     created_at: float
     updated_at: float
 
@@ -961,6 +978,29 @@ def init_control_plane_db(db_path: str) -> None:
                 UNIQUE(provider, event_id)
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS machine_principals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                display_name TEXT NOT NULL,
+                principal_kind TEXT NOT NULL DEFAULT 'service_account',
+                client_id TEXT NOT NULL UNIQUE,
+                client_secret_encrypted TEXT NOT NULL,
+                scopes_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_by_user_id INTEGER,
+                revoked_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_machine_principals_workspace_id ON machine_principals(workspace_id)"
         )
 
         # Additive migrations for databases created before the latest control-plane schema.
@@ -2226,3 +2266,101 @@ def update_repo_allocation_status(db_path: str, allocation_id: int, allocation_s
         if row is not None:
             _refresh_workspace_setup_state(conn, row["workspace_id"])
     return _row_to_repo_allocation(row)
+
+
+# ---------------------------------------------------------------------------
+# Machine principals
+# ---------------------------------------------------------------------------
+
+
+def _row_to_machine_principal(row: sqlite3.Row) -> MachinePrincipalRecord:
+    return MachinePrincipalRecord(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        display_name=row["display_name"],
+        principal_kind=row["principal_kind"],
+        client_id=row["client_id"],
+        client_secret_encrypted=row["client_secret_encrypted"],
+        scopes_json=row["scopes_json"],
+        status=row["status"],
+        created_by_user_id=row["created_by_user_id"],
+        revoked_at=row["revoked_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def create_machine_principal(
+    db_path: str,
+    *,
+    workspace_id: int,
+    display_name: str,
+    principal_kind: str,
+    client_id: str,
+    client_secret_encrypted: str,
+    scopes: list[str],
+    created_by_user_id: int | None = None,
+) -> MachinePrincipalRecord:
+    now = time.time()
+    scopes_json = json.dumps(scopes)
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO machine_principals (
+                workspace_id, display_name, principal_kind, client_id,
+                client_secret_encrypted, scopes_json, status,
+                created_by_user_id, revoked_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)
+            """,
+            (
+                workspace_id,
+                display_name,
+                principal_kind,
+                client_id,
+                client_secret_encrypted,
+                scopes_json,
+                created_by_user_id,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM machine_principals WHERE client_id = ?", (client_id,)
+        ).fetchone()
+    return _row_to_machine_principal(row)
+
+
+def get_machine_principal_by_client_id(
+    db_path: str, client_id: str
+) -> MachinePrincipalRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM machine_principals WHERE client_id = ?", (client_id,)
+        ).fetchone()
+    return _row_to_machine_principal(row) if row is not None else None
+
+
+def list_machine_principals_for_workspace(
+    db_path: str, workspace_id: int
+) -> list[MachinePrincipalRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM machine_principals WHERE workspace_id = ? ORDER BY created_at ASC",
+            (workspace_id,),
+        ).fetchall()
+    return [_row_to_machine_principal(row) for row in rows]
+
+
+def revoke_machine_principal(
+    db_path: str, client_id: str
+) -> MachinePrincipalRecord | None:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE machine_principals SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE client_id = ?",
+            (now, now, client_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM machine_principals WHERE client_id = ?", (client_id,)
+        ).fetchone()
+    return _row_to_machine_principal(row) if row is not None else None
