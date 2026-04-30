@@ -32,7 +32,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, and customer control-plane slices.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, customer control-plane, and dashboard control-tower slices.
 
 In practical terms, DriftGuard currently provides:
 
@@ -51,6 +51,9 @@ In practical terms, DriftGuard currently provides:
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
 - baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
 - a lightweight baseline-promotion action that lets operators promote the latest stored source version as the approved baseline for an artifact
+- a control-tower portfolio layer with workspace posture, ranked escalation queueing, and repo-level decision panels that keep review attention on the next human action
+- workspace-scoped pending proposal views that preserve human-vs-agent origin and no longer leak cross-workspace proposal metadata
+- a contextual Help Center at `/app/help` that reflects current workspace onboarding/baseline/export state instead of a static placeholder
 - batched overview aggregation, repo-preview caching, fingerprinted static asset caching, and `Server-Timing` response instrumentation for materially faster dashboard loads
 - real OSS onboarding validation against `doria90/openfang` and `doria90/hermes-agent`, including larger-repo historical backfill and dashboard rendering
 - bounded large-repo onboarding through narrower candidate-path discovery and direct GitHub contents API fetches for artifact snapshots
@@ -78,9 +81,12 @@ In practical terms, DriftGuard currently provides:
 - customer self-service API key management at `/app/settings/api-keys`: scope-gated machine principal creation with one-time secret flash delivery (atomic creation + flash in a single transaction, consumed on first GET), revocation, and per-workspace principal limits
 - client-credentials token exchange at `/cp/auth/token` with sliding-window rate limiting (20 req/60 s), constant-time secret comparison, and full audit logging per exchange
 
-Latest merged validation on 2026-04-29:
+Latest merged validation on 2026-04-30:
 
-- full automated suite passed locally after the control-plane low-risk write actions merge (issue #60): `402 passed`
+- focused post-merge dashboard/control-plane validation passed locally after the issue `#62` merge and proposal-visibility hardening:
+	- `pytest tests/test_dashboard_api.py -k "test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator or test_pending_proposals_api_requires_repo_visibility or test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin or test_pending_proposals_api_response_shape"`
+	- `pytest tests/test_dashboard_control_tower.py -k "pending_proposals"`
+- the latest broader full-suite local verification recorded before this merge remains `438 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).

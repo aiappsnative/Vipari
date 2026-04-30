@@ -41,7 +41,7 @@ This framing should shape roadmap decisions:
 ## Current repository map (April 2026)
 
 ### `main`
-- Purpose: active post-merge baseline for the static-first drift engine plus the merged customer control plane
+- Purpose: active post-merge baseline for the static-first drift engine plus the merged customer control plane and dashboard control tower
 - Current status:
 	- includes the merged `feature/drift-engine-v1` milestone
 	- includes the merged `feature/pr-escalation-v1` slice
@@ -56,7 +56,6 @@ This framing should shape roadmap decisions:
 	- includes the merged `feature/discovery-precision-v1` slice
 	- now includes the merged `feature/driftguard-base44-stripe-handoff-v1` slice
 	- now includes the merged `feature/control-plane-foundation-v1-issue-57` slice (PR #63)
-	- is green at the full-suite level (`359 passed` on the latest local verification)
 	- now contains the canonical implementation of the dashboard, onboarding, static drift-profile work, episode-aware PR comment lifecycle, risk-emoji reviewer comments, current-risk escalation label sync, approved-baseline provenance, provenance-linked repo case files, lightweight baseline promotion, landed-history-only dashboard evidence semantics, persisted PR lifecycle state, and the first split-service cloud deployment scaffolding
 	- now includes the triage-first operator shell, repo case-file split-pane dashboard flow, artifact storyline APIs and rendering, repo journey snapshots, fused dashboard priority ordering, and grouped low-signal onboarding discovery for larger OSS repositories
 	- now includes separate webhook/worker/api entrypoints, queue abstractions, Redis-backed token-cache support, admin-token-protected dashboard/operator routes in the split API service, and metrics exposure disabled by default
@@ -66,7 +65,8 @@ This framing should shape roadmap decisions:
 	- now includes the merged `feature/control-plane-low-risk-actions-v1` slice (issue #60): three new control-plane endpoints — `POST /cp/audits/{audit_id}/feedback` (append-only structured feedback events), `POST /cp/audits/{audit_id}/triage` (append-only triage state transitions, never mutates `pull_request_audits`), and `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (export status without `result_blob`); all three enforce workspace isolation via 404-masking, require `drift.write.low` or `drift.read` scope respectively, and persist to two new migration-managed tables with validated input bounds
 	- now includes the merged `feature/control-plane-read-models-v1` slice (issue #58): authenticated, workspace-scoped internal `/cp/*` JSON read endpoints for workspace listing, repo inventory, repo posture, repo case file, artifact inventory, artifact detail, artifact storyline, repo audits, audit detail, and the escalation queue; all endpoints are read-only and JSON-only; this layer is the canonical structured data source for the dashboard and future MCP integrations
 	- now includes the merged `feature/control-plane-high-risk-proposals-v1` slice (issue #61): human-gated proposal-and-approval flows for the control plane; covers baseline-promote proposals (artifact-scoped) and repo-onboarding proposals (workspace-scoped); adds `services/proposals_records.py` as the full CRUD persistence layer, migration `0007_add_high_risk_proposal_tables`, 8 new API routes, `principal_kind` vocabulary and `validate_scope_kind_compatibility` in `internal_auth.py`, and `require_cp_principal_kind` in `cp_auth.py`; enforces four-eyes rule, TOCTOU-safe conditional UPDATE, flood limits, 30-day expiry, artifact_id/URL consistency guard (audit log integrity), and service-account-blocked-from-high-scope at both creation and route layer; 36 tests in `test_cp_high_risk_proposals.py`
-	- is green at the full-suite level (`438 passed` on the latest local verification)
+	- now includes the merged `feature/dashboard-control-tower-v1` slice (issue #62, PR #67): workspace posture and escalation queue surfaces on `/dashboard`, repo decision panels and pending proposal summaries on `/dashboard/{owner/repo}`, the contextual `/app/help` experience, and post-review hardening so pending repo proposals remain workspace-scoped, repo-visible, and provenance-correct
+	- latest focused post-merge validation for issue `#62` passed locally in `tests/test_dashboard_api.py` and `tests/test_dashboard_control_tower.py`; the latest broader full-suite local verification recorded before this merge remains `438 passed`
 
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
@@ -110,18 +110,21 @@ This framing should shape roadmap decisions:
 	- Pre-existing failures from prior sprint (migration 0003 table-existence guard, stale JS assertion) also resolved in this PR
 
 ### `feature/dashboard-control-tower-v1` (issue #62)
-- Purpose: dashboard control-tower refactor; adds a workspace-wide escalation queue and a per-repo decision section to the operator dashboard
+- Purpose: completed dashboard control-tower refactor branch, merged to `main` via PR #67
 - Final status at merge:
 	- `GET /api/dashboard/escalation-queue` — workspace-wide ranked flat list of escalating insights; accepts `?include_watch=true`; respects repo visibility filtering; returns `workspace_posture` ("risk"/"watch"/"healthy"), `workspace_posture_reasons` (top-3 deduplicated risk reasons), `escalation_count`, `watch_count`, and `items`
-	- `GET /api/repos/{repo_full}/proposals/pending` — pending baseline proposals for a repo; returns `proposals` list with `artifact_path`, `is_agent_proposal`, `rationale`, and `created_at`; empty list if no proposals or repo not onboarded
+	- `GET /api/repos/{repo_full}/proposals/pending` — pending baseline proposals for a repo; enforces repo visibility, scopes results to the caller workspace, preserves `is_agent_proposal`, and returns `artifact_path`, `rationale`, and `created_at`; empty list if no proposals are pending in that visible workspace slice
 	- new `EscalationQueueItem` frozen dataclass and `build_workspace_escalation_queue()` in `services/dashboard_views.py`
-	- new `list_pending_baseline_proposals_for_repo()` helper in `services/proposals_records.py`; queries by `repo_full` + `PROPOSAL_STATUS_PENDING` without requiring workspace context
+	- new repo-scoped pending-proposal read helpers in `services/proposals_records.py`, including the workspace-bound query used by the main dashboard surface
 	- workspace posture bar injected into `dashboard_index.html` above the main content; escalation queue section added to main dashboard with rank, title, repo/artifact context, attribute delta chips, and direct review links
 	- repo decision section added to `dashboard_repo.html` with posture badge, top finding, recommended action, and pending-proposals panel
+	- `/app/help` now renders a dedicated contextual Help Center with workspace state summaries, next-step guidance, and support placeholders instead of a generic placeholder page
 	- `dashboard-index.js` — `fetchEscalationQueue`, `renderWorkspacePostureBar`, `renderEscalationQueueTable`, `loadEscalationQueue` added; called on page init
 	- `dashboard-repo.js` — `renderDecisionSection`, `loadPendingProposals` added; both called from `applyDashboardPayload`
 	- `dashboard.css` — ~250 lines of new control-tower styles: posture bar, escalation table, repo decision section, delta chips, responsive breakpoint at 900 px
 	- 17 tests in `tests/test_dashboard_control_tower.py` (16 pass, 1 conditional skip); covers empty-db healthy posture, key structure, drift detection, watch/review-now filtering, sort order, repo-filter, posture-reasons type, and all API endpoints
+	- follow-up hardening commit `db33753` fixed repo-scope authorization, cross-workspace proposal visibility, agent/human proposal provenance, and the `filter=mine` nav mismatch; focused regressions passed before merge
+	- remote and local feature-branch cleanup accompanies this merge-completion step
 
 ### `feature/control-plane-high-risk-proposals-v1` (issue #61)
 - Purpose: completed branch for issue `#61`, human-gated proposal-and-approval flows for the control plane, now merged to `main`
@@ -391,8 +394,7 @@ What still looks unfinished on `main`:
 - reviewer-target quality now has merged proposal-only vs landed-history separation and PR-first review targets, but still needs broader real-repo validation and tuning on history-heavy repositories
 - production persistence hardening is now merged, but live Railway/operator validation is still needed before broader launch claims
 - attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
-- the control-plane read model (issue #58) and low-risk write layer (issue #60) are now merged, making the MCP server (issue #59) and high-risk proposal flows (issue #61) natural next-layer targets
-- dashboard control-tower refactor (issue #62) is the right UI direction once the underlying data models are proven in production
+- the control-plane read model (issue #58), high-risk proposal layer (issue #61), and dashboard control tower (issue #62) are now merged, making the MCP server (issue #59) and launch hardening the most natural next integration layers
 
 What should come next:
 
@@ -400,14 +402,10 @@ What should come next:
 	- should stay close behind persistence because launch readiness depends on the production data-path actually being proven
 2. `feature/mcp-map-server-v1` (issue #59)
 	- now directly buildable on top of the merged CP read models and machine-principal auth from issues #58 and #57
-3. `feature/control-plane-high-risk-proposals-v1` (issue #61)
-	- introduces the proposal-and-approval gate that separates low-risk automation from high-trust human decisions
-4. `feature/attribute-profile-ui-v1` (issue #14)
+3. `feature/attribute-profile-ui-v1` (issue #14)
 	- now becomes more leverageable because the dashboard and storyline surfaces already expose rich profile payloads
-5. `feature/governance-signals-v1` (issue #15)
+4. `feature/governance-signals-v1` (issue #15)
 	- should follow once reviewer-target quality and attribute-profile presentation are stable enough to support another first-class dimension
-6. `feature/dashboard-control-tower-v1` (issue #62)
-	- the right dashboard end-state; should land after the underlying data models (#58, #61) are proven and the MCP layer (#59) is in place
 
 #### Completed: `feature/eval-harness-v1`
 
@@ -551,31 +549,6 @@ Planned scope:
 - implement initial read-first tool set: `promptdrift.list_repos`, `get_repo_posture`, `get_repo_casefile`, `list_artifacts`, `get_artifact_storyline`, `list_escalations`, `get_audit`
 - shape outputs for agent usability (compact structured results, normalized enums, no UI-centric nesting)
 - no high-risk write tools, no polished customer onboarding UI in this slice
-
-#### 6. `feature/control-plane-high-risk-proposals-v1` (issue #61)
-
-Purpose:
-- add proposal-and-approval flows for high-risk actions so that sensitive changes (baseline promotions, policy changes, repo onboarding decisions) require human review rather than direct automation
-
-Planned scope:
-- `POST /cp/artifacts/{artifact_id}/baseline/proposals` — propose promoting current artifact state as new approved baseline
-- `POST /cp/artifacts/{artifact_id}/baseline/approve` — human-only, `drift.write.high` scope required; approves and applies the proposal; records approver and appends baseline history event
-- `POST /cp/workspaces/{workspace_id}/policy/proposals` and a separate human-only apply endpoint — policy change proposals for severity thresholds, reviewer requirements, enforcement behavior
-- `POST /cp/workspaces/{workspace_id}/repos/onboarding-proposals` and a separate human-only apply endpoint — repo onboarding/offboarding/category proposals
-- all proposals are stored with full state and approval history; no auto-approval permitted
-- UI integration is not the deliverable here; model should be designed so UI can consume it naturally later
-
-#### 7. `feature/dashboard-control-tower-v1` (issue #62)
-
-Purpose:
-- refactor the dashboard and audit pages into a control tower centered on escalations, repo case files, artifact storylines, and human oversight rather than chart density
-
-Planned scope:
-- main dashboard above-the-fold: portfolio posture strip, escalation queue ("Needs review now"), and repo posture list
-- repo audit pages structured into four explicit layers: Decision (posture + top reasons + open escalations + actions), Story (key episodes + artifact storyline drill-down), Evidence (snippets + governance notes + rationale), Actions (baseline proposals, exports, GitHub inspection, related audits)
-- demote secondary visuals (radar, coverage bars) to secondary tabs or expandable sections so they do not compete with the triage lane
-- make agent activity visible (proposal origin, triage assist, human override markers) for legibility of the human-in-the-loop model
-- surface baseline awareness and attribute deltas (guardrails, capability, autonomy, governance) explicitly as product-level language rather than engine internals
 
 ### Trial success criteria for the next version
 
