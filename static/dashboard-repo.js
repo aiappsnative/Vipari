@@ -1319,6 +1319,31 @@ function renderDecisionSection(insights, payload) {
     `);
 }
 
+function renderRepoActionsSection(insights) {
+    const topInsight = asArray(insights)[0] || null;
+    const reviewUrl = topInsight?.review_url || "";
+    const reviewTarget = topInsight?.review_target || topInsight?.artifact_path || repoFull;
+    const reviewTitle = topInsight?.title || "Open the highest-priority change first";
+    const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
+
+    setSectionHtml("repo-actions-review", `
+        <div class="stack compact-stack">
+            <div class="detail-note">Inspect the flagged change first, then resolve baseline review and export actions from this same case file.</div>
+            <div class="artifact-card">
+                <strong>${escapeHtml(reviewTitle)}</strong>
+                <div class="artifact-card-reason">${escapeHtml(reviewTarget)}</div>
+                <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
+            </div>
+            <div class="export-actions repo-actions-row">
+                ${reviewUrl ? `<a href="${escapeHtml(reviewUrl)}" class="export-submit-button">Open flagged change</a>` : ""}
+                <a href="#repo-triage-section" class="cue-action-button">Review related audits</a>
+                ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
+                <a href="#repo-export-section" class="cue-action-button">Create export</a>
+            </div>
+        </div>
+    `);
+}
+
 async function loadPendingProposals() {
     if (!repoFull) {
         return;
@@ -1408,6 +1433,7 @@ function applyDashboardPayload(payload) {
     bindOpenSourceChangeLinks(document);
 
     renderDecisionSection(insights, payload);
+    renderRepoActionsSection(insights);
     void loadPendingProposals();
 }
 
@@ -1601,6 +1627,7 @@ async function loadDashboard() {
         setSectionHtml("repo-journey-timeline", fallback);
         setSectionHtml("repo-journey-compare", fallback);
         setSectionHtml("lower-confidence-insights", fallback);
+        setSectionHtml("repo-actions-review", fallback);
         setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);
         setText("detail-artifact-name", repoFull || "Repository unavailable");
         setText("detail-subtitle", message);

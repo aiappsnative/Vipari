@@ -96,8 +96,8 @@
                     <a class="repo-audit-anchor" href="#repo-decision-section">Decision</a>
                     <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
                     <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
-                    <a class="repo-audit-anchor" href="#repo-surfaces-section">Control Surface Coverage</a>
-                    <a class="repo-audit-anchor" href="#repo-journey-section">Version Journey</a>
+                    <a class="repo-audit-anchor" href="#repo-evidence-section">Evidence</a>
+                    <a class="repo-audit-anchor" href="#repo-actions-section">Actions</a>
                     <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
                 </section>
 
@@ -216,23 +216,45 @@
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel" id="repo-surfaces-section">
-                        <div class="secondary-panel-title">Control surface coverage</div>
-                        <div id="control-surfaces" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading grouped control surfaces...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <div class="skeleton-chip-row">
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
+                    <div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">
+                        <details class="secondary-details">
+                            <summary class="secondary-details-summary">Version journey and baseline comparison</summary>
+                            <div class="secondary-disclosure-grid">
+                                <div class="secondary-panel secondary-panel-flat">
+                                    <div class="secondary-panel-title">Version journey</div>
+                                    <div id="repo-journey-summary" class="loading-shell" aria-busy="true">
+                                        <span class="visually-hidden">Loading repository checkpoints...</span>
+                                        <div class="skeleton-stack" aria-hidden="true">
+                                            <div class="skeleton-chip-row">
+                                                <span class="skeleton-chip"></span>
+                                                <span class="skeleton-chip"></span>
+                                                <span class="skeleton-chip"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div id="repo-journey-timeline" class="loading-shell" aria-busy="true">
+                                        <span class="visually-hidden">Loading repository journey timeline...</span>
+                                        <div class="skeleton-stack" aria-hidden="true">
+                                            <div class="skeleton-block"></div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <span class="skeleton-line skeleton-line-long"></span>
+                                <div class="secondary-panel secondary-panel-flat" id="repo-compare-section">
+                                    <div class="secondary-panel-title">Baseline vs current</div>
+                                    <div id="repo-journey-compare" class="loading-shell" aria-busy="true">
+                                        <span class="visually-hidden">Loading baseline comparison...</span>
+                                        <div class="skeleton-stack" aria-hidden="true">
+                                            <span class="skeleton-line skeleton-line-medium"></span>
+                                            <div class="skeleton-block"></div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                     </div>
                 </section>
 
-                <section class="secondary-grid">
+                <section class="secondary-grid" id="repo-evidence-section">
                     <div class="secondary-panel" id="repo-ai-act-section">
                         <div class="secondary-panel-title">EU AI Act relevance</div>
                         <div id="repo-ai-act-assessment" class="loading-shell" aria-busy="true">
@@ -241,19 +263,6 @@
                                 <span class="skeleton-line skeleton-line-short"></span>
                                 <span class="skeleton-line skeleton-line-long"></span>
                                 <span class="skeleton-line skeleton-line-medium"></span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="secondary-panel" id="repo-baseline-review-section">
-                        <div class="secondary-panel-title">Baseline Review</div>
-                        <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading baseline review state...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <span class="skeleton-line skeleton-line-medium"></span>
-                                <div class="skeleton-chip-row">
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -277,36 +286,121 @@
                             </div>
                         </div>
                     </div>
+                    <div class="secondary-panel secondary-panel-disclosure" id="repo-surfaces-section">
+                        <details class="secondary-details">
+                            <summary class="secondary-details-summary">Control surface coverage</summary>
+                            <div id="control-surfaces" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading grouped control surfaces...</span>
+                                <div class="skeleton-stack" aria-hidden="true">
+                                    <div class="skeleton-chip-row">
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                        <span class="skeleton-chip"></span>
+                                    </div>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
                 </section>
 
-                <section class="secondary-row">
-                    <div class="secondary-panel" id="repo-journey-section">
-                        <div class="secondary-panel-title">Version journey</div>
-                        <div id="repo-journey-summary" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading repository checkpoints...</span>
+                <section class="secondary-grid repo-actions-grid" id="repo-actions-section">
+                    <div class="secondary-panel repo-actions-panel">
+                        <div class="secondary-panel-title">Review target</div>
+                        <div id="repo-actions-review" class="loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading recommended review target...</span>
                             <div class="skeleton-stack" aria-hidden="true">
+                                <span class="skeleton-line skeleton-line-medium"></span>
+                                <span class="skeleton-line skeleton-line-long"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="secondary-panel" id="repo-baseline-review-section">
+                        <div class="secondary-panel-title">Baseline Review</div>
+                        <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading baseline review state...</span>
+                            <div class="skeleton-stack" aria-hidden="true">
+                                <span class="skeleton-line skeleton-line-medium"></span>
                                 <div class="skeleton-chip-row">
-                                    <span class="skeleton-chip"></span>
                                     <span class="skeleton-chip"></span>
                                     <span class="skeleton-chip"></span>
                                 </div>
                             </div>
                         </div>
-                        <div id="repo-journey-timeline" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading repository journey timeline...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <div class="skeleton-block"></div>
-                            </div>
-                        </div>
                     </div>
-                    <div class="secondary-panel" id="repo-compare-section">
-                        <div class="secondary-panel-title">Baseline vs current</div>
-                        <div id="repo-journey-compare" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading baseline comparison...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <span class="skeleton-line skeleton-line-medium"></span>
-                                <div class="skeleton-block"></div>
+                    <div class="secondary-panel repo-actions-panel" id="repo-export-section">
+                        <div class="secondary-panel-title">Compliance export</div>
+                        <form id="export-form" class="export-form">
+                            <div class="export-form-group">
+                                <label for="export-from-date">From date</label>
+                                <input type="date" id="export-from-date" name="from_date">
                             </div>
+                            <div class="export-form-group">
+                                <label for="export-to-date">To date</label>
+                                <input type="date" id="export-to-date" name="to_date">
+                            </div>
+                            <fieldset class="export-mode-group export-form-group export-form-group-wide">
+                                <legend>Export mode</legend>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="summary" checked>
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Summary</span>
+                                        <span class="export-mode-description">Compact posture and evidence package for reviewer handoff.</span>
+                                    </span>
+                                </label>
+                                <label class="export-mode-option">
+                                    <input type="radio" name="export_mode" value="audit_package">
+                                    <span class="export-mode-copy">
+                                        <span class="export-mode-title">Audit package</span>
+                                        <span class="export-mode-description">Expanded archive with audit history and supporting evidence.</span>
+                                    </span>
+                                </label>
+                            </fieldset>
+                            <div class="export-form-group export-form-group-wide">
+                                <label class="checkbox-label" for="export-include-content">
+                                    <input type="checkbox" id="export-include-content" name="include_artifact_content">
+                                    Include stored artifact content when available
+                                </label>
+                            </div>
+                            <div class="export-actions export-form-group export-form-group-wide">
+                                <button type="submit" class="export-submit-button" id="export-submit-button">Generate export package</button>
+                                <a href="#repo-triage-section" class="cue-action-button">Review related audits</a>
+                            </div>
+                        </form>
+                        <div id="export-status" class="export-status" hidden></div>
+                        <div class="export-history">
+                            <div class="export-history-head">
+                                <h3>Recent exports</h3>
+                            </div>
+                            <table class="repos-table export-history-table">
+                                <thead>
+                                    <tr>
+                                        <th>Mode</th>
+                                        <th>Range</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                        <th>Size</th>
+                                        <th>Download</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="export-history-tbody">
+                                    <tr>
+                                        <td colspan="6" class="loading-shell" aria-busy="true">
+                                            <span class="visually-hidden">Loading export history...</span>
+                                            <div class="skeleton-stack" aria-hidden="true">
+                                                <div class="skeleton-table-row">
+                                                    <span class="skeleton-table-cell"></span>
+                                                    <span class="skeleton-table-cell"></span>
+                                                    <span class="skeleton-table-cell"></span>
+                                                    <span class="skeleton-table-cell"></span>
+                                                    <span class="skeleton-table-cell"></span>
+                                                    <span class="skeleton-table-cell"></span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </section>

@@ -420,9 +420,11 @@ function renderJourney(repo, repoPayload = null) {
 function renderRepoAtlasCard(repo, index) {
     const reviewNowCount = Number(repo.review_now_count || 0);
     const watchCount = Number(repo.watch_count || 0);
+    const insightCount = Number(repo.insight_count || 0);
     const driftTone = reviewNowCount > 0 ? "high" : watchCount > 0 ? "medium" : "steady";
     const checkpointCount = Number(repo.historical_version_count || 0);
     const summary = repo.highest_insight_title || triageSummary(repo) || "Repository posture available";
+    const recentSignal = repo.highest_evidence_summary || repo.highest_change_summary || repo.highest_flag_summary || repo.highest_rationale || "Recent signal summary will appear here as audits accumulate.";
     return `
         <button type="button" class="repo-atlas-card-button" data-repo-atlas-index="${index}" data-repo-full="${escapeHtml(repo.repo_full)}">
             <div class="repo-atlas-topline">
@@ -432,10 +434,11 @@ function renderRepoAtlasCard(repo, index) {
             <div class="repo-atlas-name">${escapeHtml(repo.repo_full)}</div>
             <div class="repo-atlas-summary">${escapeHtml(summary)}</div>
             <div class="repo-atlas-metrics">
-                <span>${escapeHtml(String(repo.discovered_artifact_count || 0))} artifacts</span>
-                <span>${escapeHtml(String(checkpointCount))} checkpoints</span>
-                <span>${reviewNowCount > 0 ? escapeHtml(`${String(reviewNowCount)} review`) : watchCount > 0 ? escapeHtml(`${String(watchCount)} watch`) : "stable"}</span>
+                <span>${escapeHtml(String(insightCount))} audits</span>
+                <span>${escapeHtml(String(reviewNowCount))} escalations</span>
+                <span>${watchCount > 0 ? escapeHtml(`${String(watchCount)} watch`) : escapeHtml(`${String(checkpointCount)} checkpoints`)}</span>
             </div>
+            <div class="repo-atlas-signal">${escapeHtml(recentSignal)}</div>
             <div class="repo-atlas-footer">
                 <span class="repo-atlas-baseline">${escapeHtml(repo.highest_baseline_label || baselineLabelForRepo(repo))}</span>
                 <span class="repo-atlas-open">Preview</span>
