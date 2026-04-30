@@ -1223,9 +1223,373 @@ def test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator(tm
     assert response.status_code == 200
     payload = response.json()
     assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
-    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI", "doria90/openfang"]
+    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
     assert payload["overview_sections"]["urgent_queue"]["repo_count"] >= 1
+
+
+def test_pending_proposals_api_requires_repo_visibility(tmp_path):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        init_control_plane_db,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_repo_allocation_status,
+    )
+
+    db_path = str(tmp_path / "api-dashboard-pending-visibility.db")
+    init_db(db_path)
+    init_control_plane_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="301",
+        github_login="visibility-user",
+        display_name="Visibility User",
+        primary_email="visibility@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-visibility-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="pending-visibility-workspace",
+        display_name="Pending Visibility Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id="pending-visibility-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_pending_visibility",
+        stripe_price_id="price_pending_visibility",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=321,
+        account_id="acct-321",
+        account_login="promptdrift-org-visibility",
+        account_type="Organization",
+        target_type="Organization",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=321,
+        repositories=[
+            {
+                "repo_github_id": "visible-repo",
+                "repo_full": "doria90/visible-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/visible-repo",
+        installation_id=321,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    visible_allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=321,
+        repo_github_id="visible-repo",
+        repo_full="doria90/visible-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, visible_allocation.id, "onboarded")
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/hidden-repo",
+        installation_id=999,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/hidden-repo/proposals/pending",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+
+    assert response.status_code == 404
+
+
+def test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin(tmp_path):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_machine_principal,
+        create_user_session,
+        create_workspace,
+        init_control_plane_db,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_repo_allocation_status,
+    )
+    from services.internal_auth import PRINCIPAL_KIND_HUMAN_OPERATOR, PRINCIPAL_KIND_SERVICE_ACCOUNT
+    from services.proposals_records import create_baseline_proposal
+
+    db_path = str(tmp_path / "api-dashboard-pending-workspace-scope.db")
+    init_db(db_path)
+    init_control_plane_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+
+    primary_user, _primary_identity = upsert_github_identity(
+        db_path,
+        github_user_id="401",
+        github_login="primary-proposal-user",
+        display_name="Primary Proposal User",
+        primary_email="primary-proposal@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-primary-proposal-token",
+    )
+    secondary_user, _secondary_identity = upsert_github_identity(
+        db_path,
+        github_user_id="402",
+        github_login="secondary-proposal-user",
+        display_name="Secondary Proposal User",
+        primary_email="secondary-proposal@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-secondary-proposal-token",
+    )
+
+    primary_workspace = create_workspace(
+        db_path,
+        slug="primary-proposals-workspace",
+        display_name="Primary Proposals Workspace",
+        billing_owner_user_id=primary_user.id,
+    )
+    secondary_workspace = create_workspace(
+        db_path,
+        slug="secondary-proposals-workspace",
+        display_name="Secondary Proposals Workspace",
+        billing_owner_user_id=secondary_user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id="pending-scope-session",
+        user_id=primary_user.id,
+        workspace_id=primary_workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    for workspace_id, suffix in ((primary_workspace.id, "primary"), (secondary_workspace.id, "secondary")):
+        upsert_subscription(
+            db_path,
+            workspace_id=workspace_id,
+            stripe_subscription_id=f"sub_pending_scope_{suffix}",
+            stripe_price_id=f"price_pending_scope_{suffix}",
+            plan_code="team",
+            status="active",
+            cancel_at_period_end=False,
+            current_period_start_at=time.time(),
+            current_period_end_at=time.time() + 86400,
+            next_payment_at=time.time() + 86400,
+            trial_ends_at=None,
+            last_webhook_event_id=None,
+        )
+        upsert_entitlement(
+            db_path,
+            workspace_id=workspace_id,
+            payload=derive_entitlement_payload("team", "active"),
+        )
+
+    upsert_github_installation(
+        db_path,
+        workspace_id=primary_workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="promptdrift-org-primary",
+        account_type="Organization",
+        target_type="Organization",
+        status="active",
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=secondary_workspace.id,
+        installation_id=456,
+        account_id="acct-456",
+        account_login="promptdrift-org-secondary",
+        account_type="Organization",
+        target_type="Organization",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=primary_workspace.id,
+        installation_id=123,
+        repositories=[
+            {
+                "repo_github_id": "shared-repo-a",
+                "repo_full": "doria90/shared-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=secondary_workspace.id,
+        installation_id=456,
+        repositories=[
+            {
+                "repo_github_id": "shared-repo-b",
+                "repo_full": "doria90/shared-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+
+    onboarding_result = onboard_repository(
+        db_path,
+        repo_full="doria90/shared-repo",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    artifact_id = onboarding_result.artifacts[0].id
+
+    primary_allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=primary_workspace.id,
+        installation_id=123,
+        repo_github_id="shared-repo-a",
+        repo_full="doria90/shared-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=primary_user.id,
+    )
+    secondary_allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=secondary_workspace.id,
+        installation_id=456,
+        repo_github_id="shared-repo-b",
+        repo_full="doria90/shared-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=secondary_user.id,
+    )
+    update_repo_allocation_status(db_path, primary_allocation.id, "onboarded")
+    update_repo_allocation_status(db_path, secondary_allocation.id, "onboarded")
+
+    primary_principal = create_machine_principal(
+        db_path,
+        workspace_id=primary_workspace.id,
+        display_name="Primary Agent",
+        principal_kind=PRINCIPAL_KIND_SERVICE_ACCOUNT,
+        client_id="primary-agent",
+        client_secret_encrypted="encrypted-primary-secret",
+        scopes=["drift.write.low"],
+    )
+    secondary_principal = create_machine_principal(
+        db_path,
+        workspace_id=secondary_workspace.id,
+        display_name="Secondary Human",
+        principal_kind=PRINCIPAL_KIND_HUMAN_OPERATOR,
+        client_id="secondary-human",
+        client_secret_encrypted="encrypted-secondary-secret",
+        scopes=["drift.write.low"],
+    )
+
+    create_baseline_proposal(
+        db_path,
+        artifact_id=artifact_id,
+        repo_full="doria90/shared-repo",
+        workspace_id=primary_workspace.id,
+        snapshot_id=None,
+        rationale="Primary workspace proposal",
+        linked_audit_ids=[],
+        metadata={},
+        proposer_principal_id=primary_principal.id,
+    )
+    create_baseline_proposal(
+        db_path,
+        artifact_id=artifact_id,
+        repo_full="doria90/shared-repo",
+        workspace_id=secondary_workspace.id,
+        snapshot_id=None,
+        rationale="Secondary workspace proposal",
+        linked_audit_ids=[],
+        metadata={},
+        proposer_principal_id=secondary_principal.id,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/shared-repo/proposals/pending",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pending_count"] == 1
+    assert len(payload["proposals"]) == 1
+    assert payload["proposals"][0]["rationale"] == "Primary workspace proposal"
+    assert payload["proposals"][0]["proposer_principal_id"] == primary_principal.id
+    assert payload["proposals"][0]["is_agent_proposal"] is True
+    assert payload["proposals"][0]["artifact_path"] == "prompts/refund.txt"
 
 
 def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):

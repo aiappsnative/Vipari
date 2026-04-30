@@ -336,6 +336,24 @@ def list_pending_baseline_proposals_for_repo(
     return [_row_to_baseline_proposal(r) for r in rows]
 
 
+def list_pending_baseline_proposals_for_repo_in_workspace(
+    db_path: str,
+    repo_full: str,
+    workspace_id: int,
+) -> list[BaselineProposalRecord]:
+    with connect_sqlite(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM cp_baseline_proposals
+            WHERE repo_full = ? AND workspace_id = ? AND status = ?
+            ORDER BY created_at DESC
+            """,
+            (repo_full, workspace_id, PROPOSAL_STATUS_PENDING),
+        ).fetchall()
+    return [_row_to_baseline_proposal(r) for r in rows]
+
+
 def get_baseline_proposal(
     db_path: str,
     *,

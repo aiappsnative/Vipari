@@ -25,6 +25,7 @@ from .control_plane_records import (
     create_machine_principal,
     count_machine_principals_for_workspace,
     get_machine_principal_by_client_id,
+    get_machine_principal_by_id,
     get_repo_allocation_for_workspace,
     get_workspace_by_id,
     get_workspace_entitlement,
@@ -278,7 +279,6 @@ def create_api_app() -> FastAPI:
         _require_admin_token(request, settings)
         from .proposals_records import list_pending_baseline_proposals_for_repo
         from .onboarding_records import list_onboarded_artifacts_for_onboarding, get_latest_repository_onboarding
-        from .control_plane_records import list_machine_principals_for_workspace
         from .internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
         proposals = list_pending_baseline_proposals_for_repo(db_path, repo_full)
         if not proposals:
@@ -289,16 +289,14 @@ def create_api_app() -> FastAPI:
         if onboarding:
             for artifact in list_onboarded_artifacts_for_onboarding(db_path, onboarding.id):
                 artifact_path_by_id[artifact.id] = artifact.artifact_path
-        principals_cache: dict[int, object] = {}
+        principals_cache: dict[int, object | None] = {}
         proposals_out: list[dict] = []
         for proposal in proposals:
-            if proposal.proposer_principal_id not in principals_cache and proposal.workspace_id:
-                try:
-                    all_principals = list_machine_principals_for_workspace(db_path, proposal.workspace_id)
-                    for p in all_principals:
-                        principals_cache[p.id] = p
-                except Exception:
-                    pass
+            if proposal.proposer_principal_id not in principals_cache:
+                principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
+                    db_path,
+                    proposal.proposer_principal_id,
+                )
             proposer = principals_cache.get(proposal.proposer_principal_id)
             is_agent = (
                 proposer is not None

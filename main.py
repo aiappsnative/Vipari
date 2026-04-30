@@ -107,6 +107,7 @@ from services.control_plane_records import (
     get_workspace_installation,
     get_workspace_membership,
     get_workspace_subscription,
+    get_machine_principal_by_id,
     get_subscription_by_stripe_subscription_id,
     get_machine_principal_by_client_id,
     has_processed_webhook_event,
@@ -3051,15 +3052,17 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     if active_filter not in {"all", "critical", "mine"}:
         active_filter = "all"
     owned_repo_fulls: set[str] | None = None
-    if active_filter == "mine" and access_context:
-        workspace = access_context.get("workspace")
-        session = access_context.get("session")
-        if workspace is not None and session is not None:
-            owned_repo_fulls = {
-                allocation.repo_full
-                for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
-                if allocation.activated_by_user_id == session.user_id
-            }
+    if active_filter == "mine":
+        owned_repo_fulls = set()
+        if access_context:
+            workspace = access_context.get("workspace")
+            session = access_context.get("session")
+            if workspace is not None and session is not None:
+                owned_repo_fulls = {
+                    allocation.repo_full
+                    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+                    if allocation.activated_by_user_id == session.user_id
+                }
     active_range = range.strip().lower() if range else "7d"
     if active_range not in {"24h", "7d", "30d"}:
         active_range = "7d"
@@ -3072,7 +3075,8 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
     payload = asdict(filtered_overview_view)
-    payload["nav_repos"] = [asdict(repo) for repo in overview_view.repos]
+    nav_repos = filtered_overview_view.repos if active_filter == "mine" else overview_view.repos
+    payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
     response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
@@ -3099,10 +3103,14 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
 
 @app.get("/api/repos/{repo_full:path}/proposals/pending")
 def list_pending_proposals_for_repo(request: Request, repo_full: str):
-    _require_dashboard_access(request)
-    from services.proposals_records import list_pending_baseline_proposals_for_repo
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
+    from services.internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
+    from services.proposals_records import list_pending_baseline_proposals_for_repo_in_workspace
     from services.onboarding_records import list_onboarded_artifacts_for_onboarding
-    proposals = list_pending_baseline_proposals_for_repo(AUDIT_DB_PATH, repo_full)
+    workspace = access_context.get("workspace")
+    if workspace is None:
+        return JSONResponse({"proposals": [], "pending_count": 0})
+    proposals = list_pending_baseline_proposals_for_repo_in_workspace(AUDIT_DB_PATH, repo_full, workspace.id)
     if not proposals:
         return JSONResponse({"proposals": [], "pending_count": 0})
     onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
@@ -3110,8 +3118,19 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
     if onboarding:
         for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id):
             artifact_path_by_id[artifact.id] = artifact.artifact_path
+    principals_cache: dict[int, object | None] = {}
     proposals_out: list[dict] = []
     for proposal in proposals:
+        if proposal.proposer_principal_id not in principals_cache:
+            principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
+                AUDIT_DB_PATH,
+                proposal.proposer_principal_id,
+            )
+        proposer = principals_cache.get(proposal.proposer_principal_id)
+        is_agent = (
+            proposer is not None
+            and getattr(proposer, "principal_kind", None) == PRINCIPAL_KIND_SERVICE_ACCOUNT
+        )
         proposals_out.append({
             "proposal_id": proposal.id,
             "artifact_id": proposal.artifact_id,
@@ -3119,7 +3138,7 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
             "status": proposal.status,
             "rationale": proposal.rationale,
             "proposer_principal_id": proposal.proposer_principal_id,
-            "is_agent_proposal": False,
+            "is_agent_proposal": is_agent,
             "created_at": proposal.created_at,
             "expires_at": proposal.expires_at,
         })

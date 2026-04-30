@@ -2341,6 +2341,16 @@ def get_machine_principal_by_client_id(
     return _row_to_machine_principal(row) if row is not None else None
 
 
+def get_machine_principal_by_id(
+    db_path: str, principal_id: int
+) -> MachinePrincipalRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM machine_principals WHERE id = ?", (principal_id,)
+        ).fetchone()
+    return _row_to_machine_principal(row) if row is not None else None
+
+
 def list_machine_principals_for_workspace(
     db_path: str, workspace_id: int
 ) -> list[MachinePrincipalRecord]:
