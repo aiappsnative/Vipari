@@ -556,11 +556,50 @@ def list_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id
     return [_row_to_onboarding_baseline_version(row) for row in rows]
 
 
-def list_latest_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardingBaselineVersionRecord]:
+def list_onboarding_baseline_version_summaries_for_onboarding(
+    db_path: str,
+    onboarding_id: int,
+) -> list[OnboardingBaselineVersionRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                onboarding_id,
+                onboarded_artifact_id,
+                normalized_artifact_id,
+                artifact_path,
+                artifact_type,
+                version_hash,
+                line_count,
+                profile_json,
+                approval_status,
+                approved_by,
+                approved_at,
+                approval_note,
+                created_at
+            FROM onboarding_baseline_versions
+            WHERE onboarding_id = ?
+            ORDER BY artifact_path ASC, id ASC
+            """,
+            (onboarding_id,),
+        ).fetchall()
+    return [_row_to_onboarding_baseline_version(row) for row in rows]
+
+
+def select_latest_onboarding_baseline_versions(
+    baselines: list[OnboardingBaselineVersionRecord],
+) -> list[OnboardingBaselineVersionRecord]:
     latest_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
-    for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
+    for baseline in baselines:
         latest_by_path[baseline.artifact_path] = baseline
     return [latest_by_path[path] for path in sorted(latest_by_path)]
+
+
+def list_latest_onboarding_baseline_versions_for_onboarding(db_path: str, onboarding_id: int) -> list[OnboardingBaselineVersionRecord]:
+    return select_latest_onboarding_baseline_versions(
+        list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id)
+    )
 
 
 def select_effective_onboarding_baseline_versions(
@@ -593,8 +632,16 @@ def list_latest_approved_onboarding_baseline_versions_for_onboarding(
     db_path: str,
     onboarding_id: int,
 ) -> list[OnboardingBaselineVersionRecord]:
+    return select_latest_approved_onboarding_baseline_versions(
+        list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id)
+    )
+
+
+def select_latest_approved_onboarding_baseline_versions(
+    baselines: list[OnboardingBaselineVersionRecord],
+) -> list[OnboardingBaselineVersionRecord]:
     latest_approved_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
-    for baseline in list_onboarding_baseline_versions_for_onboarding(db_path, onboarding_id):
+    for baseline in baselines:
         if baseline.approval_status == "approved":
             latest_approved_by_path[baseline.artifact_path] = baseline
     return [latest_approved_by_path[path] for path in sorted(latest_approved_by_path)]
@@ -1365,9 +1412,9 @@ def _row_to_onboarding_baseline_version(row: sqlite3.Row) -> OnboardingBaselineV
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],
         version_hash=row["version_hash"],
-        signal_terms=json.loads(row["signal_terms_json"]),
+        signal_terms=json.loads(row["signal_terms_json"]) if "signal_terms_json" in row.keys() and row["signal_terms_json"] else [],
         line_count=row["line_count"],
-        content_text=row["content_text"],
+        content_text=row["content_text"] if "content_text" in row.keys() else None,
         profile=_profile_from_json(row["profile_json"]),
         approval_status=row["approval_status"] if "approval_status" in row.keys() else "pending",
         approved_by=row["approved_by"] if "approved_by" in row.keys() else None,

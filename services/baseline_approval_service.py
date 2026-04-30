@@ -68,6 +68,57 @@ class RepoBaselineReviewPanel:
     recent_decisions: list[BaselineReviewDecision]
 
 
+def build_repo_baseline_review_panel_from_records(
+    repo_full: str,
+    onboarding: RepositoryOnboardingRecord,
+    latest_baselines: list[OnboardingBaselineVersionRecord],
+    authoritative_artifact_count: int,
+    baseline_audit_logs: list[BaselineAuditLogRecord],
+) -> RepoBaselineReviewPanel:
+    artifacts = [
+        BaselineReviewArtifact(
+            artifact_path=baseline.artifact_path,
+            artifact_type=baseline.artifact_type,
+            approval_status=baseline.approval_status,
+            approval_note=baseline.approval_note,
+            approved_by=baseline.approved_by,
+            approved_at=baseline.approved_at,
+            profile=_profile_payload(baseline.profile),
+            line_count=baseline.line_count,
+            provenance_kind=artifact_provenance_label(baseline.artifact_type).kind,
+            provenance_label=artifact_provenance_label(baseline.artifact_type).label,
+        )
+        for baseline in latest_baselines
+    ]
+    approved_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "approved")
+    pending_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "pending")
+    rejected_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "rejected")
+    recent_decisions = [
+        BaselineReviewDecision(
+            action=log.action,
+            decision_type=log.decision_type,
+            actor_login=log.actor_login,
+            rationale=log.note,
+            artifact_path=log.artifact_path,
+            linked_findings=log.linked_findings,
+            created_at=log.created_at,
+        )
+        for log in reversed(baseline_audit_logs[-5:])
+    ]
+    return RepoBaselineReviewPanel(
+        repo_full=repo_full,
+        onboarding_status=onboarding.status,
+        is_pending_review=onboarding.status == "pending_baseline_approval",
+        artifact_count=len(latest_baselines),
+        authoritative_artifact_count=authoritative_artifact_count,
+        approved_count=approved_count,
+        pending_count=pending_count,
+        rejected_count=rejected_count,
+        artifacts=artifacts,
+        recent_decisions=recent_decisions,
+    )
+
+
 def _profile_payload(profile) -> dict[str, float]:
     return {
         "guardrail_robustness": profile.guardrail_robustness,
@@ -99,48 +150,13 @@ def build_repo_baseline_review_panel(db_path: str, repo_full: str) -> RepoBaseli
         return None
 
     latest_baselines = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    artifacts = [
-        BaselineReviewArtifact(
-            artifact_path=baseline.artifact_path,
-            artifact_type=baseline.artifact_type,
-            approval_status=baseline.approval_status,
-            approval_note=baseline.approval_note,
-            approved_by=baseline.approved_by,
-            approved_at=baseline.approved_at,
-            profile=_profile_payload(baseline.profile),
-            line_count=baseline.line_count,
-            provenance_kind=artifact_provenance_label(baseline.artifact_type).kind,
-            provenance_label=artifact_provenance_label(baseline.artifact_type).label,
-        )
-        for baseline in latest_baselines
-    ]
-    approved_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "approved")
-    pending_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "pending")
-    rejected_count = sum(1 for baseline in latest_baselines if baseline.approval_status == "rejected")
     authoritative_count = len(list_latest_approved_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id))
-    recent_decisions = [
-        BaselineReviewDecision(
-            action=log.action,
-            decision_type=log.decision_type,
-            actor_login=log.actor_login,
-            rationale=log.note,
-            artifact_path=log.artifact_path,
-            linked_findings=log.linked_findings,
-            created_at=log.created_at,
-        )
-        for log in reversed(list_baseline_audit_log_for_onboarding(db_path, onboarding.id)[-5:])
-    ]
-    return RepoBaselineReviewPanel(
+    return build_repo_baseline_review_panel_from_records(
         repo_full=repo_full,
-        onboarding_status=onboarding.status,
-        is_pending_review=onboarding.status == "pending_baseline_approval",
-        artifact_count=len(latest_baselines),
+        onboarding=onboarding,
+        latest_baselines=latest_baselines,
         authoritative_artifact_count=authoritative_count,
-        approved_count=approved_count,
-        pending_count=pending_count,
-        rejected_count=rejected_count,
-        artifacts=artifacts,
-        recent_decisions=recent_decisions,
+        baseline_audit_logs=list_baseline_audit_log_for_onboarding(db_path, onboarding.id),
     )
 
 

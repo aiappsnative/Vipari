@@ -18,7 +18,7 @@ from .baseline_provenance import (
     no_baseline_provenance,
     previous_pr_fallback_provenance,
 )
-from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel
+from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel_from_records
 
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
@@ -33,12 +33,15 @@ from .onboarding_records import (
     RepositoryOnboardingRecord,
     get_latest_baseline_snapshot_id_for_onboarding,
     get_latest_repository_onboarding,
-    list_effective_onboarding_baseline_versions_for_onboarding,
+    list_baseline_audit_log_for_onboarding,
+    list_onboarding_baseline_version_summaries_for_onboarding,
     list_historical_backfill_jobs_for_repo,
     list_latest_repository_onboardings,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
     select_effective_onboarding_baseline_versions,
+    select_latest_approved_onboarding_baseline_versions,
+    select_latest_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
 from .provenance_labels import artifact_provenance_label
@@ -1147,7 +1150,7 @@ def _build_repo_dashboard_view_uncached(
         return result
 
     onboarding = timed_stage("repo-onboarding", lambda: get_latest_repository_onboarding(db_path, repo_full))
-    baseline_review = timed_stage("repo-baseline-review", lambda: build_repo_baseline_review_panel(db_path, repo_full))
+    baseline_review = None
     drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
     top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
     pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
@@ -1202,12 +1205,27 @@ def _build_repo_dashboard_view_uncached(
         )
 
     artifacts = timed_stage("repo-onboarded-artifacts", lambda: list_onboarded_artifacts_for_onboarding(db_path, onboarding.id))
-    baseline_versions = timed_stage("repo-baseline-versions", lambda: list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id))
+    baseline_versions = timed_stage(
+        "repo-baseline-versions",
+        lambda: list_onboarding_baseline_version_summaries_for_onboarding(db_path, onboarding.id),
+    )
+    latest_baseline_versions = select_latest_onboarding_baseline_versions(baseline_versions)
+    latest_approved_baseline_versions = select_latest_approved_onboarding_baseline_versions(baseline_versions)
+    baseline_review = timed_stage(
+        "repo-baseline-review",
+        lambda: build_repo_baseline_review_panel_from_records(
+            repo_full=repo_full,
+            onboarding=onboarding,
+            latest_baselines=latest_baseline_versions,
+            authoritative_artifact_count=len(latest_approved_baseline_versions),
+            baseline_audit_logs=list_baseline_audit_log_for_onboarding(db_path, onboarding.id),
+        ),
+    )
     baseline_by_path = timed_stage(
         "repo-effective-baselines",
         lambda: {
             baseline.artifact_path: baseline
-            for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+            for baseline in select_effective_onboarding_baseline_versions(baseline_versions)
         },
     )
     jobs = timed_stage("repo-backfill-jobs", lambda: list_historical_backfill_jobs_for_repo(db_path, repo_full))

@@ -35,6 +35,7 @@ window.__artifactsCollapsed = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
+window.__pendingProposalsLoadToken = 0;
 
 function resolveRepoTab() {
     const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
@@ -682,7 +683,7 @@ function requestedArtifactPath() {
     return params.get("artifact") || "";
 }
 
-function applyRepoDetail(item) {
+function applyRepoDetail(item, options = {}) {
     const profile = findDesignProfile(item.artifact_path);
     const severity = severityForPriority(item.priority);
     const subtitle = [item.title, item.review_target, item.evidence_label].filter(Boolean).join(" · ") || item.artifact_path;
@@ -727,24 +728,28 @@ function applyRepoDetail(item) {
         };
     }
 
-    loadArtifactStoryline(item.artifact_path);
+    if (options.loadStoryline !== false) {
+        loadArtifactStoryline(item.artifact_path);
+    }
+}
+
+function activateRepoRow(row, items, options = {}) {
+    document.querySelectorAll(".triage-row").forEach((candidate) => {
+        candidate.classList.remove("selected");
+        candidate.removeAttribute("aria-current");
+    });
+    row.classList.add("selected");
+    row.setAttribute("aria-current", "true");
+    const index = Number(row.getAttribute("data-row-index"));
+    if (Number.isFinite(index) && items[index]) {
+        applyRepoDetail(items[index], options);
+    }
 }
 
 function bindRepoRows(items) {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     rows.forEach((row) => {
-        const activate = () => {
-            document.querySelectorAll(".triage-row").forEach((candidate) => {
-                candidate.classList.remove("selected");
-                candidate.removeAttribute("aria-current");
-            });
-            row.classList.add("selected");
-            row.setAttribute("aria-current", "true");
-            const index = Number(row.getAttribute("data-row-index"));
-            if (Number.isFinite(index) && items[index]) {
-                applyRepoDetail(items[index]);
-            }
-        };
+        const activate = () => activateRepoRow(row, items);
         row.addEventListener("click", activate);
         row.addEventListener("focus", activate);
         row.addEventListener("keydown", (event) => {
@@ -794,11 +799,11 @@ function autoSelectRepoRow(items, preferredArtifactPath = "") {
     if (preferredArtifactPath) {
         const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
         if (preferredIndex >= 0 && rows[preferredIndex]) {
-            rows[preferredIndex].click();
+            activateRepoRow(rows[preferredIndex], items);
             return;
         }
     }
-    rows[0].click();
+    activateRepoRow(rows[0], items, { loadStoryline: false });
 }
 
 function filteredRepoItems(items, filter) {
@@ -1424,6 +1429,17 @@ async function loadPendingProposals() {
     }
 }
 
+function schedulePendingProposalsLoad() {
+    const loadToken = ++window.__pendingProposalsLoadToken;
+    const run = () => {
+        if (loadToken !== window.__pendingProposalsLoadToken) {
+            return;
+        }
+        void loadPendingProposals();
+    };
+    window.setTimeout(run, 1200);
+}
+
 function applyDashboardPayload(payload) {
     const onboarding = payload.onboarding || null;
     const insights = asArray(payload.insights);
@@ -1435,6 +1451,7 @@ function applyDashboardPayload(payload) {
     const historyTimelines = asArray(payload.history_timelines);
     const journeySnapshots = asArray(payload.journey_snapshots);
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
+    const featuredStoryline = payload.featured_storyline || null;
     const preferredArtifactPath = requestedArtifactPath();
     const governanceAttention = renderGovernanceAttentionNote(onboarding, artifacts, baselineReview, journeySnapshots);
     window.__designProfiles = asArray(payload.design_profiles);
@@ -1453,7 +1470,12 @@ function applyDashboardPayload(payload) {
     bindRepoFilters(insights, preferredArtifactPath);
     autoSelectRepoRow(insights, preferredArtifactPath);
 
-    setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    if (featuredStoryline?.artifact_path) {
+        window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
+        setSectionHtml("featured-storyline", renderStoryline(featuredStoryline));
+    } else {
+        setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    }
     setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
     setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
     setSectionHtml("history-cues", renderCueCards(historyCues));
@@ -1473,7 +1495,7 @@ function applyDashboardPayload(payload) {
 
     renderDecisionSection(insights, payload);
     renderRepoActionsSection(insights);
-    void loadPendingProposals();
+    schedulePendingProposalsLoad();
 }
 
 async function submitRebaseline() {
