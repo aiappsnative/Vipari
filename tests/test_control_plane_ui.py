@@ -1083,12 +1083,21 @@ def test_github_auth_callback_applies_upgraded_role_for_existing_workspace_membe
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
+def test_help_page_renders_help_center_and_policies_stays_placeholder(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "placeholder-pages.db")
     main.init_db(main.AUDIT_DB_PATH)
 
-    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
 
     user, _identity = upsert_github_identity(
         main.AUDIT_DB_PATH,
@@ -1144,13 +1153,86 @@ def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
             "feature_flags_json": "{}",
         },
     )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9330,
+        account_id="9330",
+        account_login="placeholder-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9330,
+        repositories=[
+            {
+                "repo_github_id": "placeholder-org/repo-approved",
+                "repo_full": "placeholder-org/repo-approved",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "placeholder-org/repo-pending",
+                "repo_full": "placeholder-org/repo-pending",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="placeholder-org/repo-approved",
+        installation_id=9330,
+        default_branch="main",
+        status="baseline_approved",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Prompt file",
+                confidence=0.9,
+                baseline_content="Follow the approved flow.",
+            )
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="placeholder-org/repo-pending",
+        installation_id=9330,
+        default_branch="main",
+        status="pending_baseline_approval",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="config/model.json",
+                artifact_type="model_config",
+                discovery_reason="Model config",
+                confidence=0.8,
+                baseline_content='{"model": "gpt-4o"}',
+            )
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
 
     help_response = client.get("/app/help", cookies={main.settings.session_cookie_name: session.session_id})
     policies_response = client.get("/app/policies", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
-    assert "We are working on this" in help_response.text
+    assert "Help that gets operators unstuck" in help_response.text
+    assert "This workspace currently has 2 visible repos, 2 onboarded repos, and 1 approved baselines." in help_response.text
+    assert "Review pending baseline" in help_response.text
+    assert "placeholder-org/repo-pending" in help_response.text
+    assert "Use the platform in this order" in help_response.text
+    assert "Connected is not the same as onboarded" in help_response.text
+    assert "Submit a support ticket" in help_response.text
+    assert "Ticket submission coming soon" in help_response.text
     assert "We are working on this" in policies_response.text
     assert 'href="/app/compliance"' in help_response.text
     assert 'href="/app/compliance"' in policies_response.text

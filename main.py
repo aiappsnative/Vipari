@@ -61,6 +61,7 @@ from services.control_plane_frontend import (
     render_control_plane_admin_page,
     render_control_plane_billing_page,
     render_control_plane_compliance_page,
+    render_control_plane_help_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
@@ -2114,22 +2115,38 @@ async def compliance_page(request: Request):
 @app.get("/app/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     access_context = _current_workspace_context(request)
+    session = access_context.get("session")
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     user = access_context["user"]
     identity = access_context["identity"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    repo_rows = _workspace_repo_rows(workspace.id)
+    allocation_status_by_full = {
+        allocation.repo_full: allocation.allocation_status
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+    }
+    repo_summaries = list_repo_dashboard_index(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls={str(item["repo_full"]) for item in repo_rows},
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    export_jobs = (
+        list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
+        if session is not None
+        else []
+    )
     return HTMLResponse(
-        render_control_plane_placeholder_page(
-            page_title="Help",
-            page_kicker="Operator assistance",
-            page_copy="We are working on this page now. It will collect guided setup, troubleshooting, and operator playbooks for each workspace.",
+        render_control_plane_help_page(
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
-            active_nav="help",
+            repo_rows=repo_rows,
+            repo_summaries=repo_summaries,
+            export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
+            export_pending_count=sum(1 for job in export_jobs if job.status != "completed"),
         )
     )
 
