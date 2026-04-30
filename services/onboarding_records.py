@@ -1310,6 +1310,24 @@ def list_historical_static_profiles_for_repo_artifact(
     return [_row_to_historical_static_profile(row) for row in rows]
 
 
+def list_historical_static_profiles_for_repo(
+    db_path: str,
+    repo_full: str,
+) -> list[HistoricalStaticProfileRecord]:
+    normalized_id_prefix = f"{repo_full.lower()}::%"
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM historical_static_profiles
+            WHERE normalized_artifact_id LIKE ?
+            ORDER BY artifact_path ASC, created_at ASC, id ASC
+            """,
+            (normalized_id_prefix,),
+        ).fetchall()
+    return [_row_to_historical_static_profile(row) for row in rows]
+
+
 def _row_to_repository_onboarding(row: sqlite3.Row) -> RepositoryOnboardingRecord:
     return RepositoryOnboardingRecord(
         id=row["id"],

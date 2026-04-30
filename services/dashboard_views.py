@@ -1101,28 +1101,72 @@ def build_repo_dashboard_view(
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view)
 
 
+def build_repo_dashboard_view_with_timings(
+    db_path: str,
+    repo_full: str,
+    *,
+    include_journey: bool = True,
+    include_detail_sections: bool = True,
+) -> tuple[RepoDashboardView, list[tuple[str, float]]]:
+    cache_key = (
+        "repo",
+        db_path,
+        _db_cache_signature(db_path),
+        repo_full,
+        include_journey,
+        include_detail_sections,
+    )
+    cached = _cache_get(_REPO_VIEW_CACHE, cache_key)
+    if cached is not None:
+        return cached, [("repo-cache-hit", 0.0)]
+
+    stage_timings: list[tuple[str, float]] = []
+    view = _build_repo_dashboard_view_uncached(
+        db_path,
+        repo_full,
+        include_journey=include_journey,
+        include_detail_sections=include_detail_sections,
+        stage_timings=stage_timings,
+    )
+    return _cache_set(_REPO_VIEW_CACHE, cache_key, view), stage_timings
+
+
 def _build_repo_dashboard_view_uncached(
     db_path: str,
     repo_full: str,
     *,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    stage_timings: list[tuple[str, float]] | None = None,
 ) -> RepoDashboardView:
-    onboarding = get_latest_repository_onboarding(db_path, repo_full)
-    baseline_review = build_repo_baseline_review_panel(db_path, repo_full)
-    drift_summary = get_repo_static_drift_summary(db_path, repo_full)
-    top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
-    pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
+    def timed_stage(stage_name: str, factory):
+        started_at = time.perf_counter()
+        result = factory()
+        if stage_timings is not None:
+            stage_timings.append((stage_name, (time.perf_counter() - started_at) * 1000.0))
+        return result
+
+    onboarding = timed_stage("repo-onboarding", lambda: get_latest_repository_onboarding(db_path, repo_full))
+    baseline_review = timed_stage("repo-baseline-review", lambda: build_repo_baseline_review_panel(db_path, repo_full))
+    drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
+    top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
+    pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
     if onboarding is not None:
-        selected_baseline_source_snapshot_id = get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id)
+        selected_baseline_source_snapshot_id = timed_stage(
+            "repo-selected-baseline",
+            lambda: get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
+        )
     if include_journey:
-        journey_snapshots, journey_comparison = _build_repo_journey_panel(
-            db_path,
-            repo_full,
-            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+        journey_snapshots, journey_comparison = timed_stage(
+            "repo-journey-panel",
+            lambda: _build_repo_journey_panel(
+                db_path,
+                repo_full,
+                selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+            ),
         )
 
     if onboarding is None:
@@ -1157,87 +1201,112 @@ def _build_repo_dashboard_view_uncached(
             export_jobs=[],
         )
 
-    artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
-    baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {
-        baseline.artifact_path: baseline
-        for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    }
-    jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
+    artifacts = timed_stage("repo-onboarded-artifacts", lambda: list_onboarded_artifacts_for_onboarding(db_path, onboarding.id))
+    baseline_versions = timed_stage("repo-baseline-versions", lambda: list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id))
+    baseline_by_path = timed_stage(
+        "repo-effective-baselines",
+        lambda: {
+            baseline.artifact_path: baseline
+            for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+        },
+    )
+    jobs = timed_stage("repo-backfill-jobs", lambda: list_historical_backfill_jobs_for_repo(db_path, repo_full))
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
-    metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
-    profile_context_by_path = _load_repo_artifact_profile_contexts(db_path, repo_full)
+    metrics_by_path = timed_stage("repo-artifact-metrics", lambda: _load_repo_artifact_metrics(db_path, repo_full))
+    profile_context_by_path = timed_stage(
+        "repo-profile-contexts",
+        lambda: _load_repo_artifact_profile_contexts(db_path, repo_full),
+    )
 
     artifact_entries: list[RepoDashboardArtifactEntry] = []
     total_historical_versions = sum(metrics["historical_version_count"] for metrics in metrics_by_path.values())
     total_historical_profiles = sum(metrics["historical_profile_count"] for metrics in metrics_by_path.values())
 
-    for artifact in artifacts:
-        baseline = baseline_by_path.get(artifact.artifact_path)
-        provenance = artifact_provenance_label(artifact.artifact_type)
-        metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
-        leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
+    def build_artifact_entries() -> list[RepoDashboardArtifactEntry]:
+        built_entries: list[RepoDashboardArtifactEntry] = []
+        for artifact in artifacts:
+            baseline = baseline_by_path.get(artifact.artifact_path)
+            provenance = artifact_provenance_label(artifact.artifact_type)
+            metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
+            leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
 
-        artifact_entries.append(
-            RepoDashboardArtifactEntry(
-                artifact_path=artifact.artifact_path,
-                artifact_type=artifact.artifact_type,
-                discovery_reason=artifact.discovery_reason,
-                discovery_confidence=artifact.confidence,
-                baseline_line_count=baseline.line_count if baseline is not None else 0,
-                historical_version_count=metrics["historical_version_count"],
-                historical_profile_count=metrics["historical_profile_count"],
-                latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
-                latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
-                latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
-                latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
-                latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
-                latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
-                pr_profile_count=metrics["pr_profile_count"],
-                latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
-                latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
-                latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
-                latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
-                latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
-                leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
-                latest_activity_at=metrics["latest_activity_at"],
-                provenance_kind=provenance.kind,
-                provenance_label=provenance.label,
+            built_entries.append(
+                RepoDashboardArtifactEntry(
+                    artifact_path=artifact.artifact_path,
+                    artifact_type=artifact.artifact_type,
+                    discovery_reason=artifact.discovery_reason,
+                    discovery_confidence=artifact.confidence,
+                    baseline_line_count=baseline.line_count if baseline is not None else 0,
+                    historical_version_count=metrics["historical_version_count"],
+                    historical_profile_count=metrics["historical_profile_count"],
+                    latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
+                    latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
+                    latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
+                    latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
+                    latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
+                    latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
+                    pr_profile_count=metrics["pr_profile_count"],
+                    latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
+                    latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
+                    latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
+                    latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
+                    latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
+                    leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
+                    latest_activity_at=metrics["latest_activity_at"],
+                    provenance_kind=provenance.kind,
+                    provenance_label=provenance.label,
+                )
+            )
+        built_entries.sort(
+            key=lambda entry: (
+                priority_sort_rank(priority_from_fused_signals(_insight_score(entry, profile_context_by_path.get(entry.artifact_path)))),
+                -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
+                -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
+                entry.artifact_path,
             )
         )
+        return built_entries
 
-    artifact_entries.sort(
-        key=lambda entry: (
-            priority_sort_rank(priority_from_fused_signals(_insight_score(entry, profile_context_by_path.get(entry.artifact_path)))),
-            -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
-            -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
-            entry.artifact_path,
-        )
-    )
+    artifact_entries = timed_stage("repo-artifact-entries", build_artifact_entries)
 
-    insights, lower_confidence_insights = _build_repo_insights(
-        artifact_entries,
-        baseline_by_path,
-        profile_context_by_path,
-        attribute_profile_mode=("all" if include_detail_sections else "ranked"),
+    insights, lower_confidence_insights = timed_stage(
+        "repo-insights",
+        lambda: _build_repo_insights(
+            artifact_entries,
+            baseline_by_path,
+            profile_context_by_path,
+            attribute_profile_mode=("all" if include_detail_sections else "ranked"),
+        ),
     )
-    control_surface_groups = _build_control_surface_groups(artifact_entries)
+    control_surface_groups = timed_stage("repo-control-surfaces", lambda: _build_control_surface_groups(artifact_entries))
     history_timelines: list[RepoArtifactHistoryTimeline] = []
     featured_storyline: RepoArtifactStoryline | None = None
     history_cues: list[RepoHistoryCue] = []
     design_profiles: list[RepoArtifactDesignProfile] = []
     if include_detail_sections:
-        history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
-        featured_storyline = _build_featured_storyline(
-            db_path,
-            repo_full,
-            artifact_entries,
-            insights,
-            baseline_by_path,
-            profile_context_by_path,
+        history_timelines = timed_stage(
+            "repo-history-timelines",
+            lambda: _build_repo_history_timelines(db_path, repo_full, artifact_entries),
         )
-        history_cues = _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path)
-        design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
+        featured_storyline = timed_stage(
+            "repo-featured-storyline",
+            lambda: _build_featured_storyline(
+                db_path,
+                repo_full,
+                artifact_entries,
+                insights,
+                baseline_by_path,
+                profile_context_by_path,
+            ),
+        )
+        history_cues = timed_stage(
+            "repo-history-cues",
+            lambda: _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path),
+        )
+        design_profiles = timed_stage(
+            "repo-design-profiles",
+            lambda: _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path),
+        )
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -1277,9 +1346,11 @@ def _build_repo_journey_panel(
     *,
     selected_baseline_source_snapshot_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    from .repo_journey import build_repo_journey, compare_repo_snapshots, snapshot_to_public_payload
+    from .repo_journey import _compare_snapshot_records, build_repo_journey, snapshot_to_public_payload
 
-    snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
+    snapshot_records = build_repo_journey(db_path, repo_full)
+    snapshots = [snapshot_to_public_payload(snapshot) for snapshot in snapshot_records]
+    snapshot_record_by_id = {snapshot.id: snapshot for snapshot in snapshot_records}
     baseline_snapshot = None
     if selected_baseline_source_snapshot_id is not None:
         baseline_snapshot = next(
@@ -1293,7 +1364,10 @@ def _build_repo_journey_panel(
         current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
     comparison = None
     if baseline_snapshot is not None and current_snapshot is not None:
-        comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
+        baseline_record = snapshot_record_by_id.get(int(baseline_snapshot["id"]))
+        current_record = snapshot_record_by_id.get(int(current_snapshot["id"]))
+        if baseline_record is not None and current_record is not None:
+            comparison = asdict(_compare_snapshot_records(repo_full, baseline_record, current_record))
     return snapshots, comparison
 
 

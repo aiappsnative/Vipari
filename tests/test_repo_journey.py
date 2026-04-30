@@ -203,6 +203,25 @@ def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):
     assert "capability_expanded" in comparison.change_labels
 
 
+def test_build_repo_journey_reuses_current_persisted_snapshots(tmp_path):
+    db_path = str(tmp_path / "journey-persisted-cache.db")
+    init_db(db_path)
+    _seed_repo_history(db_path)
+
+    build_repo_journey(db_path, "doria90/dummyAI")
+    persisted_snapshots = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
+    assert persisted_snapshots
+    assert all(snapshot.materializer_version == 2 for snapshot in persisted_snapshots)
+
+    with patch(
+        "services.repo_journey.list_onboarded_artifacts_for_onboarding",
+        side_effect=AssertionError("should reuse persisted snapshots"),
+    ):
+        snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+
+    assert [snapshot.id for snapshot in snapshots] == [snapshot.id for snapshot in persisted_snapshots]
+
+
 def test_repo_journey_snapshots_do_not_collide_across_repositories(tmp_path):
     db_path = str(tmp_path / "journey-multi-repo.db")
     init_db(db_path)

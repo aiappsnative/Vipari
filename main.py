@@ -142,7 +142,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -3118,8 +3118,9 @@ def repo_dashboard(request: Request, repo_full: str):
     access_context = _require_repo_dashboard_read_access(request, repo_full)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     build_started = time.perf_counter()
-    repo_view = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings(AUDIT_DB_PATH, repo_full)
     _record_server_timing_metric(timing_metrics, "build", build_started)
+    timing_metrics.extend(repo_stage_timings)
     json_started = time.perf_counter()
     payload = asdict(repo_view)
     workspace = access_context.get("workspace")
