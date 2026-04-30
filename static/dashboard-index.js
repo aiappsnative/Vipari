@@ -1298,6 +1298,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         const highestRiskItems = asArray(payload.highest_risk_items);
         const attentionRepos = asArray(payload.attention_repos);
         const repos = asArray(payload.repos);
+        const navRepos = asArray(payload.nav_repos).length ? asArray(payload.nav_repos) : repos;
         const sections = overviewSections(payload);
         const groupedUrgentRepos = sections.urgent_queue && Array.isArray(sections.urgent_queue.repos)
             ? asArray(sections.urgent_queue.repos)
@@ -1329,10 +1330,10 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         try {
             const auditListEl = document.getElementById("audit-logs-list");
             if (auditListEl) {
-                if (repos.length === 0) {
+                if (navRepos.length === 0) {
                     setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
                 } else {
-                    const items = repos.map((r) => `
+                    const items = navRepos.map((r) => `
                         <a class="sidebar-subitem" href="${repoDetailUrl(r)}">${escapeHtml(r.repo_full)}</a>
                     `).join("");
                     setSectionHtml("audit-logs-list", `<nav class=\"sidebar-sublist-nav\">${items}</nav>`);

@@ -1625,7 +1625,8 @@ async function loadAvailableRepos() {
             throw new Error(`Overview request failed with ${response.status}`);
         }
         const payload = await response.json();
-        populateAuditRepoLists(asArray(payload.repos));
+        const navRepos = asArray(payload.nav_repos).length ? asArray(payload.nav_repos) : asArray(payload.repos);
+        populateAuditRepoLists(navRepos);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repository inventory error";
         const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;

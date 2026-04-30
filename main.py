@@ -3007,7 +3007,7 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     active_range = range.strip().lower() if range else "7d"
     if active_range not in {"24h", "7d", "30d"}:
         active_range = "7d"
-    overview_view = filter_dashboard_overview_view(
+    filtered_overview_view = filter_dashboard_overview_view(
         overview_view,
         active_filter,
         overview_range=active_range,
@@ -3015,11 +3015,9 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    response = JSONResponse(
-        asdict(
-            overview_view
-        )
-    )
+    payload = asdict(filtered_overview_view)
+    payload["nav_repos"] = [asdict(repo) for repo in overview_view.repos]
+    response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
