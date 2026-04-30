@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     app_env: Literal["local", "test", "production"] = "local"
     service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
     app_base_url: str = "http://127.0.0.1:8000"
+    local_debug_disable_login: bool = False
     api_port: int = Field(default=8002, validation_alias=AliasChoices("API_PORT", "PORT"))
     webhook_port: int = Field(default=8001, validation_alias=AliasChoices("WEBHOOK_PORT", "PORT"))
     session_cookie_name: str = "promptdrift_session"

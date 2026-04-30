@@ -151,7 +151,7 @@ from services.github_integration import fetch_commit_pair_diff, fetch_file_conte
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
-from services.persistence import get_persistence_status, persistence_status_payload
+from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
@@ -380,12 +380,46 @@ def _dashboard_redirect_for_request(request: Request):
     session = _get_session(request)
     if not _control_plane_active():
         return None, session
+    if session is None and _local_debug_dashboard_enabled() and _local_debug_workspace_context() is not None:
+        return None, None
     if session is None:
         return RedirectResponse("/login", status_code=303), None
     access_context = _build_access_context(session)
     if not access_context["resolution"].can_access_dashboard:
         return RedirectResponse("/app", status_code=303), session
     return None, session
+
+
+def _local_debug_dashboard_enabled() -> bool:
+    return settings.app_env == "local" and bool(settings.local_debug_disable_login)
+
+
+def _local_debug_workspace_context() -> dict[str, object] | None:
+    if not _local_debug_dashboard_enabled():
+        return None
+    try:
+        with connect_sqlite(AUDIT_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT id FROM workspaces ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, int(row["id"]))
+    if workspace is None:
+        return None
+    return {
+        "session": None,
+        "user": None,
+        "identity": None,
+        "membership": None,
+        "subscription": get_workspace_subscription(AUDIT_DB_PATH, workspace.id),
+        "entitlement": get_workspace_entitlement(AUDIT_DB_PATH, workspace.id),
+        "installation": get_workspace_installation(AUDIT_DB_PATH, workspace.id),
+        "workspace": workspace,
+        "resolution": None,
+    }
 
 
 def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
@@ -670,6 +704,9 @@ def _github_oauth_callback_url(request: Request) -> str:
 def _current_workspace_context(request: Request) -> dict[str, object]:
     session = _get_session(request)
     if session is None:
+        debug_context = _local_debug_workspace_context()
+        if debug_context is not None:
+            return debug_context
         raise HTTPException(status_code=401, detail="Authentication required.")
     access_context = _build_access_context(session)
     if access_context["workspace"] is None:
@@ -692,6 +729,8 @@ def _require_dashboard_access(request: Request) -> dict[str, object]:
     if not _control_plane_active():
         return {}
     access_context = _current_workspace_context(request)
+    if access_context.get("session") is None and _local_debug_dashboard_enabled():
+        return access_context
     if not access_context["resolution"].can_access_dashboard:
         raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
     return access_context

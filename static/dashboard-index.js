@@ -295,14 +295,6 @@ function clearPreviewTimer(button) {
     }
 }
 
-function primeRepoDashboardCache(items) {
-    items.slice(0, 4).forEach((repo, index) => {
-        window.setTimeout(() => {
-            void fetchRepoDashboard(repo.repo_full).catch(() => null);
-        }, 40 * (index + 1));
-    });
-}
-
 function journeyNodesFromRepoPayload(repo, repoPayload) {
     const snapshots = asArray(repoPayload?.journey_snapshots);
     const selectedBaselineSourceSnapshotId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
@@ -1355,7 +1347,6 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             if (urgentIndex >= 0) {
                 selectUrgentRow(urgentIndex);
             }
-            primeRepoDashboardCache(selectionItems.slice(0, 4));
             try {
                 const firstPayload = preferredRepoPayload && selectedRepo.repo_full === preferredRepoFull
                     ? preferredRepoPayload

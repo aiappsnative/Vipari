@@ -1620,13 +1620,12 @@ function populateAuditRepoLists(repos = []) {
 
 async function loadAvailableRepos() {
     try {
-        const response = await fetch("/api/dashboard/overview");
+        const response = await fetch("/api/repos");
         if (!response.ok) {
-            throw new Error(`Overview request failed with ${response.status}`);
+            throw new Error(`Repo inventory request failed with ${response.status}`);
         }
         const payload = await response.json();
-        const navRepos = asArray(payload.nav_repos).length ? asArray(payload.nav_repos) : asArray(payload.repos);
-        populateAuditRepoLists(navRepos);
+        populateAuditRepoLists(asArray(payload.repos));
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repository inventory error";
         const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;
@@ -1646,7 +1645,6 @@ async function loadDashboard() {
 
         const payload = await dashboardResponse.json();
         applyDashboardPayload(payload);
-        loadExportHistory();
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
@@ -1676,7 +1674,6 @@ async function loadDashboard() {
         if (button) {
             button.disabled = true;
         }
-        loadExportHistory();  // Load export history even on error
     }
 }
 
