@@ -142,7 +142,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -2891,7 +2891,7 @@ async def base44_billing_handoff(request: Request):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_index_page(request: Request):
+async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2901,14 +2901,26 @@ async def dashboard_index_page(request: Request):
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
         return _attach_server_timing(redirect, timing_metrics)
     render_started = time.perf_counter()
-    response = HTMLResponse(render_dashboard_index_page(_current_theme_preference(request)))
+    active_range = range.strip().lower() if range else "7d"
+    if active_range not in {"24h", "7d", "30d"}:
+        active_range = "7d"
+    active_filter = filter.strip().lower() if filter else "all"
+    if active_filter not in {"all", "critical", "mine"}:
+        active_filter = "all"
+    response = HTMLResponse(
+        render_dashboard_index_page(
+            _current_theme_preference(request),
+            active_range=active_range,
+            active_filter=active_filter,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "render", render_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
-async def dashboard_repo_page(request: Request, repo_full: str):
+async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2918,7 +2930,16 @@ async def dashboard_repo_page(request: Request, repo_full: str):
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
         return _attach_server_timing(redirect, timing_metrics)
     render_started = time.perf_counter()
-    response = HTMLResponse(render_repo_dashboard_page(repo_full, _current_theme_preference(request)))
+    active_tab = tab.strip().lower() if tab else "drift"
+    if active_tab not in {"drift", "baseline", "compliance", "reports"}:
+        active_tab = "drift"
+    response = HTMLResponse(
+        render_repo_dashboard_page(
+            repo_full,
+            theme_preference=_current_theme_preference(request),
+            active_tab=active_tab,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "render", render_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
@@ -2954,7 +2975,7 @@ async def list_repos(request: Request):
 
 
 @app.get("/api/dashboard/overview")
-def dashboard_overview(request: Request):
+def dashboard_overview(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2969,6 +2990,28 @@ def dashboard_overview(request: Request):
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         repo_scope_by_full=visibility["repo_scope_by_full"],
         allocation_status_by_full=visibility["allocation_status_by_full"],
+    )
+    active_filter = filter.strip().lower() if filter else "all"
+    if active_filter not in {"all", "critical", "mine"}:
+        active_filter = "all"
+    owned_repo_fulls: set[str] | None = None
+    if active_filter == "mine" and access_context:
+        workspace = access_context.get("workspace")
+        session = access_context.get("session")
+        if workspace is not None and session is not None:
+            owned_repo_fulls = {
+                allocation.repo_full
+                for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+                if allocation.activated_by_user_id == session.user_id
+            }
+    active_range = range.strip().lower() if range else "7d"
+    if active_range not in {"24h", "7d", "30d"}:
+        active_range = "7d"
+    overview_view = filter_dashboard_overview_view(
+        overview_view,
+        active_filter,
+        overview_range=active_range,
+        allowed_repo_fulls=owned_repo_fulls,
     )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()

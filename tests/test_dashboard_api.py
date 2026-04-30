@@ -133,6 +133,10 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
     assert overview_payload["repos"][0]["historical_version_count"] >= 1
+    assert overview_payload["overview_sections"]["urgent_queue"]["repo_count"] >= 1
+    assert overview_payload["overview_sections"]["urgent_queue"]["repos"][0]["repo_full"] == "doria90/dummyAI"
+    assert overview_payload["overview_sections"]["recent_changes"]["repo_count"] >= 1
+    assert overview_payload["overview_sections"]["posture_snapshot"]["risk_state"]["headline"]
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -213,6 +217,113 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
     assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
+
+
+def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-overview-critical.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_BASELINE, "sha-2": PROMPT_CURRENT}[ref],
+    )
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-two",
+        installation_id=2,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/dashboard/overview?filter=critical")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
+    assert [repo["repo_full"] for repo in payload["attention_repos"]] == ["doria90/dummyAI"]
+    assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
+    assert payload["overview_sections"]["urgent_queue"]["watch_count"] == 0
+
+
+def test_dashboard_overview_api_range_24h_limits_recent_activity(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-overview-range.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_BASELINE, "sha-2": PROMPT_CURRENT}[ref],
+    )
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/repo-two",
+        installation_id=2,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["agents/worker.py"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
+    )
+
+    stale_timestamp = time.time() - (45 * 86400)
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            "UPDATE repository_onboardings SET updated_at = ? WHERE repo_full = ?",
+            (stale_timestamp, "doria90/repo-two"),
+        )
+        conn.commit()
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/dashboard/overview?range=24h")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
+    assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
+    assert payload["risk_state"]["review_now_repo_count"] >= 1
 
 
 def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
@@ -953,6 +1064,164 @@ def test_dashboard_api_filters_overview_to_allocated_workspace_repos(tmp_path):
     assert index_response.json()["repos"][1]["dashboard_scope"] == "connected_history"
     assert unallocated_repo_response.status_code == 200
     assert mutation_response.status_code == 404
+
+
+def test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator(tmp_path):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        init_control_plane_db,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_repo_allocation_status,
+    )
+
+    db_path = str(tmp_path / "api-dashboard-overview-mine.db")
+    init_db(db_path)
+    init_control_plane_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+
+    primary_user, _primary_identity = upsert_github_identity(
+        db_path,
+        github_user_id="101",
+        github_login="primary-user",
+        display_name="Primary User",
+        primary_email="primary@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-primary-token",
+    )
+    secondary_user, _secondary_identity = upsert_github_identity(
+        db_path,
+        github_user_id="202",
+        github_login="secondary-user",
+        display_name="Secondary User",
+        primary_email="secondary@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-secondary-token",
+    )
+
+    workspace = create_workspace(
+        db_path,
+        slug="mine-filter-workspace",
+        display_name="Mine Filter Workspace",
+        billing_owner_user_id=primary_user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id="mine-filter-session",
+        user_id=primary_user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_mine_filter",
+        stripe_price_id="price_mine_filter",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="promptdrift-org",
+        account_type="Organization",
+        target_type="Organization",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repositories=[
+            {
+                "repo_github_id": "dummyAI",
+                "repo_full": "doria90/dummyAI",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "openfang",
+                "repo_full": "doria90/openfang",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+
+    for repo_full in ["doria90/dummyAI", "doria90/openfang"]:
+        onboard_repository(
+            db_path,
+            repo_full=repo_full,
+            installation_id=123,
+            token="token",
+            get_default_branch_fn=lambda repo, token: "main",
+            list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+            fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_CURRENT if repo == "doria90/dummyAI" else PROMPT_BASELINE,
+        )
+
+    primary_allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=primary_user.id,
+    )
+    update_repo_allocation_status(db_path, primary_allocation.id, "onboarded")
+    secondary_allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="openfang",
+        repo_full="doria90/openfang",
+        baseline_mode="onboarding",
+        activated_by_user_id=secondary_user.id,
+    )
+    update_repo_allocation_status(db_path, secondary_allocation.id, "onboarded")
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/overview?filter=mine",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
+    assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
+    assert payload["overview_sections"]["urgent_queue"]["repo_count"] >= 1
 
 
 def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):

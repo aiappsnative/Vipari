@@ -886,6 +886,10 @@ function buildSelectionItems(repos, attentionRepos, highestRiskItems) {
     });
 }
 
+function overviewSections(payload) {
+    return payload && typeof payload === "object" ? (payload.overview_sections || {}) : {};
+}
+
 async function previewRepoSelection(repo, repos, rowIndex = null) {
     previewState.pinnedRepoFull = repo.repo_full;
     previewState.pendingRepoFull = repo.repo_full;
@@ -1279,7 +1283,13 @@ async function loadEscalationQueue() {
 
 async function loadOverview(preferredRepoFull = null, preferredRepoPayload = null) {
     try {
-        const response = await fetch("/api/dashboard/overview");
+        const page = document.body;
+        const url = new URL("/api/dashboard/overview", window.location.origin);
+        const activeOverviewRange = page?.dataset?.activeOverviewRange || "7d";
+        const activeOverviewFilter = page?.dataset?.activeOverviewFilter || "all";
+        url.searchParams.set("range", activeOverviewRange);
+        url.searchParams.set("filter", activeOverviewFilter);
+        const response = await fetch(`${url.pathname}${url.search}`);
         if (!response.ok) {
             throw new Error(`Overview request failed with ${response.status}`);
         }
@@ -1288,9 +1298,16 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         const highestRiskItems = asArray(payload.highest_risk_items);
         const attentionRepos = asArray(payload.attention_repos);
         const repos = asArray(payload.repos);
-        const selectionItems = buildSelectionItems(repos, attentionRepos, highestRiskItems);
-        const visibleSelectionItems = selectionItems.slice(0, 4);
-        const repoAtlasItems = selectionItems;
+        const sections = overviewSections(payload);
+        const groupedUrgentRepos = sections.urgent_queue && Array.isArray(sections.urgent_queue.repos)
+            ? asArray(sections.urgent_queue.repos)
+            : null;
+        const groupedRecentRepos = sections.recent_changes && Array.isArray(sections.recent_changes.repos)
+            ? asArray(sections.recent_changes.repos)
+            : null;
+        const selectionItems = groupedRecentRepos || buildSelectionItems(repos, attentionRepos, highestRiskItems);
+        const visibleSelectionItems = groupedUrgentRepos || selectionItems.slice(0, 4);
+        const repoAtlasItems = groupedRecentRepos || selectionItems;
 
         populateOverviewStats(payload, attentionRepos, highestRiskItems, repos);
         setSectionHtml(

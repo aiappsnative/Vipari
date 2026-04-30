@@ -23,6 +23,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
+const VALID_REPO_TABS = new Set(["drift", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -34,6 +35,20 @@ window.__artifactsCollapsed = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
+
+function resolveRepoTab() {
+    const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
+    if (metaTab && VALID_REPO_TABS.has(metaTab)) {
+        return metaTab;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = (params.get("tab") || "").trim().toLowerCase();
+    return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "drift";
+}
+
+const activeRepoTab = resolveRepoTab();
+window.__activeRepoTab = activeRepoTab;
 
 const ATTRIBUTE_PROFILE_TAB_CONFIG = [
     { key: "guardrail_regressions", label: "Guardrail regressions", dimensionKeys: ["guardrail_robustness"] },
@@ -79,6 +94,30 @@ function bindSidebarNavigation() {
             target.scrollIntoView({ behavior: "smooth", block: "start" });
             window.history.replaceState(null, "", `#${targetId}`);
         });
+    });
+}
+
+function applyRepoTabVisibility() {
+    document.body.dataset.activeRepoTab = activeRepoTab;
+
+    document.querySelectorAll("[data-repo-tab-panel]").forEach((element) => {
+        const supportedTabs = String(element.getAttribute("data-repo-tab-panel") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+        element.hidden = supportedTabs.length > 0 && !supportedTabs.includes(activeRepoTab);
+    });
+
+    document.querySelectorAll("[data-repo-tab-child]").forEach((element) => {
+        element.hidden = element.getAttribute("data-repo-tab-child") !== activeRepoTab;
+    });
+
+    document.querySelectorAll("[data-repo-tab-link]").forEach((element) => {
+        const tab = element.getAttribute("data-repo-tab-link") || "";
+        if (tab === activeRepoTab) {
+            element.setAttribute("aria-current", "page");
+            return;
+        }
+        element.removeAttribute("aria-current");
     });
 }
 
@@ -1641,6 +1680,7 @@ async function loadDashboard() {
 }
 
 bindSidebarNavigation();
+applyRepoTabVisibility();
 bindRebaselineModal();
 bindExportForm();
 loadAvailableRepos();

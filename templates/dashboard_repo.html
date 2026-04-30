@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{REPO_FULL}} · Audit Page · DriftGuard</title>
     <meta name="driftguard-repo-full" content="{{REPO_FULL}}" />
+    <meta name="driftguard-active-repo-tab" content="{{ACTIVE_REPO_TAB}}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -12,7 +13,7 @@
     <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-repo.js"></script>
 </head>
-<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}">
+<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}" data-active-repo-tab="{{ACTIVE_REPO_TAB}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
@@ -92,16 +93,14 @@
                 </div>
             </section>
             <main class="page-scroll" id="top">
-                <section class="repo-audit-anchor-bar" aria-label="Audit sections">
-                    <a class="repo-audit-anchor" href="#repo-decision-section">Decision</a>
-                    <a class="repo-audit-anchor" href="#repo-triage-section">Audit Queue</a>
-                    <a class="repo-audit-anchor" href="#repo-storyline-section">Drift Storyline</a>
-                    <a class="repo-audit-anchor" href="#repo-evidence-section">Evidence</a>
-                    <a class="repo-audit-anchor" href="#repo-actions-section">Actions</a>
-                    <a class="repo-audit-anchor" href="#repo-artifacts-section">Artifacts</a>
+                <section class="repo-audit-anchor-bar" aria-label="Repository tabs">
+                    <a class="repo-audit-anchor" data-repo-tab-link="drift" href="{{REPO_TAB_DRIFT_URL}}">Drift</a>
+                    <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Baseline &amp; artifacts</a>
+                    <a class="repo-audit-anchor" data-repo-tab-link="compliance" href="{{REPO_TAB_COMPLIANCE_URL}}">Compliance</a>
+                    <a class="repo-audit-anchor" data-repo-tab-link="reports" href="{{REPO_TAB_REPORTS_URL}}">Reports</a>
                 </section>
 
-                <section class="repo-decision-section card-shell" id="repo-decision-section" aria-label="Decision summary">
+                <section class="repo-decision-section card-shell repo-tab-panel" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="drift">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Decision</span>
@@ -134,7 +133,7 @@
                     </div>
                 </section>
 
-                <section class="main-columns" id="repo-triage-section">
+                <section class="main-columns repo-tab-panel" id="repo-triage-section" data-repo-tab-panel="drift">
                     <section class="triage-column">
                         <div class="triage-header card-shell">
                             <span class="triage-title">Audit Queue</span>
@@ -205,7 +204,7 @@
                     </aside>
                 </section>
 
-                <section class="secondary-row">
+                <section class="secondary-row repo-tab-panel" data-repo-tab-panel="drift">
                     <div class="secondary-panel" id="repo-storyline-section">
                         <div class="secondary-panel-title">Drift storyline</div>
                         <div id="featured-storyline" class="loading-shell" aria-busy="true">
@@ -254,7 +253,7 @@
                     </div>
                 </section>
 
-                <section class="secondary-grid" id="repo-evidence-section">
+                <section class="secondary-grid repo-tab-panel" id="repo-evidence-section" data-repo-tab-panel="compliance">
                     <div class="secondary-panel" id="repo-ai-act-section">
                         <div class="secondary-panel-title">EU AI Act relevance</div>
                         <div id="repo-ai-act-assessment" class="loading-shell" aria-busy="true">
@@ -304,8 +303,8 @@
                     </div>
                 </section>
 
-                <section class="secondary-grid repo-actions-grid" id="repo-actions-section">
-                    <div class="secondary-panel repo-actions-panel">
+                <section class="secondary-grid repo-actions-grid repo-tab-panel" id="repo-actions-section" data-repo-tab-panel="baseline reports">
+                    <div class="secondary-panel repo-actions-panel" data-repo-tab-child="baseline">
                         <div class="secondary-panel-title">Review target</div>
                         <div id="repo-actions-review" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading recommended review target...</span>
@@ -315,7 +314,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel" id="repo-baseline-review-section">
+                    <div class="secondary-panel" id="repo-baseline-review-section" data-repo-tab-child="baseline">
                         <div class="secondary-panel-title">Baseline Review</div>
                         <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading baseline review state...</span>
@@ -328,7 +327,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel repo-actions-panel" id="repo-export-section">
+                    <div class="secondary-panel repo-actions-panel" id="repo-export-section" data-repo-tab-child="reports">
                         <div class="secondary-panel-title">Compliance export</div>
                         <form id="export-form" class="export-form">
                             <div class="export-form-group">
@@ -405,7 +404,7 @@
                     </div>
                 </section>
 
-                <section class="repos-section" id="repo-artifacts-section">
+                <section class="repos-section repo-tab-panel" id="repo-artifacts-section" data-repo-tab-panel="baseline">
                     <div class="repos-header">
                         <span class="repos-title">Artifact Registry</span>
                         <div class="artifacts-header-actions">

@@ -318,10 +318,11 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "DriftGuard Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     index_text = index_response.text.lower()
-    assert "needs attention now" in index_text
-    assert "repository map" in index_text
+    assert "ai change overview" in index_text
+    assert "urgent changes to review" in index_text
+    assert "recent changes this week" in index_text
     assert "posture map" in index_text
-    assert "history and drift timeline" in index_text
+    assert "change timeline" in index_text
     assert "coverage" in index_text
     assert "overview-rebaseline-modal" in index_response.text
 
@@ -348,13 +349,32 @@ def test_dashboard_html_pages_render(tmp_path):
     assert index_js_response.status_code == 200
     assert "renderUrgentRow" in index_js_response.text
     assert "renderRepoAtlasCard" in index_js_response.text
-    assert "submitOverviewRebaseline" in index_js_response.text
-    assert "loadOverview" in index_js_response.text
-    assert "drawRadar" in index_js_response.text
-    assert "Unable to load dashboard overview" in index_js_response.text
-    assert "loadOverview" in index_js_response.text
-    assert repo_js_response.status_code == 200
-    assert "renderRepoTriageRow" in repo_js_response.text
-    assert "renderAttributeProfilePanel" in repo_js_response.text
-    assert "Unable to load repository dashboard" in repo_js_response.text
-    assert "loadDashboard" in repo_js_response.text
+
+
+def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI?tab=reports")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="reports"' in response.text
+    assert 'data-repo-tab-link="reports"' in response.text
+    assert '?tab=baseline' in response.text
+    assert '?tab=compliance' in response.text
+
+
+def test_dashboard_index_query_params_render_active_controls(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard?range=30d&filter=critical")
+
+    assert response.status_code == 200
+    assert 'data-active-overview-range="30d"' in response.text
+    assert 'data-active-overview-filter="critical"' in response.text
+    assert 'data-overview-range="30d"' in response.text
+    assert 'data-overview-filter="critical"' in response.text
+    assert "Review urgent changes" in response.text

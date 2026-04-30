@@ -655,8 +655,10 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     dashboard_html = render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'data-theme="light"' in dashboard_html
     assert 'class="dashboard-index-page"' in dashboard_html
-    assert "Needs attention now" in dashboard_html
-    assert "History and drift timeline" in dashboard_html
+    assert "AI Change Overview" in dashboard_html
+    assert "Urgent changes to review" in dashboard_html
+    assert "Recent changes this week" in dashboard_html
+    assert "Change timeline" in dashboard_html
     assert "Posture map" in dashboard_html
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
@@ -665,7 +667,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
     assert 'class="journey-stage loading-shell"' in dashboard_html
-    assert dashboard_html.index("Repository map") < dashboard_html.index("Needs attention now")
+    assert dashboard_html.index("Urgent changes to review") < dashboard_html.index("Recent changes this week")
 
     repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'class="repo-audit-page"' in repo_dashboard_html
@@ -2350,7 +2352,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert dashboard_response.status_code == 200
-    assert "Needs attention now" in dashboard_response.text
+    assert "Urgent changes to review" in dashboard_response.text
     assert "Posture map" in dashboard_response.text
     assert 'href="/app/repos"' in dashboard_response.text
 
