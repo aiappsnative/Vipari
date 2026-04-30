@@ -25,6 +25,7 @@ from .control_plane_records import (
     create_machine_principal,
     count_machine_principals_for_workspace,
     get_machine_principal_by_client_id,
+    get_machine_principal_by_id,
     get_repo_allocation_for_workspace,
     get_workspace_by_id,
     get_workspace_entitlement,
@@ -33,7 +34,7 @@ from .control_plane_records import (
     revoke_machine_principal,
 )
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
+from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .internal_auth import (
     ALL_SCOPES,
@@ -266,6 +267,54 @@ def create_api_app() -> FastAPI:
     def dashboard_overview(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_dashboard_overview_view(db_path)))
+
+    @app.get("/api/dashboard/escalation-queue")
+    def dashboard_escalation_queue(request: Request, include_watch: bool = False):
+        _require_admin_token(request, settings)
+        result = build_workspace_escalation_queue(db_path, include_watch=include_watch)
+        return JSONResponse(result)
+
+    @app.get("/api/repos/{repo_full:path}/proposals/pending")
+    def list_pending_proposals_for_repo(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
+        from .proposals_records import list_pending_baseline_proposals_for_repo
+        from .onboarding_records import list_onboarded_artifacts_for_onboarding, get_latest_repository_onboarding
+        from .internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
+        proposals = list_pending_baseline_proposals_for_repo(db_path, repo_full)
+        if not proposals:
+            return JSONResponse({"proposals": [], "pending_count": 0})
+        # Build a map from artifact_id to artifact_path via onboarding records
+        onboarding = get_latest_repository_onboarding(db_path, repo_full)
+        artifact_path_by_id: dict[int, str] = {}
+        if onboarding:
+            for artifact in list_onboarded_artifacts_for_onboarding(db_path, onboarding.id):
+                artifact_path_by_id[artifact.id] = artifact.artifact_path
+        principals_cache: dict[int, object | None] = {}
+        proposals_out: list[dict] = []
+        for proposal in proposals:
+            if proposal.proposer_principal_id not in principals_cache:
+                principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
+                    db_path,
+                    proposal.proposer_principal_id,
+                )
+            proposer = principals_cache.get(proposal.proposer_principal_id)
+            is_agent = (
+                proposer is not None
+                and getattr(proposer, "principal_kind", None) == PRINCIPAL_KIND_SERVICE_ACCOUNT
+            )
+            proposals_out.append({
+                "proposal_id": proposal.id,
+                "artifact_id": proposal.artifact_id,
+                "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
+                "status": proposal.status,
+                "rationale": proposal.rationale,
+                "proposer_principal_id": proposal.proposer_principal_id,
+                "is_agent_proposal": is_agent,
+                "created_at": proposal.created_at,
+                "expires_at": proposal.expires_at,
+            })
+        proposals_out.sort(key=lambda p: p["created_at"])
+        return JSONResponse({"proposals": proposals_out, "pending_count": len(proposals_out)})
 
     @app.get("/api/persistence")
     def persistence_status(request: Request):

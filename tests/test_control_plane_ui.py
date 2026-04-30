@@ -655,8 +655,10 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     dashboard_html = render_dashboard_index_page(get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'data-theme="light"' in dashboard_html
     assert 'class="dashboard-index-page"' in dashboard_html
-    assert "Needs attention now" in dashboard_html
-    assert "History and drift timeline" in dashboard_html
+    assert "AI Change Overview" in dashboard_html
+    assert "Urgent changes to review" in dashboard_html
+    assert "Recent changes this week" in dashboard_html
+    assert "Change timeline" in dashboard_html
     assert "Posture map" in dashboard_html
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
@@ -665,7 +667,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
     assert 'class="journey-stage loading-shell"' in dashboard_html
-    assert dashboard_html.index("Repository map") < dashboard_html.index("Needs attention now")
+    assert dashboard_html.index("Urgent changes to review") < dashboard_html.index("Recent changes this week")
 
     repo_dashboard_html = render_repo_dashboard_page("doria90/hermes-agent", get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference)
     assert 'class="repo-audit-page"' in repo_dashboard_html
@@ -1081,12 +1083,21 @@ def test_github_auth_callback_applies_upgraded_role_for_existing_workspace_membe
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
+def test_help_page_renders_help_center_and_policies_stays_placeholder(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "placeholder-pages.db")
     main.init_db(main.AUDIT_DB_PATH)
 
-    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
 
     user, _identity = upsert_github_identity(
         main.AUDIT_DB_PATH,
@@ -1142,13 +1153,86 @@ def test_help_and_policies_pages_render_tbd_placeholders(tmp_path):
             "feature_flags_json": "{}",
         },
     )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9330,
+        account_id="9330",
+        account_login="placeholder-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9330,
+        repositories=[
+            {
+                "repo_github_id": "placeholder-org/repo-approved",
+                "repo_full": "placeholder-org/repo-approved",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "placeholder-org/repo-pending",
+                "repo_full": "placeholder-org/repo-pending",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="placeholder-org/repo-approved",
+        installation_id=9330,
+        default_branch="main",
+        status="baseline_approved",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Prompt file",
+                confidence=0.9,
+                baseline_content="Follow the approved flow.",
+            )
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    record_repository_onboarding(
+        main.AUDIT_DB_PATH,
+        repo_full="placeholder-org/repo-pending",
+        installation_id=9330,
+        default_branch="main",
+        status="pending_baseline_approval",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="config/model.json",
+                artifact_type="model_config",
+                discovery_reason="Model config",
+                confidence=0.8,
+                baseline_content='{"model": "gpt-4o"}',
+            )
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
 
     help_response = client.get("/app/help", cookies={main.settings.session_cookie_name: session.session_id})
     policies_response = client.get("/app/policies", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
-    assert "We are working on this" in help_response.text
+    assert "Help that gets operators unstuck" in help_response.text
+    assert "This workspace currently has 2 visible repos, 2 onboarded repos, and 1 approved baselines." in help_response.text
+    assert "Review pending baseline" in help_response.text
+    assert "placeholder-org/repo-pending" in help_response.text
+    assert "Use the platform in this order" in help_response.text
+    assert "Connected is not the same as onboarded" in help_response.text
+    assert "Submit a support ticket" in help_response.text
+    assert "Ticket submission coming soon" in help_response.text
     assert "We are working on this" in policies_response.text
     assert 'href="/app/compliance"' in help_response.text
     assert 'href="/app/compliance"' in policies_response.text
@@ -2158,6 +2242,49 @@ def test_dashboard_requires_session_when_local_env_uses_non_local_base_url(tmp_p
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_dashboard_local_debug_disable_login_uses_first_workspace_without_session(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = str(tmp_path / "dashboard-local-debug.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "local"
+    main.settings.app_base_url = "http://127.0.0.1:8011"
+    main.settings.local_debug_disable_login = True
+
+    from services.control_plane_records import create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="702",
+        github_login="debug-owner",
+        display_name="Debug Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="debug-workspace",
+        display_name="Debug Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    with TestClient(main.app) as local_client:
+        dashboard_response = local_client.get("/dashboard", follow_redirects=False)
+        overview_response = local_client.get("/api/dashboard/overview")
+
+    assert dashboard_response.status_code == 200
+    assert overview_response.status_code == 200
+
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+    main.settings.app_base_url = original_app_base_url
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_persistence_api_requires_dashboard_access_when_control_plane_is_active(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "persistence-guard.db")
@@ -2350,7 +2477,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert dashboard_response.status_code == 200
-    assert "Needs attention now" in dashboard_response.text
+    assert "Urgent changes to review" in dashboard_response.text
     assert "Posture map" in dashboard_response.text
     assert 'href="/app/repos"' in dashboard_response.text
 

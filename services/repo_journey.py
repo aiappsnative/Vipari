@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .audit_records import list_pull_request_audits_for_repo, list_static_profiles_for_repo_artifact
+from .audit_records import list_pull_request_audits_for_repo, list_static_profiles_for_repo
 from .baseline_provenance import BaselineProvenance, approved_onboarding_provenance
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     get_latest_repository_onboarding,
     list_effective_onboarding_baseline_versions_for_onboarding,
-    list_historical_static_profiles_for_repo_artifact,
+    list_historical_static_profiles_for_repo,
     list_latest_approved_onboarding_baseline_versions_for_onboarding,
     list_latest_onboarding_baseline_versions_for_onboarding,
     list_onboarded_artifacts_for_onboarding,
@@ -82,6 +82,13 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     if onboarding is None:
         delete_repo_posture_snapshots_not_in_keys(db_path, repo_full, set())
         return []
+    persisted_snapshots = list_repo_posture_snapshots_for_repo(db_path, repo_full)
+    latest_snapshot_update = max((snapshot.updated_at for snapshot in persisted_snapshots), default=0.0)
+    latest_source_update = _latest_repo_journey_source_timestamp(db_path, repo_full, onboarding.id, onboarding.updated_at)
+    if persisted_snapshots and all(
+        snapshot.materializer_version == REPO_JOURNEY_MATERIALIZER_VERSION for snapshot in persisted_snapshots
+    ) and latest_snapshot_update >= latest_source_update:
+        return persisted_snapshots
 
     onboarded_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
@@ -95,6 +102,12 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         for audit in list_pull_request_audits_for_repo(db_path, repo_full)
         if audit.pr_merged and audit.status == "completed"
     }
+    historical_profiles_by_path: dict[str, list[Any]] = {}
+    for profile in list_historical_static_profiles_for_repo(db_path, repo_full):
+        historical_profiles_by_path.setdefault(profile.artifact_path, []).append(profile)
+    static_profiles_by_path: dict[str, list[Any]] = {}
+    for profile in list_static_profiles_for_repo(db_path, repo_full):
+        static_profiles_by_path.setdefault(profile.artifact_path, []).append(profile)
 
     artifact_types_by_path = {artifact.artifact_path: artifact.artifact_type for artifact in onboarded_artifacts}
     with connect_sqlite(db_path) as conn:
@@ -181,7 +194,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
 
     events_by_key: dict[str, dict[str, Any]] = {}
     for artifact_path, artifact_type in sorted(artifact_types_by_path.items()):
-        for profile in list_historical_static_profiles_for_repo_artifact(db_path, repo_full, artifact_path):
+        for profile in historical_profiles_by_path.get(artifact_path, []):
             key = _repo_snapshot_key(repo_full, f"historical:{profile.commit_sha}")
             bucket = events_by_key.setdefault(
                 key,
@@ -220,7 +233,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 )
             )
 
-        for profile in list_static_profiles_for_repo_artifact(db_path, repo_full, artifact_path):
+        for profile in static_profiles_by_path.get(artifact_path, []):
             audit = merged_audits.get(profile.audit_id)
             if audit is None:
                 continue
@@ -363,6 +376,39 @@ def build_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSnapshot
     return materialize_repo_journey(db_path, repo_full)
 
 
+def _latest_repo_journey_source_timestamp(
+    db_path: str,
+    repo_full: str,
+    onboarding_id: int,
+    onboarding_updated_at: float,
+) -> float:
+    normalized_id_prefix = f"{repo_full.lower()}::%"
+    latest_source_update = float(onboarding_updated_at)
+    with connect_sqlite(db_path) as conn:
+        baseline_row = conn.execute(
+            "SELECT MAX(created_at) AS max_created_at FROM onboarding_baseline_versions WHERE onboarding_id = ?",
+            (onboarding_id,),
+        ).fetchone()
+        historical_row = conn.execute(
+            "SELECT MAX(created_at) AS max_created_at FROM historical_static_profiles WHERE normalized_artifact_id LIKE ?",
+            (normalized_id_prefix,),
+        ).fetchone()
+        pr_row = conn.execute(
+            """
+            SELECT MAX(sap.created_at) AS max_created_at
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            """,
+            (repo_full,),
+        ).fetchone()
+    for row in (baseline_row, historical_row, pr_row):
+        if row is None or row["max_created_at"] is None:
+            continue
+        latest_source_update = max(latest_source_update, float(row["max_created_at"]))
+    return latest_source_update
+
+
 def get_repo_snapshot_detail(db_path: str, repo_full: str, snapshot_id: int) -> RepoPostureSnapshotRecord | None:
     snapshots = materialize_repo_journey(db_path, repo_full)
     for snapshot in snapshots:
@@ -378,6 +424,14 @@ def compare_repo_snapshots(db_path: str, repo_full: str, left_snapshot_id: int, 
     right = snapshot_by_id.get(right_snapshot_id)
     if left is None or right is None:
         raise ValueError("One or both repo posture snapshots could not be found.")
+    return _compare_snapshot_records(repo_full, left, right)
+
+
+def _compare_snapshot_records(
+    repo_full: str,
+    left: RepoPostureSnapshotRecord,
+    right: RepoPostureSnapshotRecord,
+) -> RepoJourneyComparison:
     if left.repo_full != right.repo_full:
         raise ValueError("Repo posture snapshots belong to different repositories.")
 

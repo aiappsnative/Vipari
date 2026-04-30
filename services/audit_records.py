@@ -975,6 +975,21 @@ def list_static_profiles_for_repo_artifact(db_path: str, repo_full: str, artifac
     return [_row_to_static_artifact_profile(row) for row in rows]
 
 
+def list_static_profiles_for_repo(db_path: str, repo_full: str) -> list[StaticArtifactProfileRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT sap.*
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.artifact_path ASC, sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+    return [_row_to_static_artifact_profile(row) for row in rows]
+
+
 def get_latest_static_profile_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> Optional[StaticArtifactProfileRecord]:
     normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
     with _connect(db_path) as conn:

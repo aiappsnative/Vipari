@@ -5,7 +5,8 @@ import json
 import os
 import sqlite3
 import threading
-from dataclasses import asdict, dataclass, replace
+import time
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
@@ -17,7 +18,7 @@ from .baseline_provenance import (
     no_baseline_provenance,
     previous_pr_fallback_provenance,
 )
-from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel
+from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_baseline_review_panel_from_records
 
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
@@ -32,12 +33,15 @@ from .onboarding_records import (
     RepositoryOnboardingRecord,
     get_latest_baseline_snapshot_id_for_onboarding,
     get_latest_repository_onboarding,
-    list_effective_onboarding_baseline_versions_for_onboarding,
+    list_baseline_audit_log_for_onboarding,
+    list_onboarding_baseline_version_summaries_for_onboarding,
     list_historical_backfill_jobs_for_repo,
     list_latest_repository_onboardings,
     list_onboarded_artifacts_for_onboarding,
     list_onboarding_baseline_versions_for_onboarding,
     select_effective_onboarding_baseline_versions,
+    select_latest_approved_onboarding_baseline_versions,
+    select_latest_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
 from .provenance_labels import artifact_provenance_label
@@ -153,6 +157,7 @@ class DashboardOverviewAttentionRepo:
     top_drift_magnitude: float
     avg_semantic_distance: float
     discovered_artifact_count: int
+    highest_updated_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +220,68 @@ class DashboardOverviewRegressionEntry:
 
 
 @dataclass(frozen=True)
+class DashboardOverviewRepoCard:
+    repo_full: str
+    default_branch: str
+    onboarding_status: str
+    discovered_artifact_count: int
+    last_onboarded_at: float
+    historical_version_count: int = 0
+    dashboard_scope: str = "allocated"
+    allocation_status: str | None = None
+    highest_priority: str = "baseline_review"
+    highest_insight_title: str | None = None
+    highest_insight_artifact_path: str | None = None
+    highest_evidence_label: str | None = None
+    highest_evidence_summary: str | None = None
+    highest_change_summary: str | None = None
+    highest_flag_summary: str | None = None
+    highest_rationale: str | None = None
+    highest_recommended_action: str | None = None
+    highest_baseline_label: str | None = None
+    highest_review_target: str | None = None
+    highest_review_url: str | None = None
+    insight_count: int = 0
+    lower_confidence_count: int = 0
+    review_now_count: int = 0
+    watch_count: int = 0
+    baseline_review_count: int = 0
+    top_drift_magnitude: float = 0.0
+    avg_semantic_distance: float = 0.0
+    recent_activity_at: float = 0.0
+    matched_risk_item: DashboardOverviewRegressionEntry | None = None
+
+
+@dataclass(frozen=True)
+class DashboardOverviewUrgentQueueSection:
+    repos: list[DashboardOverviewRepoCard] = field(default_factory=list)
+    repo_count: int = 0
+    review_now_count: int = 0
+    watch_count: int = 0
+
+
+@dataclass(frozen=True)
+class DashboardOverviewRecentChangesSection:
+    repos: list[DashboardOverviewRepoCard] = field(default_factory=list)
+    repo_count: int = 0
+
+
+@dataclass(frozen=True)
+class DashboardOverviewPostureSnapshotSection:
+    metrics: list[DashboardOverviewMetric] = field(default_factory=list)
+    risk_state: DashboardOverviewRiskState | None = None
+    control_surface_coverage: list[DashboardOverviewControlSurface] = field(default_factory=list)
+    control_surface_risk: list[DashboardOverviewRiskDistribution] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DashboardOverviewSections:
+    urgent_queue: DashboardOverviewUrgentQueueSection = field(default_factory=DashboardOverviewUrgentQueueSection)
+    recent_changes: DashboardOverviewRecentChangesSection = field(default_factory=DashboardOverviewRecentChangesSection)
+    posture_snapshot: DashboardOverviewPostureSnapshotSection = field(default_factory=DashboardOverviewPostureSnapshotSection)
+
+
+@dataclass(frozen=True)
 class DashboardOverviewView:
     risk_state: DashboardOverviewRiskState
     metrics: list[DashboardOverviewMetric]
@@ -224,6 +291,7 @@ class DashboardOverviewView:
     attention_repos: list[DashboardOverviewAttentionRepo]
     control_surface_coverage: list[DashboardOverviewControlSurface]
     repos: list[RepoDashboardIndexEntry]
+    overview_sections: DashboardOverviewSections = field(default_factory=DashboardOverviewSections)
 
 
 @dataclass(frozen=True)
@@ -459,6 +527,165 @@ class RepoDashboardView:
     export_jobs: list[dict[str, Any]] = None
 
 
+# ---------------------------------------------------------------------------
+# Escalation queue — workspace-wide flat ranked list
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EscalationQueueItem:
+    """A single item in the workspace escalation queue."""
+    repo_full: str
+    artifact_path: str
+    artifact_type: str
+    priority: str          # "review_now" | "watch"
+    score: float
+    title: str
+    rationale: str
+    recommended_action: str
+    evidence_label: str
+    provenance_summary: str
+    baseline_label: str
+    review_target: str | None
+    review_url: str | None
+    attribute_deltas: list[dict[str, Any]]  # top-2 changed dimensions
+    updated_at: float | None
+
+
+def build_workspace_escalation_queue(
+    db_path: str,
+    allowed_repo_fulls: set[str] | None = None,
+    *,
+    include_watch: bool = False,
+) -> dict[str, Any]:
+    """Return a ranked flat list of escalation items across all repos.
+
+    Returns a dict with:
+        workspace_posture: "risk" | "watch" | "healthy"
+        workspace_posture_reasons: list[str]  – top-3 deduplicated risk reasons
+        escalation_count: int  – review_now items
+        watch_count: int       – watch-priority items
+        items: list[EscalationQueueItem as dict]
+    """
+    repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
+    items: list[EscalationQueueItem] = []
+    for repo_entry in repos:
+        view = build_repo_dashboard_view(
+            db_path,
+            repo_entry.repo_full,
+            include_journey=False,
+            include_detail_sections=True,
+        )
+        for insight in (view.insights or []):
+            if insight.priority == "review_now" or (include_watch and insight.priority == "watch"):
+                # Collect top-2 changed attribute dimensions
+                deltas: list[dict[str, Any]] = []
+                for dim in (insight.attribute_profile or []):
+                    if dim.state not in ("no_change", "unknown") and len(deltas) < 2:
+                        deltas.append({
+                            "attribute_key": dim.attribute_key,
+                            "label": dim.label,
+                            "baseline_value": dim.baseline_value,
+                            "current_value": dim.current_value,
+                            "direction": dim.direction,
+                            "delta": dim.delta,
+                        })
+                items.append(EscalationQueueItem(
+                    repo_full=repo_entry.repo_full,
+                    artifact_path=insight.artifact_path,
+                    artifact_type=insight.artifact_type,
+                    priority=insight.priority,
+                    score=insight.score,
+                    title=insight.title,
+                    rationale=insight.rationale,
+                    recommended_action=insight.recommended_action,
+                    evidence_label=insight.evidence_label,
+                    provenance_summary=insight.provenance_summary,
+                    baseline_label=insight.baseline_label,
+                    review_target=insight.review_target,
+                    review_url=insight.review_url,
+                    attribute_deltas=deltas,
+                    updated_at=insight.updated_at,
+                ))
+
+    # Sort: review_now before watch, then by score descending within each tier
+    def _sort_key(item: EscalationQueueItem) -> tuple[int, float]:
+        tier = 0 if item.priority == "review_now" else 1
+        return (tier, -item.score)
+
+    items.sort(key=_sort_key)
+
+    review_now_items = [i for i in items if i.priority == "review_now"]
+    watch_items = [i for i in items if i.priority == "watch"]
+    escalation_count = len(review_now_items)
+    watch_count = len(watch_items)
+
+    # Workspace posture
+    if any(i.score > 2.0 for i in review_now_items):
+        workspace_posture = "risk"
+    elif review_now_items:
+        workspace_posture = "watch"
+    elif watch_items:
+        workspace_posture = "watch"
+    else:
+        workspace_posture = "healthy"
+
+    # Top-3 deduplicated reasons from the highest-scoring review_now items
+    seen_reasons: set[str] = set()
+    workspace_posture_reasons: list[str] = []
+    # Collect risk_reasons from top-scoring review_now insights
+    for item in items:
+        if item.priority != "review_now":
+            break
+        # Re-fetch the insight's risk_reasons from the view (already cached)
+        view = build_repo_dashboard_view(
+            db_path,
+            item.repo_full,
+            include_journey=False,
+            include_detail_sections=True,
+        )
+        for insight in (view.insights or []):
+            if insight.artifact_path == item.artifact_path and insight.priority == "review_now":
+                for reason in (insight.risk_reasons or []):
+                    if reason not in seen_reasons:
+                        seen_reasons.add(reason)
+                        workspace_posture_reasons.append(reason)
+                break
+        if len(workspace_posture_reasons) >= 3:
+            break
+
+    return {
+        "workspace_posture": workspace_posture,
+        "workspace_posture_reasons": workspace_posture_reasons[:3],
+        "escalation_count": escalation_count,
+        "watch_count": watch_count,
+        "items": [
+            {
+                "repo_full": item.repo_full,
+                "artifact_path": item.artifact_path,
+                "artifact_type": item.artifact_type,
+                "priority": item.priority,
+                "score": item.score,
+                "title": item.title,
+                "rationale": item.rationale,
+                "recommended_action": item.recommended_action,
+                "evidence_label": item.evidence_label,
+                "provenance_summary": item.provenance_summary,
+                "baseline_label": item.baseline_label,
+                "review_target": item.review_target,
+                "review_url": item.review_url,
+                "attribute_deltas": item.attribute_deltas,
+                "updated_at": item.updated_at,
+            }
+            for item in items
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Repo index
+# ---------------------------------------------------------------------------
+
+
 def list_repo_dashboard_index(
     db_path: str,
     allowed_repo_fulls: set[str] | None = None,
@@ -509,6 +736,179 @@ def build_dashboard_overview_view(
     return _cache_set(_OVERVIEW_VIEW_CACHE, cache_key, view)
 
 
+def filter_dashboard_overview_view(
+    view: DashboardOverviewView,
+    overview_filter: str | None,
+    *,
+    overview_range: str | None = None,
+    now: float | None = None,
+    allowed_repo_fulls: set[str] | None = None,
+) -> DashboardOverviewView:
+    filtered_view = view
+    if allowed_repo_fulls is not None:
+        filtered_view = _filter_dashboard_overview_view_by_repo_fulls(filtered_view, allowed_repo_fulls)
+    normalized_range = str(overview_range or "7d").strip().lower()
+    if normalized_range in {"24h", "7d", "30d"}:
+        filtered_view = _filter_dashboard_overview_view_by_range(filtered_view, normalized_range, now=now)
+
+    normalized_filter = str(overview_filter or "all").strip().lower()
+    if normalized_filter != "critical":
+        return filtered_view
+
+    filtered_repos = [repo for repo in filtered_view.repos if repo.repo_full in {item.repo_full for item in filtered_view.highest_risk_items}]
+    filtered_attention_repos = [repo for repo in filtered_view.attention_repos if repo.highest_priority == "review_now"]
+    filtered_risk_items = [item for item in filtered_view.highest_risk_items if item.priority == "review_now"]
+    filtered_recent_cards = [repo for repo in filtered_view.overview_sections.recent_changes.repos if repo.highest_priority == "review_now"]
+
+    return replace(
+        filtered_view,
+        repos=filtered_repos,
+        attention_repos=filtered_attention_repos,
+        highest_risk_items=filtered_risk_items,
+        overview_sections=replace(
+            filtered_view.overview_sections,
+            urgent_queue=replace(
+                filtered_view.overview_sections.urgent_queue,
+                repos=[repo for repo in filtered_view.overview_sections.urgent_queue.repos if repo.highest_priority == "review_now"],
+                repo_count=sum(1 for repo in filtered_view.overview_sections.urgent_queue.repos if repo.highest_priority == "review_now"),
+                review_now_count=sum(1 for repo in filtered_view.overview_sections.urgent_queue.repos if repo.highest_priority == "review_now"),
+                watch_count=0,
+            ),
+            recent_changes=replace(
+                filtered_view.overview_sections.recent_changes,
+                repos=filtered_recent_cards,
+                repo_count=len(filtered_recent_cards),
+            ),
+        ),
+    )
+
+
+def _filter_dashboard_overview_view_by_range(
+    view: DashboardOverviewView,
+    overview_range: str,
+    *,
+    now: float | None = None,
+) -> DashboardOverviewView:
+    cutoff = _dashboard_overview_range_cutoff(overview_range, now=now)
+    if cutoff is None:
+        return view
+
+    recent_repo_fulls = {
+        repo.repo_full
+        for repo in view.overview_sections.recent_changes.repos
+        if _dashboard_overview_repo_activity_at(repo) >= cutoff
+    }
+    filtered_repos = [repo for repo in view.repos if repo.repo_full in recent_repo_fulls]
+    filtered_attention_repos = [repo for repo in view.attention_repos if repo.repo_full in recent_repo_fulls]
+    filtered_risk_items = [item for item in view.highest_risk_items if item.repo_full in recent_repo_fulls]
+    filtered_recent_cards = [repo for repo in view.overview_sections.recent_changes.repos if repo.repo_full in recent_repo_fulls]
+    filtered_urgent_cards = [repo for repo in view.overview_sections.urgent_queue.repos if repo.repo_full in recent_repo_fulls]
+
+    filtered_risk_state = replace(
+        view.risk_state,
+        review_now_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "review_now"),
+        watch_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "watch"),
+        baseline_review_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "baseline_review"),
+        highest_risk_repo_full=(filtered_risk_items[0].repo_full if filtered_risk_items else None),
+        highest_risk_artifact_path=(filtered_risk_items[0].artifact_path if filtered_risk_items else None),
+        highest_risk_title=(filtered_risk_items[0].title if filtered_risk_items else None),
+        highest_drift_magnitude=max((item.drift_magnitude for item in filtered_risk_items), default=0.0),
+    )
+
+    return replace(
+        view,
+        risk_state=filtered_risk_state,
+        repos=filtered_repos,
+        attention_repos=filtered_attention_repos,
+        highest_risk_items=filtered_risk_items,
+        overview_sections=replace(
+            view.overview_sections,
+            urgent_queue=replace(
+                view.overview_sections.urgent_queue,
+                repos=filtered_urgent_cards,
+                repo_count=len(filtered_urgent_cards),
+                review_now_count=sum(1 for repo in filtered_urgent_cards if repo.highest_priority == "review_now"),
+                watch_count=sum(1 for repo in filtered_urgent_cards if repo.highest_priority == "watch"),
+            ),
+            recent_changes=replace(
+                view.overview_sections.recent_changes,
+                repos=filtered_recent_cards,
+                repo_count=len(filtered_recent_cards),
+            ),
+            posture_snapshot=replace(
+                view.overview_sections.posture_snapshot,
+                risk_state=filtered_risk_state,
+            ),
+        ),
+    )
+
+
+def _filter_dashboard_overview_view_by_repo_fulls(
+    view: DashboardOverviewView,
+    allowed_repo_fulls: set[str],
+) -> DashboardOverviewView:
+    normalized_repo_fulls = {str(repo_full) for repo_full in allowed_repo_fulls}
+    filtered_repos = [repo for repo in view.repos if repo.repo_full in normalized_repo_fulls]
+    filtered_attention_repos = [repo for repo in view.attention_repos if repo.repo_full in normalized_repo_fulls]
+    filtered_risk_items = [item for item in view.highest_risk_items if item.repo_full in normalized_repo_fulls]
+    filtered_recent_cards = [repo for repo in view.overview_sections.recent_changes.repos if repo.repo_full in normalized_repo_fulls]
+    filtered_urgent_cards = [repo for repo in view.overview_sections.urgent_queue.repos if repo.repo_full in normalized_repo_fulls]
+
+    filtered_risk_state = replace(
+        view.risk_state,
+        review_now_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "review_now"),
+        watch_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "watch"),
+        baseline_review_repo_count=sum(1 for repo in filtered_attention_repos if repo.highest_priority == "baseline_review"),
+        highest_risk_repo_full=(filtered_risk_items[0].repo_full if filtered_risk_items else None),
+        highest_risk_artifact_path=(filtered_risk_items[0].artifact_path if filtered_risk_items else None),
+        highest_risk_title=(filtered_risk_items[0].title if filtered_risk_items else None),
+        highest_drift_magnitude=max((item.drift_magnitude for item in filtered_risk_items), default=0.0),
+    )
+
+    return replace(
+        view,
+        risk_state=filtered_risk_state,
+        repos=filtered_repos,
+        attention_repos=filtered_attention_repos,
+        highest_risk_items=filtered_risk_items,
+        overview_sections=replace(
+            view.overview_sections,
+            urgent_queue=replace(
+                view.overview_sections.urgent_queue,
+                repos=filtered_urgent_cards,
+                repo_count=len(filtered_urgent_cards),
+                review_now_count=sum(1 for repo in filtered_urgent_cards if repo.highest_priority == "review_now"),
+                watch_count=sum(1 for repo in filtered_urgent_cards if repo.highest_priority == "watch"),
+            ),
+            recent_changes=replace(
+                view.overview_sections.recent_changes,
+                repos=filtered_recent_cards,
+                repo_count=len(filtered_recent_cards),
+            ),
+            posture_snapshot=replace(
+                view.overview_sections.posture_snapshot,
+                risk_state=filtered_risk_state,
+            ),
+        ),
+    )
+
+
+def _dashboard_overview_range_cutoff(overview_range: str, *, now: float | None = None) -> float | None:
+    normalized_range = str(overview_range or "7d").strip().lower()
+    now_timestamp = time.time() if now is None else float(now)
+    if normalized_range == "24h":
+        return now_timestamp - 86400.0
+    if normalized_range == "7d":
+        return now_timestamp - (7 * 86400.0)
+    if normalized_range == "30d":
+        return now_timestamp - (30 * 86400.0)
+    return None
+
+
+def _dashboard_overview_repo_activity_at(repo: DashboardOverviewRepoCard) -> float:
+    return max(float(repo.recent_activity_at or 0.0), float(repo.last_onboarded_at or 0.0))
+
+
 def _build_dashboard_overview_view_uncached(
     db_path: str,
     allowed_repo_fulls: set[str] | None = None,
@@ -548,6 +948,7 @@ def _build_dashboard_overview_view_uncached(
     regression_patterns = _build_overview_regression_patterns(repo_views)
     highest_risk_items = _build_overview_regressions(repo_views)
     risk_state = _build_overview_risk_state(attention_repos)
+    repo_cards = _build_overview_repo_cards(repos, attention_repos, highest_risk_items)
 
     metrics = [
         DashboardOverviewMetric(
@@ -591,7 +992,88 @@ def _build_dashboard_overview_view_uncached(
         attention_repos=attention_repos,
         control_surface_coverage=control_surface_coverage,
         repos=repos,
+        overview_sections=DashboardOverviewSections(
+            urgent_queue=DashboardOverviewUrgentQueueSection(
+                repos=[repo for repo in repo_cards if repo.highest_priority in {"review_now", "watch"}],
+                repo_count=sum(1 for repo in repo_cards if repo.highest_priority in {"review_now", "watch"}),
+                review_now_count=sum(1 for repo in repo_cards if repo.highest_priority == "review_now"),
+                watch_count=sum(1 for repo in repo_cards if repo.highest_priority == "watch"),
+            ),
+            recent_changes=DashboardOverviewRecentChangesSection(
+                repos=repo_cards,
+                repo_count=len(repo_cards),
+            ),
+            posture_snapshot=DashboardOverviewPostureSnapshotSection(
+                metrics=metrics,
+                risk_state=risk_state,
+                control_surface_coverage=control_surface_coverage,
+                control_surface_risk=control_surface_risk,
+            ),
+        ),
     )
+
+
+def _overview_priority_rank(priority: str | None) -> int:
+    normalized = str(priority or "baseline_review").strip().lower()
+    if normalized == "review_now":
+        return 0
+    if normalized == "watch":
+        return 1
+    return 2
+
+
+def _build_overview_repo_cards(
+    repos: list[RepoDashboardIndexEntry],
+    attention_repos: list[DashboardOverviewAttentionRepo],
+    highest_risk_items: list[DashboardOverviewRegressionEntry],
+) -> list[DashboardOverviewRepoCard]:
+    attention_by_repo = {repo.repo_full: repo for repo in attention_repos}
+    risk_by_repo = {item.repo_full: item for item in highest_risk_items}
+    cards: list[DashboardOverviewRepoCard] = []
+    for repo in repos:
+        attention = attention_by_repo.get(repo.repo_full)
+        matched_risk_item = risk_by_repo.get(repo.repo_full)
+        cards.append(
+            DashboardOverviewRepoCard(
+                repo_full=repo.repo_full,
+                default_branch=repo.default_branch,
+                onboarding_status=repo.onboarding_status,
+                discovered_artifact_count=(attention.discovered_artifact_count if attention is not None else repo.discovered_artifact_count),
+                last_onboarded_at=repo.last_onboarded_at,
+                historical_version_count=repo.historical_version_count,
+                dashboard_scope=repo.dashboard_scope,
+                allocation_status=repo.allocation_status,
+                highest_priority=(attention.highest_priority if attention is not None else "baseline_review"),
+                highest_insight_title=(attention.highest_insight_title if attention is not None else (matched_risk_item.title if matched_risk_item is not None else None)),
+                highest_insight_artifact_path=(attention.highest_insight_artifact_path if attention is not None else (matched_risk_item.artifact_path if matched_risk_item is not None else None)),
+                highest_evidence_label=(attention.highest_evidence_label if attention is not None else (matched_risk_item.evidence_label if matched_risk_item is not None else None)),
+                highest_evidence_summary=(attention.highest_evidence_summary if attention is not None else (matched_risk_item.evidence_summary if matched_risk_item is not None else None)),
+                highest_change_summary=(attention.highest_change_summary if attention is not None else (matched_risk_item.change_summary if matched_risk_item is not None else None)),
+                highest_flag_summary=(attention.highest_flag_summary if attention is not None else (matched_risk_item.flag_summary if matched_risk_item is not None else None)),
+                highest_rationale=(attention.highest_rationale if attention is not None else (matched_risk_item.rationale if matched_risk_item is not None else None)),
+                highest_recommended_action=(attention.highest_recommended_action if attention is not None else (matched_risk_item.recommended_action if matched_risk_item is not None else None)),
+                highest_baseline_label=(attention.highest_baseline_label if attention is not None else (matched_risk_item.baseline_label if matched_risk_item is not None else "Baseline: none yet")),
+                highest_review_target=(attention.highest_review_target if attention is not None else (matched_risk_item.review_target if matched_risk_item is not None else None)),
+                highest_review_url=(attention.highest_review_url if attention is not None else (matched_risk_item.review_url if matched_risk_item is not None else None)),
+                insight_count=(attention.insight_count if attention is not None else 0),
+                lower_confidence_count=(attention.lower_confidence_count if attention is not None else 0),
+                review_now_count=(attention.review_now_count if attention is not None else 0),
+                watch_count=(attention.watch_count if attention is not None else 0),
+                baseline_review_count=(attention.baseline_review_count if attention is not None else 0),
+                top_drift_magnitude=(attention.top_drift_magnitude if attention is not None else 0.0),
+                avg_semantic_distance=(attention.avg_semantic_distance if attention is not None else 0.0),
+                recent_activity_at=(attention.highest_updated_at if attention is not None and attention.highest_updated_at is not None else repo.last_onboarded_at),
+                matched_risk_item=matched_risk_item,
+            )
+        )
+    cards.sort(
+        key=lambda card: (
+            _overview_priority_rank(card.highest_priority),
+            -card.top_drift_magnitude,
+            card.repo_full,
+        )
+    )
+    return cards
 
 
 def build_repo_dashboard_view(
@@ -622,28 +1104,72 @@ def build_repo_dashboard_view(
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view)
 
 
+def build_repo_dashboard_view_with_timings(
+    db_path: str,
+    repo_full: str,
+    *,
+    include_journey: bool = True,
+    include_detail_sections: bool = True,
+) -> tuple[RepoDashboardView, list[tuple[str, float]]]:
+    cache_key = (
+        "repo",
+        db_path,
+        _db_cache_signature(db_path),
+        repo_full,
+        include_journey,
+        include_detail_sections,
+    )
+    cached = _cache_get(_REPO_VIEW_CACHE, cache_key)
+    if cached is not None:
+        return cached, [("repo-cache-hit", 0.0)]
+
+    stage_timings: list[tuple[str, float]] = []
+    view = _build_repo_dashboard_view_uncached(
+        db_path,
+        repo_full,
+        include_journey=include_journey,
+        include_detail_sections=include_detail_sections,
+        stage_timings=stage_timings,
+    )
+    return _cache_set(_REPO_VIEW_CACHE, cache_key, view), stage_timings
+
+
 def _build_repo_dashboard_view_uncached(
     db_path: str,
     repo_full: str,
     *,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    stage_timings: list[tuple[str, float]] | None = None,
 ) -> RepoDashboardView:
-    onboarding = get_latest_repository_onboarding(db_path, repo_full)
-    baseline_review = build_repo_baseline_review_panel(db_path, repo_full)
-    drift_summary = get_repo_static_drift_summary(db_path, repo_full)
-    top_drifting_artifacts = list_top_drifting_artifacts_for_repo(db_path, repo_full)
-    pull_request_audit_count = len(list_pull_request_audits_for_repo(db_path, repo_full))
+    def timed_stage(stage_name: str, factory):
+        started_at = time.perf_counter()
+        result = factory()
+        if stage_timings is not None:
+            stage_timings.append((stage_name, (time.perf_counter() - started_at) * 1000.0))
+        return result
+
+    onboarding = timed_stage("repo-onboarding", lambda: get_latest_repository_onboarding(db_path, repo_full))
+    baseline_review = None
+    drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
+    top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
+    pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
     if onboarding is not None:
-        selected_baseline_source_snapshot_id = get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id)
+        selected_baseline_source_snapshot_id = timed_stage(
+            "repo-selected-baseline",
+            lambda: get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
+        )
     if include_journey:
-        journey_snapshots, journey_comparison = _build_repo_journey_panel(
-            db_path,
-            repo_full,
-            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+        journey_snapshots, journey_comparison = timed_stage(
+            "repo-journey-panel",
+            lambda: _build_repo_journey_panel(
+                db_path,
+                repo_full,
+                selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+            ),
         )
 
     if onboarding is None:
@@ -678,87 +1204,127 @@ def _build_repo_dashboard_view_uncached(
             export_jobs=[],
         )
 
-    artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
-    baseline_versions = list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    baseline_by_path = {
-        baseline.artifact_path: baseline
-        for baseline in list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
-    }
-    jobs = list_historical_backfill_jobs_for_repo(db_path, repo_full)
+    artifacts = timed_stage("repo-onboarded-artifacts", lambda: list_onboarded_artifacts_for_onboarding(db_path, onboarding.id))
+    baseline_versions = timed_stage(
+        "repo-baseline-versions",
+        lambda: list_onboarding_baseline_version_summaries_for_onboarding(db_path, onboarding.id),
+    )
+    latest_baseline_versions = select_latest_onboarding_baseline_versions(baseline_versions)
+    latest_approved_baseline_versions = select_latest_approved_onboarding_baseline_versions(baseline_versions)
+    baseline_review = timed_stage(
+        "repo-baseline-review",
+        lambda: build_repo_baseline_review_panel_from_records(
+            repo_full=repo_full,
+            onboarding=onboarding,
+            latest_baselines=latest_baseline_versions,
+            authoritative_artifact_count=len(latest_approved_baseline_versions),
+            baseline_audit_logs=list_baseline_audit_log_for_onboarding(db_path, onboarding.id),
+        ),
+    )
+    baseline_by_path = timed_stage(
+        "repo-effective-baselines",
+        lambda: {
+            baseline.artifact_path: baseline
+            for baseline in select_effective_onboarding_baseline_versions(baseline_versions)
+        },
+    )
+    jobs = timed_stage("repo-backfill-jobs", lambda: list_historical_backfill_jobs_for_repo(db_path, repo_full))
     leaderboard_by_path = {entry.artifact_path: entry for entry in top_drifting_artifacts}
-    metrics_by_path = _load_repo_artifact_metrics(db_path, repo_full)
-    profile_context_by_path = _load_repo_artifact_profile_contexts(db_path, repo_full)
+    metrics_by_path = timed_stage("repo-artifact-metrics", lambda: _load_repo_artifact_metrics(db_path, repo_full))
+    profile_context_by_path = timed_stage(
+        "repo-profile-contexts",
+        lambda: _load_repo_artifact_profile_contexts(db_path, repo_full),
+    )
 
     artifact_entries: list[RepoDashboardArtifactEntry] = []
     total_historical_versions = sum(metrics["historical_version_count"] for metrics in metrics_by_path.values())
     total_historical_profiles = sum(metrics["historical_profile_count"] for metrics in metrics_by_path.values())
 
-    for artifact in artifacts:
-        baseline = baseline_by_path.get(artifact.artifact_path)
-        provenance = artifact_provenance_label(artifact.artifact_type)
-        metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
-        leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
+    def build_artifact_entries() -> list[RepoDashboardArtifactEntry]:
+        built_entries: list[RepoDashboardArtifactEntry] = []
+        for artifact in artifacts:
+            baseline = baseline_by_path.get(artifact.artifact_path)
+            provenance = artifact_provenance_label(artifact.artifact_type)
+            metrics = metrics_by_path.get(artifact.artifact_path, _empty_artifact_metrics())
+            leaderboard_entry = leaderboard_by_path.get(artifact.artifact_path)
 
-        artifact_entries.append(
-            RepoDashboardArtifactEntry(
-                artifact_path=artifact.artifact_path,
-                artifact_type=artifact.artifact_type,
-                discovery_reason=artifact.discovery_reason,
-                discovery_confidence=artifact.confidence,
-                baseline_line_count=baseline.line_count if baseline is not None else 0,
-                historical_version_count=metrics["historical_version_count"],
-                historical_profile_count=metrics["historical_profile_count"],
-                latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
-                latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
-                latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
-                latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
-                latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
-                latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
-                pr_profile_count=metrics["pr_profile_count"],
-                latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
-                latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
-                latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
-                latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
-                latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
-                leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
-                latest_activity_at=metrics["latest_activity_at"],
-                provenance_kind=provenance.kind,
-                provenance_label=provenance.label,
+            built_entries.append(
+                RepoDashboardArtifactEntry(
+                    artifact_path=artifact.artifact_path,
+                    artifact_type=artifact.artifact_type,
+                    discovery_reason=artifact.discovery_reason,
+                    discovery_confidence=artifact.confidence,
+                    baseline_line_count=baseline.line_count if baseline is not None else 0,
+                    historical_version_count=metrics["historical_version_count"],
+                    historical_profile_count=metrics["historical_profile_count"],
+                    latest_historical_semantic_distance=metrics["latest_historical_semantic_distance"],
+                    latest_historical_drift_magnitude=metrics["latest_historical_drift_magnitude"],
+                    latest_historical_capability_shift=metrics["latest_historical_capability_shift"],
+                    latest_historical_guardrail_shift=metrics["latest_historical_guardrail_shift"],
+                    latest_historical_governance_shift=metrics["latest_historical_governance_shift"],
+                    latest_historical_autonomy_shift=metrics["latest_historical_autonomy_shift"],
+                    pr_profile_count=metrics["pr_profile_count"],
+                    latest_pr_semantic_distance=metrics["latest_pr_semantic_distance"],
+                    latest_pr_capability_shift=metrics["latest_pr_capability_shift"],
+                    latest_pr_guardrail_shift=metrics["latest_pr_guardrail_shift"],
+                    latest_pr_governance_shift=metrics["latest_pr_governance_shift"],
+                    latest_pr_autonomy_shift=metrics["latest_pr_autonomy_shift"],
+                    leaderboard_drift_magnitude=(leaderboard_entry.drift_magnitude if leaderboard_entry is not None else 0.0),
+                    latest_activity_at=metrics["latest_activity_at"],
+                    provenance_kind=provenance.kind,
+                    provenance_label=provenance.label,
+                )
+            )
+        built_entries.sort(
+            key=lambda entry: (
+                priority_sort_rank(priority_from_fused_signals(_insight_score(entry, profile_context_by_path.get(entry.artifact_path)))),
+                -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
+                -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
+                entry.artifact_path,
             )
         )
+        return built_entries
 
-    artifact_entries.sort(
-        key=lambda entry: (
-            priority_sort_rank(priority_from_fused_signals(_insight_score(entry, profile_context_by_path.get(entry.artifact_path)))),
-            -_insight_score(entry, profile_context_by_path.get(entry.artifact_path)),
-            -max(entry.leaderboard_drift_magnitude, entry.latest_historical_drift_magnitude),
-            entry.artifact_path,
-        )
-    )
+    artifact_entries = timed_stage("repo-artifact-entries", build_artifact_entries)
 
-    insights, lower_confidence_insights = _build_repo_insights(
-        artifact_entries,
-        baseline_by_path,
-        profile_context_by_path,
-        attribute_profile_mode=("all" if include_detail_sections else "ranked"),
+    insights, lower_confidence_insights = timed_stage(
+        "repo-insights",
+        lambda: _build_repo_insights(
+            artifact_entries,
+            baseline_by_path,
+            profile_context_by_path,
+            attribute_profile_mode=("all" if include_detail_sections else "ranked"),
+        ),
     )
-    control_surface_groups = _build_control_surface_groups(artifact_entries)
+    control_surface_groups = timed_stage("repo-control-surfaces", lambda: _build_control_surface_groups(artifact_entries))
     history_timelines: list[RepoArtifactHistoryTimeline] = []
     featured_storyline: RepoArtifactStoryline | None = None
     history_cues: list[RepoHistoryCue] = []
     design_profiles: list[RepoArtifactDesignProfile] = []
     if include_detail_sections:
-        history_timelines = _build_repo_history_timelines(db_path, repo_full, artifact_entries)
-        featured_storyline = _build_featured_storyline(
-            db_path,
-            repo_full,
-            artifact_entries,
-            insights,
-            baseline_by_path,
-            profile_context_by_path,
+        history_timelines = timed_stage(
+            "repo-history-timelines",
+            lambda: _build_repo_history_timelines(db_path, repo_full, artifact_entries),
         )
-        history_cues = _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path)
-        design_profiles = _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path)
+        featured_storyline = timed_stage(
+            "repo-featured-storyline",
+            lambda: _build_featured_storyline(
+                db_path,
+                repo_full,
+                artifact_entries,
+                insights,
+                baseline_by_path,
+                profile_context_by_path,
+            ),
+        )
+        history_cues = timed_stage(
+            "repo-history-cues",
+            lambda: _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path),
+        )
+        design_profiles = timed_stage(
+            "repo-design-profiles",
+            lambda: _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path),
+        )
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -798,9 +1364,11 @@ def _build_repo_journey_panel(
     *,
     selected_baseline_source_snapshot_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    from .repo_journey import build_repo_journey, compare_repo_snapshots, snapshot_to_public_payload
+    from .repo_journey import _compare_snapshot_records, build_repo_journey, snapshot_to_public_payload
 
-    snapshots = [snapshot_to_public_payload(snapshot) for snapshot in build_repo_journey(db_path, repo_full)]
+    snapshot_records = build_repo_journey(db_path, repo_full)
+    snapshots = [snapshot_to_public_payload(snapshot) for snapshot in snapshot_records]
+    snapshot_record_by_id = {snapshot.id: snapshot for snapshot in snapshot_records}
     baseline_snapshot = None
     if selected_baseline_source_snapshot_id is not None:
         baseline_snapshot = next(
@@ -814,7 +1382,10 @@ def _build_repo_journey_panel(
         current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
     comparison = None
     if baseline_snapshot is not None and current_snapshot is not None:
-        comparison = asdict(compare_repo_snapshots(db_path, repo_full, baseline_snapshot["id"], current_snapshot["id"]))
+        baseline_record = snapshot_record_by_id.get(int(baseline_snapshot["id"]))
+        current_record = snapshot_record_by_id.get(int(current_snapshot["id"]))
+        if baseline_record is not None and current_record is not None:
+            comparison = asdict(_compare_snapshot_records(repo_full, baseline_record, current_record))
     return snapshots, comparison
 
 
@@ -3665,6 +4236,7 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 ),
                 avg_semantic_distance=view.drift_summary.avg_semantic_distance,
                 discovered_artifact_count=(view.onboarding.discovered_artifact_count if view.onboarding is not None else 0),
+                highest_updated_at=(top_insight.updated_at if top_insight is not None else None),
             )
         )
 

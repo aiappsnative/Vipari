@@ -109,6 +109,20 @@ This framing should shape roadmap decisions:
 	- Security hardening commit resolved 7 issues: empty `aud` IndexError, key-length enforcement, production presence check, scope re-validation, input validation, import placement, and missing DB index
 	- Pre-existing failures from prior sprint (migration 0003 table-existence guard, stale JS assertion) also resolved in this PR
 
+### `feature/dashboard-control-tower-v1` (issue #62)
+- Purpose: dashboard control-tower refactor; adds a workspace-wide escalation queue and a per-repo decision section to the operator dashboard
+- Final status at merge:
+	- `GET /api/dashboard/escalation-queue` — workspace-wide ranked flat list of escalating insights; accepts `?include_watch=true`; respects repo visibility filtering; returns `workspace_posture` ("risk"/"watch"/"healthy"), `workspace_posture_reasons` (top-3 deduplicated risk reasons), `escalation_count`, `watch_count`, and `items`
+	- `GET /api/repos/{repo_full}/proposals/pending` — pending baseline proposals for a repo; returns `proposals` list with `artifact_path`, `is_agent_proposal`, `rationale`, and `created_at`; empty list if no proposals or repo not onboarded
+	- new `EscalationQueueItem` frozen dataclass and `build_workspace_escalation_queue()` in `services/dashboard_views.py`
+	- new `list_pending_baseline_proposals_for_repo()` helper in `services/proposals_records.py`; queries by `repo_full` + `PROPOSAL_STATUS_PENDING` without requiring workspace context
+	- workspace posture bar injected into `dashboard_index.html` above the main content; escalation queue section added to main dashboard with rank, title, repo/artifact context, attribute delta chips, and direct review links
+	- repo decision section added to `dashboard_repo.html` with posture badge, top finding, recommended action, and pending-proposals panel
+	- `dashboard-index.js` — `fetchEscalationQueue`, `renderWorkspacePostureBar`, `renderEscalationQueueTable`, `loadEscalationQueue` added; called on page init
+	- `dashboard-repo.js` — `renderDecisionSection`, `loadPendingProposals` added; both called from `applyDashboardPayload`
+	- `dashboard.css` — ~250 lines of new control-tower styles: posture bar, escalation table, repo decision section, delta chips, responsive breakpoint at 900 px
+	- 17 tests in `tests/test_dashboard_control_tower.py` (16 pass, 1 conditional skip); covers empty-db healthy posture, key structure, drift detection, watch/review-now filtering, sort order, repo-filter, posture-reasons type, and all API endpoints
+
 ### `feature/control-plane-high-risk-proposals-v1` (issue #61)
 - Purpose: completed branch for issue `#61`, human-gated proposal-and-approval flows for the control plane, now merged to `main`
 - Final status at merge:

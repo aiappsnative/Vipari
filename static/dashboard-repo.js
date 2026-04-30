@@ -23,6 +23,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
+const VALID_REPO_TABS = new Set(["drift", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -34,6 +35,21 @@ window.__artifactsCollapsed = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
+window.__pendingProposalsLoadToken = 0;
+
+function resolveRepoTab() {
+    const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
+    if (metaTab && VALID_REPO_TABS.has(metaTab)) {
+        return metaTab;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = (params.get("tab") || "").trim().toLowerCase();
+    return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "drift";
+}
+
+const activeRepoTab = resolveRepoTab();
+window.__activeRepoTab = activeRepoTab;
 
 const ATTRIBUTE_PROFILE_TAB_CONFIG = [
     { key: "guardrail_regressions", label: "Guardrail regressions", dimensionKeys: ["guardrail_robustness"] },
@@ -79,6 +95,30 @@ function bindSidebarNavigation() {
             target.scrollIntoView({ behavior: "smooth", block: "start" });
             window.history.replaceState(null, "", `#${targetId}`);
         });
+    });
+}
+
+function applyRepoTabVisibility() {
+    document.body.dataset.activeRepoTab = activeRepoTab;
+
+    document.querySelectorAll("[data-repo-tab-panel]").forEach((element) => {
+        const supportedTabs = String(element.getAttribute("data-repo-tab-panel") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+        element.hidden = supportedTabs.length > 0 && !supportedTabs.includes(activeRepoTab);
+    });
+
+    document.querySelectorAll("[data-repo-tab-child]").forEach((element) => {
+        element.hidden = element.getAttribute("data-repo-tab-child") !== activeRepoTab;
+    });
+
+    document.querySelectorAll("[data-repo-tab-link]").forEach((element) => {
+        const tab = element.getAttribute("data-repo-tab-link") || "";
+        if (tab === activeRepoTab) {
+            element.setAttribute("aria-current", "page");
+            return;
+        }
+        element.removeAttribute("aria-current");
     });
 }
 
@@ -643,7 +683,7 @@ function requestedArtifactPath() {
     return params.get("artifact") || "";
 }
 
-function applyRepoDetail(item) {
+function applyRepoDetail(item, options = {}) {
     const profile = findDesignProfile(item.artifact_path);
     const severity = severityForPriority(item.priority);
     const subtitle = [item.title, item.review_target, item.evidence_label].filter(Boolean).join(" · ") || item.artifact_path;
@@ -688,24 +728,28 @@ function applyRepoDetail(item) {
         };
     }
 
-    loadArtifactStoryline(item.artifact_path);
+    if (options.loadStoryline !== false) {
+        loadArtifactStoryline(item.artifact_path);
+    }
+}
+
+function activateRepoRow(row, items, options = {}) {
+    document.querySelectorAll(".triage-row").forEach((candidate) => {
+        candidate.classList.remove("selected");
+        candidate.removeAttribute("aria-current");
+    });
+    row.classList.add("selected");
+    row.setAttribute("aria-current", "true");
+    const index = Number(row.getAttribute("data-row-index"));
+    if (Number.isFinite(index) && items[index]) {
+        applyRepoDetail(items[index], options);
+    }
 }
 
 function bindRepoRows(items) {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     rows.forEach((row) => {
-        const activate = () => {
-            document.querySelectorAll(".triage-row").forEach((candidate) => {
-                candidate.classList.remove("selected");
-                candidate.removeAttribute("aria-current");
-            });
-            row.classList.add("selected");
-            row.setAttribute("aria-current", "true");
-            const index = Number(row.getAttribute("data-row-index"));
-            if (Number.isFinite(index) && items[index]) {
-                applyRepoDetail(items[index]);
-            }
-        };
+        const activate = () => activateRepoRow(row, items);
         row.addEventListener("click", activate);
         row.addEventListener("focus", activate);
         row.addEventListener("keydown", (event) => {
@@ -755,11 +799,11 @@ function autoSelectRepoRow(items, preferredArtifactPath = "") {
     if (preferredArtifactPath) {
         const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
         if (preferredIndex >= 0 && rows[preferredIndex]) {
-            rows[preferredIndex].click();
+            activateRepoRow(rows[preferredIndex], items);
             return;
         }
     }
-    rows[0].click();
+    activateRepoRow(rows[0], items, { loadStoryline: false });
 }
 
 function filteredRepoItems(items, filter) {
@@ -1268,6 +1312,134 @@ function setRebaselineBusy(isBusy) {
     });
 }
 
+function renderDecisionSection(insights, payload) {
+    const topInsight = asArray(insights)[0] || null;
+    if (!topInsight) {
+        const badgeEl = document.getElementById("repo-decision-posture-badge");
+        if (badgeEl) {
+            badgeEl.textContent = "Healthy";
+            badgeEl.className = "severity-badge severity-low";
+        }
+        setText("repo-decision-subtitle", "No audit findings require immediate action.");
+        setSectionHtml("repo-decision-finding", '<div class="muted">No primary findings at this time.</div>');
+        setSectionHtml("repo-decision-action", '<div class="muted">—</div>');
+        return;
+    }
+
+    const severity = topInsight.priority === "review_now"
+        ? { label: "Review Now", className: "severity-high" }
+        : topInsight.priority === "watch"
+            ? { label: "Watch", className: "severity-medium" }
+            : { label: "Baseline Review", className: "severity-low" };
+
+    const badgeEl = document.getElementById("repo-decision-posture-badge");
+    if (badgeEl) {
+        badgeEl.textContent = severity.label;
+        badgeEl.className = `severity-badge ${severity.className}`;
+    }
+
+    const reviewCount = asArray(insights).filter((i) => i.priority === "review_now").length;
+    const watchCount = asArray(insights).filter((i) => i.priority === "watch").length;
+    setText("repo-decision-subtitle", `${reviewCount} review now · ${watchCount} watch · ${asArray(payload?.lower_confidence_insights).length} lower-confidence`);
+
+    const artifactName = String(topInsight.artifact_path || "").split("/").pop() || topInsight.artifact_path || "";
+    const deltas = asArray(topInsight.attribute_profile)
+        .filter((d) => d.state && d.state !== "no_change" && d.state !== "unknown")
+        .slice(0, 2);
+
+    setSectionHtml("repo-decision-finding", `
+        <div class="stack compact-stack">
+            <strong>${escapeHtml(topInsight.title || artifactName)}</strong>
+            <div class="muted">${escapeHtml(topInsight.rationale || "")}</div>
+            ${deltas.length ? `<div class="tag-row">${deltas.map((d) => `<span class="drift-chip chip-governance">${escapeHtml(d.label || d.attribute_key)}: ${escapeHtml(`${d.baseline_value || "?"} → ${d.current_value || "?"}`)}</span>`).join("")}</div>` : ""}
+        </div>
+    `);
+
+    setSectionHtml("repo-decision-action", `
+        <div class="stack compact-stack">
+            <div>${escapeHtml(topInsight.recommended_action || "Inspect before merge.")}</div>
+            ${topInsight.review_url ? `<a href="${escapeHtml(topInsight.review_url)}" class="escalation-action-btn">Open review</a>` : ""}
+        </div>
+    `);
+}
+
+function renderRepoActionsSection(insights) {
+    const topInsight = asArray(insights)[0] || null;
+    const reviewUrl = topInsight?.review_url || "";
+    const reviewTarget = topInsight?.review_target || topInsight?.artifact_path || repoFull;
+    const reviewTitle = topInsight?.title || "Open the highest-priority change first";
+    const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
+
+    setSectionHtml("repo-actions-review", `
+        <div class="stack compact-stack">
+            <div class="detail-note">Inspect the flagged change first, then resolve baseline review and export actions from this same case file.</div>
+            <div class="artifact-card">
+                <strong>${escapeHtml(reviewTitle)}</strong>
+                <div class="artifact-card-reason">${escapeHtml(reviewTarget)}</div>
+                <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
+            </div>
+            <div class="export-actions repo-actions-row">
+                ${reviewUrl ? `<a href="${escapeHtml(reviewUrl)}" class="export-submit-button">Open flagged change</a>` : ""}
+                <a href="#repo-triage-section" class="cue-action-button">Review related audits</a>
+                ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
+                <a href="#repo-export-section" class="cue-action-button">Create export</a>
+            </div>
+        </div>
+    `);
+}
+
+async function loadPendingProposals() {
+    if (!repoFull) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/proposals/pending`);
+        if (!response.ok) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+            return;
+        }
+        const payload = await response.json();
+        const proposals = asArray(payload?.proposals || []);
+        const pendingCount = Number(payload?.pending_count || proposals.length);
+
+        if (!pendingCount) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">None pending</div>');
+            return;
+        }
+
+        const items = proposals.slice(0, 5).map((p) => {
+            const agentLabel = p.is_agent_proposal ? '<span class="drift-chip chip-model">Agent</span>' : '<span class="drift-chip chip-governance">Human</span>';
+            return `
+                <div class="repo-proposal-row">
+                    ${agentLabel}
+                    <span class="repo-proposal-artifact">${escapeHtml(p.artifact_path || String(p.artifact_id || ""))}</span>
+                    <span class="repo-proposal-rationale">${escapeHtml(String(p.rationale || "").slice(0, 80))}</span>
+                </div>
+            `;
+        }).join("");
+
+        setSectionHtml("repo-decision-proposals", `
+            <div>
+                <strong>${pendingCount}</strong> pending proposal${pendingCount !== 1 ? "s" : ""}
+                <div class="stack compact-stack" style="margin-top: 0.5rem;">${items}</div>
+            </div>
+        `);
+    } catch {
+        setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+    }
+}
+
+function schedulePendingProposalsLoad() {
+    const loadToken = ++window.__pendingProposalsLoadToken;
+    const run = () => {
+        if (loadToken !== window.__pendingProposalsLoadToken) {
+            return;
+        }
+        void loadPendingProposals();
+    };
+    window.setTimeout(run, 1200);
+}
+
 function applyDashboardPayload(payload) {
     const onboarding = payload.onboarding || null;
     const insights = asArray(payload.insights);
@@ -1279,6 +1451,7 @@ function applyDashboardPayload(payload) {
     const historyTimelines = asArray(payload.history_timelines);
     const journeySnapshots = asArray(payload.journey_snapshots);
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
+    const featuredStoryline = payload.featured_storyline || null;
     const preferredArtifactPath = requestedArtifactPath();
     const governanceAttention = renderGovernanceAttentionNote(onboarding, artifacts, baselineReview, journeySnapshots);
     window.__designProfiles = asArray(payload.design_profiles);
@@ -1297,7 +1470,12 @@ function applyDashboardPayload(payload) {
     bindRepoFilters(insights, preferredArtifactPath);
     autoSelectRepoRow(insights, preferredArtifactPath);
 
-    setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    if (featuredStoryline?.artifact_path) {
+        window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
+        setSectionHtml("featured-storyline", renderStoryline(featuredStoryline));
+    } else {
+        setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    }
     setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
     setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
     setSectionHtml("history-cues", renderCueCards(historyCues));
@@ -1314,6 +1492,10 @@ function applyDashboardPayload(payload) {
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
+
+    renderDecisionSection(insights, payload);
+    renderRepoActionsSection(insights);
+    schedulePendingProposalsLoad();
 }
 
 async function submitRebaseline() {
@@ -1460,9 +1642,9 @@ function populateAuditRepoLists(repos = []) {
 
 async function loadAvailableRepos() {
     try {
-        const response = await fetch("/api/dashboard/overview");
+        const response = await fetch("/api/repos");
         if (!response.ok) {
-            throw new Error(`Overview request failed with ${response.status}`);
+            throw new Error(`Repo inventory request failed with ${response.status}`);
         }
         const payload = await response.json();
         populateAuditRepoLists(asArray(payload.repos));
@@ -1485,7 +1667,6 @@ async function loadDashboard() {
 
         const payload = await dashboardResponse.json();
         applyDashboardPayload(payload);
-        loadExportHistory();
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
@@ -1506,6 +1687,7 @@ async function loadDashboard() {
         setSectionHtml("repo-journey-timeline", fallback);
         setSectionHtml("repo-journey-compare", fallback);
         setSectionHtml("lower-confidence-insights", fallback);
+        setSectionHtml("repo-actions-review", fallback);
         setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);
         setText("detail-artifact-name", repoFull || "Repository unavailable");
         setText("detail-subtitle", message);
@@ -1514,11 +1696,11 @@ async function loadDashboard() {
         if (button) {
             button.disabled = true;
         }
-        loadExportHistory();  // Load export history even on error
     }
 }
 
 bindSidebarNavigation();
+applyRepoTabVisibility();
 bindRebaselineModal();
 bindExportForm();
 loadAvailableRepos();

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape as html_escape
 from pathlib import Path
+from urllib.parse import quote
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DASHBOARD_TEMPLATES_DIR = BASE_DIR / "templates"
@@ -26,13 +27,36 @@ def _load_template(name: str) -> str:
     return template
 
 
-def render_dashboard_index_page(theme_preference: str = "dark") -> str:
-    return _load_template("dashboard_index.html").replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+def _dashboard_index_url(*, active_range: str, active_filter: str) -> str:
+    return f"/dashboard?range={active_range}&filter={active_filter}"
 
 
-def render_repo_dashboard_page(repo_full: str, theme_preference: str = "dark") -> str:
+def render_dashboard_index_page(theme_preference: str = "dark", active_range: str = "7d", active_filter: str = "all") -> str:
     return (
+        _load_template("dashboard_index.html")
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{ACTIVE_OVERVIEW_RANGE}}", html_escape(active_range))
+        .replace("{{ACTIVE_OVERVIEW_FILTER}}", html_escape(active_filter))
+        .replace("{{OVERVIEW_RANGE_24H_URL}}", _dashboard_index_url(active_range="24h", active_filter=active_filter))
+        .replace("{{OVERVIEW_RANGE_7D_URL}}", _dashboard_index_url(active_range="7d", active_filter=active_filter))
+        .replace("{{OVERVIEW_RANGE_30D_URL}}", _dashboard_index_url(active_range="30d", active_filter=active_filter))
+        .replace("{{OVERVIEW_FILTER_ALL_URL}}", _dashboard_index_url(active_range=active_range, active_filter="all"))
+        .replace("{{OVERVIEW_FILTER_CRITICAL_URL}}", _dashboard_index_url(active_range=active_range, active_filter="critical"))
+        .replace("{{OVERVIEW_FILTER_MINE_URL}}", _dashboard_index_url(active_range=active_range, active_filter="mine"))
+    )
+
+
+def render_repo_dashboard_page(repo_full: str, theme_preference: str = "dark", active_tab: str = "drift") -> str:
+    encoded_repo_full = quote(repo_full, safe="")
+    base_url = f"/dashboard/{encoded_repo_full}"
+    template = (
         _load_template("dashboard_repo.html")
         .replace("{{REPO_FULL}}", html_escape(repo_full))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{ACTIVE_REPO_TAB}}", html_escape(active_tab))
+        .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift")
+        .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline")
+        .replace("{{REPO_TAB_COMPLIANCE_URL}}", f"{base_url}?tab=compliance")
+        .replace("{{REPO_TAB_REPORTS_URL}}", f"{base_url}?tab=reports")
     )
+    return template

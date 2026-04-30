@@ -61,6 +61,7 @@ from services.control_plane_frontend import (
     render_control_plane_admin_page,
     render_control_plane_billing_page,
     render_control_plane_compliance_page,
+    render_control_plane_help_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_marketing_page,
@@ -106,6 +107,7 @@ from services.control_plane_records import (
     get_workspace_installation,
     get_workspace_membership,
     get_workspace_subscription,
+    get_machine_principal_by_id,
     get_subscription_by_stripe_subscription_id,
     get_machine_principal_by_client_id,
     has_processed_webhook_event,
@@ -142,7 +144,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -151,7 +153,7 @@ from services.github_integration import fetch_commit_pair_diff, fetch_file_conte
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
-from services.persistence import get_persistence_status, persistence_status_payload
+from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
@@ -380,12 +382,46 @@ def _dashboard_redirect_for_request(request: Request):
     session = _get_session(request)
     if not _control_plane_active():
         return None, session
+    if session is None and _local_debug_dashboard_enabled() and _local_debug_workspace_context() is not None:
+        return None, None
     if session is None:
         return RedirectResponse("/login", status_code=303), None
     access_context = _build_access_context(session)
     if not access_context["resolution"].can_access_dashboard:
         return RedirectResponse("/app", status_code=303), session
     return None, session
+
+
+def _local_debug_dashboard_enabled() -> bool:
+    return settings.app_env == "local" and bool(settings.local_debug_disable_login)
+
+
+def _local_debug_workspace_context() -> dict[str, object] | None:
+    if not _local_debug_dashboard_enabled():
+        return None
+    try:
+        with connect_sqlite(AUDIT_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT id FROM workspaces ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, int(row["id"]))
+    if workspace is None:
+        return None
+    return {
+        "session": None,
+        "user": None,
+        "identity": None,
+        "membership": None,
+        "subscription": get_workspace_subscription(AUDIT_DB_PATH, workspace.id),
+        "entitlement": get_workspace_entitlement(AUDIT_DB_PATH, workspace.id),
+        "installation": get_workspace_installation(AUDIT_DB_PATH, workspace.id),
+        "workspace": workspace,
+        "resolution": None,
+    }
 
 
 def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
@@ -670,6 +706,9 @@ def _github_oauth_callback_url(request: Request) -> str:
 def _current_workspace_context(request: Request) -> dict[str, object]:
     session = _get_session(request)
     if session is None:
+        debug_context = _local_debug_workspace_context()
+        if debug_context is not None:
+            return debug_context
         raise HTTPException(status_code=401, detail="Authentication required.")
     access_context = _build_access_context(session)
     if access_context["workspace"] is None:
@@ -692,6 +731,8 @@ def _require_dashboard_access(request: Request) -> dict[str, object]:
     if not _control_plane_active():
         return {}
     access_context = _current_workspace_context(request)
+    if access_context.get("session") is None and _local_debug_dashboard_enabled():
+        return access_context
     if not access_context["resolution"].can_access_dashboard:
         raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
     return access_context
@@ -2075,22 +2116,38 @@ async def compliance_page(request: Request):
 @app.get("/app/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     access_context = _current_workspace_context(request)
+    session = access_context.get("session")
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     user = access_context["user"]
     identity = access_context["identity"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    repo_rows = _workspace_repo_rows(workspace.id)
+    allocation_status_by_full = {
+        allocation.repo_full: allocation.allocation_status
+        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+    }
+    repo_summaries = list_repo_dashboard_index(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls={str(item["repo_full"]) for item in repo_rows},
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    export_jobs = (
+        list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
+        if session is not None
+        else []
+    )
     return HTMLResponse(
-        render_control_plane_placeholder_page(
-            page_title="Help",
-            page_kicker="Operator assistance",
-            page_copy="We are working on this page now. It will collect guided setup, troubleshooting, and operator playbooks for each workspace.",
+        render_control_plane_help_page(
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
-            active_nav="help",
+            repo_rows=repo_rows,
+            repo_summaries=repo_summaries,
+            export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
+            export_pending_count=sum(1 for job in export_jobs if job.status != "completed"),
         )
     )
 
@@ -2891,7 +2948,7 @@ async def base44_billing_handoff(request: Request):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_index_page(request: Request):
+async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2901,14 +2958,26 @@ async def dashboard_index_page(request: Request):
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
         return _attach_server_timing(redirect, timing_metrics)
     render_started = time.perf_counter()
-    response = HTMLResponse(render_dashboard_index_page(_current_theme_preference(request)))
+    active_range = range.strip().lower() if range else "7d"
+    if active_range not in {"24h", "7d", "30d"}:
+        active_range = "7d"
+    active_filter = filter.strip().lower() if filter else "all"
+    if active_filter not in {"all", "critical", "mine"}:
+        active_filter = "all"
+    response = HTMLResponse(
+        render_dashboard_index_page(
+            _current_theme_preference(request),
+            active_range=active_range,
+            active_filter=active_filter,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "render", render_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
-async def dashboard_repo_page(request: Request, repo_full: str):
+async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2918,7 +2987,16 @@ async def dashboard_repo_page(request: Request, repo_full: str):
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
         return _attach_server_timing(redirect, timing_metrics)
     render_started = time.perf_counter()
-    response = HTMLResponse(render_repo_dashboard_page(repo_full, _current_theme_preference(request)))
+    active_tab = tab.strip().lower() if tab else "drift"
+    if active_tab not in {"drift", "baseline", "compliance", "reports"}:
+        active_tab = "drift"
+    response = HTMLResponse(
+        render_repo_dashboard_page(
+            repo_full,
+            theme_preference=_current_theme_preference(request),
+            active_tab=active_tab,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "render", render_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
@@ -2954,7 +3032,7 @@ async def list_repos(request: Request):
 
 
 @app.get("/api/dashboard/overview")
-def dashboard_overview(request: Request):
+def dashboard_overview(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -2970,13 +3048,36 @@ def dashboard_overview(request: Request):
         repo_scope_by_full=visibility["repo_scope_by_full"],
         allocation_status_by_full=visibility["allocation_status_by_full"],
     )
+    active_filter = filter.strip().lower() if filter else "all"
+    if active_filter not in {"all", "critical", "mine"}:
+        active_filter = "all"
+    owned_repo_fulls: set[str] | None = None
+    if active_filter == "mine":
+        owned_repo_fulls = set()
+        if access_context:
+            workspace = access_context.get("workspace")
+            session = access_context.get("session")
+            if workspace is not None and session is not None:
+                owned_repo_fulls = {
+                    allocation.repo_full
+                    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+                    if allocation.activated_by_user_id == session.user_id
+                }
+    active_range = range.strip().lower() if range else "7d"
+    if active_range not in {"24h", "7d", "30d"}:
+        active_range = "7d"
+    filtered_overview_view = filter_dashboard_overview_view(
+        overview_view,
+        active_filter,
+        overview_range=active_range,
+        allowed_repo_fulls=owned_repo_fulls,
+    )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    response = JSONResponse(
-        asdict(
-            overview_view
-        )
-    )
+    payload = asdict(filtered_overview_view)
+    nav_repos = filtered_overview_view.repos if active_filter == "mine" else overview_view.repos
+    payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
+    response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
@@ -2988,6 +3089,63 @@ def persistence_status(request: Request):
     return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
 
 
+@app.get("/api/dashboard/escalation-queue")
+def dashboard_escalation_queue(request: Request, include_watch: bool = False):
+    access_context = _require_dashboard_access(request)
+    visibility = _dashboard_repo_visibility(access_context)
+    result = build_workspace_escalation_queue(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visibility["allowed_repo_fulls"],
+        include_watch=include_watch,
+    )
+    return JSONResponse(result)
+
+
+@app.get("/api/repos/{repo_full:path}/proposals/pending")
+def list_pending_proposals_for_repo(request: Request, repo_full: str):
+    access_context = _require_repo_dashboard_read_access(request, repo_full)
+    from services.internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
+    from services.proposals_records import list_pending_baseline_proposals_for_repo_in_workspace
+    from services.onboarding_records import list_onboarded_artifacts_for_onboarding
+    workspace = access_context.get("workspace")
+    if workspace is None:
+        return JSONResponse({"proposals": [], "pending_count": 0})
+    proposals = list_pending_baseline_proposals_for_repo_in_workspace(AUDIT_DB_PATH, repo_full, workspace.id)
+    if not proposals:
+        return JSONResponse({"proposals": [], "pending_count": 0})
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
+    artifact_path_by_id: dict[int, str] = {}
+    if onboarding:
+        for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id):
+            artifact_path_by_id[artifact.id] = artifact.artifact_path
+    principals_cache: dict[int, object | None] = {}
+    proposals_out: list[dict] = []
+    for proposal in proposals:
+        if proposal.proposer_principal_id not in principals_cache:
+            principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
+                AUDIT_DB_PATH,
+                proposal.proposer_principal_id,
+            )
+        proposer = principals_cache.get(proposal.proposer_principal_id)
+        is_agent = (
+            proposer is not None
+            and getattr(proposer, "principal_kind", None) == PRINCIPAL_KIND_SERVICE_ACCOUNT
+        )
+        proposals_out.append({
+            "proposal_id": proposal.id,
+            "artifact_id": proposal.artifact_id,
+            "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
+            "status": proposal.status,
+            "rationale": proposal.rationale,
+            "proposer_principal_id": proposal.proposer_principal_id,
+            "is_agent_proposal": is_agent,
+            "created_at": proposal.created_at,
+            "expires_at": proposal.expires_at,
+        })
+    proposals_out.sort(key=lambda p: p["created_at"])
+    return JSONResponse({"proposals": proposals_out, "pending_count": len(proposals_out)})
+
+
 @app.get("/api/repos/{repo_full:path}/dashboard")
 def repo_dashboard(request: Request, repo_full: str):
     request_started = time.perf_counter()
@@ -2996,8 +3154,9 @@ def repo_dashboard(request: Request, repo_full: str):
     access_context = _require_repo_dashboard_read_access(request, repo_full)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     build_started = time.perf_counter()
-    repo_view = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+    repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings(AUDIT_DB_PATH, repo_full)
     _record_server_timing_metric(timing_metrics, "build", build_started)
+    timing_metrics.extend(repo_stage_timings)
     json_started = time.perf_counter()
     payload = asdict(repo_view)
     workspace = access_context.get("workspace")

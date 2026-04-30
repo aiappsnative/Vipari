@@ -491,6 +491,12 @@ def test_build_dashboard_overview_view_summarizes_repo_priorities_and_coverage(t
     assert overview.highest_risk_items[0].change_summary
     assert overview.highest_risk_items[0].flag_summary.startswith("Flagged because")
     assert len(overview.highest_risk_items[0].attribute_profile) == 6
+    assert overview.overview_sections.urgent_queue.repo_count >= 1
+    assert overview.overview_sections.urgent_queue.repos[0].repo_full == "doria90/dummyAI"
+    assert overview.overview_sections.recent_changes.repo_count == 2
+    assert overview.overview_sections.recent_changes.repos[0].highest_priority in {"review_now", "watch", "baseline_review"}
+    assert overview.overview_sections.posture_snapshot.risk_state is not None
+    assert overview.overview_sections.posture_snapshot.metrics[0].label == "Onboarded repositories"
 
 
 def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_path, monkeypatch):

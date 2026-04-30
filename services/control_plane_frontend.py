@@ -827,6 +827,169 @@ def render_control_plane_placeholder_page(
     )
 
 
+def render_control_plane_help_page(
+    *,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    repo_rows: list[dict[str, object]],
+    repo_summaries: list[object],
+    export_ready_count: int,
+    export_pending_count: int,
+) -> str:
+    template = _load_template("control_plane_help.html")
+    admin_control = ""
+    if admin_url:
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
+    help_context = _build_help_context(repo_rows, repo_summaries, export_ready_count, export_pending_count)
+    return (
+        template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
+        .replace("{{HELP_CONTEXT_SUMMARY}}", html_escape(help_context["summary"]))
+        .replace("{{HELP_START_HERE_COPY}}", html_escape(help_context["start_here_copy"]))
+        .replace("{{HELP_NEXT_STEP_LABEL}}", html_escape(help_context["next_step_label"]))
+        .replace("{{HELP_STATUS_CARDS}}", help_context["status_cards_html"])
+        .replace("{{HELP_NEXT_STEP_PANEL}}", help_context["next_step_panel_html"])
+    )
+
+
+def _build_help_context(
+    repo_rows: list[dict[str, object]],
+    repo_summaries: list[object],
+    export_ready_count: int,
+    export_pending_count: int,
+) -> dict[str, str]:
+    visible_repo_count = len(repo_rows)
+    repo_summary_by_full = {
+        str(getattr(summary, "repo_full", "")): summary
+        for summary in repo_summaries
+        if str(getattr(summary, "repo_full", ""))
+    }
+    baseline_approved = [
+        summary for summary in repo_summaries if str(getattr(summary, "onboarding_status", "")).lower() == "baseline_approved"
+    ]
+    baseline_pending = [
+        summary for summary in repo_summaries if str(getattr(summary, "onboarding_status", "")).lower() == "pending_baseline_approval"
+    ]
+    onboarding_active = [
+        summary
+        for summary in repo_summaries
+        if str(getattr(summary, "onboarding_status", "")).lower() not in {"baseline_approved", "pending_baseline_approval"}
+    ]
+    connected_only_rows = [row for row in repo_rows if str(row.get("repo_full") or "") not in repo_summary_by_full]
+
+    summary = (
+        f"This workspace currently has {visible_repo_count} visible repos, "
+        f"{len(repo_summaries)} onboarded repos, and {len(baseline_approved)} approved baselines."
+    )
+
+    if not repo_rows:
+        start_here_copy = "This workspace does not have any visible repositories yet. Open Repositories first and confirm the GitHub installation is connected to the right account or org."
+        next_step_label = "Connect a repository"
+        next_title = "No repositories are visible yet"
+        next_body = "Help should start with the actual blocking state. Right now the blocker is before drift review: the workspace has nothing in inventory to onboard or review."
+        next_href = "/app/repos"
+        next_cta = "Open Repositories"
+    elif connected_only_rows:
+        target_repo = str(connected_only_rows[0].get("repo_full") or "your repo")
+        start_here_copy = f"Start in Repositories. {target_repo} is visible to the workspace, but at least one visible repo has not been onboarded into review workflows yet."
+        next_step_label = "Finish onboarding"
+        next_title = "A visible repo still needs onboarding"
+        next_body = f"{target_repo} is connected, but it does not yet have stored onboarding state. Until onboarding runs, Help, Dashboard, and Compliance can only explain so much because there is no review-ready baseline context."
+        next_href = "/app/repos"
+        next_cta = "Go to Repositories"
+    elif baseline_pending:
+        target_repo = str(getattr(baseline_pending[0], "repo_full", "your repo"))
+        start_here_copy = f"You already have onboarded repositories. The next useful move is baseline review, because {target_repo} is waiting for approval before drift becomes fully grounded."
+        next_step_label = "Review pending baseline"
+        next_title = "A repo is waiting for baseline approval"
+        next_body = f"{target_repo} has completed artifact discovery, but its latest baseline is still pending approval. That usually explains why the system feels partially ready instead of fully trustworthy."
+        next_href = f"/dashboard/{quote(target_repo, safe='')}"
+        next_cta = "Open pending repo"
+    elif onboarding_active:
+        target_repo = str(getattr(onboarding_active[0], "repo_full", "your repo"))
+        start_here_copy = f"Your workspace has onboarding in progress. Check {target_repo} next to confirm discovery finished and baseline creation did not stall."
+        next_step_label = "Check onboarding progress"
+        next_title = "Onboarding is still maturing"
+        next_body = f"{target_repo} has onboarding state, but it is not baseline-approved yet. That usually means Help should point you to repository setup and the repo dashboard before any compliance workflow."
+        next_href = f"/dashboard/{quote(target_repo, safe='')}"
+        next_cta = "Open repo dashboard"
+    elif export_pending_count > 0:
+        start_here_copy = "Review state looks healthy enough to move into evidence work. The next check is whether pending exports are still running or need follow-up in Compliance."
+        next_step_label = "Check pending exports"
+        next_title = "Compliance work is active"
+        next_body = f"This workspace has {len(baseline_approved)} approved baselines and {export_pending_count} pending export jobs. The most useful help now is operational: verify evidence generation is finishing cleanly."
+        next_href = "/app/compliance"
+        next_cta = "Open Compliance"
+    else:
+        start_here_copy = "This workspace already has review-ready repos. The next useful place to work is the Dashboard, where approved baselines and current repo state can be compared directly."
+        next_step_label = "Review drift"
+        next_title = "The workspace is ready for review"
+        next_body = f"This workspace has {len(baseline_approved)} approved baselines and {export_ready_count} completed exports. Help should now point people toward active review and evidence follow-up, not setup."
+        next_href = "/dashboard"
+        next_cta = "Open Dashboard"
+
+    status_cards = [
+        ("Visible repos", str(visible_repo_count), "Repositories visible to this workspace through its current GitHub connection."),
+        ("Onboarded repos", str(len(repo_summaries)), "Repositories with stored onboarding state that Help can reason about."),
+        ("Baselines approved", str(len(baseline_approved)), "Repos whose current baseline is already trusted for drift comparison."),
+        ("Exports ready / pending", f"{export_ready_count} / {export_pending_count}", "Compliance export jobs completed versus still in progress."),
+    ]
+    status_cards_html = "".join(
+        f'''
+        <article class="control-page-stat-card">
+            <span class="control-page-stat-label">{html_escape(label)}</span>
+            <strong>{html_escape(value)}</strong>
+            <span class="control-page-microcopy">{html_escape(detail)}</span>
+        </article>
+        '''
+        for label, value, detail in status_cards
+    )
+
+    spotlight_items: list[tuple[str, str]] = []
+    if connected_only_rows:
+        spotlight_items.extend((str(row.get("repo_full") or "repo"), "Connected only") for row in connected_only_rows[:2])
+    if baseline_pending:
+        spotlight_items.extend((str(getattr(item, "repo_full", "repo")), "Baseline pending") for item in baseline_pending[:2])
+    if baseline_approved and not spotlight_items:
+        spotlight_items.extend((str(getattr(item, "repo_full", "repo")), "Ready for drift review") for item in baseline_approved[:2])
+
+    spotlight_html = (
+        "".join(
+            f'<div class="help-page-spotlight-row"><strong>{html_escape(repo_full)}</strong><span>{html_escape(label)}</span></div>'
+            for repo_full, label in spotlight_items
+        )
+        or '<div class="control-page-empty">No repo-specific guidance is available yet because the workspace has no visible repositories.</div>'
+    )
+
+    next_step_panel_html = f'''
+        <div class="help-page-next-grid">
+            <article class="control-page-section help-page-rich-text help-page-next-card">
+                <p class="secondary-panel-title">Recommended next move</p>
+                <h2 class="control-page-section-title">{html_escape(next_title)}</h2>
+                <p>{html_escape(next_body)}</p>
+                <a class="control-page-button help-page-inline-button" href="{html_escape(next_href)}">{html_escape(next_cta)}</a>
+            </article>
+            <article class="control-page-section help-page-rich-text help-page-next-card">
+                <p class="secondary-panel-title">Repo spotlight</p>
+                <h2 class="control-page-section-title">What Help is reacting to right now</h2>
+                <div class="help-page-spotlight-list">{spotlight_html}</div>
+            </article>
+        </div>
+    '''
+
+    return {
+        "summary": summary,
+        "start_here_copy": start_here_copy,
+        "next_step_label": next_step_label,
+        "status_cards_html": status_cards_html,
+        "next_step_panel_html": next_step_panel_html,
+    }
+
+
 def render_control_plane_compliance_page(
     *,
     workspace_name: str,

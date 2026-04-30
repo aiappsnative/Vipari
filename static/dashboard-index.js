@@ -295,14 +295,6 @@ function clearPreviewTimer(button) {
     }
 }
 
-function primeRepoDashboardCache(items) {
-    items.slice(0, 4).forEach((repo, index) => {
-        window.setTimeout(() => {
-            void fetchRepoDashboard(repo.repo_full).catch(() => null);
-        }, 40 * (index + 1));
-    });
-}
-
 function journeyNodesFromRepoPayload(repo, repoPayload) {
     const snapshots = asArray(repoPayload?.journey_snapshots);
     const selectedBaselineSourceSnapshotId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
@@ -420,9 +412,11 @@ function renderJourney(repo, repoPayload = null) {
 function renderRepoAtlasCard(repo, index) {
     const reviewNowCount = Number(repo.review_now_count || 0);
     const watchCount = Number(repo.watch_count || 0);
+    const insightCount = Number(repo.insight_count || 0);
     const driftTone = reviewNowCount > 0 ? "high" : watchCount > 0 ? "medium" : "steady";
     const checkpointCount = Number(repo.historical_version_count || 0);
     const summary = repo.highest_insight_title || triageSummary(repo) || "Repository posture available";
+    const recentSignal = repo.highest_evidence_summary || repo.highest_change_summary || repo.highest_flag_summary || repo.highest_rationale || "Recent signal summary will appear here as audits accumulate.";
     return `
         <button type="button" class="repo-atlas-card-button" data-repo-atlas-index="${index}" data-repo-full="${escapeHtml(repo.repo_full)}">
             <div class="repo-atlas-topline">
@@ -432,10 +426,11 @@ function renderRepoAtlasCard(repo, index) {
             <div class="repo-atlas-name">${escapeHtml(repo.repo_full)}</div>
             <div class="repo-atlas-summary">${escapeHtml(summary)}</div>
             <div class="repo-atlas-metrics">
-                <span>${escapeHtml(String(repo.discovered_artifact_count || 0))} artifacts</span>
-                <span>${escapeHtml(String(checkpointCount))} checkpoints</span>
-                <span>${reviewNowCount > 0 ? escapeHtml(`${String(reviewNowCount)} review`) : watchCount > 0 ? escapeHtml(`${String(watchCount)} watch`) : "stable"}</span>
+                <span>${escapeHtml(String(insightCount))} audits</span>
+                <span>${escapeHtml(String(reviewNowCount))} escalations</span>
+                <span>${watchCount > 0 ? escapeHtml(`${String(watchCount)} watch`) : escapeHtml(`${String(checkpointCount)} checkpoints`)}</span>
             </div>
+            <div class="repo-atlas-signal">${escapeHtml(recentSignal)}</div>
             <div class="repo-atlas-footer">
                 <span class="repo-atlas-baseline">${escapeHtml(repo.highest_baseline_label || baselineLabelForRepo(repo))}</span>
                 <span class="repo-atlas-open">Preview</span>
@@ -883,6 +878,10 @@ function buildSelectionItems(repos, attentionRepos, highestRiskItems) {
     });
 }
 
+function overviewSections(payload) {
+    return payload && typeof payload === "object" ? (payload.overview_sections || {}) : {};
+}
+
 async function previewRepoSelection(repo, repos, rowIndex = null) {
     previewState.pinnedRepoFull = repo.repo_full;
     previewState.pendingRepoFull = repo.repo_full;
@@ -1164,9 +1163,125 @@ function populateOverviewStats(payload, attentionRepos, highestRiskItems, repos)
     setText("triage-count-summary", `${attentionRepos.length || highestRiskItems.length || repos.length} repositories in queue`);
 }
 
+async function fetchEscalationQueue(includeWatch = false) {
+    const url = `/api/dashboard/escalation-queue${includeWatch ? "?include_watch=true" : ""}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Escalation queue request failed with ${response.status}`);
+    }
+    return response.json();
+}
+
+function renderWorkspacePostureBar(queuePayload) {
+    const posture = String(queuePayload?.workspace_posture || "healthy");
+    const reasons = asArray(queuePayload?.workspace_posture_reasons);
+    const escalationCount = Number(queuePayload?.escalation_count || 0);
+    const watchCount = Number(queuePayload?.watch_count || 0);
+
+    const postureClass = posture === "risk" ? "posture-bar-risk" : posture === "watch" ? "posture-bar-watch" : "posture-bar-healthy";
+    const postureLabel = posture === "risk" ? "Risk" : posture === "watch" ? "Watch" : "Healthy";
+    const reasonHtml = reasons.length
+        ? `<span class="posture-bar-reasons">${reasons.map((r) => `<span class="posture-bar-reason">${escapeHtml(r)}</span>`).join("")}</span>`
+        : "";
+    const countsHtml = `<span class="posture-bar-counts"><strong>${escalationCount}</strong> escalation${escalationCount !== 1 ? "s" : ""} &middot; <strong>${watchCount}</strong> watch</span>`;
+
+    return `
+        <div class="posture-bar-inner ${postureClass}">
+            <span class="posture-bar-indicator" aria-label="Workspace posture: ${escapeHtml(postureLabel)}">${escapeHtml(postureLabel)}</span>
+            ${reasonHtml}
+            ${countsHtml}
+        </div>
+    `;
+}
+
+function renderEscalationQueueRow(item, index) {
+    const severity = severityForPriority(item.priority);
+    const deltaHtml = asArray(item.attribute_deltas).slice(0, 2).map((delta) => `
+        <span class="escalation-delta-chip">
+            <span class="escalation-delta-label">${escapeHtml(delta.label || delta.attribute_key || "")}</span>
+            <span class="escalation-delta-transition">${escapeHtml(`${delta.baseline_value || "?"} → ${delta.current_value || "?"}`)}</span>
+        </span>
+    `).join("");
+    const artifactName = String(item.artifact_path || "").split("/").pop() || item.artifact_path || "artifact";
+    const repoName = String(item.repo_full || "");
+    const reviewHref = item.review_url || `/dashboard/${encodeURIComponent(repoName)}?artifact=${encodeURIComponent(item.artifact_path || "")}`;
+
+    return `
+        <div class="escalation-row" role="row" data-escalation-index="${index}" data-escalation-priority="${escapeHtml(item.priority)}">
+            <div class="escalation-row-rank" role="cell"><span class="escalation-rank-num">${index + 1}</span></div>
+            <div class="escalation-row-main" role="cell">
+                <div class="escalation-row-top">
+                    <strong class="escalation-title">${escapeHtml(item.title || artifactName)}</strong>
+                    <span class="severity-badge ${severity.className}">${escapeHtml(severity.label)}</span>
+                </div>
+                <div class="escalation-row-repo">${escapeHtml(repoName)}</div>
+                <div class="escalation-row-artifact">${escapeHtml(item.artifact_path || "")}</div>
+                <div class="escalation-row-rationale">${escapeHtml(item.rationale || "")}</div>
+                ${deltaHtml ? `<div class="escalation-deltas">${deltaHtml}</div>` : ""}
+            </div>
+            <div class="escalation-row-meta" role="cell">
+                <span class="escalation-meta-label">${escapeHtml(item.evidence_label || "")}</span>
+                <span class="escalation-meta-baseline">${escapeHtml(item.baseline_label || "")}</span>
+            </div>
+            <div class="escalation-row-action" role="cell">
+                <a class="escalation-action-btn" href="${escapeHtml(reviewHref)}" aria-label="Review ${escapeHtml(artifactName)}">${escapeHtml(item.recommended_action || "Review")}</a>
+            </div>
+        </div>
+    `;
+}
+
+function renderEscalationQueueTable(queuePayload) {
+    const items = asArray(queuePayload?.items);
+    if (!items.length) {
+        return '<div class="muted">No escalation items — workspace is healthy.</div>';
+    }
+    return `
+        <div class="escalation-table-header" role="row">
+            <span role="columnheader">#</span>
+            <span role="columnheader">Finding</span>
+            <span role="columnheader">Signal</span>
+            <span role="columnheader">Action</span>
+        </div>
+        ${items.map((item, index) => renderEscalationQueueRow(item, index)).join("")}
+    `;
+}
+
+async function loadEscalationQueue() {
+    try {
+        const queuePayload = await fetchEscalationQueue();
+        const postureBarEl = document.getElementById("workspace-posture-bar");
+        if (postureBarEl) {
+            postureBarEl.innerHTML = renderWorkspacePostureBar(queuePayload);
+            postureBarEl.classList.remove("loading-shell");
+            postureBarEl.removeAttribute("aria-busy");
+        }
+        const countEl = document.getElementById("escalation-count-summary");
+        if (countEl) {
+            const escalationCount = Number(queuePayload?.escalation_count || 0);
+            const watchCount = Number(queuePayload?.watch_count || 0);
+            countEl.textContent = `${escalationCount} escalation${escalationCount !== 1 ? "s" : ""} · ${watchCount} watch`;
+        }
+        setSectionHtml("escalation-queue-table", renderEscalationQueueTable(queuePayload));
+    } catch {
+        const postureBarEl = document.getElementById("workspace-posture-bar");
+        if (postureBarEl) {
+            postureBarEl.innerHTML = '<div class="posture-bar-inner posture-bar-healthy"><span class="posture-bar-indicator">Healthy</span></div>';
+            postureBarEl.classList.remove("loading-shell");
+            postureBarEl.removeAttribute("aria-busy");
+        }
+        setSectionHtml("escalation-queue-table", '<div class="muted">Escalation queue unavailable.</div>');
+    }
+}
+
 async function loadOverview(preferredRepoFull = null, preferredRepoPayload = null) {
     try {
-        const response = await fetch("/api/dashboard/overview");
+        const page = document.body;
+        const url = new URL("/api/dashboard/overview", window.location.origin);
+        const activeOverviewRange = page?.dataset?.activeOverviewRange || "7d";
+        const activeOverviewFilter = page?.dataset?.activeOverviewFilter || "all";
+        url.searchParams.set("range", activeOverviewRange);
+        url.searchParams.set("filter", activeOverviewFilter);
+        const response = await fetch(`${url.pathname}${url.search}`);
         if (!response.ok) {
             throw new Error(`Overview request failed with ${response.status}`);
         }
@@ -1175,9 +1290,17 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         const highestRiskItems = asArray(payload.highest_risk_items);
         const attentionRepos = asArray(payload.attention_repos);
         const repos = asArray(payload.repos);
-        const selectionItems = buildSelectionItems(repos, attentionRepos, highestRiskItems);
-        const visibleSelectionItems = selectionItems.slice(0, 4);
-        const repoAtlasItems = selectionItems;
+        const navRepos = asArray(payload.nav_repos).length ? asArray(payload.nav_repos) : repos;
+        const sections = overviewSections(payload);
+        const groupedUrgentRepos = sections.urgent_queue && Array.isArray(sections.urgent_queue.repos)
+            ? asArray(sections.urgent_queue.repos)
+            : null;
+        const groupedRecentRepos = sections.recent_changes && Array.isArray(sections.recent_changes.repos)
+            ? asArray(sections.recent_changes.repos)
+            : null;
+        const selectionItems = groupedRecentRepos || buildSelectionItems(repos, attentionRepos, highestRiskItems);
+        const visibleSelectionItems = groupedUrgentRepos || selectionItems.slice(0, 4);
+        const repoAtlasItems = groupedRecentRepos || selectionItems;
 
         populateOverviewStats(payload, attentionRepos, highestRiskItems, repos);
         setSectionHtml(
@@ -1199,10 +1322,10 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         try {
             const auditListEl = document.getElementById("audit-logs-list");
             if (auditListEl) {
-                if (repos.length === 0) {
+                if (navRepos.length === 0) {
                     setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
                 } else {
-                    const items = repos.map((r) => `
+                    const items = navRepos.map((r) => `
                         <a class="sidebar-subitem" href="${repoDetailUrl(r)}">${escapeHtml(r.repo_full)}</a>
                     `).join("");
                     setSectionHtml("audit-logs-list", `<nav class=\"sidebar-sublist-nav\">${items}</nav>`);
@@ -1224,7 +1347,6 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
             if (urgentIndex >= 0) {
                 selectUrgentRow(urgentIndex);
             }
-            primeRepoDashboardCache(selectionItems.slice(0, 4));
             try {
                 const firstPayload = preferredRepoPayload && selectedRepo.repo_full === preferredRepoFull
                     ? preferredRepoPayload
@@ -1281,6 +1403,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
 
     bindOverviewRebaselineModal();
 loadOverview();
+loadEscalationQueue();
 
 // Audit Logs toggle behavior: expand/collapse the repo list
 function bindAuditLogsToggle() {
