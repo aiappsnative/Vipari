@@ -555,6 +555,8 @@ def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
     assert response.status_code == 200
     assert 'data-active-repo-tab="reports"' in response.text
     assert 'data-repo-tab-link="reports"' in response.text
+    assert 'data-repo-tab-link="version-control"' in response.text
+    assert '?tab=version-control' in response.text
     assert '?tab=baseline' in response.text
     assert '?tab=compliance' in response.text
 

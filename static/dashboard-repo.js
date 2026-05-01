@@ -23,7 +23,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
-const VALID_REPO_TABS = new Set(["drift", "baseline", "compliance", "reports"]);
+const VALID_REPO_TABS = new Set(["drift", "version-control", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -447,6 +447,155 @@ function bindBaselineReviewActions() {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+function normalizeRadarValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return 0;
+    }
+    return clamp(numeric, 0, 1);
+}
+
+function compactRepoLabel(repoFullValue) {
+    const segments = String(repoFullValue || "").split("/").filter(Boolean);
+    return segments.length ? segments[segments.length - 1] : String(repoFullValue || "Repository posture");
+}
+
+function repoRadarVectors(repoPayload) {
+    const snapshots = asArray(repoPayload?.journey_snapshots);
+    if (!snapshots.length) {
+        return null;
+    }
+
+    const selectedBaselineId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
+    const baselineSnapshot = (selectedBaselineId
+        ? snapshots.find((snapshot) => Number(snapshot.id) === selectedBaselineId)
+        : null) || snapshots.find((snapshot) => snapshot.snapshot_type === "baseline_approved") || snapshots[0];
+    const currentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current")
+        || snapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
+        || snapshots[snapshots.length - 1];
+    if (!baselineSnapshot || !currentSnapshot) {
+        return null;
+    }
+
+    const toSeries = (snapshot) => {
+        const vector = snapshot?.attribute_vector || {};
+        const inputSummary = snapshot?.input_summary || {};
+        return [
+            normalizeRadarValue(vector.governance),
+            normalizeRadarValue(vector.change_velocity),
+            normalizeRadarValue(Number(inputSummary.coverage_percent || 0) / 100),
+            normalizeRadarValue(vector.autonomy),
+            normalizeRadarValue(vector.capability),
+            normalizeRadarValue(vector.guardrails),
+        ];
+    };
+
+    return {
+        labels: ["Governance", "Velocity", "Coverage", "Autonomy", "Capability", "Guardrails"],
+        baselineKey: baselineSnapshot.snapshot_key || baselineSnapshot.source_ref || "Approved baseline",
+        currentKey: currentSnapshot.snapshot_key || currentSnapshot.source_ref || "Current snapshot",
+        series: [
+            {
+                color: "rgba(78, 103, 255, 0.28)",
+                stroke: "rgba(79, 106, 255, 0.9)",
+                values: toSeries(baselineSnapshot),
+            },
+            {
+                color: "rgba(73, 223, 217, 0.22)",
+                stroke: "rgba(85, 230, 222, 0.92)",
+                values: toSeries(currentSnapshot),
+            },
+        ],
+    };
+}
+
+function drawRepoRadar(repoPayload) {
+    const canvas = document.getElementById("repo-posture-radar");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+        return;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) {
+        return;
+    }
+
+    const vectors = repoRadarVectors(repoPayload);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!vectors) {
+        return;
+    }
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2 + 10;
+    const radius = 118;
+    const angleStep = (Math.PI * 2) / vectors.labels.length;
+    const darkTheme = document.body?.dataset?.theme !== "light";
+    const ringColor = darkTheme ? "rgba(255,255,255,0.10)" : "rgba(112, 98, 84, 0.14)";
+    const axisColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.12)";
+    const labelColor = darkTheme ? "rgba(221, 222, 225, 0.55)" : "rgba(77, 68, 60, 0.72)";
+
+    for (let level = 1; level <= 4; level += 1) {
+        const scale = level / 4;
+        context.beginPath();
+        vectors.labels.forEach((_, index) => {
+            const angle = -Math.PI / 2 + index * angleStep;
+            const x = centerX + Math.cos(angle) * radius * scale;
+            const y = centerY + Math.sin(angle) * radius * scale;
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.strokeStyle = ringColor;
+        context.lineWidth = 1;
+        context.stroke();
+    }
+
+    vectors.labels.forEach((label, index) => {
+        const angle = -Math.PI / 2 + index * angleStep;
+        const axisX = centerX + Math.cos(angle) * radius;
+        const axisY = centerY + Math.sin(angle) * radius;
+        context.beginPath();
+        context.moveTo(centerX, centerY);
+        context.lineTo(axisX, axisY);
+        context.strokeStyle = axisColor;
+        context.stroke();
+
+        const labelX = centerX + Math.cos(angle) * (radius + 22);
+        const labelY = centerY + Math.sin(angle) * (radius + 22);
+        context.fillStyle = labelColor;
+        context.font = "500 13px Inter";
+        context.textAlign = labelX > centerX + 10 ? "left" : labelX < centerX - 10 ? "right" : "center";
+        context.textBaseline = labelY > centerY + 10 ? "top" : labelY < centerY - 10 ? "bottom" : "middle";
+        context.fillText(label, labelX, labelY);
+    });
+
+    vectors.series.forEach((series) => {
+        context.beginPath();
+        series.values.forEach((value, index) => {
+            const angle = -Math.PI / 2 + index * angleStep;
+            const x = centerX + Math.cos(angle) * radius * normalizeRadarValue(value);
+            const y = centerY + Math.sin(angle) * radius * normalizeRadarValue(value);
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.fillStyle = series.color;
+        context.strokeStyle = series.stroke;
+        context.lineWidth = 2;
+        context.fill();
+        context.stroke();
+    });
+
+    setText("repo-radar-title", compactRepoLabel(repoFull));
+    setText("repo-radar-meta", `${vectors.baselineKey} vs ${vectors.currentKey}`);
 }
 
 function severityForPriority(priority) {
@@ -1483,6 +1632,11 @@ function applyDashboardPayload(payload) {
     setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
+    drawRepoRadar(payload);
+    const repoRadarCaption = comparison
+        ? `${comparison.left?.snapshot_key || "baseline"} -> ${comparison.right?.snapshot_key || "current"} with drift delta ${formatSigned(comparison.drift_summary?.drift_delta)}.`
+        : "Version-control posture appears once DriftGuard has both an approved baseline snapshot and a current repository snapshot to compare.";
+    setText("repo-radar-caption", repoRadarCaption);
     setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
@@ -1686,6 +1840,10 @@ async function loadDashboard() {
         setSectionHtml("repo-journey-summary", fallback);
         setSectionHtml("repo-journey-timeline", fallback);
         setSectionHtml("repo-journey-compare", fallback);
+        setText("repo-radar-title", "Version posture unavailable");
+        setText("repo-radar-meta", message);
+        setText("repo-radar-caption", message);
+        drawRepoRadar(null);
         setSectionHtml("lower-confidence-insights", fallback);
         setSectionHtml("repo-actions-review", fallback);
         setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);

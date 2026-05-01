@@ -864,40 +864,184 @@ def render_control_plane_mcp_page(
     plan_label: str,
     theme_preference: str,
     admin_url: str | None,
+    active_tab: str,
     download_url: str,
     broker_host: str,
     config_snippet: str,
     principals: list,
+    audit_logs: list,
+    csrf_token: str,
+    can_manage: bool,
+    entitlement_allows: bool,
+    one_time_secret: str | None,
+    max_principals: int,
+    new_client_id: str | None = None,
 ) -> str:
     template = _load_template("control_plane_mcp.html")
     admin_control = ""
     if admin_url:
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
 
+    tab_urls = {
+        "overview": "/app/integrations/mcp?tab=overview",
+        "api-keys": "/app/integrations/mcp?tab=api-keys",
+        "activity": "/app/integrations/mcp?tab=activity",
+    }
+    tab_labels = {
+        "overview": "Overview",
+        "api-keys": "API keys",
+        "activity": "Activity",
+    }
+    tab_bar = "".join(
+        f'''<a class="control-page-tab-link" href="{html_escape(tab_urls[tab_key])}"{' aria-current="page"' if tab_key == active_tab else ''}>{html_escape(tab_labels[tab_key])}</a>'''
+        for tab_key in ("overview", "api-keys", "activity")
+    )
+
+    if one_time_secret:
+        secret_block = f"""
+        <section class="control-page-flash-secret" role="alert" aria-live="polite">
+            <div class="control-page-flash-secret-inner">
+                <p class="control-page-flash-secret-title">&#128274; API key created — copy your secret now</p>
+                <p class="control-page-copy">This secret will not be shown again. Store it securely.</p>
+                <div class="control-page-secret-reveal">
+                    <code id="api-key-secret" class="control-page-monospace">{html_escape(one_time_secret)}</code>
+                    <button type="button" class="control-page-copy-btn"
+                            onclick="navigator.clipboard.writeText(document.getElementById('api-key-secret').textContent)">
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </section>"""
+    else:
+        secret_block = ""
+
+    active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active")
+    api_keys_section = _render_api_keys_section(
+        principals=principals,
+        can_manage=can_manage,
+        entitlement_allows=entitlement_allows,
+        csrf_token=csrf_token,
+        max_principals=max_principals,
+        new_client_id=new_client_id,
+    )
+
     tool_cards = "".join(
         f'''<article class="help-page-topic-card"><strong>{html_escape(tool["name"])}</strong><p>{html_escape(tool["description"])}</p><p><span class="control-page-badge">{html_escape(tool["required_scope"])}</span></p></article>'''
         for tool in MCP_BROKER_TOOLS
     )
-    if principals:
-        principal_rows = "".join(
-            f'''<tr><td><code>{html_escape(p.display_name)}</code></td><td><code class="control-page-monospace">{html_escape(p.client_id[:16])}&#8230;</code></td><td>{" ".join(f'<span class="control-page-badge">{html_escape(scope)}</span>' for scope in json.loads(p.scopes_json))}</td><td><span class="control-page-badge">{html_escape(p.status)}</span></td></tr>'''
-            for p in principals
-        )
-        principal_table = f'''<div class="control-page-table-wrap"><table class="control-page-table"><thead><tr><th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th></tr></thead><tbody>{principal_rows}</tbody></table></div>'''
+
+    activity_rows = ""
+    for entry in audit_logs:
+        try:
+            payload = json.loads(getattr(entry, "payload_json", "") or "{}")
+        except (ValueError, TypeError):
+            payload = {}
+        details: list[str] = []
+        if isinstance(payload, dict):
+            if payload.get("source"):
+                details.append(f"source={payload['source']}")
+            scopes = payload.get("scopes")
+            if isinstance(scopes, list) and scopes:
+                details.append("scopes=" + ", ".join(str(scope) for scope in scopes))
+            if payload.get("tool_name"):
+                details.append(f"tool={payload['tool_name']}")
+        detail_text = " | ".join(details) if details else "Workspace automation activity"
+        activity_rows += f"""
+        <tr>
+            <td>{html_escape(_format_timestamp(getattr(entry, 'created_at', None)))}</td>
+            <td><code>{html_escape(getattr(entry, 'event_type', 'unknown'))}</code></td>
+            <td>{html_escape(f"{getattr(entry, 'subject_type', 'workspace')}:{getattr(entry, 'subject_id', 'n/a')}")}</td>
+            <td>{html_escape(detail_text)}</td>
+        </tr>"""
+
+    if activity_rows:
+        activity_section = f"""
+        <article class="control-page-section control-page-section-wide">
+            <div class="secondary-panel-title">Workspace activity</div>
+            <h2 class="control-page-section-title">Recent integration and API-key events</h2>
+            <p class="control-page-copy">This feed keeps connector setup, key rotation, and broker actions together on one page.</p>
+            <div class="control-page-table-wrap">
+                <table class="control-page-table">
+                    <thead>
+                        <tr><th>When</th><th>Event</th><th>Subject</th><th>Details</th></tr>
+                    </thead>
+                    <tbody>{activity_rows}</tbody>
+                </table>
+            </div>
+        </article>"""
     else:
-        principal_table = '<p class="control-page-copy">No workspace API keys exist yet. Create one before downloading the connector.</p>'
+        activity_section = """
+        <article class="control-page-section control-page-section-wide">
+            <div class="secondary-panel-title">Workspace activity</div>
+            <h2 class="control-page-section-title">Recent integration and API-key events</h2>
+            <p class="control-page-copy">No integration activity has been recorded for this workspace yet.</p>
+        </article>"""
+
+    if active_tab == "api-keys":
+        active_panel = api_keys_section
+    elif active_tab == "activity":
+        active_panel = activity_section
+    else:
+        active_panel = f"""
+        <article class="control-page-section control-page-section-wide">
+            <div class="secondary-panel-title">Download</div>
+            <h2 class="control-page-section-title">Customer MCP connector package</h2>
+            <p class="control-page-copy">This downloadable package is meant for authenticated customers only. It runs as a thin local MCP server in the customer environment, exchanges workspace-scoped machine-principal credentials for a short-lived broker token, and forwards allowed tool calls to the hosted PromptDrift broker.</p>
+            <div class="help-page-workflow-grid">
+                <a class="help-page-action-card" href="{html_escape(download_url)}"><span class="help-page-action-step">1</span><strong>Download connector</strong><p>Includes the local MCP server script, dependency list, environment template, and example host configuration.</p></a>
+                <a class="help-page-action-card" href="{html_escape(tab_urls['api-keys'])}"><span class="help-page-action-step">2</span><strong>Review API keys</strong><p>Use the API keys tab for the workspace machine principal list, scope choices, and one-time secret handoff.</p></a>
+                <a class="help-page-action-card" href="{html_escape(tab_urls['activity'])}"><span class="help-page-action-step">3</span><strong>Check activity</strong><p>Recent integration activity stays on this page so connector rollout, key rotation, and broker actions can be reviewed together.</p></a>
+            </div>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Quickstart</div>
+            <h2 class="control-page-section-title">Host configuration</h2>
+            <pre class="help-page-flow">{html_escape(config_snippet)}</pre>
+            <p class="control-page-copy">The connector never receives internal PromptDrift bearer tokens. It uses the machine-principal credentials you create for this workspace only to obtain a short-lived broker token.</p>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Safety model</div>
+            <h2 class="control-page-section-title">Trust boundary</h2>
+            <pre class="help-page-flow">Your AI agent
+  -&gt; customer MCP connector
+  -&gt; PromptDrift broker
+  -&gt; curated PromptDrift control-plane reads</pre>
+            <p class="control-page-copy">One connector session maps to one workspace. The connector package is thin on purpose so PromptDrift can keep product semantics, output shaping, and credential handling server-side.</p>
+        </article>
+
+        <article class="control-page-section control-page-section-wide">
+            <div class="secondary-panel-title">Available tools</div>
+            <h2 class="control-page-section-title">Read-first MCP surface</h2>
+            <div class="help-page-card-grid">{tool_cards}</div>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Workspace machine principals</div>
+            <h2 class="control-page-section-title">API-key posture</h2>
+            <p class="control-page-copy">{html_escape(str(active_principal_count))} active workspace API key(s) are currently available for connector setup. Use the API keys tab to review scopes, create a new key, or revoke an old one.</p>
+            <a class="control-page-button" href="{html_escape(tab_urls['api-keys'])}">Open API keys</a>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Operational visibility</div>
+            <h2 class="control-page-section-title">Recent integration activity</h2>
+            <p class="control-page-copy">Keep connector rollout, key changes, and broker actions together by reviewing the Activity tab before handing the package to a customer host.</p>
+            <a class="control-page-button" href="{html_escape(tab_urls['activity'])}">Open Activity</a>
+        </article>"""
 
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{ADMIN_CONTROL}}", admin_control)
-        .replace("{{DOWNLOAD_URL}}", html_escape(download_url))
         .replace("{{BROKER_HOST}}", html_escape(broker_host))
         .replace("{{TOOL_COUNT}}", html_escape(str(len(MCP_BROKER_TOOLS))))
-        .replace("{{CONFIG_SNIPPET}}", html_escape(config_snippet))
-        .replace("{{TOOL_CARDS}}", tool_cards)
-        .replace("{{PRINCIPAL_TABLE}}", principal_table)
+        .replace("{{ACTIVE_API_KEY_COUNT}}", html_escape(str(active_principal_count)))
+        .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
+        .replace("{{MCP_TAB_BAR}}", tab_bar)
+        .replace("{{MCP_ACTIVE_PANEL}}", active_panel)
     )
 
 
@@ -1174,8 +1318,8 @@ def render_control_plane_admin_page(
             else html_escape(github_login)
         )
         counts_markup = (
-            f'Installs {html_escape(str(int(row.get("installation_count") or 0)))} · '
-            f'Connected {html_escape(str(int(row.get("connected_repo_count") or 0)))} · '
+            f'Installs {html_escape(str(int(row.get("installation_count") or 0)))} | '
+            f'Connected {html_escape(str(int(row.get("connected_repo_count") or 0)))} | '
             f'Onboarded {html_escape(str(int(row.get("onboarded_repo_count") or 0)))}'
         )
         user_edit = f'''
@@ -1321,11 +1465,11 @@ def _render_api_keys_section(
 
     def _fmt_date(ts: float | None) -> str:
         if not ts:
-            return "—"
+            return "-"
         try:
             return _dt.fromtimestamp(ts, tz=_timezone.utc).strftime("%Y-%m-%d")
         except Exception:
-            return "—"
+            return "-"
 
     rows_html = ""
     for p in principals:
@@ -1348,7 +1492,7 @@ def _render_api_keys_section(
         status_class = "control-page-badge-active" if p.status == "active" else "control-page-badge-revoked"
         # Highlight the newly-created row
         row_class = ' class="control-page-table-row-new"' if (new_client_id and p.client_id == new_client_id) else ""
-        # Show first 16 chars of client_id — not secret, but enough to match CI config
+        # Show first 16 chars of client_id; not secret, but enough to match CI config.
         client_id_display = html_escape(p.client_id[:16]) + "&#8230;"
         created_label = _fmt_date(getattr(p, "created_at", None))
         rows_html += f"""
@@ -1395,19 +1539,19 @@ def _render_api_keys_section(
             <label class="control-page-label" for="api-key-name">Key name</label>
             <input class="control-page-input" id="api-key-name" name="display_name"
                    placeholder="e.g. CI pipeline" maxlength="120" required{disabled_attr} />
-            <fieldset class="control-page-choice-group" aria-labelledby="api-key-scopes-title">
+            <fieldset class="control-page-checkbox-group" aria-labelledby="api-key-scopes-title">
                 <legend class="control-page-label" id="api-key-scopes-title">Scopes</legend>
-                <label class="control-page-choice">
+                <label class="control-page-checkbox-option">
                     <input type="checkbox" name="scope_drift_read" value="1"{disabled_attr} />
-                    <span><strong>drift.read</strong> &mdash; Read drift data and dashboards</span>
+                    <span class="control-page-checkbox-copy"><strong>drift.read</strong> &mdash; Read drift data and dashboards</span>
                 </label>
-                <label class="control-page-choice">
+                <label class="control-page-checkbox-option">
                     <input type="checkbox" name="scope_drift_write_low" value="1"{disabled_attr} />
-                    <span><strong>drift.write.low</strong> &mdash; Initiate compliance exports</span>
+                    <span class="control-page-checkbox-copy"><strong>drift.write.low</strong> &mdash; Initiate compliance exports</span>
                 </label>
-                <label class="control-page-choice">
+                <label class="control-page-checkbox-option">
                     <input type="checkbox" name="scope_drift_write_high" value="1"{disabled_attr} />
-                    <span><strong>drift.write.high</strong> &mdash; Approve baselines
+                    <span class="control-page-checkbox-copy"><strong>drift.write.high</strong> &mdash; Approve baselines
                         <em class="control-page-warning">(Baseline approval is a permanent governance action &mdash; assign only to trusted automation)</em>
                     </span>
                 </label>
@@ -1455,7 +1599,7 @@ def render_api_keys_settings_page(
         secret_block = f"""
         <section class="control-page-flash-secret" role="alert" aria-live="polite">
             <div class="control-page-flash-secret-inner">
-                <p class="control-page-flash-secret-title">&#128274; API key created — copy your secret now</p>
+                <p class="control-page-flash-secret-title">&#128274; API key created - copy your secret now</p>
                 <p class="control-page-copy">This secret will not be shown again. Store it securely.</p>
                 <div class="control-page-secret-reveal">
                     <code id="api-key-secret" class="control-page-monospace">{html_escape(one_time_secret)}</code>
@@ -1484,7 +1628,7 @@ def render_api_keys_settings_page(
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{API_KEYS_SECTION}}", api_keys_section)
-        # Replace ONE_TIME_SECRET_BLOCK last — its content contains the raw
+        # Replace ONE_TIME_SECRET_BLOCK last; its content contains the raw
         # secret and must not be interpretable as another placeholder.
         .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
     )

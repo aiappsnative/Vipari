@@ -668,6 +668,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Coverage" in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
     assert 'href="/app/compliance"' in dashboard_html
+    assert 'href="/app/integrations/mcp"' in dashboard_html
     assert 'id="audit-logs-toggle"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
@@ -686,6 +687,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
     assert 'href="/app/compliance"' in repo_dashboard_html
+    assert 'href="/app/integrations/mcp"' in repo_dashboard_html
     assert "Generate Export Package" not in repo_dashboard_html
     assert "Recent Exports" not in repo_dashboard_html
     assert "Available repositories" not in repo_dashboard_html
@@ -4187,13 +4189,21 @@ def test_api_keys_page_loads_for_owner(tmp_path):
     response = client.get(
         "/app/settings/api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    page = client.get(
+        response.headers["location"],
+        cookies={main.settings.session_cookie_name: session.session_id},
     )
 
     main.settings.app_encryption_key = original_enc
     main.AUDIT_DB_PATH = original_db_path
 
-    assert response.status_code == 200
-    assert "API Keys" in response.text or "api-keys" in response.text.lower()
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert page.status_code == 200
+    assert "Machine principal credentials" in page.text
 
 
 def test_api_keys_page_denied_for_viewer(tmp_path):
@@ -4204,11 +4214,20 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     response = client.get(
         "/app/settings/api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    page = client.get(
+        response.headers["location"],
+        cookies={main.settings.session_cookie_name: session.session_id},
     )
 
     main.AUDIT_DB_PATH = original_db_path
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert page.status_code == 200
+    assert "Only workspace owners and admins can create API keys." in page.text
 def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
     """POST create → 303, GET → secret shown; second GET → secret absent."""
     original_db_path = main.AUDIT_DB_PATH
@@ -4229,24 +4248,25 @@ def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
         follow_redirects=False,
     )
     assert create_resp.status_code == 303
+    assert create_resp.headers["location"] == "/app/integrations/mcp?tab=api-keys"
 
     # First GET — secret must appear
     get1 = client.get(
-        "/app/settings/api-keys",
+        "/app/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert get1.status_code == 200
-    # The secret is a base64url token; verify the flash section is present
-    assert "new_api_key_secret" in get1.text or "client_secret" in get1.text or "Copy this secret" in get1.text or get1.text.count("_") > 5
+    assert "API key created" in get1.text
+    assert "This secret will not be shown again" in get1.text
 
     # Second GET — secret must be gone (consumed)
     get2 = client.get(
-        "/app/settings/api-keys",
+        "/app/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert get2.status_code == 200
     # The one-time secret section should no longer be rendered
-    assert "Copy this secret" not in get2.text
+    assert "This secret will not be shown again" not in get2.text
 
     main.settings.app_encryption_key = original_enc
     main.AUDIT_DB_PATH = original_db_path
@@ -4285,6 +4305,7 @@ def test_api_keys_revoke_works(tmp_path):
         follow_redirects=False,
     )
     assert revoke_resp.status_code == 303
+    assert revoke_resp.headers["location"] == "/app/integrations/mcp?tab=api-keys"
 
     updated = get_machine_principal_by_client_id(main.AUDIT_DB_PATH, principal.client_id)
     assert updated is not None
@@ -4419,7 +4440,7 @@ def test_api_keys_create_rejects_empty_scopes(tmp_path):
 
 
 def test_api_keys_page_shows_scope_checkboxes(tmp_path):
-    """GET /app/settings/api-keys page must show all three customer scope labels."""
+    """GET MCP API-keys tab must show all three customer scope labels."""
     original_db_path = main.AUDIT_DB_PATH
     original_enc = main.settings.app_encryption_key
     main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
@@ -4427,7 +4448,7 @@ def test_api_keys_page_shows_scope_checkboxes(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "scope-ui", "1006")
 
     response = client.get(
-        "/app/settings/api-keys",
+        "/app/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -4435,6 +4456,9 @@ def test_api_keys_page_shows_scope_checkboxes(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 200
+    assert 'type="checkbox" name="scope_drift_read"' in response.text
+    assert 'type="checkbox" name="scope_drift_write_low"' in response.text
+    assert 'type="checkbox" name="scope_drift_write_high"' in response.text
     assert "drift.read" in response.text
     assert "drift.write.low" in response.text
     assert "drift.write.high" in response.text
@@ -4459,6 +4483,28 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
     assert "Agent Integrations" in response.text
     assert "promptdrift.list_repos" in response.text
     assert "/app/integrations/mcp/download" in response.text
+    assert "API keys" in response.text
+    assert "Activity" in response.text
+
+
+def test_mcp_integrations_page_loads_for_viewer(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-viewer", "1104", role="viewer")
+
+    response = client.get(
+        "/app/integrations/mcp",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "Agent Integrations" in response.text
+    assert "Download connector" in response.text
 
 
 def test_settings_page_links_to_mcp_integrations(tmp_path):
@@ -4515,3 +4561,33 @@ def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
     assert expected_broker_url in env_example
     claude_example = archive.read("claude-desktop-config.json.example").decode("utf-8")
     assert f'"PROMPTDRIFT_MCP_BROKER_URL": "{main.settings.app_base_url}/api/agent-integrations/mcp"' in claude_example
+
+
+def test_mcp_activity_tab_shows_workspace_audit_events(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    user, workspace, session = _setup_api_keys_db(tmp_path, "mcp-activity", "1105")
+    main.create_control_plane_audit_log(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=user.id,
+        event_type="principal.created",
+        subject_type="machine_principal",
+        subject_id="activity-client-id",
+        payload={"source": "self_service", "scopes": ["drift.read"]},
+    )
+
+    response = client.get(
+        "/app/integrations/mcp?tab=activity",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "Recent integration and API-key events" in response.text
+    assert "principal.created" in response.text
+    assert "source=self_service" in response.text

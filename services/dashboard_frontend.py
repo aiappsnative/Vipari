@@ -55,6 +55,7 @@ def render_repo_dashboard_page(repo_full: str, theme_preference: str = "dark", a
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{ACTIVE_REPO_TAB}}", html_escape(active_tab))
         .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift")
+        .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control")
         .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline")
         .replace("{{REPO_TAB_COMPLIANCE_URL}}", f"{base_url}?tab=compliance")
         .replace("{{REPO_TAB_REPORTS_URL}}", f"{base_url}?tab=reports")
