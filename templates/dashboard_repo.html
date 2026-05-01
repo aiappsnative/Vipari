@@ -243,8 +243,8 @@
                         <div class="radar-axis-caption" id="repo-radar-caption">Version-control posture appears once DriftGuard has both an approved baseline snapshot and a current repository snapshot to compare.</div>
                     </div>
                     <div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">
-                        <details class="secondary-details">
-                            <summary class="secondary-details-summary">Version journey and baseline comparison</summary>
+                        <div class="secondary-details secondary-details-static">
+                            <div class="secondary-details-summary secondary-details-summary-static">Version journey and baseline comparison</div>
                             <div class="secondary-disclosure-grid">
                                 <div class="secondary-panel secondary-panel-flat">
                                     <div class="secondary-panel-title">Version journey</div>
@@ -276,7 +276,7 @@
                                     </div>
                                 </div>
                             </div>
-                        </details>
+                        </div>
                     </div>
                 </section>
 
@@ -390,7 +390,7 @@
                             </div>
                             <div class="export-actions export-form-group export-form-group-wide">
                                 <button type="submit" class="export-submit-button" id="export-submit-button">Generate export package</button>
-                                <a href="#repo-triage-section" class="cue-action-button">Review related audits</a>
+                                <a href="{{REPO_TAB_DRIFT_URL}}#repo-triage-section" class="cue-action-button">Review related audits</a>
                             </div>
                         </form>
                         <div id="export-status" class="export-status" hidden></div>

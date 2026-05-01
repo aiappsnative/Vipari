@@ -148,6 +148,20 @@ function repoDetailUrl(repo) {
     return `${url.pathname}${url.search}`;
 }
 
+function repoTabUrl(tab, options = {}) {
+    const url = new URL(`/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
+    if (tab) {
+        url.searchParams.set("tab", tab);
+    }
+    if (options.artifactPath) {
+        url.searchParams.set("artifact", options.artifactPath);
+    }
+    if (options.hash) {
+        url.hash = options.hash;
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+}
+
 function profileMetricLabel(key) {
     return {
         guardrail_robustness: "Guardrails",
@@ -1518,6 +1532,15 @@ function renderRepoActionsSection(insights) {
     const reviewTarget = topInsight?.review_target || topInsight?.artifact_path || repoFull;
     const reviewTitle = topInsight?.title || "Open the highest-priority change first";
     const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
+    const reviewArtifactUrl = repoFull
+        ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
+        : "#repo-triage-section";
+    const relatedAuditsUrl = repoFull
+        ? repoTabUrl("drift", { hash: "repo-triage-section" })
+        : "#repo-triage-section";
+    const exportUrl = repoFull
+        ? repoTabUrl("reports", { hash: "repo-export-section" })
+        : "#repo-export-section";
 
     setSectionHtml("repo-actions-review", `
         <div class="stack compact-stack">
@@ -1528,10 +1551,11 @@ function renderRepoActionsSection(insights) {
                 <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
             </div>
             <div class="export-actions repo-actions-row">
-                ${reviewUrl ? `<a href="${escapeHtml(reviewUrl)}" class="export-submit-button">Open flagged change</a>` : ""}
-                <a href="#repo-triage-section" class="cue-action-button">Review related audits</a>
+                <a href="${escapeHtml(reviewArtifactUrl)}" class="export-submit-button">Open flagged change</a>
+                <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Review related audits</a>
                 ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
-                <a href="#repo-export-section" class="cue-action-button">Create export</a>
+                ${reviewUrl && reviewUrl !== repoUrl ? `<a href="${escapeHtml(reviewUrl)}" class="cue-action-button">Open source review</a>` : ""}
+                <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
             </div>
         </div>
     `);

@@ -4718,7 +4718,28 @@ body.repo-audit-page[data-theme="light"] {
 }
 
 .repo-audit-page #repo-version-control-section {
+    display: grid;
+    grid-template-columns: 1fr;
     align-items: start;
+    gap: 18px;
+}
+
+.repo-audit-page #repo-radar-section,
+.repo-audit-page #repo-journey-section {
+    grid-column: 1;
+}
+
+.repo-audit-page .secondary-details-static {
+    padding: 14px;
+}
+
+.repo-audit-page .secondary-details-summary-static {
+    cursor: default;
+    padding: 0;
+}
+
+.repo-audit-page .secondary-details-summary-static::after {
+    content: none;
 }
 
 .repo-audit-page[data-theme="light"] .repo-audit-anchor:hover {
