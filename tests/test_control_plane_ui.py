@@ -4438,3 +4438,57 @@ def test_api_keys_page_shows_scope_checkboxes(tmp_path):
     assert "drift.read" in response.text
     assert "drift.write.low" in response.text
     assert "drift.write.high" in response.text
+
+
+def test_mcp_integrations_page_loads_for_owner(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-page", "1101")
+
+    response = client.get(
+        "/app/integrations/mcp",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "Agent Integrations" in response.text
+    assert "promptdrift.list_repos" in response.text
+    assert "/app/integrations/mcp/download" in response.text
+
+
+def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
+    import io as _io
+    import zipfile as _zipfile
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-download", "1102")
+
+    response = client.get(
+        "/app/integrations/mcp/download",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    assert "promptdrift-mcp-connector.zip" in response.headers["content-disposition"]
+
+    archive = _zipfile.ZipFile(_io.BytesIO(response.content))
+    names = set(archive.namelist())
+    assert "promptdrift_mcp_server.py" in names
+    assert "requirements.txt" in names
+    assert "promptdrift.env.example" in names
+    assert "claude-desktop-config.json.example" in names
+    env_example = archive.read("promptdrift.env.example").decode("utf-8")
+    expected_broker_url = f"PROMPTDRIFT_MCP_BROKER_URL={main.settings.app_base_url}/api/agent-integrations/mcp"
+    assert expected_broker_url in env_example

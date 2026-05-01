@@ -69,6 +69,17 @@ This framing should shape roadmap decisions:
 	- now includes the merged `feature/security-hardening-issue-68` slice (PR #69): signed OAuth and install-flow cookies, session-bound install callback validation, sanitized public auth-session payloads, trusted workspace-install enforcement for onboarding/backfill, localhost-only local-owner fallback, and explicit separation between read-only standalone dashboard inspection and authenticated mutation/control-plane access
 	- latest broader security regression sweep for the merged issue `#68` slice passed locally across `tests/test_control_plane_ui.py`, `tests/test_control_plane_auth.py`, `tests/test_operator_api.py`, `tests/test_runtime_guardrails.py`, `tests/test_dashboard_api.py`, and `tests/test_dashboard_control_tower.py` (`156 passed, 1 skipped`)
 
+### `feature/mcp-map-server-v1` (issue #59)
+- Purpose: active branch for the first customer agent-integration slice, pairing a downloadable customer MCP connector with a hosted PromptDrift broker
+- Current status on this branch:
+	- authenticated Agent Integrations page at `/app/integrations/mcp` with setup guidance, trust-boundary explanation, available-tool inventory, and visible workspace machine principals
+	- authenticated download route at `/app/integrations/mcp/download` that packages the customer connector as a ZIP distributed through the product website only, not PyPI
+	- new `services/mcp_broker.py` hosted broker layer with machine-principal Basic-auth authentication and four initial read-first tools: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
+	- new broker endpoints in `main.py`: `GET /api/agent-integrations/mcp/tools` and `POST /api/agent-integrations/mcp/invoke`
+	- new `customer_mcp_server/` connector package with its own `requirements.txt`, `promptdrift_mcp_server.py`, bundled environment template, and example Claude Desktop host config
+	- Help Center and API Keys surfaces now route customers toward the dedicated MCP integrations page instead of leaving agent setup implicit
+	- focused regression coverage added in `tests/test_control_plane_ui.py` and new `tests/test_mcp_broker.py`; current local validation on this branch: `73 passed` across both touched test modules
+
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
 - Final status at merge:

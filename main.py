@@ -64,6 +64,7 @@ from services.control_plane_frontend import (
     render_control_plane_help_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
+    render_control_plane_mcp_page,
     render_control_plane_marketing_page,
     render_control_plane_placeholder_page,
     render_control_plane_profile_page,
@@ -151,6 +152,8 @@ from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
+from services.mcp_broker import authenticate_mcp_broker_request, invoke_mcp_broker_tool, list_mcp_tools_for_scopes
+from services.mcp_package import build_customer_mcp_bundle
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
@@ -288,6 +291,11 @@ class ComplianceExportRequest(BaseModel):
     to_date: str | None = None
     export_mode: str
     include_artifact_content: bool = False
+
+
+class McpBrokerInvokeRequest(BaseModel):
+    tool_name: str
+    arguments: dict[str, object] = {}
 
 
 def _control_plane_active() -> bool:
@@ -2068,6 +2076,94 @@ async def api_keys_page(request: Request):
             max_principals=settings.cp_max_principals_per_workspace,
             new_client_id=new_client_id,
         )
+    )
+
+
+@app.get("/app/integrations/mcp", response_class=HTMLResponse)
+async def mcp_integrations_page(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _require_workspace_role(access_context, "owner", "admin")
+
+    workspace = access_context["workspace"]
+    user = access_context["user"]
+    identity = access_context["identity"]
+    subscription = access_context["subscription"]
+    entitlement = access_context["entitlement"]
+    plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    principals = list_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id)
+    broker_url = settings.app_base_url.rstrip("/") + "/api/agent-integrations/mcp"
+    config_snippet = (
+        f"PROMPTDRIFT_MCP_BROKER_URL={broker_url}\n"
+        "PROMPTDRIFT_CLIENT_ID=replace-with-your-client-id\n"
+        "PROMPTDRIFT_CLIENT_SECRET=replace-with-your-client-secret"
+    )
+
+    return HTMLResponse(
+        render_control_plane_mcp_page(
+            workspace_name=workspace.display_name,
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            download_url="/app/integrations/mcp/download",
+            broker_host=broker_url,
+            config_snippet=config_snippet,
+            principals=principals,
+        )
+    )
+
+
+@app.get("/app/integrations/mcp/download")
+async def mcp_integrations_download(request: Request):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _require_workspace_role(access_context, "owner", "admin")
+
+    bundle_bytes = build_customer_mcp_bundle(app_base_url=settings.app_base_url)
+    return Response(
+        content=bundle_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="promptdrift-mcp-connector.zip"'},
+    )
+
+
+@app.get("/api/agent-integrations/mcp/tools")
+async def mcp_broker_tools(request: Request):
+    context = authenticate_mcp_broker_request(
+        request.headers.get("Authorization"),
+        settings=settings,
+        db_path=AUDIT_DB_PATH,
+    )
+    return JSONResponse(
+        {
+            "workspace_id": context.workspace_id,
+            "client_id": context.client_id,
+            "tools": list_mcp_tools_for_scopes(context.scopes),
+        }
+    )
+
+
+@app.post("/api/agent-integrations/mcp/invoke")
+async def mcp_broker_invoke(payload: McpBrokerInvokeRequest, request: Request):
+    context = authenticate_mcp_broker_request(
+        request.headers.get("Authorization"),
+        settings=settings,
+        db_path=AUDIT_DB_PATH,
+    )
+    result = invoke_mcp_broker_tool(
+        payload.tool_name,
+        payload.arguments,
+        context=context,
+        db_path=AUDIT_DB_PATH,
+    )
+    return JSONResponse(
+        {
+            "tool_name": payload.tool_name,
+            "workspace_id": context.workspace_id,
+            "result": result,
+        }
     )
 
 

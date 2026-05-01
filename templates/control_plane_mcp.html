@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Integrations | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/theme-toggle.js"></script>
+</head>
+<body class="control-page" data-theme="{{THEME_PREFERENCE}}">
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
+                <span class="sidebar-logo-mark">D</span>
+            </a>
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard"><span>Dashboard</span></a>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories"><span>Repositories</span></a>
+                <a href="/app/compliance" class="sidebar-nav-item" aria-label="Compliance"><span>Compliance</span></a>
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies"><span>Policies</span></a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings"><span>Settings</span></a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help"><span>Help</span></a>
+            </div>
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="User profile">D</a>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            <main class="page-scroll control-page-shell">
+                <section class="control-page-hero">
+                    <div class="control-page-hero-copy">
+                        <p class="control-page-eyebrow">Agent Integrations</p>
+                        <h1>{{WORKSPACE_NAME}}</h1>
+                        <p>Download the PromptDrift MCP connector for your agent host and keep all workspace binding, tool shaping, and control-plane credentials on the PromptDrift side of the boundary.</p>
+                        {{ADMIN_CONTROL}}
+                    </div>
+                    <div class="control-page-hero-note">
+                        <span class="control-page-note-label">Plan</span>
+                        <span class="control-page-note-copy">{{PLAN_LABEL}}</span>
+                    </div>
+                </section>
+
+                <section class="control-page-stat-grid">
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Workspace</span><strong>{{WORKSPACE_NAME}}</strong></article>
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Broker URL</span><strong>{{BROKER_HOST}}</strong></article>
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Available tools</span><strong>{{TOOL_COUNT}}</strong></article>
+                </section>
+
+                <section class="control-page-sections">
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Download</div>
+                        <h2 class="control-page-section-title">Customer MCP connector package</h2>
+                        <p class="control-page-copy">This downloadable package is meant for authenticated customers only. It runs as a thin local MCP server in the customer environment and forwards allowed tool calls to the hosted PromptDrift broker using workspace-scoped machine-principal credentials.</p>
+                        <div class="help-page-workflow-grid">
+                            <a class="help-page-action-card" href="{{DOWNLOAD_URL}}"><span class="help-page-action-step">1</span><strong>Download connector</strong><p>Includes the local MCP server script, dependency list, environment template, and example host configuration.</p></a>
+                            <a class="help-page-action-card" href="/app/settings/api-keys"><span class="help-page-action-step">2</span><strong>Create API key</strong><p>Create or reuse a workspace API key with at least <code>drift.read</code> scope.</p></a>
+                            <a class="help-page-action-card" href="/app/help"><span class="help-page-action-step">3</span><strong>Read the safety model</strong><p>Use the Help Center as the conceptual companion. The MCP connector is read-first and stays workspace-bound.</p></a>
+                        </div>
+                    </article>
+
+                    <article class="control-page-section">
+                        <div class="secondary-panel-title">Quickstart</div>
+                        <h2 class="control-page-section-title">Host configuration</h2>
+                        <pre class="help-page-flow">{{CONFIG_SNIPPET}}</pre>
+                        <p class="control-page-copy">The connector never receives internal PromptDrift bearer tokens. It only uses the machine-principal credentials you create for this workspace.</p>
+                    </article>
+
+                    <article class="control-page-section">
+                        <div class="secondary-panel-title">Safety model</div>
+                        <h2 class="control-page-section-title">Trust boundary</h2>
+                        <pre class="help-page-flow">Your AI agent
+  -> customer MCP connector
+  -> PromptDrift broker
+  -> curated PromptDrift control-plane reads</pre>
+                        <p class="control-page-copy">One connector session maps to one workspace. The connector package is thin on purpose so PromptDrift can keep product semantics, output shaping, and credential handling server-side.</p>
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Available tools</div>
+                        <h2 class="control-page-section-title">Read-first MCP surface</h2>
+                        <div class="help-page-card-grid">{{TOOL_CARDS}}</div>
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Current API keys</div>
+                        <h2 class="control-page-section-title">Workspace machine principals</h2>
+                        <p class="control-page-copy">Client secrets are never shown again here. Use the API Keys page to create a new principal if you need a fresh secret for a customer agent host.</p>
+                        {{PRINCIPAL_TABLE}}
+                    </article>
+                </section>
+            </main>
+        </div>
+    </div>
+</body>
+</html>

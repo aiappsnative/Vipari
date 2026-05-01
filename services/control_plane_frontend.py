@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from html import escape as html_escape
 from pathlib import Path
@@ -7,6 +8,7 @@ from urllib.parse import quote
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
 from .entitlements import PLAN_DEFINITIONS
+from .mcp_broker import MCP_BROKER_TOOLS
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -853,6 +855,49 @@ def render_control_plane_help_page(
         .replace("{{HELP_NEXT_STEP_LABEL}}", html_escape(help_context["next_step_label"]))
         .replace("{{HELP_STATUS_CARDS}}", help_context["status_cards_html"])
         .replace("{{HELP_NEXT_STEP_PANEL}}", help_context["next_step_panel_html"])
+    )
+
+
+def render_control_plane_mcp_page(
+    *,
+    workspace_name: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    download_url: str,
+    broker_host: str,
+    config_snippet: str,
+    principals: list,
+) -> str:
+    template = _load_template("control_plane_mcp.html")
+    admin_control = ""
+    if admin_url:
+        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
+
+    tool_cards = "".join(
+        f'''<article class="help-page-topic-card"><strong>{html_escape(tool["name"])}</strong><p>{html_escape(tool["description"])}</p><p><span class="control-page-badge">{html_escape(tool["required_scope"])}</span></p></article>'''
+        for tool in MCP_BROKER_TOOLS
+    )
+    if principals:
+        principal_rows = "".join(
+            f'''<tr><td><code>{html_escape(p.display_name)}</code></td><td><code class="control-page-monospace">{html_escape(p.client_id[:16])}&#8230;</code></td><td>{" ".join(f'<span class="control-page-badge">{html_escape(scope)}</span>' for scope in json.loads(p.scopes_json))}</td><td><span class="control-page-badge">{html_escape(p.status)}</span></td></tr>'''
+            for p in principals
+        )
+        principal_table = f'''<div class="control-page-table-wrap"><table class="control-page-table"><thead><tr><th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th></tr></thead><tbody>{principal_rows}</tbody></table></div>'''
+    else:
+        principal_table = '<p class="control-page-copy">No workspace API keys exist yet. Create one before downloading the connector.</p>'
+
+    return (
+        template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{ADMIN_CONTROL}}", admin_control)
+        .replace("{{DOWNLOAD_URL}}", html_escape(download_url))
+        .replace("{{BROKER_HOST}}", html_escape(broker_host))
+        .replace("{{TOOL_COUNT}}", html_escape(str(len(MCP_BROKER_TOOLS))))
+        .replace("{{CONFIG_SNIPPET}}", html_escape(config_snippet))
+        .replace("{{TOOL_CARDS}}", tool_cards)
+        .replace("{{PRINCIPAL_TABLE}}", principal_table)
     )
 
 
