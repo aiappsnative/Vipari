@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -18,6 +19,15 @@ def test_checked_in_tool_manifest_matches_broker_contract():
     canonical_manifest = json.loads(render_customer_mcp_tool_manifest())
 
     assert checked_in_manifest == canonical_manifest
+
+
+def test_connector_tool_registrations_match_broker_contract():
+    connector_path = Path(__file__).resolve().parent.parent / "customer_mcp_server" / "promptdrift_mcp_server.py"
+    connector_source = connector_path.read_text(encoding="utf-8")
+    connector_tool_names = re.findall(r'@server\.tool\(name="([^"]+)"\)', connector_source)
+    canonical_manifest = json.loads(render_customer_mcp_tool_manifest())
+
+    assert connector_tool_names == [tool["name"] for tool in canonical_manifest["tools"]]
 
 
 def test_build_customer_mcp_bundle_uses_self_contained_package_directory():

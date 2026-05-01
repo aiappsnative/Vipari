@@ -228,13 +228,16 @@ def test_mcp_broker_blocks_repo_outside_workspace(tmp_path):
 def test_mcp_broker_requires_bearer_auth(tmp_path):
     db_path = str(tmp_path / "mcp-broker-auth.db")
     original_db_path = main.AUDIT_DB_PATH
+    original_jwt_secret = main.settings.internal_jwt_secret
     main.AUDIT_DB_PATH = db_path
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
     init_db(db_path)
 
     with TestClient(main.app) as client:
         response = client.get("/api/agent-integrations/mcp/tools")
 
     main.AUDIT_DB_PATH = original_db_path
+    main.settings.internal_jwt_secret = original_jwt_secret
 
     assert response.status_code == 401
 
@@ -261,3 +264,27 @@ def test_mcp_broker_token_requires_valid_client_credentials(tmp_path):
     main.settings.internal_jwt_secret = original_jwt_secret
 
     assert response.status_code == 401
+
+
+def test_mcp_broker_token_requires_internal_jwt_config(tmp_path):
+    db_path = str(tmp_path / "mcp-broker-token-secret.db")
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
+    main.AUDIT_DB_PATH = db_path
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = ""
+
+    client_id, client_secret = _seed_mcp_workspace(db_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/agent-integrations/mcp/token",
+            json={"client_id": client_id, "client_secret": client_secret},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
+
+    assert response.status_code == 503

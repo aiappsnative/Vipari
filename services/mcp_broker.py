@@ -71,6 +71,8 @@ def issue_mcp_broker_token_via_client_credentials(
     db_path: str,
     client_ip: str,
 ) -> dict[str, Any]:
+    if not settings.has_internal_jwt_config:
+        raise HTTPException(status_code=503, detail="Internal JWT auth is not configured.")
     if not _mcp_token_endpoint_limiter.allow(client_ip):
         raise HTTPException(
             status_code=429,
@@ -175,6 +177,8 @@ def authenticate_mcp_broker_request(
     settings: Settings,
     db_path: str,
 ) -> McpBrokerPrincipalContext:
+    if not settings.has_internal_jwt_config:
+        raise HTTPException(status_code=503, detail="Internal JWT auth is not configured.")
     token = _extract_bearer_token(authorization_header)
     try:
         claims = validate_mcp_broker_token(

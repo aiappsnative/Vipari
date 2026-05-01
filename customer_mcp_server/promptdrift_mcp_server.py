@@ -12,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 BROKER_URL = os.getenv("PROMPTDRIFT_MCP_BROKER_URL", "").rstrip("/")
 CLIENT_ID = os.getenv("PROMPTDRIFT_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("PROMPTDRIFT_CLIENT_SECRET", "")
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("PROMPTDRIFT_REQUEST_TIMEOUT_SECONDS", "15"))
 
 _BROKER_TOKEN: str | None = None
 _BROKER_TOKEN_EXPIRES_AT: float = 0.0
@@ -32,11 +33,13 @@ def _issue_broker_token() -> tuple[str, float]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             body = json.load(response)
     except urllib.error.HTTPError as exc:  # pragma: no cover - customer runtime path
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"PromptDrift MCP broker token request failed: HTTP {exc.code}: {detail}") from exc
+    except OSError as exc:  # pragma: no cover - customer runtime path
+        raise RuntimeError(f"PromptDrift MCP broker token request failed: {exc}") from exc
 
     ttl_seconds = int(body.get("ttl_seconds", 0))
     if ttl_seconds <= 0 or not body.get("token"):
@@ -75,7 +78,7 @@ def _invoke(tool_name: str, arguments: dict[str, object] | None = None) -> dict[
             },
         )
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:  # pragma: no cover - customer runtime path
             detail = exc.read().decode("utf-8", errors="replace")
@@ -83,6 +86,8 @@ def _invoke(tool_name: str, arguments: dict[str, object] | None = None) -> dict[
                 _invalidate_broker_token()
                 continue
             raise RuntimeError(f"PromptDrift MCP broker request failed: HTTP {exc.code}: {detail}") from exc
+        except OSError as exc:  # pragma: no cover - customer runtime path
+            raise RuntimeError(f"PromptDrift MCP broker request failed: {exc}") from exc
     raise RuntimeError("PromptDrift MCP broker request failed after token refresh.")
 
 
