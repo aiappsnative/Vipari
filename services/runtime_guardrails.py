@@ -48,6 +48,7 @@ def validate_migration_configuration(settings: Settings, *, resolved_db_path: st
 
 def validate_runtime_configuration(settings: Settings) -> None:
     errors: list[str] = []
+    app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
 
     if settings.queue_backend == "redis" and not settings.redis_url:
         errors.append("QUEUE_BACKEND=redis requires REDIS_URL.")
@@ -91,6 +92,18 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append("Production worker and webhook services must use QUEUE_BACKEND=redis.")
         if settings.service_role in {"api", "monolith"} and not settings.has_internal_jwt_config:
             errors.append("Production API service requires INTERNAL_JWT_SECRET to be configured.")
+
+    if (
+        settings.service_role in {"api", "monolith"}
+        and not settings.is_production
+        and settings.app_env in {"local", "test"}
+        and app_base_host not in {"127.0.0.1", "localhost", "::1"}
+        and not settings.has_owner_access_config
+    ):
+        errors.append(
+            "Non-production API/control-plane services exposed on non-localhost hosts must configure OWNER_GITHUB_* access; "
+            "local billing-owner fallback is localhost-only."
+        )
 
     if errors:
         raise RuntimeError(" ".join(errors))

@@ -195,6 +195,94 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
 def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="4000",
+        github_login="operator-owner",
+        display_name="Operator Owner",
+        primary_email="operator-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="operator-workspace",
+        display_name="Operator Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_operator",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=2.0,
+        next_payment_at=2.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="operator-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=9999999999.0,
+    )
 
     onboarding_record = RepositoryOnboardingRecord(
         id=1,
@@ -270,6 +358,7 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         with TestClient(main.app) as client:
             response = client.post(
                 "/api/repos/doria90/dummyAI/onboard",
+                cookies={main.settings.session_cookie_name: session.session_id},
                 json={
                     "installation_id": 123,
                     "commit_limit_per_artifact": 5,
@@ -288,19 +377,124 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     assert payload["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
 
 
-def test_persistence_api_returns_backend_metadata(tmp_path):
+def test_onboard_api_rejects_installation_mismatch(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="4001",
+        github_login="operator-owner-2",
+        display_name="Operator Owner Two",
+        primary_email="operator-owner-2@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="operator-workspace-2",
+        display_name="Operator Workspace Two",
+        billing_owner_user_id=user.id,
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_operator_2",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=2.0,
+        next_payment_at=2.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="operator-session-2",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=9999999999.0,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/repos/doria90/dummyAI/onboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            json={
+                "installation_id": 999,
+                "commit_limit_per_artifact": 5,
+                "plan_backfill": False,
+                "execute_backfill": False,
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Installation mismatch for workspace access."
+
+
+def test_persistence_api_requires_authentication(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
 
     with TestClient(main.app) as client:
         response = client.get("/api/persistence")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["backend"] == "sqlite"
-    assert payload["production_target"] == "postgresql"
-    assert "audit_jobs" in payload["operational_tables"]
-    assert "database_path" not in payload
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."
 
 
 def test_dashboard_html_pages_render(tmp_path):

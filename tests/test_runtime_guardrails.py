@@ -68,6 +68,23 @@ def test_runtime_configuration_rejects_malformed_github_private_key(monkeypatch)
     assert "signing key is invalid" in str(exc_info.value)
 
 
+def test_runtime_configuration_rejects_local_owner_fallback_on_remote_host(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://preview.example.com")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
+    monkeypatch.setenv("OWNER_GITHUB_USER_ID", "")
+    monkeypatch.setenv("OWNER_GITHUB_LOGIN", "")
+    monkeypatch.setenv("OWNER_EMAIL", "")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "local billing-owner fallback is localhost-only" in str(exc_info.value)
+
+
 @pytest.mark.anyio
 async def test_readiness_reports_invalid_github_private_key(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
