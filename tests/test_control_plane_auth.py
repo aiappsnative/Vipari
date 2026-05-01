@@ -378,6 +378,9 @@ def test_short_jwt_secret_fails_runtime_validation():
     mock_settings.has_internal_jwt_config = True
     mock_settings.internal_jwt_secret = "tooshort"  # 8 bytes — below minimum
     mock_settings.is_production = False
+    mock_settings.has_owner_access_config = False
+    mock_settings.app_base_url = "http://127.0.0.1:8000"
+    mock_settings.app_env = "local"
 
     with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET must be at least 32 bytes"):
         validate_runtime_configuration(mock_settings)
@@ -401,6 +404,8 @@ def test_production_api_requires_jwt_secret():
     mock_settings.app_base_url = "https://app.example.com"
     mock_settings.session_cookie_secure = True
     mock_settings.github_private_key_path = ""
+    mock_settings.has_owner_access_config = False
+    mock_settings.app_env = "production"
 
     with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET"):
         validate_runtime_configuration(mock_settings)

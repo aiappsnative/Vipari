@@ -79,6 +79,99 @@ def _record_pr_profile(db_path: str):
     )
 
 
+def _create_dashboard_owner_session(db_path: str, *, repo_full: str = "doria90/dummyAI", installation_id: int = 123):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id=f"dashboard-user-{installation_id}",
+        github_login=f"dashboard-owner-{installation_id}",
+        display_name="Dashboard Owner",
+        primary_email=f"dashboard-owner-{installation_id}@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug=f"dashboard-workspace-{installation_id}",
+        display_name="Dashboard Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id=f"dashboard-session-{installation_id}",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id=f"sub_dashboard_{installation_id}",
+        stripe_price_id=f"price_dashboard_{installation_id}",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=f"acct-{installation_id}",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repositories=[
+            {
+                "repo_github_id": repo_full.split("/", 1)[1],
+                "repo_full": repo_full,
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id=repo_full.split("/", 1)[1],
+        repo_full=repo_full,
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "onboarded")
+    return session
+
+
 def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
@@ -398,13 +491,21 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
     )
+    session = _create_dashboard_owner_session(db_path)
     with TestClient(main.app) as client:
-        pending_response = client.get("/api/repos/doria90/dummyAI/baseline/pending")
+        pending_response = client.get(
+            "/api/repos/doria90/dummyAI/baseline/pending",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
         approve_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "Approved for live posture tracking."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert pending_response.status_code == 200
     pending_payload = pending_response.json()
@@ -430,6 +531,7 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": current_snapshot_id, "rationale": ""},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert rebaseline_response.status_code == 200
@@ -444,6 +546,7 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
         approve_rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "Approve the candidate baseline."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert approve_rebaseline_response.status_code == 200
@@ -487,13 +590,18 @@ def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(t
             ("config/policy.yml", "sha-1"): "policy: strict\n",
         }[(path, ref)],
     )
+    session = _create_dashboard_owner_session(db_path)
 
     with TestClient(main.app) as client:
         approve_repo = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "approve repo baseline"},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert approve_repo.status_code == 200
 
@@ -617,6 +725,7 @@ def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(t
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": current_snapshot["id"], "rationale": ""},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert rebaseline_response.status_code == 200
@@ -663,9 +772,13 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
         )
 
     assert result in {"completed", "completed_with_updates"}
+    session = _create_dashboard_owner_session(db_path)
 
     with TestClient(main.app) as client:
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert journey_response.status_code == 200
     branch_head_snapshot = next(
@@ -678,8 +791,12 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": branch_head_snapshot["id"], "rationale": ""},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        dashboard_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert rebaseline_response.status_code == 200
     rebaseline_payload = rebaseline_response.json()
@@ -690,8 +807,12 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
         approve_rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "Approve branch-head rebaseline."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        dashboard_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert approve_rebaseline_response.status_code == 200
 
@@ -732,13 +853,18 @@ def test_dashboard_api_rebaseline_route_uses_resolved_github_private_key(tmp_pat
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
     )
+    session = _create_dashboard_owner_session(db_path)
 
     with TestClient(main.app) as client:
         approve_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "Approve baseline before re-baselining."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert approve_response.status_code == 200
     current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
@@ -751,6 +877,7 @@ def test_dashboard_api_rebaseline_route_uses_resolved_github_private_key(tmp_pat
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": current_snapshot["id"], "rationale": "Use current checkpoint."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert rebaseline_response.status_code == 200
@@ -792,9 +919,13 @@ def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
             "sha-2": PROMPT_CURRENT,
         }[ref],
     )
+    session = _create_dashboard_owner_session(db_path)
 
     with TestClient(main.app) as client:
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert journey_response.status_code == 200
     historical_snapshot = next(
@@ -807,8 +938,12 @@ def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
         rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/rebaseline",
             json={"snapshot_id": historical_snapshot["id"], "rationale": ""},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        dashboard_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert rebaseline_response.status_code == 200
     assert dashboard_response.status_code == 200
@@ -819,8 +954,12 @@ def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
         approve_rebaseline_response = client.post(
             "/api/repos/doria90/dummyAI/baseline/approve",
             json={"note": "Approve historical rebaseline."},
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
-        approved_dashboard_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        approved_dashboard_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert approve_rebaseline_response.status_code == 200
     assert approved_dashboard_response.status_code == 200
@@ -1621,9 +1760,13 @@ def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):
         token="token",
         fetch_file_content_fn=lambda repo, path, token, ref: {"sha-2": PROMPT_MEDIUM}[ref],
     )
+    session = _create_dashboard_owner_session(db_path)
 
     with TestClient(main.app) as client:
-        response = client.post("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline")
+        response = client.post(
+            "/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 200
     payload = response.json()

@@ -16,7 +16,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from github.GithubException import GithubException
 from jwt.exceptions import InvalidKeyError
 from openai import OpenAI
@@ -183,6 +183,7 @@ PR_DIFF_FETCH_RETRY_SECONDS = settings.pr_diff_fetch_retry_seconds
 CONTROL_PLANE_OAUTH_STATE_COOKIE = "promptdrift_oauth_state"
 CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
 CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
+CONTROL_PLANE_INSTALL_STATE_COOKIE = "promptdrift_install_state"
 SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
@@ -435,10 +436,32 @@ def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
     )
 
 
-def _set_context_cookie(response: RedirectResponse, name: str, payload: dict[str, object], *, max_age: int = 1800) -> None:
+def _require_context_cookie_signing_config() -> None:
+    if not settings.has_encryption_key:
+        raise HTTPException(status_code=503, detail="APP_ENCRYPTION_KEY must be configured before control-plane flow state can be issued.")
+
+
+def _context_cookie_binding_for_session_id(session_id: str | None) -> str | None:
+    normalized = (session_id or "").strip()
+    return f"session:{normalized}" if normalized else None
+
+
+def _context_cookie_binding_for_oauth_state(state: str | None) -> str | None:
+    normalized = (state or "").strip()
+    return f"oauth:{normalized}" if normalized else None
+
+
+def _set_context_cookie(
+    response: Response,
+    name: str,
+    payload: dict[str, object],
+    *,
+    binding: str | None,
+    max_age: int = 1800,
+) -> None:
     response.set_cookie(
         name,
-        _encode_context_cookie(payload),
+        _encode_context_cookie(payload, binding=binding, max_age=max_age),
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",
@@ -491,24 +514,64 @@ def _require_token_encryption_config() -> None:
         raise HTTPException(status_code=503, detail="APP_ENCRYPTION_KEY must be configured before GitHub OAuth can store user tokens.")
 
 
-def _encode_context_cookie(payload: dict[str, object]) -> str:
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("utf-8")
+def _encode_context_cookie(payload: dict[str, object], *, binding: str | None, max_age: int = 1800) -> str:
+    _require_context_cookie_signing_config()
+    envelope = {
+        "v": 1,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + max_age,
+        "binding": binding,
+        "payload": payload,
+    }
+    raw = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    signature = hmac.new(settings.app_encryption_key.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+    encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    return f"{encoded}.{signature}"
 
 
-def _decode_context_cookie(value: str | None) -> dict[str, object]:
+def _decode_context_cookie(value: str | None, *, binding: str | None) -> dict[str, object]:
     if not value:
         return {}
     try:
-        decoded = base64.urlsafe_b64decode(value.encode("utf-8")).decode("utf-8")
-        payload = json.loads(decoded)
+        encoded_payload, provided_signature = value.split(".", 1)
+        padded_payload = encoded_payload + "=" * (-len(encoded_payload) % 4)
+        raw = base64.urlsafe_b64decode(padded_payload.encode("utf-8"))
+        if not settings.has_encryption_key:
+            return {}
+        expected_signature = hmac.new(settings.app_encryption_key.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(provided_signature, expected_signature):
+            return {}
+        payload = json.loads(raw.decode("utf-8"))
     except (ValueError, json.JSONDecodeError):
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("v") != 1:
+        return {}
+    if payload.get("binding") != binding:
+        return {}
+    expires_at = payload.get("exp")
+    if not isinstance(expires_at, int) or expires_at < int(time.time()):
+        return {}
+    cookie_payload = payload.get("payload")
+    return cookie_payload if isinstance(cookie_payload, dict) else {}
+
+
+def _decode_bound_context_cookie(request: Request, cookie_name: str) -> dict[str, object]:
+    cookie_value = request.cookies.get(cookie_name)
+    session = _get_session(request)
+    if session is not None:
+        payload = _decode_context_cookie(cookie_value, binding=_context_cookie_binding_for_session_id(session.session_id))
+        if payload:
+            return payload
+    oauth_state_binding = _context_cookie_binding_for_oauth_state(request.cookies.get(CONTROL_PLANE_OAUTH_STATE_COOKIE))
+    if oauth_state_binding is not None:
+        return _decode_context_cookie(cookie_value, binding=oauth_state_binding)
+    return {}
 
 
 def _flow_context_from_request(request: Request) -> dict[str, str]:
-    cookie_payload = _decode_context_cookie(request.cookies.get(CONTROL_PLANE_OAUTH_CONTEXT_COOKIE))
+    cookie_payload = _decode_bound_context_cookie(request, CONTROL_PLANE_OAUTH_CONTEXT_COOKIE)
     source = _normalize_source_hint(request.query_params.get("source")) or _normalize_source_hint(str(cookie_payload.get("source") or ""))
     plan = _normalize_plan_hint(request.query_params.get("plan")) or _normalize_plan_hint(str(cookie_payload.get("plan") or ""))
     claim_token = (request.query_params.get("claim") or str(cookie_payload.get("claim") or "")).strip()
@@ -523,7 +586,7 @@ def _flow_context_from_request(request: Request) -> dict[str, str]:
 
 
 def _pending_install_context_from_request(request: Request) -> dict[str, object]:
-    payload = _decode_context_cookie(request.cookies.get(CONTROL_PLANE_PENDING_INSTALL_COOKIE))
+    payload = _decode_bound_context_cookie(request, CONTROL_PLANE_PENDING_INSTALL_COOKIE)
     installation_id = payload.get("installation_id")
     workspace_id = payload.get("workspace_id")
     setup_action = payload.get("setup_action")
@@ -534,6 +597,32 @@ def _pending_install_context_from_request(request: Request) -> dict[str, object]
         context["workspace_id"] = int(workspace_id)
     if isinstance(setup_action, str) and setup_action.strip():
         context["setup_action"] = setup_action.strip()
+    return context
+
+
+def _pending_install_context_from_query(request: Request) -> dict[str, object]:
+    installation_id = request.query_params.get("installation_id")
+    workspace_id = request.query_params.get("workspace_id")
+    setup_action = request.query_params.get("setup_action")
+    context: dict[str, object] = {}
+    if installation_id and installation_id.isdigit():
+        context["installation_id"] = int(installation_id)
+    if workspace_id and workspace_id.isdigit():
+        context["workspace_id"] = int(workspace_id)
+    if setup_action and setup_action.strip():
+        context["setup_action"] = setup_action.strip()
+    return context
+
+
+def _install_callback_context_from_request(request: Request) -> dict[str, object]:
+    payload = _decode_bound_context_cookie(request, CONTROL_PLANE_INSTALL_STATE_COOKIE)
+    nonce = payload.get("nonce")
+    workspace_id = payload.get("workspace_id")
+    context: dict[str, object] = {}
+    if isinstance(nonce, str) and nonce.strip():
+        context["nonce"] = nonce.strip()
+    if isinstance(workspace_id, int) or (isinstance(workspace_id, str) and str(workspace_id).isdigit()):
+        context["workspace_id"] = int(workspace_id)
     return context
 
 
@@ -652,18 +741,13 @@ def _link_installation_to_workspace(
 
 
 def _redirect_with_pending_install(request: Request, *, installation_id: int, workspace_id: int | None, setup_action: str | None) -> RedirectResponse:
-    response = RedirectResponse(_auth_start_url(_flow_context_from_request(request)), status_code=303)
-    _set_context_cookie(
-        response,
-        CONTROL_PLANE_PENDING_INSTALL_COOKIE,
-        {
-            "installation_id": installation_id,
-            "workspace_id": workspace_id,
-            "setup_action": setup_action or "install",
-        },
-        max_age=1800,
-    )
-    return response
+    pending_install = {
+        "installation_id": installation_id,
+        "setup_action": setup_action or "install",
+    }
+    if workspace_id is not None:
+        pending_install["workspace_id"] = workspace_id
+    return RedirectResponse(_path_with_flow_context(_auth_start_url(pending_install), _flow_context_from_request(request)), status_code=303)
 
 
 def _workspace_slug_candidates(name: str) -> list[str]:
@@ -703,10 +787,10 @@ def _github_oauth_callback_url(request: Request) -> str:
     return str(request.url_for("github_auth_callback"))
 
 
-def _current_workspace_context(request: Request) -> dict[str, object]:
+def _current_workspace_context(request: Request, *, allow_local_debug: bool = True) -> dict[str, object]:
     session = _get_session(request)
     if session is None:
-        debug_context = _local_debug_workspace_context()
+        debug_context = _local_debug_workspace_context() if allow_local_debug else None
         if debug_context is not None:
             return debug_context
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -728,14 +812,16 @@ def _current_authenticated_identity_context(request: Request) -> dict[str, objec
 
 
 def _require_dashboard_access(request: Request) -> dict[str, object]:
-    if not _control_plane_active():
-        return {}
-    access_context = _current_workspace_context(request)
-    if access_context.get("session") is None and _local_debug_dashboard_enabled():
-        return access_context
+    access_context = _current_workspace_context(request, allow_local_debug=False)
     if not access_context["resolution"].can_access_dashboard:
         raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
     return access_context
+
+
+def _require_dashboard_read_access(request: Request) -> dict[str, object]:
+    if not _control_plane_active():
+        return {}
+    return _require_dashboard_access(request)
 
 
 def _current_theme_preference(request: Request) -> str:
@@ -874,7 +960,7 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
-    access_context = _require_dashboard_access(request)
+    access_context = _require_dashboard_read_access(request)
     if not access_context:
         return access_context
     workspace = access_context["workspace"]
@@ -890,8 +976,6 @@ def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dic
 
 def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) -> dict[str, object]:
     access_context = _require_dashboard_access(request)
-    if not access_context:
-        return access_context
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
@@ -1443,6 +1527,11 @@ def _has_local_owner_fallback(user, workspace) -> bool:
         return False
     if user is None or workspace is None:
         return False
+    if settings.app_env not in {"local", "test"}:
+        return False
+    app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
+    if app_base_host not in {"127.0.0.1", "localhost", "::1"}:
+        return False
     return bool(getattr(workspace, "billing_owner_user_id", None) == user.id)
 
 
@@ -1503,6 +1592,38 @@ def _public_session_payload(session) -> dict[str, object] | None:
     }
 
 
+def _public_identity_payload(identity) -> dict[str, object] | None:
+    if identity is None:
+        return None
+    return {
+        "id": identity.id,
+        "user_id": identity.user_id,
+        "github_user_id": identity.github_user_id,
+        "github_login": identity.github_login,
+        "avatar_url": identity.avatar_url,
+        "profile_url": identity.profile_url,
+        "company": identity.company,
+        "blog": identity.blog,
+        "location": identity.location,
+        "bio": identity.bio,
+        "twitter_username": identity.twitter_username,
+        "granted_scopes": list(identity.granted_scopes),
+        "last_login_at": identity.last_login_at,
+        "created_at": identity.created_at,
+        "updated_at": identity.updated_at,
+    }
+
+
+def _trusted_workspace_installation_id(access_context: dict[str, object], requested_installation_id: int) -> int:
+    installation = access_context.get("installation")
+    if installation is None:
+        raise HTTPException(status_code=400, detail="GitHub installation is required for this workspace.")
+    trusted_installation_id = int(installation.installation_id)
+    if trusted_installation_id != requested_installation_id:
+        raise HTTPException(status_code=403, detail="Installation mismatch for workspace access.")
+    return trusted_installation_id
+
+
 @app.get("/", response_class=HTMLResponse)
 async def marketing_page():
     return HTMLResponse(render_control_plane_marketing_page())
@@ -1546,10 +1667,20 @@ async def login_page(request: Request):
 async def github_auth_start(request: Request):
     existing_session = _get_session(request)
     flow_context = _flow_context_from_request(request)
+    pending_install = _pending_install_context_from_query(request)
     if existing_session is not None:
         existing_identity = get_github_identity_for_user(AUDIT_DB_PATH, existing_session.user_id)
         if existing_identity is not None and _identity_has_required_repo_scopes(existing_identity):
-            return RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
+            response = RedirectResponse(_resume_destination_for_session(existing_session, flow_context), status_code=303)
+            if pending_install:
+                _set_context_cookie(
+                    response,
+                    CONTROL_PLANE_PENDING_INSTALL_COOKIE,
+                    pending_install,
+                    binding=_context_cookie_binding_for_session_id(existing_session.session_id),
+                    max_age=1800,
+                )
+            return response
     if not settings.has_github_oauth_credentials:
         return RedirectResponse(_path_with_flow_context("/login?login_error=oauth_not_configured", flow_context), status_code=303)
     if not settings.has_encryption_key:
@@ -1562,7 +1693,21 @@ async def github_auth_start(request: Request):
     )
     response = RedirectResponse(authorize_url, status_code=302)
     if flow_context:
-        _set_context_cookie(response, CONTROL_PLANE_OAUTH_CONTEXT_COOKIE, flow_context, max_age=1800)
+        _set_context_cookie(
+            response,
+            CONTROL_PLANE_OAUTH_CONTEXT_COOKIE,
+            flow_context,
+            binding=_context_cookie_binding_for_oauth_state(state),
+            max_age=1800,
+        )
+    if pending_install:
+        _set_context_cookie(
+            response,
+            CONTROL_PLANE_PENDING_INSTALL_COOKIE,
+            pending_install,
+            binding=_context_cookie_binding_for_oauth_state(state),
+            max_age=1800,
+        )
     response.set_cookie(
         CONTROL_PLANE_OAUTH_STATE_COOKIE,
         state,
@@ -1653,6 +1798,7 @@ async def github_auth_callback(
     _set_session_cookie(response, session.session_id)
     response.delete_cookie(CONTROL_PLANE_OAUTH_STATE_COOKIE)
     response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
+    response.delete_cookie(CONTROL_PLANE_INSTALL_STATE_COOKIE)
     return response
 
 
@@ -2631,7 +2777,13 @@ async def claim_entry(request: Request, claim_token: str | None = None):
     else:
         destination = _path_with_flow_context("/app/billing/claim", flow_context)
     response = RedirectResponse(destination, status_code=303)
-    _set_context_cookie(response, CONTROL_PLANE_OAUTH_CONTEXT_COOKIE, flow_context, max_age=1800)
+    _set_context_cookie(
+        response,
+        CONTROL_PLANE_OAUTH_CONTEXT_COOKIE,
+        flow_context,
+        binding=_context_cookie_binding_for_session_id(session.session_id) if session is not None else None,
+        max_age=1800,
+    )
     return response
 
 
@@ -2681,16 +2833,19 @@ async def install_page(request: Request):
     workspace = access_context["workspace"]
     installation = access_context["installation"]
     install_url = None
+    install_state_nonce = None
     if settings.has_github_app_credentials:
         try:
+            install_state_nonce = secrets.token_urlsafe(24)
             install_url = get_live_github_install_url(
                 settings.github_app_id,
                 settings.github_private_key_path,
                 settings.resolved_github_private_key,
-                state=str(workspace.id),
+                state=install_state_nonce,
             )
         except Exception:
             install_url = None
+            install_state_nonce = None
     installation_summary = (
         f"Connected installation {installation.account_login} ({installation.account_type})." if installation else "No GitHub App installation is linked yet."
     )
@@ -2699,7 +2854,7 @@ async def install_page(request: Request):
         install_hint = "GitHub installation linked successfully. Review the synced repositories below."
     elif request.query_params.get("install_error"):
         install_hint = "GitHub installation completed, but DriftGuard could not finish linking it automatically. Use the manual fallback form below."
-    return HTMLResponse(
+    response = HTMLResponse(
         render_control_plane_install_page(
             workspace_name=workspace.display_name,
             install_hint=install_hint,
@@ -2709,6 +2864,15 @@ async def install_page(request: Request):
             csrf_token=access_context["session"].csrf_secret,
         )
     )
+    if install_state_nonce is not None:
+        _set_context_cookie(
+            response,
+            CONTROL_PLANE_INSTALL_STATE_COOKIE,
+            {"nonce": install_state_nonce, "workspace_id": workspace.id},
+            binding=_context_cookie_binding_for_session_id(access_context["session"].session_id),
+            max_age=1800,
+        )
+    return response
 
 
 @app.get("/app/setup/install/callback")
@@ -2721,8 +2885,15 @@ async def install_callback(
     if not installation_id.isdigit():
         raise HTTPException(status_code=400, detail="Installation callback is missing a valid installation id.")
     installation_id_int = int(installation_id)
-    workspace_hint = _coerce_workspace_hint(state)
-    session = _switch_session_workspace_if_allowed(_get_session(request), workspace_hint)
+    session = _get_session(request)
+    install_state = _install_callback_context_from_request(request) if session is not None else {}
+    validated_workspace_id = None
+    if session is not None and install_state:
+        nonce = str(install_state.get("nonce") or "")
+        if not state or not hmac.compare_digest(nonce, state):
+            raise HTTPException(status_code=400, detail="Install callback state validation failed.")
+        validated_workspace_id = _coerce_workspace_hint(str(install_state.get("workspace_id") or ""))
+        session = _switch_session_workspace_if_allowed(session, validated_workspace_id)
     if session is None:
         try:
             _link_installation_to_workspace(workspace_id=None, installation_id=installation_id_int)
@@ -2731,7 +2902,7 @@ async def install_callback(
         return _redirect_with_pending_install(
             request,
             installation_id=installation_id_int,
-            workspace_id=workspace_hint,
+            workspace_id=None,
             setup_action=setup_action,
         )
     access_context = _build_access_context(session)
@@ -2744,10 +2915,14 @@ async def install_callback(
         _set_context_cookie(
             response,
             CONTROL_PLANE_PENDING_INSTALL_COOKIE,
-            {"installation_id": installation_id_int, "workspace_id": workspace_hint, "setup_action": setup_action or "install"},
+            {"installation_id": installation_id_int, "workspace_id": validated_workspace_id, "setup_action": setup_action or "install"},
+            binding=_context_cookie_binding_for_session_id(session.session_id),
             max_age=1800,
         )
+        response.delete_cookie(CONTROL_PLANE_INSTALL_STATE_COOKIE)
         return response
+    if not install_state:
+        raise HTTPException(status_code=400, detail="Install callback state validation failed.")
     _require_workspace_role(access_context, "owner", "admin")
     _link_installation_to_workspace(workspace_id=access_context["workspace"].id, installation_id=installation_id_int)
     response = RedirectResponse(
@@ -2758,6 +2933,7 @@ async def install_callback(
         status_code=303,
     )
     response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
+    response.delete_cookie(CONTROL_PLANE_INSTALL_STATE_COOKIE)
     return response
 
 
@@ -2895,7 +3071,7 @@ async def auth_session(request: Request):
         "authenticated": True,
         "session": _public_session_payload(access_context["session"]),
         "user": asdict(access_context["user"]) if access_context["user"] else None,
-        "identity": asdict(access_context["identity"]) if access_context["identity"] else None,
+        "identity": _public_identity_payload(access_context["identity"]),
         "workspace": asdict(access_context["workspace"]) if access_context["workspace"] else None,
         "access": asdict(access_context["resolution"]),
     }
@@ -3007,7 +3183,7 @@ async def list_repos(request: Request):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_access(request)
+    access_context = _require_dashboard_read_access(request)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3036,7 +3212,7 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_access(request)
+    access_context = _require_dashboard_read_access(request)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3091,7 +3267,7 @@ def persistence_status(request: Request):
 
 @app.get("/api/dashboard/escalation-queue")
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
-    access_context = _require_dashboard_access(request)
+    access_context = _require_dashboard_read_access(request)
     visibility = _dashboard_repo_visibility(access_context)
     result = build_workspace_escalation_queue(
         AUDIT_DB_PATH,
@@ -3232,14 +3408,15 @@ def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: in
 
 @app.post("/api/repos/{repo_full:path}/onboard")
 async def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
-    _require_repo_dashboard_mutation_access(request, repo_full)
+    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
+    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, payload.installation_id)
+    token = get_installation_token(jwt_token, installation_id)
 
     onboarding_result = onboard_repository(
         AUDIT_DB_PATH,
         repo_full=repo_full,
-        installation_id=payload.installation_id,
+        installation_id=installation_id,
         token=token,
     )
     planned_jobs = []
@@ -3274,9 +3451,10 @@ async def run_repo_onboarding(request: Request, repo_full: str, payload: Reposit
 
 @app.post("/api/repos/{repo_full:path}/backfill")
 async def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
-    _require_repo_dashboard_mutation_access(request, repo_full)
+    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
+    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
     jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, payload.installation_id)
+    token = get_installation_token(jwt_token, installation_id)
     executed_jobs = execute_repository_history_backfill(
         AUDIT_DB_PATH,
         repo_full=repo_full,

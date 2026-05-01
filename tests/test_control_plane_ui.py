@@ -244,6 +244,8 @@ def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstr
     assert auth_payload["session"]["workspace_id"] is None
     assert "session_id" not in auth_payload["session"]
     assert "csrf_secret" not in auth_payload["session"]
+    assert "access_token_encrypted" not in auth_payload["identity"]
+    assert "refresh_token_encrypted" not in auth_payload["identity"]
 
     from services.control_plane_records import _connect
 
@@ -286,7 +288,10 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
         data={"csrf_token": session.csrf_secret},
         cookies={
             main.settings.session_cookie_name: session.session_id,
-            "promptdrift_oauth_context": main._encode_context_cookie({"source": "base44", "plan": "team"}),
+            "promptdrift_oauth_context": main._encode_context_cookie(
+                {"source": "base44", "plan": "team"},
+                binding=main._context_cookie_binding_for_session_id(session.session_id),
+            ),
         },
         follow_redirects=False,
     )
@@ -2163,8 +2168,10 @@ def test_webhook_ignores_unallocated_repo(tmp_path):
 
 def test_dashboard_requires_session_when_control_plane_is_active(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
     main.AUDIT_DB_PATH = str(tmp_path / "gated.db")
     main.init_db(main.AUDIT_DB_PATH)
+    main.settings.local_debug_disable_login = False
 
     from services.control_plane_records import create_workspace, upsert_github_identity
 
@@ -2277,7 +2284,8 @@ def test_dashboard_local_debug_disable_login_uses_first_workspace_without_sessio
         overview_response = local_client.get("/api/dashboard/overview")
 
     assert dashboard_response.status_code == 200
-    assert overview_response.status_code == 200
+    assert overview_response.status_code == 401
+    assert overview_response.json()["detail"] == "Authentication required."
 
     main.settings.local_debug_disable_login = original_local_debug_disable_login
     main.settings.app_base_url = original_app_base_url
@@ -2681,6 +2689,11 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         expires_at=time.time() + 3600,
     )
 
+    install_state_cookie = main._encode_context_cookie(
+        {"nonce": "install-state", "workspace_id": workspace.id},
+        binding=main._context_cookie_binding_for_session_id(session.session_id),
+    )
+
     with patch.object(main.settings, "github_app_id", "app-id"), patch.object(
         main.settings, "github_app_private_key", "dummy-private-key"
     ), patch(
@@ -2691,8 +2704,11 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         ),
     ):
         response = client.get(
-            f"/app/setup/install/callback?installation_id=12345&setup_action=install&state={workspace.id}",
-            cookies={main.settings.session_cookie_name: session.session_id},
+            "/app/setup/install/callback?installation_id=12345&setup_action=install&state=install-state",
+            cookies={
+                main.settings.session_cookie_name: session.session_id,
+                "promptdrift_install_state": install_state_cookie,
+            },
             follow_redirects=False,
         )
 
@@ -2721,6 +2737,90 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     assert 'href="/dashboard"' in repo_setup_response.text
     assert 'href="/app/repos"' in repo_setup_response.text
     assert "Already there" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_install_callback_rejects_workspace_link_without_valid_nonce(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "install-callback-invalid-state.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="821",
+        github_login="install-owner-2",
+        display_name="Install Owner Two",
+        primary_email="owner2@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="install-callback-invalid-state",
+        display_name="Install Callback Invalid State",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="install-callback-invalid-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get(
+        "/app/setup/install/callback?installation_id=12345&setup_action=install&state=forged-state",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Install callback state validation failed."
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_auth_session_identity_omits_encrypted_tokens(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "auth-session-sanitized.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="880",
+        github_login="session-owner",
+        display_name="Session Owner",
+        primary_email="session-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-access-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="session-sanitized-token",
+        user_id=user.id,
+        workspace_id=None,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get(
+        "/api/auth/session",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    identity_payload = response.json()["identity"]
+    assert identity_payload["github_login"] == "session-owner"
+    assert "access_token_encrypted" not in identity_payload
+    assert "refresh_token_encrypted" not in identity_payload
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -4109,8 +4209,6 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 403
-
-
 def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
     """POST create → 303, GET → secret shown; second GET → secret absent."""
     original_db_path = main.AUDIT_DB_PATH
