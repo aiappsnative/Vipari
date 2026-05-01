@@ -74,11 +74,12 @@ This framing should shape roadmap decisions:
 - Current status on this branch:
 	- authenticated Agent Integrations page at `/app/integrations/mcp` with setup guidance, trust-boundary explanation, available-tool inventory, and visible workspace machine principals
 	- authenticated download route at `/app/integrations/mcp/download` that packages the customer connector as a ZIP distributed through the product website only, not PyPI
-	- new `services/mcp_broker.py` hosted broker layer with machine-principal Basic-auth authentication and four initial read-first tools: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
-	- new broker endpoints in `main.py`: `GET /api/agent-integrations/mcp/tools` and `POST /api/agent-integrations/mcp/invoke`
+	- new `services/mcp_broker.py` hosted broker layer with machine-principal credential exchange into short-lived broker tokens, per-principal invoke rate limiting, broker token issuance audit logs, invocation audit logs, and four initial read-first tools: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
+	- new broker endpoints in `main.py`: `POST /api/agent-integrations/mcp/token`, `GET /api/agent-integrations/mcp/tools`, and `POST /api/agent-integrations/mcp/invoke`
 	- new `customer_mcp_server/` connector package with its own `requirements.txt`, `promptdrift_mcp_server.py`, bundled environment template, example Claude Desktop host config, shipped tool manifest, and package-owned templates so the bundle can be worked on as a standalone repo subproject
+	- package/broker contract hardening now enforces the shipped `tool-manifest.json` against the canonical broker tool registry so customer package metadata cannot silently drift from the hosted broker surface
 	- Help Center and API Keys surfaces now route customers toward the dedicated MCP integrations page instead of leaving agent setup implicit
-	- focused regression coverage added in `tests/test_control_plane_ui.py`, `tests/test_mcp_broker.py`, and `tests/test_mcp_package.py`; package-bundle tests now enforce that the downloadable MCP connector is assembled from the dedicated package directory rather than ad hoc generated files
+	- focused regression coverage added in `tests/test_control_plane_ui.py`, `tests/test_mcp_broker.py`, and `tests/test_mcp_package.py`; package-bundle tests now enforce that the downloadable MCP connector is assembled from the dedicated package directory rather than ad hoc generated files, and that the checked-in package manifest matches the canonical broker contract
 
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface

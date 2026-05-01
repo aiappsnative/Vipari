@@ -28,7 +28,7 @@ The connector also does not keep sending your long-lived client secret on every 
 - `requirements.txt`: connector-specific dependencies
 - `promptdrift.env.example`: environment template for broker URL and credentials
 - `claude-desktop-config.json.example`: example MCP host configuration
-- `tool-manifest.json`: shipped inventory of the current broker-exposed tools
+- `tool-manifest.json`: shipped inventory of the current broker-exposed tools, contract-checked against the hosted broker registry
 
 ## Environment variables
 

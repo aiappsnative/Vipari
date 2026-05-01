@@ -5,10 +5,19 @@ import json
 import os
 import sys
 import zipfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
-from services.mcp_package import build_customer_mcp_bundle
+from services.mcp_package import build_customer_mcp_bundle, render_customer_mcp_tool_manifest
+
+
+def test_checked_in_tool_manifest_matches_broker_contract():
+    manifest_path = Path(__file__).resolve().parent.parent / "customer_mcp_server" / "tool-manifest.json"
+    checked_in_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    canonical_manifest = json.loads(render_customer_mcp_tool_manifest())
+
+    assert checked_in_manifest == canonical_manifest
 
 
 def test_build_customer_mcp_bundle_uses_self_contained_package_directory():
