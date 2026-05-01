@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-05-01 — Control-plane auth boundary hardening merged to main
+
+### Added
+- signed, integrity-protected flow cookies that bind pre-auth continuation state to the OAuth nonce and pending-install context to the active session
+- dedicated install-callback nonce validation plus focused regression coverage for callback spoofing, auth-session sanitization, and remote-host local-owner fallback rejection
+
+### Changed
+- `/api/auth/session` now exposes only the public identity payload instead of encrypted token fields
+- onboarding and backfill routes now trust the workspace-linked GitHub installation instead of caller-supplied `installation_id` values
+- dashboard auth rules now preserve read-only standalone local inspection when the control plane is inactive while keeping mutations and control-plane paths authenticated
+- local owner fallback is now restricted to localhost `local` and `test` runs, and runtime guardrails reject unsafe remote-host configurations
+
+### Verified
+- merged control-plane/dashboard/runtime regression sweep passed locally (`156 passed, 1 skipped`)
+
+### Product impact
+- install-linking and login continuation flows now fail closed if their browser state is tampered with
+- local seeded inspection remains available for true localhost development without reopening anonymous mutation or remote-host access paths
+
 ## 2026-04-24 — Persistence status output sanitization
 
 ### Changed

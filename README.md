@@ -65,10 +65,11 @@ In practical terms, DriftGuard currently provides:
 - signed billing handoff claims for external providers, with Base44/Wix-style payment-first activation and workspace claim flow
 - local free-tier activation plus optional Stripe fallback for paid checkout and billing portal support
 - GitHub App install linkage, setup-URL callback handling, synced repository connection inventory, and repo allocation into the existing onboarding engine
+- signed OAuth and pending-install flow cookies plus session-bound install callback validation so continuation state cannot be replayed or spoofed across browsers
 - additive SQLite repair migrations for legacy control-plane databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys that now correctly target `github_installations.installation_id`
 - setup-state persistence that now recomputes `workspaces.setup_state` from entitlement, install, and onboarding facts
 - dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes, including JSON API routes when the control plane is active
-- production deployments always gate `/dashboard` through login, while true localhost operator mode can still expose the dashboard directly for local seeded inspection
+- production deployments always gate `/dashboard` through login, while only true localhost operator mode can still expose the dashboard directly for local seeded inspection
 - webhook gating that suppresses PR audits/comments for managed repos that are installed but not allocated or not entitled for comments, while leaving unmanaged legacy installs compatible with queued audits
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
 - actionable setup-state, free-tier, and active-state app shells so `/app` always exposes a real continuation path
@@ -81,12 +82,11 @@ In practical terms, DriftGuard currently provides:
 - customer self-service API key management at `/app/settings/api-keys`: scope-gated machine principal creation with one-time secret flash delivery (atomic creation + flash in a single transaction, consumed on first GET), revocation, and per-workspace principal limits
 - client-credentials token exchange at `/cp/auth/token` with sliding-window rate limiting (20 req/60 s), constant-time secret comparison, and full audit logging per exchange
 
-Latest merged validation on 2026-04-30:
+Latest merged validation on 2026-05-01:
 
-- focused post-merge dashboard/control-plane validation passed locally after the issue `#62` merge and proposal-visibility hardening:
-	- `pytest tests/test_dashboard_api.py -k "test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator or test_pending_proposals_api_requires_repo_visibility or test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin or test_pending_proposals_api_response_shape"`
-	- `pytest tests/test_dashboard_control_tower.py -k "pending_proposals"`
-- the latest broader full-suite local verification recorded before this merge remains `438 passed`
+- broader control-plane/dashboard/runtime security sweep passed locally after the issue `#68` merge:
+	- `pytest tests/test_control_plane_ui.py tests/test_control_plane_auth.py tests/test_operator_api.py tests/test_runtime_guardrails.py tests/test_dashboard_api.py tests/test_dashboard_control_tower.py`
+	- result: `156 passed, 1 skipped`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
