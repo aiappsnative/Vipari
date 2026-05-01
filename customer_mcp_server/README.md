@@ -2,6 +2,8 @@
 
 This package is distributed to authenticated PromptDrift customers through the in-product MCP page.
 
+Everything needed to evolve the connector as its own repo-local package lives in this directory so future work can happen against the package in isolation before the product zips it for download.
+
 It runs a thin local MCP server that:
 
 - exposes PromptDrift tools to your MCP-compatible agent host over stdio
@@ -17,6 +19,14 @@ The connector does **not** contain PromptDrift internal control-plane bearer tok
 3. Install the dependencies from `requirements.txt`.
 4. Copy `promptdrift.env.example` to `.env` or set the environment variables in your MCP host.
 5. Point your MCP host at `promptdrift_mcp_server.py`.
+
+## Directory contents
+
+- `promptdrift_mcp_server.py`: local MCP server entrypoint
+- `requirements.txt`: connector-specific dependencies
+- `promptdrift.env.example`: environment template for broker URL and credentials
+- `claude-desktop-config.json.example`: example MCP host configuration
+- `tool-manifest.json`: shipped inventory of the current broker-exposed tools
 
 ## Environment variables
 
