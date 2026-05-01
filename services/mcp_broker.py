@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import base64
+import collections
 import hmac
 import json
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,16 +13,46 @@ from fastapi import HTTPException
 
 from config import Settings
 from .control_plane_records import (
+    create_control_plane_audit_log,
     get_machine_principal_by_client_id,
     get_repo_allocation_for_workspace,
     get_workspace_entitlement,
     list_repo_allocations_for_workspace,
 )
 from .dashboard_views import build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
+from .internal_auth import issue_mcp_broker_token, validate_mcp_broker_token, TokenValidationError
 from .secure_store import decrypt_text
 
 
 MCP_READ_SCOPE = "drift.read"
+MCP_BROKER_AUDIENCE_SUFFIX = "/mcp-broker"
+MCP_BROKER_TOKEN_TTL_SECONDS = 900
+
+
+class _SlidingWindowRateLimiter:
+    def __init__(self, limit: int, window_seconds: float) -> None:
+        self._limit = limit
+        self._window = window_seconds
+        self._buckets: dict[str, collections.deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - self._window
+        with self._lock:
+            if key not in self._buckets:
+                self._buckets[key] = collections.deque()
+            bucket = self._buckets[key]
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= self._limit:
+                return False
+            bucket.append(now)
+            return True
+
+
+_mcp_token_endpoint_limiter = _SlidingWindowRateLimiter(limit=20, window_seconds=60.0)
+_mcp_invoke_limiter = _SlidingWindowRateLimiter(limit=120, window_seconds=60.0)
 
 
 @dataclass(frozen=True)
@@ -29,6 +61,53 @@ class McpBrokerPrincipalContext:
     display_name: str
     workspace_id: int
     scopes: frozenset[str]
+
+
+def issue_mcp_broker_token_via_client_credentials(
+    client_id: str,
+    client_secret: str,
+    *,
+    settings: Settings,
+    db_path: str,
+    client_ip: str,
+) -> dict[str, Any]:
+    if not _mcp_token_endpoint_limiter.allow(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please retry after 60 seconds.",
+            headers={"Retry-After": "60"},
+        )
+
+    principal = _authenticate_principal_credentials(
+        client_id,
+        client_secret,
+        settings=settings,
+        db_path=db_path,
+    )
+    scopes = json.loads(principal.scopes_json)
+    token = issue_mcp_broker_token(
+        client_id=principal.client_id,
+        workspace_id=principal.workspace_id,
+        scopes=scopes,
+        secret=settings.internal_jwt_secret,
+        issuer=settings.internal_jwt_issuer,
+        audience=_mcp_broker_audience(settings),
+        ttl_seconds=MCP_BROKER_TOKEN_TTL_SECONDS,
+    )
+    create_control_plane_audit_log(
+        db_path,
+        workspace_id=principal.workspace_id,
+        actor_user_id=None,
+        event_type="mcp_broker.token_issued",
+        subject_type="machine_principal",
+        subject_id=principal.client_id,
+    )
+    return {
+        "token": token,
+        "client_id": principal.client_id,
+        "workspace_id": principal.workspace_id,
+        "ttl_seconds": MCP_BROKER_TOKEN_TTL_SECONDS,
+    }
 
 
 MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
@@ -96,7 +175,64 @@ def authenticate_mcp_broker_request(
     settings: Settings,
     db_path: str,
 ) -> McpBrokerPrincipalContext:
-    client_id, client_secret = _parse_basic_auth(authorization_header)
+    token = _extract_bearer_token(authorization_header)
+    try:
+        claims = validate_mcp_broker_token(
+            token,
+            secret=settings.internal_jwt_secret,
+            issuer=settings.internal_jwt_issuer,
+            audience=_mcp_broker_audience(settings),
+        )
+    except TokenValidationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    principal = get_machine_principal_by_client_id(db_path, claims.subject)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Machine principal not found.")
+    if principal.status != "active":
+        raise HTTPException(status_code=401, detail="Machine principal is not active.")
+    if claims.workspace_id != principal.workspace_id:
+        raise HTTPException(status_code=401, detail="Token workspace does not match principal.")
+
+    if not _mcp_invoke_limiter.allow(principal.client_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many MCP broker requests. Please retry after 60 seconds.",
+            headers={"Retry-After": "60"},
+        )
+
+    return McpBrokerPrincipalContext(
+        client_id=principal.client_id,
+        display_name=principal.display_name,
+        workspace_id=principal.workspace_id,
+        scopes=claims.scopes,
+    )
+
+
+def record_mcp_broker_invocation(
+    *,
+    db_path: str,
+    context: McpBrokerPrincipalContext,
+    tool_name: str,
+) -> None:
+    create_control_plane_audit_log(
+        db_path,
+        workspace_id=context.workspace_id,
+        actor_user_id=None,
+        event_type="mcp_broker.tool_invoked",
+        subject_type="machine_principal",
+        subject_id=context.client_id,
+        payload={"tool_name": tool_name},
+    )
+
+
+def _authenticate_principal_credentials(
+    client_id: str,
+    client_secret: str,
+    *,
+    settings: Settings,
+    db_path: str,
+):
     generic_401 = "Invalid client credentials."
 
     principal = get_machine_principal_by_client_id(db_path, client_id)
@@ -119,13 +255,8 @@ def authenticate_mcp_broker_request(
         if flags.get("cp_api_enabled", True) is False:
             raise HTTPException(status_code=403, detail="Control plane API is not enabled for this workspace.")
 
-    scopes = frozenset(json.loads(principal.scopes_json))
-    return McpBrokerPrincipalContext(
-        client_id=principal.client_id,
-        display_name=principal.display_name,
-        workspace_id=principal.workspace_id,
-        scopes=scopes,
-    )
+    return principal
+
 
 
 def invoke_mcp_broker_tool(
@@ -148,22 +279,22 @@ def invoke_mcp_broker_tool(
     return handler(arguments or {}, context=context, db_path=db_path)
 
 
-def _parse_basic_auth(header_value: str | None) -> tuple[str, str]:
-    if not header_value or not header_value.startswith("Basic "):
+def _extract_bearer_token(header_value: str | None) -> str:
+    prefix = "Bearer "
+    if not header_value or not header_value.startswith(prefix):
         raise HTTPException(
             status_code=401,
             detail="Missing or malformed Authorization header.",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    token = header_value[6:].strip()
-    try:
-        decoded = base64.b64decode(token).decode("utf-8")
-    except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=401, detail="Malformed basic auth credentials.") from exc
-    client_id, separator, client_secret = decoded.partition(":")
-    if not separator or not client_id or not client_secret:
-        raise HTTPException(status_code=401, detail="Malformed basic auth credentials.")
-    return client_id, client_secret
+    token = header_value[len(prefix):].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Empty bearer token.")
+    return token
+
+
+def _mcp_broker_audience(settings: Settings) -> str:
+    return f"{settings.internal_jwt_audience}{MCP_BROKER_AUDIENCE_SUFFIX}"
 
 
 def _require_scope(context: McpBrokerPrincipalContext, scope: str) -> None:

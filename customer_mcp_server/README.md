@@ -8,9 +8,11 @@ It runs a thin local MCP server that:
 
 - exposes PromptDrift tools to your MCP-compatible agent host over stdio
 - authenticates to your PromptDrift workspace using your machine principal credentials
-- forwards tool calls to the hosted PromptDrift MCP broker
+- exchanges those credentials for a short-lived PromptDrift MCP broker token
+- forwards tool calls to the hosted PromptDrift MCP broker using that short-lived token
 
 The connector does **not** contain PromptDrift internal control-plane bearer tokens.
+The connector also does not keep sending your long-lived client secret on every tool invocation; it uses the secret only to obtain a short-lived broker token.
 
 ## Setup
 

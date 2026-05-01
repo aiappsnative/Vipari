@@ -88,6 +88,19 @@ class MachinePrincipalClaims:
     audience: str
 
 
+@dataclass(frozen=True)
+class McpBrokerClaims:
+    """Validated claims extracted from a verified MCP broker token."""
+
+    subject: str
+    workspace_id: int
+    scopes: frozenset[str]
+    issued_at: float
+    expires_at: float
+    issuer: str
+    audience: str
+
+
 # ---------------------------------------------------------------------------
 # Issuance
 # ---------------------------------------------------------------------------
@@ -119,6 +132,31 @@ def issue_cp_token(
         "workspace_id": workspace_id,
         "scopes": list(scopes),
         "typ": "cp",
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def issue_mcp_broker_token(
+    *,
+    client_id: str,
+    workspace_id: int,
+    scopes: list[str],
+    secret: str,
+    issuer: str,
+    audience: str,
+    ttl_seconds: int,
+) -> str:
+    """Issue a signed HS256 JWT for MCP broker access only."""
+    now = int(time.time())
+    payload = {
+        "sub": client_id,
+        "iss": issuer,
+        "aud": audience,
+        "iat": now,
+        "exp": now + ttl_seconds,
+        "workspace_id": workspace_id,
+        "scopes": list(scopes),
+        "typ": "mcp_broker",
     }
     return jwt.encode(payload, secret, algorithm="HS256")
 
@@ -186,6 +224,66 @@ def validate_cp_token(
     audience_str = aud_raw if isinstance(aud_raw, str) else (aud_raw[0] if aud_raw else "")
 
     return MachinePrincipalClaims(
+        subject=subject,
+        workspace_id=int(workspace_id_raw),
+        scopes=frozenset(scopes_raw),
+        issued_at=float(payload["iat"]),
+        expires_at=float(payload["exp"]),
+        issuer=payload["iss"],
+        audience=audience_str,
+    )
+
+
+def validate_mcp_broker_token(
+    token: str,
+    *,
+    secret: str,
+    issuer: str,
+    audience: str,
+) -> McpBrokerClaims:
+    """Decode and validate an MCP broker JWT."""
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            issuer=issuer,
+            audience=audience,
+            options={"require": ["sub", "iss", "aud", "iat", "exp", "workspace_id", "scopes"]},
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenValidationError("Token has expired.") from exc
+    except jwt.InvalidIssuerError as exc:
+        raise TokenValidationError("Token issuer is invalid.") from exc
+    except jwt.InvalidAudienceError as exc:
+        raise TokenValidationError("Token audience is invalid.") from exc
+    except jwt.MissingRequiredClaimError as exc:
+        raise TokenValidationError(f"Token is missing required claim: {exc}") from exc
+    except jwt.DecodeError as exc:
+        raise TokenValidationError("Token signature is invalid or malformed.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise TokenValidationError(f"Token is invalid: {exc}") from exc
+
+    typ = payload.get("typ")
+    if typ != "mcp_broker":
+        raise TokenValidationError("Token type claim is not 'mcp_broker'.")
+
+    subject = payload.get("sub")
+    if not subject:
+        raise TokenValidationError("Token subject is missing.")
+
+    workspace_id_raw = payload.get("workspace_id")
+    if not isinstance(workspace_id_raw, int):
+        raise TokenValidationError("Token workspace_id claim is missing or not an integer.")
+
+    scopes_raw = payload.get("scopes")
+    if not isinstance(scopes_raw, list):
+        raise TokenValidationError("Token scopes claim is missing or not a list.")
+
+    aud_raw = payload.get("aud", "")
+    audience_str = aud_raw if isinstance(aud_raw, str) else (aud_raw[0] if aud_raw else "")
+
+    return McpBrokerClaims(
         subject=subject,
         workspace_id=int(workspace_id_raw),
         scopes=frozenset(scopes_raw),

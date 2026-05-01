@@ -152,7 +152,13 @@ from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
-from services.mcp_broker import authenticate_mcp_broker_request, invoke_mcp_broker_tool, list_mcp_tools_for_scopes
+from services.mcp_broker import (
+    authenticate_mcp_broker_request,
+    invoke_mcp_broker_tool,
+    issue_mcp_broker_token_via_client_credentials,
+    list_mcp_tools_for_scopes,
+    record_mcp_broker_invocation,
+)
 from services.mcp_package import build_customer_mcp_bundle
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
@@ -296,6 +302,11 @@ class ComplianceExportRequest(BaseModel):
 class McpBrokerInvokeRequest(BaseModel):
     tool_name: str
     arguments: dict[str, object] = {}
+
+
+class McpBrokerTokenRequest(BaseModel):
+    client_id: str
+    client_secret: str
 
 
 def _control_plane_active() -> bool:
@@ -2145,6 +2156,22 @@ async def mcp_broker_tools(request: Request):
     )
 
 
+@app.post("/api/agent-integrations/mcp/token")
+async def mcp_broker_token(payload: McpBrokerTokenRequest, request: Request):
+    client_ip = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    return JSONResponse(
+        issue_mcp_broker_token_via_client_credentials(
+            payload.client_id,
+            payload.client_secret,
+            settings=settings,
+            db_path=AUDIT_DB_PATH,
+            client_ip=client_ip,
+        )
+    )
+
+
 @app.post("/api/agent-integrations/mcp/invoke")
 async def mcp_broker_invoke(payload: McpBrokerInvokeRequest, request: Request):
     context = authenticate_mcp_broker_request(
@@ -2157,6 +2184,11 @@ async def mcp_broker_invoke(payload: McpBrokerInvokeRequest, request: Request):
         payload.arguments,
         context=context,
         db_path=AUDIT_DB_PATH,
+    )
+    record_mcp_broker_invocation(
+        db_path=AUDIT_DB_PATH,
+        context=context,
+        tool_name=payload.tool_name,
     )
     return JSONResponse(
         {

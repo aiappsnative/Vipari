@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import sys
 import time
@@ -15,6 +14,7 @@ from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_machine_principal,
     create_workspace,
+    list_control_plane_audit_logs_for_workspace,
     replace_repo_connections,
     upsert_entitlement,
     upsert_github_identity,
@@ -36,9 +36,17 @@ temperature: 0.2
 """
 
 
-def _auth_header(client_id: str, client_secret: str) -> dict[str, str]:
-    token = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
-    return {"Authorization": f"Basic {token}"}
+def _issue_broker_token(client: TestClient, client_id: str, client_secret: str) -> str:
+    response = client.post(
+        "/api/agent-integrations/mcp/token",
+        json={"client_id": client_id, "client_secret": client_secret},
+    )
+    assert response.status_code == 200
+    return response.json()["token"]
+
+
+def _bearer_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _seed_mcp_workspace(db_path: str, *, repo_full: str = "doria90/dummyAI") -> tuple[str, str]:
@@ -136,39 +144,43 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     db_path = str(tmp_path / "mcp-broker.db")
     original_db_path = main.AUDIT_DB_PATH
     original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
     main.AUDIT_DB_PATH = db_path
     main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
 
     client_id, client_secret = _seed_mcp_workspace(db_path)
 
     with TestClient(main.app) as client:
+        broker_token = _issue_broker_token(client, client_id, client_secret)
         tools_response = client.get(
             "/api/agent-integrations/mcp/tools",
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
         repos_response = client.post(
             "/api/agent-integrations/mcp/invoke",
             json={"tool_name": "promptdrift.list_repos", "arguments": {}},
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
         posture_response = client.post(
             "/api/agent-integrations/mcp/invoke",
             json={"tool_name": "promptdrift.get_repo_posture", "arguments": {"repo_full": "doria90/dummyAI"}},
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
         casefile_response = client.post(
             "/api/agent-integrations/mcp/invoke",
             json={"tool_name": "promptdrift.get_repo_casefile", "arguments": {"repo_full": "doria90/dummyAI"}},
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
         escalations_response = client.post(
             "/api/agent-integrations/mcp/invoke",
             json={"tool_name": "promptdrift.list_escalations", "arguments": {}},
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
 
     assert tools_response.status_code == 200
     tool_names = {tool["name"] for tool in tools_response.json()["tools"]}
@@ -182,31 +194,38 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     assert casefile_response.json()["result"]["coverage_summary"]["discovered_artifact_count"] >= 1
     assert escalations_response.status_code == 200
     assert escalations_response.json()["result"]["workspace_id"] >= 1
+    entries = list_control_plane_audit_logs_for_workspace(db_path, 1)
+    assert any(entry.event_type == "mcp_broker.token_issued" for entry in entries)
+    assert any(entry.event_type == "mcp_broker.tool_invoked" for entry in entries)
 
 
 def test_mcp_broker_blocks_repo_outside_workspace(tmp_path):
     db_path = str(tmp_path / "mcp-broker-outside.db")
     original_db_path = main.AUDIT_DB_PATH
     original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
     main.AUDIT_DB_PATH = db_path
     main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
 
     client_id, client_secret = _seed_mcp_workspace(db_path)
 
     with TestClient(main.app) as client:
+        broker_token = _issue_broker_token(client, client_id, client_secret)
         response = client.post(
             "/api/agent-integrations/mcp/invoke",
             json={"tool_name": "promptdrift.get_repo_posture", "arguments": {"repo_full": "doria90/not-allocated"}},
-            headers=_auth_header(client_id, client_secret),
+            headers=_bearer_header(broker_token),
         )
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
 
     assert response.status_code == 404
 
 
-def test_mcp_broker_requires_basic_auth(tmp_path):
+def test_mcp_broker_requires_bearer_auth(tmp_path):
     db_path = str(tmp_path / "mcp-broker-auth.db")
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = db_path
@@ -216,5 +235,29 @@ def test_mcp_broker_requires_basic_auth(tmp_path):
         response = client.get("/api/agent-integrations/mcp/tools")
 
     main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 401
+
+
+def test_mcp_broker_token_requires_valid_client_credentials(tmp_path):
+    db_path = str(tmp_path / "mcp-broker-token-auth.db")
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
+    main.AUDIT_DB_PATH = db_path
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
+
+    client_id, _client_secret = _seed_mcp_workspace(db_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/agent-integrations/mcp/token",
+            json={"client_id": client_id, "client_secret": "wrong-secret"},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
 
     assert response.status_code == 401
