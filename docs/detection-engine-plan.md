@@ -160,6 +160,33 @@ Important constraint preserved in the merged implementation:
 - billing redirects do not activate access without webhook-confirmed subscription state
 - incomplete setup states terminate in guided app shells rather than leaking into half-initialized dashboard routes
 
+### Merged MCP broker architecture extension (2026-05-02)
+
+The merged `feature/mcp-map-server-v1` work adds a third linked surface on top of the existing engine and control plane: a customer-facing agent integration path that keeps machine-principal auth, workspace binding, and output shaping on the PromptDrift side of the boundary.
+
+That merged slice adds:
+
+- a customer-facing Agent Integrations page at `/app/integrations/mcp` with setup guidance, download flow, trust-boundary explanation, and role-gated visibility for API-key inventory and recent integration activity
+- a product-owned downloadable connector bundle assembled from `customer_mcp_server/` rather than generated ad hoc at request time
+- hosted MCP broker endpoints for short-lived token issuance, tool discovery, and tool invocation under `/api/agent-integrations/mcp/*`
+- a dedicated broker JWT type and audience for the MCP path instead of reusing broader control-plane bearer tokens directly
+- a curated read-first tool registry over workspace-scoped repo posture, case-file, repo-list, and escalation data
+- contract enforcement between the hosted broker registry and the shipped connector manifest so customer-visible tool metadata cannot drift silently from the broker implementation
+
+Important architecture constraints preserved in the merged implementation:
+
+- one broker session maps to one workspace; no cross-workspace roaming is introduced for agent calls
+- the downloadable connector is intentionally thin and does not receive internal control-plane bearer tokens
+- long-lived machine-principal secrets are used only to mint short-lived broker tokens and are not resent on every broker invocation from the connector
+- write-capable MCP tools remain out of scope for this slice; the broker is read-first and bounded to curated control-plane views
+- customer-facing overview access does not imply access to machine-principal inventory or audit activity; those stay restricted to workspace owners and admins
+
+Architecturally, this means DriftGuard now has three linked surfaces on `main`:
+
+- the audit engine for PR review, history, and dashboard evidence
+- the control plane for customer identity, billing, install setup, and access gating into that engine
+- the MCP broker path for handing a constrained, workspace-bound read surface to external agent hosts without collapsing the product boundary
+
 ### Dashboard evolution note
 
 The current dashboard layer should be understood as an early customer-facing decision surface built on read-model APIs, not yet the final customer product.

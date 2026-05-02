@@ -65,11 +65,10 @@ In practical terms, DriftGuard currently provides:
 - signed billing handoff claims for external providers, with Base44/Wix-style payment-first activation and workspace claim flow
 - local free-tier activation plus optional Stripe fallback for paid checkout and billing portal support
 - GitHub App install linkage, setup-URL callback handling, synced repository connection inventory, and repo allocation into the existing onboarding engine
-- signed OAuth and pending-install flow cookies plus session-bound install callback validation so continuation state cannot be replayed or spoofed across browsers
 - additive SQLite repair migrations for legacy control-plane databases, including rebuilt `repo_connections` and `repo_allocations` foreign keys that now correctly target `github_installations.installation_id`
 - setup-state persistence that now recomputes `workspaces.setup_state` from entitlement, install, and onboarding facts
 - dashboard gating that blocks incomplete setup states from falling through to broken dashboard routes, including JSON API routes when the control plane is active
-- production deployments always gate `/dashboard` through login, while only true localhost operator mode can still expose the dashboard directly for local seeded inspection
+- production deployments always gate `/dashboard` through login, while true localhost operator mode can still expose the dashboard directly for local seeded inspection
 - webhook gating that suppresses PR audits/comments for managed repos that are installed but not allocated or not entitled for comments, while leaving unmanaged legacy installs compatible with queued audits
 - owner/admin-only protection for billing and provisioning mutations so viewer roles can inspect state but not mutate it
 - actionable setup-state, free-tier, and active-state app shells so `/app` always exposes a real continuation path
@@ -81,13 +80,14 @@ In practical terms, DriftGuard currently provides:
 - worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
 - customer self-service API key management at `/app/settings/api-keys`: scope-gated machine principal creation with one-time secret flash delivery (atomic creation + flash in a single transaction, consumed on first GET), revocation, and per-workspace principal limits
 - client-credentials token exchange at `/cp/auth/token` with sliding-window rate limiting (20 req/60 s), constant-time secret comparison, and full audit logging per exchange
-- a customer-facing Agent Integrations page at `/app/integrations/mcp` with an authenticated download flow for a website-distributed MCP connector package, plus a hosted workspace-bound MCP broker exposing curated read-first tools over machine-principal Basic auth
+- a customer-facing Agent Integrations surface at `/app/integrations/mcp` with a downloadable MCP connector package, hosted broker token exchange, tool discovery, and workspace-bound read-first invocation routes
 
-Latest merged validation on 2026-05-01:
+Latest merged validation on 2026-04-30:
 
-- broader control-plane/dashboard/runtime security sweep passed locally after the issue `#68` merge:
-	- `pytest tests/test_control_plane_ui.py tests/test_control_plane_auth.py tests/test_operator_api.py tests/test_runtime_guardrails.py tests/test_dashboard_api.py tests/test_dashboard_control_tower.py`
-	- result: `156 passed, 1 skipped`
+- focused post-merge dashboard/control-plane validation passed locally after the issue `#62` merge and proposal-visibility hardening:
+	- `pytest tests/test_dashboard_api.py -k "test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator or test_pending_proposals_api_requires_repo_visibility or test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin or test_pending_proposals_api_response_shape"`
+	- `pytest tests/test_dashboard_control_tower.py -k "pending_proposals"`
+- the latest broader full-suite local verification recorded before this merge remains `438 passed`
 - tunnel-backed live validation previously confirmed GitHub OAuth handoff, workspace bootstrap, GitHub App install linkage, repo connection sync, repo allocation for `doria90/dummyAI`, and dashboard unlock after simulated Team billing
 
 For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, see [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
@@ -136,10 +136,10 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
 - provides a customer-facing self-service API key management UI at `/app/settings/api-keys` where workspace owners and admins can create scope-gated machine principals, receive the one-time `client_secret` on creation, and revoke keys
 - exchanges client credentials for short-lived JWTs at `/cp/auth/token` with sliding-window rate limiting, constant-time secret verification, production entitlement gating, and per-exchange audit log entries
+- provides a customer MCP integration flow: `/app/integrations/mcp` for setup and download, `POST /api/agent-integrations/mcp/token` for short-lived broker tokens, `GET /api/agent-integrations/mcp/tools` for workspace-scoped tool discovery, and `POST /api/agent-integrations/mcp/invoke` for brokered read-first tool execution
 - accepts structured feedback on PR audits at `POST /cp/audits/{audit_id}/feedback` (`drift.write.low`): append-only events with validated `kind` (six values), optional bounded `comment`, and bounded `metadata`; workspace isolation enforced via 404-masking
 - records triage state transitions on PR audits at `POST /cp/audits/{audit_id}/triage` (`drift.write.low`): append-only events with validated `state` (three values) and optional bounded `reason`; never mutates `pull_request_audits`
 - returns export job status (without `result_blob`) at `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`)
-- provides a customer-only MCP integration flow: `/app/integrations/mcp` renders setup guidance, `/app/integrations/mcp/download` returns the connector ZIP, `GET /api/agent-integrations/mcp/tools` lists the allowed MCP tools for a machine principal, and `POST /api/agent-integrations/mcp/invoke` executes those workspace-bound read tools without exposing internal control-plane bearer tokens
 
 ## High-level architecture
 
@@ -147,6 +147,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
+- **Customer agent integration path:** machine-principal credentials mint short-lived MCP broker tokens, the hosted broker exposes a curated workspace-bound read surface, and the downloadable connector stays thin so internal control-plane tokens never leave PromptDrift
 
 ## Compliance export package
 

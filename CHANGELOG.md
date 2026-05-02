@@ -1,23 +1,25 @@
 # Changelog
 
-## 2026-05-01 — Control-plane auth boundary hardening merged to main
+## 2026-05-02 — Customer MCP integrations merged to main
 
 ### Added
-- signed, integrity-protected flow cookies that bind pre-auth continuation state to the OAuth nonce and pending-install context to the active session
-- dedicated install-callback nonce validation plus focused regression coverage for callback spoofing, auth-session sanitization, and remote-host local-owner fallback rejection
+- customer-facing Agent Integrations page at `/app/integrations/mcp` with a downloadable MCP connector bundle, setup guidance, trust-boundary explanation, and workspace-scoped machine-principal management for authorized roles
+- hosted MCP broker endpoints at `/api/agent-integrations/mcp/token`, `/api/agent-integrations/mcp/tools`, and `/api/agent-integrations/mcp/invoke`
+- dedicated `customer_mcp_server/` package assets so the downloadable connector remains a self-contained product-owned bundle instead of an ad hoc export
+- focused regression coverage for MCP broker routing, package assembly, contract matching, and control-plane UI access rules
 
 ### Changed
-- `/api/auth/session` now exposes only the public identity payload instead of encrypted token fields
-- onboarding and backfill routes now trust the workspace-linked GitHub installation instead of caller-supplied `installation_id` values
-- dashboard auth rules now preserve read-only standalone local inspection when the control plane is inactive while keeping mutations and control-plane paths authenticated
-- local owner fallback is now restricted to localhost `local` and `test` runs, and runtime guardrails reject unsafe remote-host configurations
+- repo audit pages now expose a dedicated `Version control` tab with a posture radar plus a default-open baseline comparison and journey layout
+- baseline and export action links now switch across repo tabs explicitly instead of pointing at hidden same-page anchors
+- Agent Integrations overview access remains available to accepted workspace members, but API-key inventory and integration activity stay restricted to workspace owners and admins
+- MCP broker route wiring is now first-class in `main.py` so the documented broker endpoints resolve on `main`
 
 ### Verified
-- merged control-plane/dashboard/runtime regression sweep passed locally (`156 passed, 1 skipped`)
+- MCP-focused local regression slices passed after merge cleanup and access hardening: `tests/test_control_plane_ui.py`, `tests/test_mcp_broker.py`, and `tests/test_mcp_package.py` (`82 passed`)
 
 ### Product impact
-- install-linking and login continuation flows now fail closed if their browser state is tampered with
-- local seeded inspection remains available for true localhost development without reopening anonymous mutation or remote-host access paths
+- DriftGuard can now hand curated, workspace-bound read tools to external AI agents without distributing internal control-plane tokens or collapsing the product boundary
+- the merged MCP surface stays least-privilege by keeping connector downloads discoverable while limiting machine-principal inventory and activity history to admin-capable roles
 
 ## 2026-04-24 — Persistence status output sanitization
 

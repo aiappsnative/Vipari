@@ -66,20 +66,7 @@ This framing should shape roadmap decisions:
 	- now includes the merged `feature/control-plane-read-models-v1` slice (issue #58): authenticated, workspace-scoped internal `/cp/*` JSON read endpoints for workspace listing, repo inventory, repo posture, repo case file, artifact inventory, artifact detail, artifact storyline, repo audits, audit detail, and the escalation queue; all endpoints are read-only and JSON-only; this layer is the canonical structured data source for the dashboard and future MCP integrations
 	- now includes the merged `feature/control-plane-high-risk-proposals-v1` slice (issue #61): human-gated proposal-and-approval flows for the control plane; covers baseline-promote proposals (artifact-scoped) and repo-onboarding proposals (workspace-scoped); adds `services/proposals_records.py` as the full CRUD persistence layer, migration `0007_add_high_risk_proposal_tables`, 8 new API routes, `principal_kind` vocabulary and `validate_scope_kind_compatibility` in `internal_auth.py`, and `require_cp_principal_kind` in `cp_auth.py`; enforces four-eyes rule, TOCTOU-safe conditional UPDATE, flood limits, 30-day expiry, artifact_id/URL consistency guard (audit log integrity), and service-account-blocked-from-high-scope at both creation and route layer; 36 tests in `test_cp_high_risk_proposals.py`
 	- now includes the merged `feature/dashboard-control-tower-v1` slice (issue #62, PR #67): workspace posture and escalation queue surfaces on `/dashboard`, repo decision panels and pending proposal summaries on `/dashboard/{owner/repo}`, the contextual `/app/help` experience, and post-review hardening so pending repo proposals remain workspace-scoped, repo-visible, and provenance-correct
-	- now includes the merged `feature/security-hardening-issue-68` slice (PR #69): signed OAuth and install-flow cookies, session-bound install callback validation, sanitized public auth-session payloads, trusted workspace-install enforcement for onboarding/backfill, localhost-only local-owner fallback, and explicit separation between read-only standalone dashboard inspection and authenticated mutation/control-plane access
-	- latest broader security regression sweep for the merged issue `#68` slice passed locally across `tests/test_control_plane_ui.py`, `tests/test_control_plane_auth.py`, `tests/test_operator_api.py`, `tests/test_runtime_guardrails.py`, `tests/test_dashboard_api.py`, and `tests/test_dashboard_control_tower.py` (`156 passed, 1 skipped`)
-
-### `feature/mcp-map-server-v1` (issue #59)
-- Purpose: active branch for the first customer agent-integration slice, pairing a downloadable customer MCP connector with a hosted PromptDrift broker
-- Current status on this branch:
-	- authenticated Agent Integrations page at `/app/integrations/mcp` with setup guidance, trust-boundary explanation, available-tool inventory, and visible workspace machine principals
-	- authenticated download route at `/app/integrations/mcp/download` that packages the customer connector as a ZIP distributed through the product website only, not PyPI
-	- new `services/mcp_broker.py` hosted broker layer with machine-principal credential exchange into short-lived broker tokens, per-principal invoke rate limiting, broker token issuance audit logs, invocation audit logs, and four initial read-first tools: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
-	- new broker endpoints in `main.py`: `POST /api/agent-integrations/mcp/token`, `GET /api/agent-integrations/mcp/tools`, and `POST /api/agent-integrations/mcp/invoke`
-	- new `customer_mcp_server/` connector package with its own `requirements.txt`, `promptdrift_mcp_server.py`, bundled environment template, example Claude Desktop host config, shipped tool manifest, and package-owned templates so the bundle can be worked on as a standalone repo subproject
-	- package/broker contract hardening now enforces the shipped `tool-manifest.json` against the canonical broker tool registry so customer package metadata cannot silently drift from the hosted broker surface
-	- Help Center and API Keys surfaces now route customers toward the dedicated MCP integrations page instead of leaving agent setup implicit
-	- focused regression coverage added in `tests/test_control_plane_ui.py`, `tests/test_mcp_broker.py`, and `tests/test_mcp_package.py`; package-bundle tests now enforce that the downloadable MCP connector is assembled from the dedicated package directory rather than ad hoc generated files, and that the checked-in package manifest matches the canonical broker contract
+	- latest focused post-merge validation for issue `#62` passed locally in `tests/test_dashboard_api.py` and `tests/test_dashboard_control_tower.py`; the latest broader full-suite local verification recorded before this merge remains `438 passed`
 
 ### `feature/drift-storyline-v1`
 - Purpose: completed branch for turning artifact history into a first-class case-file storyline surface
@@ -391,11 +378,11 @@ Verified against repo state and open issues:
 - GitHub issue `#60` (`feature/control-plane-low-risk-actions-v1`) is now merged to `main`; feedback/triage write endpoints and export-status read endpoint are mainline functionality. Issue is closed.
 - GitHub issue `#58` (`feature/control-plane-read-models-v1`) is now merged to `main`; all `/cp/*` JSON read endpoints for workspaces, repos, posture, case file, artifacts, storyline, audits, and escalations are mainline functionality. Issue is closed.
 - GitHub issue `#61` (`feature/control-plane-high-risk-proposals-v1`) is now merged to `main`; human-gated proposal-and-approval flows for baseline promotions and repo onboarding are mainline functionality. Issue is closed.
+- GitHub issue `#59` (`feature/mcp-map-server-v1`) is now merged to `main`; the customer MCP connector, hosted broker routes, and Agent Integrations page are mainline functionality. Issue should be treated as complete.
 - The remaining open issues that align with real unfinished work are:
   - `#46` (`feature/railway-launch-hardening`) — production Railway deployment readiness
   - `#14` (`feature/attribute-profile-ui-v1`) — attribute profile as a first-class dashboard and review surface
   - `#15` (`feature/governance-signals-v1`) — first-class governance anomaly detection
-  - `#59` (`feature/mcp-map-server-v1`) — brokered MCP server exposing curated PromptDrift tools to customer agents
   - `#62` (`feature/dashboard-control-tower-v1`) — refactor dashboard and audit pages into a control-tower model centered on escalations, case files, and human oversight
 
 #### Remaining work analysis
@@ -407,17 +394,15 @@ What still looks unfinished on `main`:
 - reviewer-target quality now has merged proposal-only vs landed-history separation and PR-first review targets, but still needs broader real-repo validation and tuning on history-heavy repositories
 - production persistence hardening is now merged, but live Railway/operator validation is still needed before broader launch claims
 - attribute-profile and governance-specific product surfaces now have enough foundation to justify dedicated follow-on slices
-- the control-plane read model (issue #58), high-risk proposal layer (issue #61), and dashboard control tower (issue #62) are now merged, making the MCP server (issue #59) and launch hardening the most natural next integration layers
+- the control-plane read model (issue #58), MCP broker layer (issue #59), high-risk proposal layer (issue #61), and dashboard control tower (issue #62) are now merged, making launch hardening and deeper signal presentation the most natural next integration layers
 
 What should come next:
 
 1. `feature/railway-launch-hardening` (issue #46)
 	- should stay close behind persistence because launch readiness depends on the production data-path actually being proven
-2. `feature/mcp-map-server-v1` (issue #59)
-	- now directly buildable on top of the merged CP read models and machine-principal auth from issues #58 and #57
-3. `feature/attribute-profile-ui-v1` (issue #14)
+2. `feature/attribute-profile-ui-v1` (issue #14)
 	- now becomes more leverageable because the dashboard and storyline surfaces already expose rich profile payloads
-4. `feature/governance-signals-v1` (issue #15)
+3. `feature/governance-signals-v1` (issue #15)
 	- should follow once reviewer-target quality and attribute-profile presentation are stable enough to support another first-class dimension
 
 #### Completed: `feature/eval-harness-v1`
@@ -550,18 +535,21 @@ Planned scope:
 - surface governance-related anomalies in dashboard prioritization and evidence summaries
 - keep the first slice additive and explainable rather than expanding into a generic compliance suite
 
-#### 5. `feature/mcp-map-server-v1` (issue #59)
+#### Completed: `feature/mcp-map-server-v1` (issue #59)
 
 Purpose:
 - build a brokered MCP server that exposes curated PromptDrift tools to customer agents without leaking internal credentials or collapsing the product boundary
 
-Planned scope:
-- create a dedicated MCP service or module with tool discovery and invocation, workspace binding, internal CP access via machine principals, and agent-shaped output formatting
-- bind every MCP session to a single workspace; no cross-workspace roaming
-- authenticate to `/cp/*` using short-lived internal JWTs from issue #57 machine-principal infrastructure
-- implement initial read-first tool set: `promptdrift.list_repos`, `get_repo_posture`, `get_repo_casefile`, `list_artifacts`, `get_artifact_storyline`, `list_escalations`, `get_audit`
-- shape outputs for agent usability (compact structured results, normalized enums, no UI-centric nesting)
-- no high-risk write tools, no polished customer onboarding UI in this slice
+Final status at merge:
+- added `/app/integrations/mcp` as the customer-facing Agent Integrations page, with overview, API-key, and activity sections constrained by workspace role
+- added downloadable connector packaging at `/app/integrations/mcp/download`, backed by the dedicated `customer_mcp_server/` package directory
+- added hosted broker endpoints for short-lived MCP tokens, tool discovery, and workspace-bound tool invocation under `/api/agent-integrations/mcp/*`
+- shipped the first read-first broker tool set: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
+- enforced a broker/package contract via `tool-manifest.json` matching tests so the distributed connector cannot silently drift from the hosted broker surface
+- kept the trust boundary intact: machine-principal credentials only mint short-lived broker tokens, and high-risk write tools remain out of scope
+
+Exit note:
+- the MCP integration foundation is now merged; next work should expand tool depth, customer-host coverage, and operational rollout guidance incrementally rather than reopening the broker boundary itself
 
 ### Trial success criteria for the next version
 
