@@ -10,6 +10,7 @@ from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.branch_scan_jobs import create_branch_scan_job
@@ -241,6 +242,22 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].points[-1].source_ref == "commit sha-3"
     assert dashboard.history_timelines[0].points[-1].source_url == "https://github.com/doria90/dummyAI/commit/sha-3"
     assert dashboard.history_timelines[0].points[-1].review_context == "Historical snapshot from backfill"
+
+
+def test_build_repo_governance_posture_stays_neutral_when_repo_has_no_design_profiles():
+    posture = build_repo_governance_posture(
+        "doria90/empty-repo",
+        design_profiles=[],
+        artifacts=[],
+        history_cues=[],
+        insights=[],
+    )
+
+    assert posture.ownership_confidence == "established"
+    assert posture.review_quality == "adequate"
+    assert posture.repeated_drift_without_refresh_count == 0
+    assert posture.baseline_freshness_status == "current"
+    assert posture.top_governance_anomalies == ()
 
 
 def test_live_branch_head_scan_becomes_current_repo_journey_checkpoint(tmp_path):

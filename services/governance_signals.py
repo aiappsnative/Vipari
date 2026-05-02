@@ -39,11 +39,14 @@ def build_pr_comment_governance_findings(
     repo: str = "unknown",
     pr_number: int | None = None,
     decision: str | None = None,
+    include_missing_profile_fallback: bool = True,
 ) -> tuple[GovernanceFinding, ...]:
     profiles = [profile for profile in (attribute_profiles or []) if _dimensions(profile)]
     findings: list[GovernanceFinding] = []
 
     if not profiles:
+        if not include_missing_profile_fallback:
+            return ()
         return (
             GovernanceFinding(
                 finding_type="low_governance_confidence",
@@ -210,6 +213,7 @@ def build_repo_governance_findings(
         build_pr_comment_governance_findings(
             design_profiles,
             repo=repo_full,
+            include_missing_profile_fallback=False,
         )
     )
     seen = {(finding.artifact_id, finding.finding_type) for finding in findings}
