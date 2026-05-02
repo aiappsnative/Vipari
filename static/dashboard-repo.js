@@ -526,6 +526,7 @@ function attributeChangeSummary(item) {
         const impact = magnitude >= 0.12 ? "high" : magnitude >= 0.05 ? "medium" : "low";
         const state = magnitude < 0.02 ? "no_change" : "drift_detected";
         return {
+            attributeKey: field.key,
             label: field.label,
             baselineValue,
             currentValue,
@@ -598,6 +599,7 @@ function renderAttributeSummary(item) {
     const normalizedProfile = asArray(item.attribute_profile || []);
     const changes = normalizedProfile.length
         ? normalizedProfile.map((dimension) => ({
+            attributeKey: dimension.attribute_key,
             label: dimension.label,
             baselineValue: dimension.baseline_value,
             currentValue: dimension.current_value,
@@ -610,13 +612,9 @@ function renderAttributeSummary(item) {
             confidenceLabel: dimension.confidence_label,
         }))
         : attributeChangeSummary(item);
+    const controlSurface = normalizedProfile.find((dimension) => dimension.attribute_key === "control_surface_type");
     return `
         <div class="stack compact-stack">
-            ${normalizedProfile.length ? `
-                <div class="tag-row">${normalizedProfile
-                    .map((dimension) => `<span class="tag tag-muted">${dimension.label}: ${dimension.current_value}</span>`)
-                    .join("")}</div>
-            ` : ""}
             <div class="glance-strip">
                 <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_provenance?.label || "No baseline"}</strong></div>
                 <div class="glance-chip"><span class="glance-chip-label">Current source</span><strong>${renderProvenance(item.provenance, "Baseline only")}</strong></div>
@@ -626,51 +624,108 @@ function renderAttributeSummary(item) {
             <div class="brief-panel">
                 <div class="brief-row"><span class="brief-label">Summary</span><span class="brief-copy">${item.headline_summary || "Baseline-relative posture changed."}</span></div>
             </div>
+            ${renderAttributeProfilePanel(changes, controlSurface, sourceLink, item)}
             ${renderAttributeFindings(item, sourceLink)}
-            <details class="micro-detail">
-                <summary>Full posture comparison</summary>
-                <div class="micro-detail-body attribute-summary-list">
-                    ${changes.map((change) => `
-                        <div class="attribute-summary-card">
-                            <div class="attribute-summary-header">
-                                <strong>${change.label}</strong>
-                                <span class="pill ${change.state === "no_change" ? "pill-no-change" : change.state === "unknown" ? "pill-medium" : `pill-drift pill-${change.impact}`}">${change.state === "no_change" ? "no change" : change.state === "unknown" ? "unknown" : "drift detected"}</span>
-                            </div>
-                            <div class="meta-tight muted"><strong>${change.baselineValue}</strong> → <strong>${change.currentValue}</strong> · ${change.direction} · ${change.confidenceLabel}</div>
-                            <div class="meta-tight muted">${change.summary}</div>
-                        ${(() => {
-                            const finding = attributeFindingForLabel(item, change.label);
-                            if (normalizedProfile.length) {
-                                const evidence = asArray(change.evidence || []);
-                                return `
-                            ${evidence.length ? `
-                            <div class="meta-tight"><strong>What in the code changed:</strong></div>
-                            <ul class="evidence-list">
-                                ${evidence.map((entry) => `<li>${entry}</li>`).join("")}
-                            </ul>
-                            ` : ""}
-                            <div class="meta-tight">${change.remediation || ""}</div>
-                        `;
-                            }
-                            if (change.state === "no_change" || !finding) {
-                                return "";
-                            }
-                            return `
-                            <div class="meta-tight"><strong>What in the code changed:</strong></div>
-                            <ul class="evidence-list">
-                                ${asArray(finding.evidence || []).map((entry) => `<li>${entry}</li>`).join("")}
-                            </ul>
-                            <div class="meta-tight">${finding.reason || ""}</div>
-                            <div class="meta-tight">${finding.remediation || ""}</div>
-                        `;
-                        })()}
-                        ${change.state !== "no_change" && change.state !== "unknown" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
-                        </div>
-                    `).join("")}
-                </div>
-            </details>
         </div>
     `;
+}
+
+function renderAttributeProfilePanel(changes = [], controlSurface, sourceLink, item) {
+    const tabs = asArray(changes).slice(0, 5);
+    if (!tabs.length) {
+        return "";
+    }
+    const panelId = `attribute-profile-${tabs.map((tab) => tab.attributeKey || tab.label).join("-").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+    return `
+        <section class="attribute-tab-panel" data-attribute-profile-panel>
+            <div class="attribute-tab-panel-header">
+                <div>
+                    <div class="insight-title">Attribute profile</div>
+                    <div class="meta-tight muted">Review the five posture dimensions for the selected artifact.</div>
+                </div>
+                <span class="tag tag-muted">${controlSurface?.current_value || "unknown"}</span>
+            </div>
+            <div class="attribute-tab-list" role="tablist" aria-label="Attribute profile dimensions">
+                ${tabs.map((change, index) => `
+                    <button
+                        type="button"
+                        class="attribute-tab ${index === 0 ? "is-active" : ""}"
+                        id="${panelId}-tab-${index}"
+                        role="tab"
+                        aria-selected="${index === 0 ? "true" : "false"}"
+                        aria-controls="${panelId}-panel-${index}"
+                        data-attribute-profile-tab="${panelId}-panel-${index}"
+                    >
+                        ${change.label}
+                    </button>
+                `).join("")}
+            </div>
+            <div class="attribute-tab-panels">
+                ${tabs.map((change, index) => renderAttributeProfileTabPanel(change, index, panelId, sourceLink, item)).join("")}
+            </div>
+        </section>
+    `;
+}
+
+function renderAttributeProfileTabPanel(change, index, panelId, sourceLink, item) {
+    const finding = attributeFindingForLabel(item, change.label);
+    const evidence = asArray(change.evidence || (finding ? finding.evidence : []));
+    const remediation = change.remediation || finding?.remediation || "Review the changed artifact directly before promoting a new baseline.";
+    return `
+        <section
+            class="attribute-tab-body ${index === 0 ? "is-active" : ""}"
+            id="${panelId}-panel-${index}"
+            role="tabpanel"
+            aria-labelledby="${panelId}-tab-${index}"
+            ${index === 0 ? "" : "hidden"}
+        >
+            <div class="attribute-summary-header">
+                <strong>${change.label}</strong>
+                <span class="pill ${change.state === "no_change" ? "pill-no-change" : change.state === "unknown" ? "pill-medium" : `pill-drift pill-${change.impact}`} ">${change.state === "no_change" ? "no change" : change.state === "unknown" ? "unknown" : "drift detected"}</span>
+            </div>
+            <div class="attribute-tab-metrics">
+                <div><span class="brief-label">Baseline</span><strong>${change.baselineValue}</strong></div>
+                <div><span class="brief-label">Current</span><strong>${change.currentValue}</strong></div>
+                <div><span class="brief-label">Direction</span><strong>${change.direction || "unknown"}</strong></div>
+                <div><span class="brief-label">Confidence</span><strong>${change.confidenceLabel || "low confidence"}</strong></div>
+            </div>
+            <div class="meta-tight muted">${change.summary}</div>
+            ${evidence.length ? `
+                <div class="meta-tight"><strong>What in the code changed:</strong></div>
+                <ul class="evidence-list">
+                    ${evidence.map((entry) => `<li>${entry}</li>`).join("")}
+                </ul>
+            ` : ""}
+            <div class="meta-tight">${remediation}</div>
+            ${change.state !== "no_change" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
+        </section>
+    `;
+}
+
+function bindAttributeProfileTabs(scope = document) {
+    scope.querySelectorAll("[data-attribute-profile-panel]").forEach((panel) => {
+        if (panel.dataset.boundAttributeProfileTabs === "true") {
+            return;
+        }
+        panel.dataset.boundAttributeProfileTabs = "true";
+        const buttons = Array.from(panel.querySelectorAll("[data-attribute-profile-tab]"));
+        const bodies = Array.from(panel.querySelectorAll(".attribute-tab-body"));
+        const activate = (targetId) => {
+            buttons.forEach((button) => {
+                const isActive = button.dataset.attributeProfileTab === targetId;
+                button.classList.toggle("is-active", isActive);
+                button.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+            bodies.forEach((body) => {
+                const isActive = body.id === targetId;
+                body.classList.toggle("is-active", isActive);
+                body.hidden = !isActive;
+            });
+        };
+        buttons.forEach((button) => {
+            button.addEventListener("click", () => activate(button.dataset.attributeProfileTab));
+        });
+    });
 }
 
 function bindOpenSourceChangeLinks(scope = document) {
@@ -783,6 +838,7 @@ function bindDesignProfiles(items = []) {
         const selected = items.find((item) => item.artifact_path === select.value) || items[0];
         detail.innerHTML = renderDesignProfileDetail(selected);
         bindOpenSourceChangeLinks(detail);
+        bindAttributeProfileTabs(detail);
         detail.querySelectorAll("[data-promote-baseline]").forEach((button) => {
             button.addEventListener("click", async () => {
                 const encodedPath = button.getAttribute("data-promote-baseline");

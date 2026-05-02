@@ -1818,6 +1818,68 @@ p {
     color: var(--ink);
 }
 
+.attribute-tab-panel {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(157, 176, 208, 0.18);
+    background: rgba(11, 16, 32, 0.34);
+}
+
+.attribute-tab-panel-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.attribute-tab-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.attribute-tab {
+    border: 1px solid rgba(157, 176, 208, 0.22);
+    background: rgba(157, 176, 208, 0.08);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.attribute-tab.is-active {
+    background: rgba(61, 211, 255, 0.14);
+    color: var(--accent);
+    border-color: rgba(61, 211, 255, 0.32);
+}
+
+.attribute-tab-panels {
+    display: grid;
+}
+
+.attribute-tab-body {
+    display: grid;
+    gap: 10px;
+    padding-top: 4px;
+}
+
+.attribute-tab-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+}
+
+.attribute-tab-metrics > div {
+    display: grid;
+    gap: 3px;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(157, 176, 208, 0.08);
+}
+
 .tag {
     display: inline-flex;
     align-items: center;

@@ -340,6 +340,9 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "loadOverview" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "renderDesignProfiles" in repo_js_response.text
+    assert "renderAttributeProfilePanel" in repo_js_response.text
+    assert "bindAttributeProfileTabs" in repo_js_response.text
+    assert 'role="tablist"' in repo_js_response.text
     assert "renderHistoryTimelines" in repo_js_response.text
     assert "Unable to load repository dashboard" in repo_js_response.text
     assert "loadDashboard" in repo_js_response.text
