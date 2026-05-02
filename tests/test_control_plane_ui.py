@@ -666,6 +666,8 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Change timeline" in dashboard_html
     assert "Posture map" in dashboard_html
     assert "Coverage" in dashboard_html
+    assert 'id="governance-attention-headline"' in dashboard_html
+    assert 'id="governance-attention-list"' in dashboard_html
     assert 'href="/app/repos"' in dashboard_html
     assert 'href="/app/compliance"' in dashboard_html
     assert 'href="/app/integrations/mcp"' in dashboard_html
@@ -683,6 +685,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "EU AI Act relevance" in repo_dashboard_html
     assert "Governance attention" in repo_dashboard_html
     assert "Loading EU AI Act, SOC 2, and ISO 27001 governance guidance..." in repo_dashboard_html
+    assert 'id="repo-governance-attention-details"' in repo_dashboard_html
     assert "Static posture" not in repo_dashboard_html
     assert 'id="audit-logs-toggle"' in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html

@@ -13,6 +13,7 @@ from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
+from .governance_signals import GovernanceFinding, build_pr_comment_governance_findings
 from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normalize_risk_level
 from .audit_jobs import (
     AuditJob,
@@ -107,7 +108,7 @@ class PrCommentReview:
     what_changed: tuple[str, ...]
     key_deltas: tuple[str, ...]
     evidence: tuple[str, ...]
-    governance_signals: tuple[str, ...]
+    governance_findings: tuple[GovernanceFinding, ...]
     recommended_next_step: str
     episode_context: PrCommentEpisodeContext
 
@@ -235,7 +236,10 @@ def _build_pr_comment_review(
         what_changed=_build_what_changed_lines(summary, fusion_summary, decision, primary_profile),
         key_deltas=_build_key_delta_bullets(selected_key_deltas, deterministic_analysis),
         evidence=_build_evidence_bullets(selected_key_deltas, deterministic_analysis),
-        governance_signals=_build_governance_signals(profiles, decision),
+        governance_findings=build_pr_comment_governance_findings(
+            profiles,
+            decision=decision,
+        ),
         recommended_next_step=_build_recommended_next_step(
             decision,
             semantic_recommendation,
@@ -278,9 +282,9 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
     lines.extend(f"- {bullet}" for bullet in review.key_deltas)
     lines.extend(["", "### Evidence"])
     lines.extend(f"- {bullet}" for bullet in review.evidence)
-    if review.governance_signals:
+    if review.governance_findings:
         lines.extend(["", "### Governance signals"])
-        lines.extend(f"- {bullet}" for bullet in review.governance_signals)
+        lines.extend(f"- {finding.evidence_summary}" for finding in review.governance_findings)
     lines.extend(
         [
             "",
@@ -560,33 +564,6 @@ def _append_unique_evidence(bullets: list[str], seen: set[str], raw_evidence: st
     seen.add(normalized_key)
     bullets.append(normalized)
     return True
-
-
-def _build_governance_signals(
-    attribute_profiles: list[ArtifactAttributeProfile],
-    decision: str,
-) -> tuple[str, ...]:
-    signals: list[str] = []
-    for profile in attribute_profiles:
-        governance_dimension = next((item for item in profile.dimensions if item.attribute_key == "governance_strength"), None)
-        if (
-            governance_dimension is not None
-            and governance_dimension.state != "no_change"
-            and governance_dimension.evidence
-            and _key_delta_prefix(governance_dimension) == "Governance weakened"
-        ):
-            signals.append(_normalize_sentence(governance_dimension.reason, default=governance_dimension.reason))
-            break
-
-    if not signals and decision == "rebaseline_follow_up_after_merge":
-        for profile in attribute_profiles:
-            if profile.has_authoritative_baseline:
-                continue
-            signals.append(
-                f"No approved baseline exists yet for `{profile.artifact_path}`, so reviewers should explicitly promote the intended version after merge."
-            )
-            break
-    return tuple(signals[:3])
 
 
 def _build_recommended_next_step(

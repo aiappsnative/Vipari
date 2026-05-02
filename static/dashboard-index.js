@@ -144,6 +144,93 @@ function renderOverviewAttributeBlock(repo) {
     `;
 }
 
+function governanceFindingLabel(findingType) {
+    return {
+        missing_required_owner_review: "Owner review gap",
+        weak_review_for_high_risk_change: "Weak review",
+        repeated_high_risk_drift_same_surface: "Repeated high drift",
+        baseline_stale_after_repeated_change: "Stale baseline",
+        low_governance_confidence: "Low confidence",
+    }[String(findingType || "")] || "Governance signal";
+}
+
+function governanceSeverityClass(severity) {
+    if (severity === "high") {
+        return "severity-high";
+    }
+    if (severity === "warning") {
+        return "severity-medium";
+    }
+    return "severity-low";
+}
+
+function overviewGovernanceHeadline(summary) {
+    const missingReviewCount = Number(summary?.high_risk_missing_review_count || 0);
+    const repeatedSurfaces = asArray(summary?.repeated_drift_surfaces);
+    const anomalyCount = Number(summary?.repos_with_anomalies_count || 0);
+    if (missingReviewCount > 0 || repeatedSurfaces.length > 0) {
+        return "Immediate governance follow-up";
+    }
+    if (anomalyCount > 0) {
+        return "Governance watchlist active";
+    }
+    return "No governance escalations";
+}
+
+function overviewGovernanceCopy(summary) {
+    const anomalyCount = Number(summary?.repos_with_anomalies_count || 0);
+    const missingReviewCount = Number(summary?.high_risk_missing_review_count || 0);
+    const repeatedSurfaces = asArray(summary?.repeated_drift_surfaces);
+    if (!anomalyCount) {
+        return "No repositories currently surface backend governance anomalies that need immediate follow-up.";
+    }
+    if (missingReviewCount > 0) {
+        return `${missingReviewCount} high-risk change${missingReviewCount === 1 ? " lacks" : "s lack"} clear review coverage across ${anomalyCount} repo${anomalyCount === 1 ? "" : "s"}.`;
+    }
+    if (repeatedSurfaces.length > 0) {
+        return `Repeated drift is clustering on ${repeatedSurfaces.slice(0, 2).join(", ")}, so baseline freshness needs attention.`;
+    }
+    return `${anomalyCount} repo${anomalyCount === 1 ? " has" : "s have"} normalized governance signals worth monitoring.`;
+}
+
+function renderOverviewGovernanceAttention(summary) {
+    const anomalyCount = Number(summary?.repos_with_anomalies_count || 0);
+    const missingReviewCount = Number(summary?.high_risk_missing_review_count || 0);
+    const repeatedSurfaces = asArray(summary?.repeated_drift_surfaces).slice(0, 3);
+    const rankedIssues = asArray(summary?.ranked_issues_now).slice(0, 4);
+    const chips = [
+        `${anomalyCount} repo${anomalyCount === 1 ? "" : "s"} flagged`,
+        `${missingReviewCount} high-risk review gap${missingReviewCount === 1 ? "" : "s"}`,
+        `${repeatedSurfaces.length} repeated surface${repeatedSurfaces.length === 1 ? "" : "s"}`,
+    ];
+    return `
+        <div class="stack compact-stack">
+            <div class="tag-row">
+                ${chips.map((chip) => `<span class="drift-chip chip-governance">${escapeHtml(chip)}</span>`).join("")}
+            </div>
+            ${repeatedSurfaces.length ? `
+                <div class="governance-surface-list">
+                    ${repeatedSurfaces.map((surface) => `<span class="governance-surface-chip">${escapeHtml(surface)}</span>`).join("")}
+                </div>
+            ` : ""}
+            ${rankedIssues.length ? `
+                <div class="governance-issue-list">
+                    ${rankedIssues.map((finding) => `
+                        <div class="governance-issue-row">
+                            <div class="governance-issue-copy">
+                                <strong>${escapeHtml(governanceFindingLabel(finding.finding_type))}</strong>
+                                <span>${escapeHtml(finding.repo || "unknown repo")}</span>
+                                <span>${escapeHtml(finding.evidence_summary || "Governance evidence requires review.")}</span>
+                            </div>
+                            <span class="severity-badge ${governanceSeverityClass(finding.severity)}">${escapeHtml(String(finding.severity || "info").toUpperCase())}</span>
+                        </div>
+                    `).join("")}
+                </div>
+            ` : '<div class="muted">No ranked governance issues are active right now.</div>'}
+        </div>
+    `;
+}
+
 function attributeScore(entry, keyPrefix) {
     const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
     const value = Number(entry?.[scoreKey]);
@@ -1292,6 +1379,7 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         const repos = asArray(payload.repos);
         const navRepos = asArray(payload.nav_repos).length ? asArray(payload.nav_repos) : repos;
         const sections = overviewSections(payload);
+        const governanceAttention = sections.governance_attention || null;
         const groupedUrgentRepos = sections.urgent_queue && Array.isArray(sections.urgent_queue.repos)
             ? asArray(sections.urgent_queue.repos)
             : null;
@@ -1303,6 +1391,9 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         const repoAtlasItems = groupedRecentRepos || selectionItems;
 
         populateOverviewStats(payload, attentionRepos, highestRiskItems, repos);
+        setText("governance-attention-headline", overviewGovernanceHeadline(governanceAttention));
+        setText("governance-attention-copy", overviewGovernanceCopy(governanceAttention));
+        setSectionHtml("governance-attention-list", renderOverviewGovernanceAttention(governanceAttention));
         setSectionHtml(
             "triage-list",
             visibleSelectionItems.length
@@ -1385,6 +1476,9 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
         setSectionHtml("repo-atlas-grid", fallback);
         setSectionHtml("repo-journey-strip", fallback);
         setSectionHtml("coverage-bars", fallback);
+        setText("governance-attention-headline", "Governance attention unavailable");
+        setText("governance-attention-copy", message);
+        setSectionHtml("governance-attention-list", fallback);
         setHtml("detail-summary", fallback);
         setText("detail-repo-name", "Overview unavailable");
         setText("detail-subtitle", message);

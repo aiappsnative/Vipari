@@ -10,6 +10,7 @@ from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.branch_scan_jobs import create_branch_scan_job
@@ -180,6 +181,8 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.featured_storyline.episodes[-1].episode_type == "current_posture"
     assert len(dashboard.history_cues) >= 1
     assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
+    assert dashboard.governance_posture.review_quality in {"adequate", "mixed", "weak for recent high-risk change"}
+    assert isinstance(dashboard.governance_posture.top_governance_anomalies, tuple)
     assert dashboard.journey_snapshots[0]["snapshot_type"] == "baseline_approved"
     assert dashboard.journey_snapshots[0]["input_summary"]["baseline_verified"] is True
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
@@ -239,6 +242,22 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].points[-1].source_ref == "commit sha-3"
     assert dashboard.history_timelines[0].points[-1].source_url == "https://github.com/doria90/dummyAI/commit/sha-3"
     assert dashboard.history_timelines[0].points[-1].review_context == "Historical snapshot from backfill"
+
+
+def test_build_repo_governance_posture_stays_neutral_when_repo_has_no_design_profiles():
+    posture = build_repo_governance_posture(
+        "doria90/empty-repo",
+        design_profiles=[],
+        artifacts=[],
+        history_cues=[],
+        insights=[],
+    )
+
+    assert posture.ownership_confidence == "established"
+    assert posture.review_quality == "adequate"
+    assert posture.repeated_drift_without_refresh_count == 0
+    assert posture.baseline_freshness_status == "current"
+    assert posture.top_governance_anomalies == ()
 
 
 def test_live_branch_head_scan_becomes_current_repo_journey_checkpoint(tmp_path):
@@ -523,6 +542,8 @@ def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_pa
     assert overview.metrics[0].value == 1
     assert overview.repos[0].repo_full == "doria90/dummyAI"
     assert len(overview.attention_repos) == 1
+    assert overview.overview_sections.governance_attention.repos_with_anomalies_count >= 0
+    assert isinstance(overview.overview_sections.governance_attention.ranked_issues_now, tuple)
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI"]
 

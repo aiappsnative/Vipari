@@ -1204,6 +1204,48 @@ index 1..2
     assert "weaker governance because review and approval cues were removed from the operating instructions" in governance_section
 
 
+def test_build_llm_comment_renders_low_governance_confidence_when_profile_data_is_missing():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++Ask one clarifying question before answering.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt changed, but reviewer certainty is limited.\nRisk Level: Low\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        episode_context=PrCommentEpisodeContext(head_sha="ghi123456", analyzed_at=1_700_000_300),
+        attribute_profiles=None,
+    )
+
+    governance_section = comment.split("### Governance signals", 1)[1].split("### Recommended next step", 1)[0]
+    assert "Ownership and review quality could not be determined confidently from the stored evidence for this change." in governance_section
+
+
 def test_build_llm_comment_evidence_uses_second_unique_delta_example_before_generic_metadata():
     analysis = analyze_diff(
         """diff --git a/system_prompt.md b/system_prompt.md

@@ -375,46 +375,51 @@ function governanceSurfaceCounts(artifacts = []) {
 }
 
 function renderGovernanceAttentionNote(onboarding, artifacts = [], baselineReview = null, journeySnapshots = []) {
-    const counts = governanceSurfaceCounts(artifacts);
-    const snapshots = asArray(journeySnapshots);
-    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1] || null;
-    const riskLevel = String(current?.risk_summary?.risk_level || "low").toLowerCase();
-    const pendingReview = Boolean(baselineReview?.is_pending_review || Number(baselineReview?.pending_count || 0) > 0);
-    const aiSurfaceCount = counts.aiControl + counts.tool + counts.model;
-    const hasGovernanceCoverage = counts.governance > 0;
-    const repoStatus = String(onboarding?.status || "onboarded").replaceAll("_", " ");
-
-    const reasons = [];
-    if (riskLevel === "high") {
-        reasons.push("a high current drift-risk posture");
-    } else if (riskLevel === "medium") {
-        reasons.push("a moderate current drift-risk posture");
-    }
-    if (counts.tool > 0) {
-        reasons.push(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`);
-    }
-    if (counts.model > 0) {
-        reasons.push(`${counts.model} model or config surface${counts.model === 1 ? "" : "s"}`);
-    }
-    if (pendingReview) {
-        reasons.push("baseline evidence still awaiting human approval");
-    }
-    if (!hasGovernanceCoverage) {
-        reasons.push("limited stored governance artifacts");
-    }
+    const posture = onboarding;
+    const ownershipConfidence = String(posture?.ownership_confidence || "low confidence").replaceAll("_", " ");
+    const reviewQuality = String(posture?.review_quality || "mixed").replaceAll("_", " ");
+    const baselineFreshness = String(posture?.baseline_freshness_status || "current").replaceAll("_", " ");
+    const repeatedCount = Number(posture?.repeated_drift_without_refresh_count || 0);
+    const anomalies = asArray(posture?.top_governance_anomalies).slice(0, 3);
 
     let headline = "Moderate governance attention";
-    let body = `This repo should stay in the regular governance review path because it has meaningful AI control evidence. Under the EU AI Act, that supports ongoing oversight of control surfaces and human review signals. For SOC 2 and ISO 27001, keep change approval, traceability, and baseline evidence current while the repository remains ${repoStatus}.`;
-
-    if (riskLevel === "high" || pendingReview || counts.tool > 0 || (!hasGovernanceCoverage && aiSurfaceCount >= 3)) {
+    if (reviewQuality === "weak for recent high-risk change" || baselineFreshness === "stale after repeated change" || repeatedCount > 0) {
         headline = "Higher governance attention";
-        body = `This repo needs stronger governance attention because the stored evidence shows ${reasons.length ? reasons.join(", ") : "material AI control surfaces"}. Under the EU AI Act, those signals increase the need for documented oversight, approval, and change accountability. For SOC 2 and ISO 27001, that means tighter change control, clearer reviewer sign-off, and stronger traceability from baseline to current posture.`;
-    } else if (riskLevel === "low" && !pendingReview && hasGovernanceCoverage && aiSurfaceCount <= 2) {
+    } else if (reviewQuality === "adequate" && ownershipConfidence === "established" && !anomalies.length) {
         headline = "Lower governance attention";
-        body = "This repo currently points to lighter governance attention because the stored evidence shows a low drift-risk posture, reviewed baseline evidence, and governance artifacts alongside a limited number of AI control surfaces. Under the EU AI Act, that suggests lighter ongoing oversight rather than a legal risk classification. For SOC 2 and ISO 27001, standard change approval, baseline traceability, and periodic evidence review should remain in place.";
     }
 
-    return { headline, body };
+    const body = [
+        `Review quality is ${reviewQuality}.`,
+        `Ownership confidence is ${ownershipConfidence}.`,
+        `Baseline freshness is ${baselineFreshness}.`,
+        repeatedCount > 0 ? `${repeatedCount} repeated drift signal${repeatedCount === 1 ? " is" : "s are"} still open.` : null,
+    ].filter(Boolean).join(" ");
+
+    const details = anomalies.length
+        ? `
+            <div class="stack compact-stack">
+                <div class="tag-row">
+                    <span class="drift-chip chip-governance">${escapeHtml(`${repeatedCount} repeated drift signal${repeatedCount === 1 ? "" : "s"}`)}</span>
+                    <span class="drift-chip chip-governance">${escapeHtml(`Ownership: ${ownershipConfidence}`)}</span>
+                    <span class="drift-chip chip-governance">${escapeHtml(`Baseline: ${baselineFreshness}`)}</span>
+                </div>
+                <div class="repo-governance-anomaly-list">
+                    ${anomalies.map((finding) => `
+                        <div class="repo-governance-anomaly-row">
+                            <span class="severity-badge ${String(finding?.severity || "") === "high" ? "severity-high" : String(finding?.severity || "") === "warning" ? "severity-medium" : "severity-low"}">${escapeHtml(String(finding?.severity || "info").toUpperCase())}</span>
+                            <div class="repo-governance-anomaly-copy">
+                                <strong>${escapeHtml(String(finding?.artifact_id || "unknown artifact"))}</strong>
+                                <span>${escapeHtml(String(finding?.evidence_summary || "Governance evidence requires review."))}</span>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            </div>
+        `
+        : '<div class="muted">No backend governance anomalies are ranked for this repo right now.</div>';
+
+    return { headline, body, details };
 }
 
 async function mutateRepoBaselineDecision(action, note) {
@@ -1626,7 +1631,7 @@ function applyDashboardPayload(payload) {
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
     const featuredStoryline = payload.featured_storyline || null;
     const preferredArtifactPath = requestedArtifactPath();
-    const governanceAttention = renderGovernanceAttentionNote(onboarding, artifacts, baselineReview, journeySnapshots);
+    const governanceAttention = renderGovernanceAttentionNote(payload.governance_posture || null);
     window.__designProfiles = asArray(payload.design_profiles);
     window.__journeySnapshots = journeySnapshots;
     const comparison = payload.journey_comparison || null;
@@ -1636,7 +1641,8 @@ function applyDashboardPayload(payload) {
     setText("repo-stat-baselines", String(asNumber(payload.baseline_version_count)));
     setText("repo-stat-history", String(historyTimelines.reduce((sum, item) => sum + Number(item.point_count || 0), 0)));
     setText("repo-governance-attention-headline", governanceAttention.headline);
-    setText("repo-governance-attention-copy", governanceAttention.body);
+    setHtml("repo-governance-attention-copy", escapeHtml(governanceAttention.body));
+    setSectionHtml("repo-governance-attention-details", governanceAttention.details);
 
     setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
     bindRepoRows(insights);
@@ -1853,6 +1859,9 @@ async function loadDashboard() {
         setText("repo-stat-baselines", "-");
         setText("repo-stat-history", "-");
         setText("repo-triage-count", "Unavailable");
+        setText("repo-governance-attention-headline", "Governance attention unavailable");
+        setHtml("repo-governance-attention-copy", escapeHtml(message));
+        setSectionHtml("repo-governance-attention-details", fallback);
         setSectionHtml("triage-list", fallback);
         setSectionHtml("featured-storyline", fallback);
         setSectionHtml("detail-attributes", fallback);
