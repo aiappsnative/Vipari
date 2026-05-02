@@ -77,6 +77,16 @@ function setSectionHtml(elementId, html) {
     }
 }
 
+function setHtml(elementId, html) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
+    }
+}
+
 function bindSidebarNavigation() {
     document.querySelectorAll('.sidebar-nav-item[href^="#"]').forEach((link) => {
         if (link.dataset.boundNav === "true") {
