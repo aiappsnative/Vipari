@@ -40,7 +40,7 @@ the preferred baseline is the **latest explicitly approved version** of a contro
 
 The first implementation is intentionally narrow and heuristic-first.
 
-It now renders a compact first-pass static drift summary in GitHub comments when artifact snapshots are available.
+It now renders a reviewer-facing normalized attribute profile in GitHub comments when artifact snapshots are available, and the same normalized contract is shared with overview and repo dashboard surfaces.
 
 It **does** introduce:
 - static signal extraction from prompt/config text
@@ -50,6 +50,14 @@ It **does** introduce:
 - explainable drift narrative output
 - durable storage of artifact-level static profiles and baseline-linked deltas inside audit history
 - regression tests validating the expected score direction of representative prompt changes
+
+The current surfaced contract is intentionally smaller than the full internal profile and currently includes:
+- `guardrail_robustness`
+- `capability_risk`
+- `autonomy_level`
+- `governance_strength`
+- `model_config_posture`
+- `control_surface_type`
 
 The profile computation core lives in `engine/drift_profile.py`, while the persisted history, read-side aggregation, and dashboard consumption now extend into the audit, onboarding, and dashboard service layers.
 
@@ -129,6 +137,11 @@ Baseline provenance is now part of the broader product contract around these com
 - historical fallback when that is the best available reference
 
 The next product improvement is not to invent provenance from scratch, but to make repo evidence and reviewer-target context denser and easier to trust.
+
+The current branch now does part of that work by making the same normalized attribute-profile contract visible in:
+- managed PR comments for proposal-time review
+- overview hotspot entries for cross-repo triage
+- repo case-file posture cards for baseline-relative inspection
 
 ---
 
