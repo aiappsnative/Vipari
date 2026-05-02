@@ -180,6 +180,8 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.featured_storyline.episodes[-1].episode_type == "current_posture"
     assert len(dashboard.history_cues) >= 1
     assert dashboard.history_cues[0].artifact_paths[0] == "prompts/refund.txt"
+    assert dashboard.governance_posture.review_quality in {"adequate", "mixed", "weak for recent high-risk change"}
+    assert isinstance(dashboard.governance_posture.top_governance_anomalies, tuple)
     assert dashboard.journey_snapshots[0]["snapshot_type"] == "baseline_approved"
     assert dashboard.journey_snapshots[0]["input_summary"]["baseline_verified"] is True
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
@@ -523,6 +525,8 @@ def test_build_dashboard_overview_view_skips_repo_journey_materialization(tmp_pa
     assert overview.metrics[0].value == 1
     assert overview.repos[0].repo_full == "doria90/dummyAI"
     assert len(overview.attention_repos) == 1
+    assert overview.overview_sections.governance_attention.repos_with_anomalies_count >= 0
+    assert isinstance(overview.overview_sections.governance_attention.ranked_issues_now, tuple)
     assert any(group.group_key == "prompts" for group in overview.control_surface_coverage)
     assert [repo.repo_full for repo in overview.repos] == ["doria90/dummyAI"]
 

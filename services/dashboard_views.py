@@ -27,6 +27,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
+from .governance_signals import GovernanceAttentionSummary, RepoGovernancePosture, build_overview_governance_attention, build_repo_governance_posture
 from .signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
@@ -279,6 +280,7 @@ class DashboardOverviewSections:
     urgent_queue: DashboardOverviewUrgentQueueSection = field(default_factory=DashboardOverviewUrgentQueueSection)
     recent_changes: DashboardOverviewRecentChangesSection = field(default_factory=DashboardOverviewRecentChangesSection)
     posture_snapshot: DashboardOverviewPostureSnapshotSection = field(default_factory=DashboardOverviewPostureSnapshotSection)
+    governance_attention: GovernanceAttentionSummary = field(default_factory=lambda: GovernanceAttentionSummary(0, 0, (), ()))
 
 
 @dataclass(frozen=True)
@@ -520,6 +522,7 @@ class RepoDashboardView:
     featured_storyline: RepoArtifactStoryline | None = None
     history_cues: list[RepoHistoryCue] = None
     design_profiles: list[RepoArtifactDesignProfile] = None
+    governance_posture: RepoGovernancePosture = field(default_factory=lambda: RepoGovernancePosture("low confidence", "mixed", 0, "current", ()))
     artifacts: list[RepoDashboardArtifactEntry] = None
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
@@ -949,6 +952,7 @@ def _build_dashboard_overview_view_uncached(
     highest_risk_items = _build_overview_regressions(repo_views)
     risk_state = _build_overview_risk_state(attention_repos)
     repo_cards = _build_overview_repo_cards(repos, attention_repos, highest_risk_items)
+    governance_attention = build_overview_governance_attention(repo_views)
 
     metrics = [
         DashboardOverviewMetric(
@@ -1009,6 +1013,7 @@ def _build_dashboard_overview_view_uncached(
                 control_surface_coverage=control_surface_coverage,
                 control_surface_risk=control_surface_risk,
             ),
+            governance_attention=governance_attention,
         ),
     )
 
@@ -1197,6 +1202,7 @@ def _build_repo_dashboard_view_uncached(
             featured_storyline=None,
             history_cues=[],
             design_profiles=[],
+            governance_posture=RepoGovernancePosture("low confidence", "mixed", 0, "current", ()),
             artifacts=[],
             journey_snapshots=journey_snapshots,
             journey_comparison=journey_comparison,
@@ -1325,6 +1331,16 @@ def _build_repo_dashboard_view_uncached(
             "repo-design-profiles",
             lambda: _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path),
         )
+    governance_posture = timed_stage(
+        "repo-governance-posture",
+        lambda: build_repo_governance_posture(
+            repo_full,
+            design_profiles=design_profiles,
+            artifacts=artifact_entries,
+            history_cues=history_cues,
+            insights=insights,
+        ),
+    )
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -1350,6 +1366,7 @@ def _build_repo_dashboard_view_uncached(
         featured_storyline=featured_storyline,
         history_cues=history_cues,
         design_profiles=design_profiles,
+        governance_posture=governance_posture,
         artifacts=artifact_entries,
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,

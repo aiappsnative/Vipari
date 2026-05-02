@@ -231,6 +231,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["overview_sections"]["urgent_queue"]["repos"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["overview_sections"]["recent_changes"]["repo_count"] >= 1
     assert overview_payload["overview_sections"]["posture_snapshot"]["risk_state"]["headline"]
+    assert overview_payload["overview_sections"]["governance_attention"]["repos_with_anomalies_count"] >= 0
+    assert isinstance(overview_payload["overview_sections"]["governance_attention"]["ranked_issues_now"], list)
 
     assert index_response.status_code == 200
     assert index_response.json()["repos"][0]["repo_full"] == "doria90/dummyAI"
@@ -265,6 +267,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["featured_storyline"]["episodes"][0]["episode_type"] == "baseline_milestone"
     assert payload["featured_storyline"]["episodes"][-1]["episode_type"] == "current_posture"
     assert payload["history_cues"][0]["label"]
+    assert payload["governance_posture"]["review_quality"]
+    assert isinstance(payload["governance_posture"]["top_governance_anomalies"], list)
     assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
     assert payload["design_profiles"][0]["baseline_provenance"]["is_authoritative"] is True
