@@ -7,9 +7,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from config import get_settings
+from .audit_jobs import init_db
 from .cloud_common import build_webhook_envelope, verify_signature
 from .observability import configure_logging, instrument_fastapi
-from .queue import LocalSQLiteQueue, QueueBackend, SQSQueue
+from .queue import LocalSQLiteQueue, QueueBackend, RedisQueue, SQSQueue, close_queue_backend
+from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .webhook_deliveries import (
     claim_webhook_delivery,
     cleanup_webhook_deliveries,
@@ -22,6 +24,8 @@ from .webhook_deliveries import (
 def build_queue_backend(settings) -> QueueBackend:
     if settings.queue_backend == "sqs":
         return SQSQueue(settings.sqs_queue_url, settings.sqs_dlq_url)
+    if settings.queue_backend == "redis":
+        return RedisQueue(settings.redis_url)
     return LocalSQLiteQueue(settings.resolved_db_path)
 
 
@@ -33,18 +37,27 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        validate_runtime_configuration(settings)
         if not settings.github_webhook_secret:
             raise RuntimeError("GITHUB_WEBHOOK_SECRET must be configured for the webhook service.")
+        init_db(db_path)
         init_webhook_delivery_db(db_path)
         cleanup_webhook_deliveries(db_path)
-        yield
+        try:
+            yield
+        finally:
+            await close_queue_backend(queue)
 
     app = FastAPI(lifespan=lifespan)
     instrument_fastapi(app)
 
     @app.get("/health")
     async def health():
-        return {"status": "ok"}
+        return {"status": "ok", "service_role": settings.service_role}
+
+    @app.get("/health/ready")
+    async def ready():
+        return readiness_json_response(await build_runtime_readiness(settings, queue_backend=queue))
 
     @app.post("/webhook")
     async def webhook(request: Request):
@@ -53,7 +66,7 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid signature")
 
         event = request.headers.get("X-GitHub-Event", "")
-        if event != "pull_request":
+        if event not in {"pull_request", "push"}:
             return JSONResponse({"message": "ignored"}, status_code=202)
 
         delivery_id = request.headers.get("X-GitHub-Delivery")

@@ -1,0 +1,28 @@
+{
+  "tools": [
+    {
+      "name": "promptdrift.list_repos",
+      "title": "List workspace repositories",
+      "description": "List repositories allocated to the authenticated workspace with lightweight posture context.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "promptdrift.get_repo_posture",
+      "title": "Get repository posture",
+      "description": "Return the current review posture, top reasons, and next action for one workspace-visible repository.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "promptdrift.get_repo_casefile",
+      "title": "Get repository case file",
+      "description": "Return a compact repository case file with baseline status, leading findings, and review targets.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "promptdrift.list_escalations",
+      "title": "List workspace escalations",
+      "description": "Return the workspace escalation queue with review-now and optional watch items.",
+      "required_scope": "drift.read"
+    }
+  ]
+}

@@ -13,9 +13,11 @@ from github import Auth, Github
 
 
 PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
+DRIFTGUARD_MANAGED_MARKER = "<!-- driftguard:managed-comment -->"
 PROMPTDRIFT_ESCALATION_LABEL = "promptdrift: escalate-before-merge"
-PROMPTDRIFT_ESCALATION_LABEL_COLOR = "B60205"
-PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION = "PromptDrift recommends escalation before merge"
+DRIFTGUARD_ESCALATION_LABEL = "driftguard: escalate-before-merge"
+DRIFTGUARD_ESCALATION_LABEL_COLOR = "B60205"
+DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "DriftGuard recommends escalation before merge"
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
 
@@ -189,25 +191,20 @@ def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, 
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
     managed_body = _build_managed_comment_body(body)
-    previous_comment = None
+    existing_comment = None
 
     if existing_comment_id is not None:
         for comment in pr.get_issue_comments():
             if comment.id != existing_comment_id:
                 continue
-            previous_comment = comment
+            existing_comment = comment
             break
 
-    if previous_comment is None:
-        for comment in reversed(list(pr.get_issue_comments())):
-            if PROMPTDRIFT_MANAGED_MARKER not in comment.body:
-                continue
-            previous_comment = comment
-            break
+    if existing_comment is not None:
+        existing_comment.edit(managed_body)
+        return existing_comment.id
 
     created_comment = pr.create_issue_comment(managed_body)
-    if previous_comment is not None and previous_comment.id != created_comment.id:
-        previous_comment.delete()
     return created_comment.id
 
 
@@ -216,9 +213,9 @@ def ensure_pr_label(
     pr_number: int,
     token: str,
     *,
-    label_name: str = PROMPTDRIFT_ESCALATION_LABEL,
-    label_color: str = PROMPTDRIFT_ESCALATION_LABEL_COLOR,
-    label_description: str = PROMPTDRIFT_ESCALATION_LABEL_DESCRIPTION,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
+    label_color: str = DRIFTGUARD_ESCALATION_LABEL_COLOR,
+    label_description: str = DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
 ) -> bool:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
@@ -232,11 +229,62 @@ def ensure_pr_label(
     if label_name in issue_labels:
         return False
 
+    if PROMPTDRIFT_ESCALATION_LABEL in issue_labels:
+        issue.remove_from_labels(PROMPTDRIFT_ESCALATION_LABEL)
+
     issue.add_to_labels(label_name)
     return True
 
 
+def remove_pr_label(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
+) -> bool:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    issue = repo.get_issue(number=pr_number)
+
+    issue_labels = {label.name for label in issue.get_labels()}
+    matching_labels = [candidate for candidate in {label_name, PROMPTDRIFT_ESCALATION_LABEL} if candidate in issue_labels]
+    if not matching_labels:
+        return False
+
+    issue.remove_from_labels(*matching_labels)
+    return True
+
+
+def sync_pr_label(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    *,
+    should_have_label: bool,
+    label_name: str = DRIFTGUARD_ESCALATION_LABEL,
+    label_color: str = DRIFTGUARD_ESCALATION_LABEL_COLOR,
+    label_description: str = DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
+) -> bool:
+    if should_have_label:
+        return ensure_pr_label(
+            repo_full,
+            pr_number,
+            token,
+            label_name=label_name,
+            label_color=label_color,
+            label_description=label_description,
+        )
+    return remove_pr_label(
+        repo_full,
+        pr_number,
+        token,
+        label_name=label_name,
+    )
+
+
 def _build_managed_comment_body(body: str) -> str:
-    if body.startswith(PROMPTDRIFT_MANAGED_MARKER):
-        return body
-    return f"{PROMPTDRIFT_MANAGED_MARKER}\n{body}"
+    for marker in (DRIFTGUARD_MANAGED_MARKER, PROMPTDRIFT_MANAGED_MARKER):
+        if body.startswith(marker):
+            return body.replace(marker, DRIFTGUARD_MANAGED_MARKER, 1)
+    return f"{DRIFTGUARD_MANAGED_MARKER}\n{body}"

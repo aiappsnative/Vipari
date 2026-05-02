@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New Workspace | DriftGuard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/control-plane.css" />
+    <script defer src="/static/theme-toggle.js"></script>
+</head>
+<body data-theme="dark">
+    <main class="simple-shell">
+        <section class="simple-panel">
+            <p class="eyebrow">Workspace bootstrap</p>
+            <h1>Create your DriftGuard workspace</h1>
+            <p>{{WORKSPACE_CONTEXT}}</p>
+            <form method="post" action="/app/workspaces/bootstrap">
+                {{CSRF_INPUT}}
+                <label class="field-label" for="workspace-name">Workspace name</label>
+                <input class="field-input" id="workspace-name" name="name" value="PromptDrift Team" />
+                <button class="button" type="submit">Create workspace</button>
+            </form>
+        </section>
+    </main>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
+</body>
+</html>

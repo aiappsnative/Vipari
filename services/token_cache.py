@@ -16,7 +16,7 @@ _redis_client: Any | None = None
 
 
 def _redis_key(installation_id: int) -> str:
-    return f"promptdrift:installation-token:{installation_id}"
+    return f"driftguard:installation-token:{installation_id}"
 
 
 async def _get_redis_client() -> Any | None:

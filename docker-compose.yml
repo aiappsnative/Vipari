@@ -6,6 +6,8 @@ services:
     ports:
       - "8001:8001"
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: webhook
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
@@ -14,7 +16,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -26,6 +28,8 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: worker
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
@@ -42,7 +46,7 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-8003}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -56,15 +60,28 @@ services:
     ports:
       - "8002:8002"
     environment:
+      APP_ENV: ${APP_ENV:-local}
+      SERVICE_ROLE: api
+      APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:8002}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-promptdrift_session}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       API_ADMIN_TOKEN: ${API_ADMIN_TOKEN:?API_ADMIN_TOKEN must be set}
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_PRIVATE_KEY_PATH: ${GITHUB_PRIVATE_KEY_PATH:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_CALLBACK_URL: ${GITHUB_OAUTH_CALLBACK_URL:-}
+      OWNER_GITHUB_LOGIN: ${OWNER_GITHUB_LOGIN:-}
+      OWNER_GITHUB_USER_ID: ${OWNER_GITHUB_USER_ID:-}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/promptdrift.db}
       AUDIT_DB_PATH: ${AUDIT_DB_PATH:-/data/promptdrift.db}
       ENABLE_METRICS: ${ENABLE_METRICS:-false}
     volumes:
-      - promptdrift-data:/data
+      - driftguard-data:/data
     depends_on:
       db:
         condition: service_healthy
@@ -82,14 +99,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: promptdrift
+      POSTGRES_DB: driftguard
       POSTGRES_USER: pd
       POSTGRES_PASSWORD: pd
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pd -d promptdrift"]
+      test: ["CMD-SHELL", "pg_isready -U pd -d driftguard"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  promptdrift-data:
+  driftguard-data:

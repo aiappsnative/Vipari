@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import uvicorn
 
-from services.api_service import create_api_app
+from config import get_settings
+from main import app
 
 
-app = create_api_app()
+def main() -> None:
+    settings = get_settings()
+    uvicorn.run("run_api:app", host="0.0.0.0", port=settings.api_port)
 
 
 if __name__ == "__main__":
-    uvicorn.run("run_api:app", host="0.0.0.0", port=8002)
+    main()

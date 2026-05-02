@@ -1,4 +1,63 @@
-const repoFull = document.querySelector('meta[name="promptdrift-repo-full"]')?.getAttribute("content") || "";
+function resolveRepoFull() {
+    const metaRepoFull = document.querySelector('meta[name="driftguard-repo-full"]')?.getAttribute("content")?.trim();
+    if (metaRepoFull) {
+        return metaRepoFull;
+    }
+
+    const pathname = String(window.location.pathname || "");
+    const prefix = "/dashboard/";
+    if (!pathname.startsWith(prefix)) {
+        return "";
+    }
+
+    const encodedRepoFull = pathname.slice(prefix.length).replace(/^\/+|\/+$/g, "");
+    if (!encodedRepoFull) {
+        return "";
+    }
+
+    try {
+        return decodeURIComponent(encodedRepoFull);
+    } catch {
+        return encodedRepoFull;
+    }
+}
+
+const repoFull = resolveRepoFull();
+const VALID_REPO_TABS = new Set(["drift", "version-control", "baseline", "compliance", "reports"]);
+window.__storylineCache = new Map();
+window.__selectedInsight = null;
+window.__designProfiles = [];
+window.__journeySnapshots = [];
+window.__artifactEntries = [];
+window.__artifactTypeFilter = "all";
+window.__artifactQuery = "";
+window.__artifactsCollapsed = false;
+window.__pendingRebaselineSnapshot = null;
+window.__rebaselineBusy = false;
+window.__attributeProfileActiveTab = "guardrail_regressions";
+window.__pendingProposalsLoadToken = 0;
+
+function resolveRepoTab() {
+    const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
+    if (metaTab && VALID_REPO_TABS.has(metaTab)) {
+        return metaTab;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = (params.get("tab") || "").trim().toLowerCase();
+    return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "drift";
+}
+
+const activeRepoTab = resolveRepoTab();
+window.__activeRepoTab = activeRepoTab;
+
+const ATTRIBUTE_PROFILE_TAB_CONFIG = [
+    { key: "guardrail_regressions", label: "Guardrail regressions", dimensionKeys: ["guardrail_robustness"] },
+    { key: "capability_expansions", label: "Capability expansions", dimensionKeys: ["capability_risk"] },
+    { key: "autonomy_increases", label: "Autonomy increases", dimensionKeys: ["autonomy_level"] },
+    { key: "governance_anomalies", label: "Governance anomalies", dimensionKeys: ["governance_strength"] },
+    { key: "model_config_changes", label: "Model/config changes", dimensionKeys: ["model_config_posture"] },
+];
 
 function asArray(value) {
     return Array.isArray(value) ? value : [];
@@ -12,720 +71,1208 @@ function setSectionHtml(elementId, html) {
     const element = document.getElementById(elementId);
     if (element) {
         element.innerHTML = html;
+        element.classList.remove("loading-shell");
+        element.classList.remove("muted");
+        element.removeAttribute("aria-busy");
     }
 }
 
-function renderRiskTags(tags = []) {
-    return tags.map((tag) => `<span class="tag">${tag}</span>`).join("");
+function bindSidebarNavigation() {
+    document.querySelectorAll('.sidebar-nav-item[href^="#"]').forEach((link) => {
+        if (link.dataset.boundNav === "true") {
+            return;
+        }
+        link.dataset.boundNav = "true";
+        link.addEventListener("click", (event) => {
+            const href = link.getAttribute("href") || "";
+            const targetId = href.slice(1);
+            const scrollRoot = document.querySelector(".page-scroll");
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!scrollRoot || !target) {
+                return;
+            }
+            event.preventDefault();
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+            window.history.replaceState(null, "", `#${targetId}`);
+        });
+    });
 }
 
-function renderMutedTags(tags = []) {
-    return tags.map((tag) => `<span class="tag tag-muted">${tag}</span>`).join("");
+function applyRepoTabVisibility() {
+    document.body.dataset.activeRepoTab = activeRepoTab;
+
+    document.querySelectorAll("[data-repo-tab-panel]").forEach((element) => {
+        const supportedTabs = String(element.getAttribute("data-repo-tab-panel") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+        element.hidden = supportedTabs.length > 0 && !supportedTabs.includes(activeRepoTab);
+    });
+
+    document.querySelectorAll("[data-repo-tab-child]").forEach((element) => {
+        element.hidden = element.getAttribute("data-repo-tab-child") !== activeRepoTab;
+    });
+
+    document.querySelectorAll("[data-repo-tab-link]").forEach((element) => {
+        const tab = element.getAttribute("data-repo-tab-link") || "";
+        if (tab === activeRepoTab) {
+            element.setAttribute("aria-current", "page");
+            return;
+        }
+        element.removeAttribute("aria-current");
+    });
 }
 
-function priorityGlyph(priority) {
-    if (priority === "review_now") {
-        return "⚑";
+function setText(elementId, value) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.textContent = value;
+        element.removeAttribute("aria-busy");
     }
-    if (priority === "watch") {
-        return "◉";
-    }
-    return "◆";
 }
 
-function renderProvenance(provenance, fallback = "No PR or history provenance yet") {
-    if (!provenance) {
-        return fallback;
-    }
-    const parts = [provenance.label, provenance.source_ref, provenance.review_context].filter(Boolean);
-    return parts.length ? parts.join(" · ") : fallback;
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
 }
 
-function renderProfileMetric(label, baselineValue, currentValue) {
-    return `
-        <div class="profile-metric profile-metric-compact">
-            <div class="profile-label">${label}</div>
-            <div class="profile-values"><span>${baselineValue.toFixed(2)}</span><span class="muted">→</span><span>${currentValue.toFixed(2)}</span></div>
+function repoDetailUrl(repo) {
+    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
+    const artifactPath = repo.highest_insight_artifact_path || "";
+    if (artifactPath) {
+        url.searchParams.set("artifact", artifactPath);
+    }
+    return `${url.pathname}${url.search}`;
+}
+
+function repoTabUrl(tab, options = {}) {
+    const url = new URL(`/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
+    if (tab) {
+        url.searchParams.set("tab", tab);
+    }
+    if (options.artifactPath) {
+        url.searchParams.set("artifact", options.artifactPath);
+    }
+    if (options.hash) {
+        url.hash = options.hash;
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function profileMetricLabel(key) {
+    return {
+        guardrail_robustness: "Guardrails",
+        capability_risk: "Capability",
+        autonomy_level: "Autonomy",
+        stability_vs_creativity: "Stability",
+        governance_strength: "Governance",
+        change_frequency: "Velocity",
+        semantic_density: "Density",
+    }[key] || key.replaceAll("_", " ");
+}
+
+function renderProfileMetricBars(profile = {}) {
+    const keys = ["guardrail_robustness", "capability_risk", "autonomy_level", "stability_vs_creativity", "governance_strength", "change_frequency"];
+    return keys.map((key) => {
+        const value = clamp(Number(profile[key] || 0), 0, 1);
+        return `
+            <div class="baseline-metric-row">
+                <span class="baseline-metric-label">${escapeHtml(profileMetricLabel(key))}</span>
+                <div class="baseline-metric-track"><div class="baseline-metric-fill" style="width:${value * 100}%"></div></div>
+                <span class="baseline-metric-value">${value.toFixed(2)}</span>
+            </div>
+        `;
+    }).join("");
+}
+
+function baselineStatusBadge(status) {
+    const normalized = String(status || "pending").toLowerCase();
+    const className = normalized === "approved" ? "baseline-status-approved" : normalized === "rejected" ? "baseline-status-rejected" : "baseline-status-pending";
+    const label = normalized === "approved" ? "Approved" : normalized === "rejected" ? "Rejected" : "Pending";
+    return `<span class="baseline-status-badge ${className}">${label}</span>`;
+}
+
+function formatUnixTimestamp(ts) {
+    const value = Number(ts);
+    if (!Number.isFinite(value) || value <= 0) {
+        return "Unknown time";
+    }
+    return new Date(value * 1000).toLocaleString();
+}
+
+function renderBaselineReviewPanel(panel) {
+    if (!panel) {
+        return '<div class="muted">No baseline review data is available for this repository yet.</div>';
+    }
+
+    const recentDecisions = asArray(panel.recent_decisions);
+    const artifactCards = asArray(panel.artifacts).slice(0, 6).map((artifact) => `
+        <div class="artifact-card">
+            <strong>${escapeHtml(artifact.artifact_path)}</strong>
+            <div class="artifact-card-reason">${baselineStatusBadge(artifact.approval_status)} ${escapeHtml(artifact.artifact_type || "artifact")} · ${escapeHtml(artifact.provenance_label || "Supporting repository artifact")} · ${escapeHtml(`${artifact.line_count || 0} lines`)}</div>
+            <div class="detail-note">${escapeHtml(artifact.approval_note || "No approval rationale recorded yet.")}</div>
         </div>
-    `;
-}
+    `).join("");
 
-function metricCard(label, value, detail) {
-    return `<div class="card"><div class="muted">${label}</div><div class="metric">${value}</div><div class="muted">${detail}</div></div>`;
-}
+    const decisionsHtml = recentDecisions.length
+        ? `<div class="stack compact-stack">${recentDecisions.map((decision) => `
+            <div class="artifact-card">
+                <strong>${escapeHtml(decision.decision_type || decision.action || "decision")}</strong>
+                <div class="artifact-card-reason">${escapeHtml(decision.actor_login || "system")} · ${escapeHtml(formatUnixTimestamp(decision.created_at))}${decision.artifact_path ? ` · ${escapeHtml(decision.artifact_path)}` : ""}</div>
+                <div class="detail-note">${escapeHtml(decision.rationale || "No rationale recorded.")}</div>
+                ${asArray(decision.linked_findings).length ? `<div class="tag-row">${asArray(decision.linked_findings).map((finding) => `<span class="drift-chip chip-governance">${escapeHtml(finding)}</span>`).join("")}</div>` : ""}
+            </div>
+        `).join("")}</div>`
+        : '<div class="muted">No baseline review decisions have been recorded yet.</div>';
 
-function metricGlyph(label) {
-    const normalized = label.toLowerCase();
-    if (normalized.includes("review")) {
-        return "⚑";
-    }
-    if (normalized.includes("artifact")) {
-        return "◈";
-    }
-    if (normalized.includes("baseline")) {
-        return "◆";
-    }
-    if (normalized.includes("history")) {
-        return "◌";
-    }
-    if (normalized.includes("pr")) {
-        return "↗";
-    }
-    return "●";
-}
+    const actionsHtml = panel.is_pending_review
+        ? `
+            <div class="export-actions">
+                <button type="button" class="export-submit-button" data-baseline-decision="approve">Approve baseline</button>
+                <button type="button" class="cue-action-button" data-baseline-decision="reject">Reject baseline</button>
+            </div>
+        `
+        : '<div class="detail-note">Baseline review is not currently pending for this repository.</div>';
 
-function renderMetricGlyphCard(label, value, detail) {
     return `
-        <div class="metric-glyph-card">
-            <div class="metric-glyph-badge">${metricGlyph(label)}</div>
-            <div class="metric-glyph-copy">
-                <div class="metric-glyph-label">${label}</div>
-                <div class="metric-glyph-value">${value}</div>
-                <div class="metric-glyph-detail">${detail}</div>
+        <div class="stack compact-stack">
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(panel.artifact_count || 0))}</span>
+                    <span class="journey-node-label">Artifacts</span>
+                    <span class="journey-node-caption">Tracked baseline candidates</span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${escapeHtml(String(panel.pending_count || 0))}</span>
+                    <span class="journey-node-label">Pending</span>
+                    <span class="journey-node-caption">Awaiting human review</span>
+                </div>
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(panel.approved_count || 0))}</span>
+                    <span class="journey-node-label">Approved</span>
+                    <span class="journey-node-caption">Authoritative baseline entries</span>
+                </div>
+                <div class="journey-node journey-tone-gap">
+                    <span class="journey-node-value">${escapeHtml(String(panel.rejected_count || 0))}</span>
+                    <span class="journey-node-label">Rejected</span>
+                    <span class="journey-node-caption">Need follow-up or rework</span>
+                </div>
+            </div>
+            ${actionsHtml}
+            <div>
+                <div class="detail-section-label">Recent governance decisions</div>
+                ${decisionsHtml}
+            </div>
+            <div>
+                <div class="detail-section-label">Current artifact review state</div>
+                <div class="stack compact-stack">${artifactCards || '<div class="muted">No baseline artifacts are present.</div>'}</div>
             </div>
         </div>
     `;
+}
+
+function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null) {
+    const items = asArray(artifacts);
+    if (!items.length) {
+        return '<div class="muted">No stored onboarding artifacts are available yet for a repo-level relevance assessment.</div>';
+    }
+
+    const counts = {
+        aiControl: 0,
+        tool: 0,
+        model: 0,
+        governance: 0,
+    };
+
+    for (const artifact of items) {
+        const kind = String(artifact?.provenance_kind || "");
+        if (kind === "ai_control_surface") {
+            counts.aiControl += 1;
+        } else if (kind === "ai_tool_surface") {
+            counts.tool += 1;
+        } else if (kind === "model_behavior_surface") {
+            counts.model += 1;
+        } else if (kind === "human_governance_surface") {
+            counts.governance += 1;
+        }
+    }
+
+    const statusTags = [];
+    if (counts.aiControl > 0) {
+        statusTags.push(`<span class="drift-chip chip-capability">${escapeHtml(`${counts.aiControl} AI control surface${counts.aiControl === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.tool > 0) {
+        statusTags.push(`<span class="drift-chip chip-model">${escapeHtml(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.model > 0) {
+        statusTags.push(`<span class="drift-chip chip-baseline">${escapeHtml(`${counts.model} model/config surface${counts.model === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.governance > 0) {
+        statusTags.push(`<span class="drift-chip chip-governance">${escapeHtml(`${counts.governance} governance artifact${counts.governance === 1 ? "" : "s"}`)}</span>`);
+    }
+    statusTags.push(`<span class="drift-chip ${baselineReview?.is_pending_review ? "chip-baseline" : "chip-guardrails"}">${escapeHtml(baselineReview?.is_pending_review ? "Baseline review pending" : "Human-reviewed baseline")}</span>`);
+
+    const reviewState = baselineReview?.is_pending_review
+        ? "Baseline review is still pending for part of the stored evidence."
+        : "Stored evidence includes a reviewed baseline reference for this repository."
+    const repoStatus = String(onboarding?.status || "onboarded repository").replaceAll("_", " ");
+
+    return `
+        <div class="stack compact-stack">
+            <p class="detail-note">This repo view surfaces stored evidence that may require AI governance review. It does not classify the repository under the EU AI Act or make legal claims.</p>
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${escapeHtml(String(counts.aiControl + counts.tool + counts.model))}</span>
+                    <span class="journey-node-label">AI surfaces</span>
+                    <span class="journey-node-caption">Prompt, tool, and model/config artifacts found in stored onboarding evidence.</span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${escapeHtml(String(counts.governance))}</span>
+                    <span class="journey-node-label">Governance</span>
+                    <span class="journey-node-caption">Policy and guardrail artifacts detected during onboarding.</span>
+                </div>
+                <div class="journey-node ${baselineReview?.is_pending_review ? "journey-tone-gap" : "journey-tone-primary"}">
+                    <span class="journey-node-value">${escapeHtml(String(baselineReview?.pending_count || 0))}</span>
+                    <span class="journey-node-label">Pending review</span>
+                    <span class="journey-node-caption">Baseline entries still awaiting human approval.</span>
+                </div>
+            </div>
+            <div class="tag-row">${statusTags.join("")}</div>
+            <div class="artifact-card">
+                <strong>Oversight summary</strong>
+                <div class="artifact-card-reason">${escapeHtml(repoStatus)} · ${escapeHtml(`${items.length} stored artifacts`)}</div>
+                <div class="detail-note">${escapeHtml(reviewState)}</div>
+            </div>
+        </div>
+    `;
+}
+
+function governanceSurfaceCounts(artifacts = []) {
+    const counts = {
+        aiControl: 0,
+        tool: 0,
+        model: 0,
+        governance: 0,
+    };
+
+    for (const artifact of asArray(artifacts)) {
+        const kind = String(artifact?.provenance_kind || "");
+        if (kind === "ai_control_surface") {
+            counts.aiControl += 1;
+        } else if (kind === "ai_tool_surface") {
+            counts.tool += 1;
+        } else if (kind === "model_behavior_surface") {
+            counts.model += 1;
+        } else if (kind === "human_governance_surface") {
+            counts.governance += 1;
+        }
+    }
+
+    return counts;
+}
+
+function renderGovernanceAttentionNote(onboarding, artifacts = [], baselineReview = null, journeySnapshots = []) {
+    const counts = governanceSurfaceCounts(artifacts);
+    const snapshots = asArray(journeySnapshots);
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1] || null;
+    const riskLevel = String(current?.risk_summary?.risk_level || "low").toLowerCase();
+    const pendingReview = Boolean(baselineReview?.is_pending_review || Number(baselineReview?.pending_count || 0) > 0);
+    const aiSurfaceCount = counts.aiControl + counts.tool + counts.model;
+    const hasGovernanceCoverage = counts.governance > 0;
+    const repoStatus = String(onboarding?.status || "onboarded").replaceAll("_", " ");
+
+    const reasons = [];
+    if (riskLevel === "high") {
+        reasons.push("a high current drift-risk posture");
+    } else if (riskLevel === "medium") {
+        reasons.push("a moderate current drift-risk posture");
+    }
+    if (counts.tool > 0) {
+        reasons.push(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`);
+    }
+    if (counts.model > 0) {
+        reasons.push(`${counts.model} model or config surface${counts.model === 1 ? "" : "s"}`);
+    }
+    if (pendingReview) {
+        reasons.push("baseline evidence still awaiting human approval");
+    }
+    if (!hasGovernanceCoverage) {
+        reasons.push("limited stored governance artifacts");
+    }
+
+    let headline = "Moderate governance attention";
+    let body = `This repo should stay in the regular governance review path because it has meaningful AI control evidence. Under the EU AI Act, that supports ongoing oversight of control surfaces and human review signals. For SOC 2 and ISO 27001, keep change approval, traceability, and baseline evidence current while the repository remains ${repoStatus}.`;
+
+    if (riskLevel === "high" || pendingReview || counts.tool > 0 || (!hasGovernanceCoverage && aiSurfaceCount >= 3)) {
+        headline = "Higher governance attention";
+        body = `This repo needs stronger governance attention because the stored evidence shows ${reasons.length ? reasons.join(", ") : "material AI control surfaces"}. Under the EU AI Act, those signals increase the need for documented oversight, approval, and change accountability. For SOC 2 and ISO 27001, that means tighter change control, clearer reviewer sign-off, and stronger traceability from baseline to current posture.`;
+    } else if (riskLevel === "low" && !pendingReview && hasGovernanceCoverage && aiSurfaceCount <= 2) {
+        headline = "Lower governance attention";
+        body = "This repo currently points to lighter governance attention because the stored evidence shows a low drift-risk posture, reviewed baseline evidence, and governance artifacts alongside a limited number of AI control surfaces. Under the EU AI Act, that suggests lighter ongoing oversight rather than a legal risk classification. For SOC 2 and ISO 27001, standard change approval, baseline traceability, and periodic evidence review should remain in place.";
+    }
+
+    return { headline, body };
+}
+
+async function mutateRepoBaselineDecision(action, note) {
+    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/baseline/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+    });
+    if (!response.ok) {
+        throw new Error(`Baseline ${action} failed with ${response.status}`);
+    }
+    return response.json();
+}
+
+function bindBaselineReviewActions() {
+    document.querySelectorAll("[data-baseline-decision]").forEach((button) => {
+        if (button.dataset.boundBaselineDecision === "true") {
+            return;
+        }
+        button.dataset.boundBaselineDecision = "true";
+        button.addEventListener("click", async () => {
+            const action = button.getAttribute("data-baseline-decision");
+            if (!action) {
+                return;
+            }
+            const note = window.prompt(`Optional rationale for ${action}ing this baseline:`) || "";
+            button.disabled = true;
+            try {
+                const payload = await mutateRepoBaselineDecision(action, note.trim() || null);
+                if (payload?.dashboard) {
+                    applyDashboardPayload(payload.dashboard);
+                    return;
+                }
+                await loadDashboard();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : `Baseline ${action} failed.`;
+                window.alert(message);
+            } finally {
+                button.disabled = false;
+            }
+        });
+    });
 }
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 
-function createRingMeter({ value = 0, label = "", tone = "accent", size = 124, stroke = 12, centerLabel = "" }) {
-    const normalized = clamp(value, 0, 1);
-    const radius = (size - stroke) / 2;
-    const circumference = 2 * Math.PI * radius;
-    const dash = circumference * normalized;
-    return `
-        <svg viewBox="0 0 ${size} ${size}" class="ring-meter ring-meter-${tone}" aria-label="${label}">
-            <circle cx="${size / 2}" cy="${size / 2}" r="${radius}" class="ring-meter-track"></circle>
-            <circle cx="${size / 2}" cy="${size / 2}" r="${radius}" class="ring-meter-value" stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${circumference * 0.25}"></circle>
-            <text x="50%" y="48%" text-anchor="middle" class="ring-meter-center">${centerLabel}</text>
-            <text x="50%" y="63%" text-anchor="middle" class="ring-meter-caption">${label}</text>
-        </svg>
-    `;
+function normalizeRadarValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return 0;
+    }
+    return clamp(numeric, 0, 1);
 }
 
-function formatTimestamp(timestamp) {
-    if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+function compactRepoLabel(repoFullValue) {
+    const segments = String(repoFullValue || "").split("/").filter(Boolean);
+    return segments.length ? segments[segments.length - 1] : String(repoFullValue || "Repository posture");
+}
+
+function repoRadarVectors(repoPayload) {
+    const snapshots = asArray(repoPayload?.journey_snapshots);
+    if (!snapshots.length) {
         return null;
     }
-    try {
-        return new Date(timestamp * 1000).toLocaleString();
-    } catch {
+
+    const selectedBaselineId = Number(repoPayload?.selected_baseline_source_snapshot_id || 0);
+    const baselineSnapshot = (selectedBaselineId
+        ? snapshots.find((snapshot) => Number(snapshot.id) === selectedBaselineId)
+        : null) || snapshots.find((snapshot) => snapshot.snapshot_type === "baseline_approved") || snapshots[0];
+    const currentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current")
+        || snapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
+        || snapshots[snapshots.length - 1];
+    if (!baselineSnapshot || !currentSnapshot) {
         return null;
     }
+
+    const toSeries = (snapshot) => {
+        const vector = snapshot?.attribute_vector || {};
+        const inputSummary = snapshot?.input_summary || {};
+        return [
+            normalizeRadarValue(vector.governance),
+            normalizeRadarValue(vector.change_velocity),
+            normalizeRadarValue(Number(inputSummary.coverage_percent || 0) / 100),
+            normalizeRadarValue(vector.autonomy),
+            normalizeRadarValue(vector.capability),
+            normalizeRadarValue(vector.guardrails),
+        ];
+    };
+
+    return {
+        labels: ["Governance", "Velocity", "Coverage", "Autonomy", "Capability", "Guardrails"],
+        baselineKey: baselineSnapshot.snapshot_key || baselineSnapshot.source_ref || "Approved baseline",
+        currentKey: currentSnapshot.snapshot_key || currentSnapshot.source_ref || "Current snapshot",
+        series: [
+            {
+                color: "rgba(78, 103, 255, 0.28)",
+                stroke: "rgba(79, 106, 255, 0.9)",
+                values: toSeries(baselineSnapshot),
+            },
+            {
+                color: "rgba(73, 223, 217, 0.22)",
+                stroke: "rgba(85, 230, 222, 0.92)",
+                values: toSeries(currentSnapshot),
+            },
+        ],
+    };
 }
 
-function renderBriefRows({ changeSummary, flagSummary, whereLabel, whereUrl }) {
-    const rows = [
-        changeSummary ? `<div class="brief-row"><span class="brief-label">What changed</span><span class="brief-copy">${changeSummary}</span></div>` : "",
-        flagSummary ? `<div class="brief-row"><span class="brief-label">Why flagged</span><span class="brief-copy">${flagSummary}</span></div>` : "",
-        whereLabel ? `<div class="brief-row"><span class="brief-label">Where</span><span class="brief-copy">${whereUrl ? `<a class="link" href="${whereUrl}" target="_blank" rel="noreferrer noopener">${whereLabel}</a>` : whereLabel}</span></div>` : "",
-    ].filter(Boolean);
-    if (!rows.length) {
-        return "";
+function drawRepoRadar(repoPayload) {
+    const canvas = document.getElementById("repo-posture-radar");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+        return;
     }
-    return `<div class="brief-panel">${rows.join("")}</div>`;
-}
-
-function renderOpenChangeLink(label, url, className = "cta-link") {
-    if (!url) {
-        return `<span class="${className}">${label}</span>`;
+    const context = canvas.getContext("2d");
+    if (!context) {
+        return;
     }
-    return `<a class="${className}" href="${url}" data-open-source-change="${url}" target="_blank" rel="noreferrer noopener">${label}</a>`;
+
+    const vectors = repoRadarVectors(repoPayload);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!vectors) {
+        return;
+    }
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2 + 10;
+    const radius = 118;
+    const angleStep = (Math.PI * 2) / vectors.labels.length;
+    const darkTheme = document.body?.dataset?.theme !== "light";
+    const ringColor = darkTheme ? "rgba(255,255,255,0.10)" : "rgba(112, 98, 84, 0.14)";
+    const axisColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.12)";
+    const labelColor = darkTheme ? "rgba(221, 222, 225, 0.55)" : "rgba(77, 68, 60, 0.72)";
+
+    for (let level = 1; level <= 4; level += 1) {
+        const scale = level / 4;
+        context.beginPath();
+        vectors.labels.forEach((_, index) => {
+            const angle = -Math.PI / 2 + index * angleStep;
+            const x = centerX + Math.cos(angle) * radius * scale;
+            const y = centerY + Math.sin(angle) * radius * scale;
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.strokeStyle = ringColor;
+        context.lineWidth = 1;
+        context.stroke();
+    }
+
+    vectors.labels.forEach((label, index) => {
+        const angle = -Math.PI / 2 + index * angleStep;
+        const axisX = centerX + Math.cos(angle) * radius;
+        const axisY = centerY + Math.sin(angle) * radius;
+        context.beginPath();
+        context.moveTo(centerX, centerY);
+        context.lineTo(axisX, axisY);
+        context.strokeStyle = axisColor;
+        context.stroke();
+
+        const labelX = centerX + Math.cos(angle) * (radius + 22);
+        const labelY = centerY + Math.sin(angle) * (radius + 22);
+        context.fillStyle = labelColor;
+        context.font = "500 13px Inter";
+        context.textAlign = labelX > centerX + 10 ? "left" : labelX < centerX - 10 ? "right" : "center";
+        context.textBaseline = labelY > centerY + 10 ? "top" : labelY < centerY - 10 ? "bottom" : "middle";
+        context.fillText(label, labelX, labelY);
+    });
+
+    vectors.series.forEach((series) => {
+        context.beginPath();
+        series.values.forEach((value, index) => {
+            const angle = -Math.PI / 2 + index * angleStep;
+            const x = centerX + Math.cos(angle) * radius * normalizeRadarValue(value);
+            const y = centerY + Math.sin(angle) * radius * normalizeRadarValue(value);
+            if (index === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        });
+        context.closePath();
+        context.fillStyle = series.color;
+        context.strokeStyle = series.stroke;
+        context.lineWidth = 2;
+        context.fill();
+        context.stroke();
+    });
+
+    setText("repo-radar-title", compactRepoLabel(repoFull));
+    setText("repo-radar-meta", `${vectors.baselineKey} vs ${vectors.currentKey}`);
 }
 
-function renderInsightCard(item, designProfile, tone = "primary") {
-    const combinedReasons = [...new Set([...(item.risk_reasons || []), ...((designProfile && designProfile.risk_tags) || [])])];
-    const updatedAt = formatTimestamp(item.updated_at);
-    const targetLabel = item.review_target || "repo detail";
-    const supportingTargetLabel = item.supporting_review_target || null;
-    const supportingTargetMarkup = supportingTargetLabel
-        ? (item.supporting_review_url
-            ? `<a class="link" href="${item.supporting_review_url}" data-open-source-change="${item.supporting_review_url}" target="_blank" rel="noreferrer noopener">${supportingTargetLabel}</a>`
-            : supportingTargetLabel)
-        : "";
-    const targetMarkup = item.review_url
-        ? `<a class="link" href="${item.review_url}" data-open-source-change="${item.review_url}" target="_blank" rel="noreferrer noopener">${targetLabel}</a>`
-        : targetLabel;
-    const ctaMarkup = renderOpenChangeLink("Open source change →", item.review_url);
-    const signalStrength = clamp(
-        (item.priority === "review_now" ? 0.92 : item.priority === "watch" ? 0.64 : 0.36)
-        + (combinedReasons.includes("critical surface") ? 0.08 : 0)
-        + (combinedReasons.includes("guardrails weakened") ? 0.06 : 0),
-        0.1,
-        1,
-    );
+function severityForPriority(priority) {
+    if (priority === "review_now") {
+        return { label: "High", className: "severity-high" };
+    }
+    if (priority === "watch") {
+        return { label: "Medium", className: "severity-medium" };
+    }
+    return { label: "Low", className: "severity-low" };
+}
+
+function detailButton() {
+    return document.getElementById("detail-escalate-btn");
+}
+
+function findDesignProfile(artifactPath) {
+    return asArray(window.__designProfiles).find((item) => item.artifact_path === artifactPath) || null;
+}
+
+function attributeScore(entry, keyPrefix) {
+    const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
+    const score = Number(entry?.[scoreKey]);
+    if (Number.isFinite(score)) {
+        return clamp(score, 0, 1);
+    }
+    const fallbackKey = keyPrefix === "baseline" ? "baseline_value" : "current_value";
+    const fallback = Number(entry?.[fallbackKey]);
+    if (Number.isFinite(fallback)) {
+        return clamp(fallback, 0, 1);
+    }
+    return 0;
+}
+
+function renderInsightChips(item, profile) {
+    const mergedReasons = [...new Set([...(item.risk_reasons || []), ...((profile?.risk_tags) || [])])];
+    const reasons = mergedReasons.filter((reason) => {
+        const normalized = String(reason).toLowerCase();
+        if (normalized !== "baseline only") {
+            return true;
+        }
+        return String(item?.evidence_label || "").toLowerCase() === "baseline only";
+    });
+    return reasons.slice(0, 4).map((reason) => {
+        const normalized = String(reason).toLowerCase();
+        const className = normalized.includes("guardrail")
+            ? "chip-guardrails"
+            : normalized.includes("capability")
+                ? "chip-capability"
+                : normalized.includes("autonomy")
+                    ? "chip-autonomy"
+                    : normalized.includes("governance")
+                        ? "chip-governance"
+                        : normalized.includes("baseline")
+                            ? "chip-baseline"
+                            : "chip-model";
+        return `<span class="drift-chip ${className}">${escapeHtml(reason)}</span>`;
+    }).join("");
+}
+
+function profileDimensionLabel(key) {
+    return {
+        guardrail_robustness: "Guardrails",
+        capability_risk: "Capability",
+        autonomy_level: "Autonomy",
+        governance_strength: "Governance",
+        model_config_posture: "Model/config",
+        control_surface_type: "Control surface",
+    }[key] || key.replaceAll("_", " ");
+}
+
+function fallbackProfileDimension(key) {
+    return {
+        attribute_key: key,
+        label: profileDimensionLabel(key),
+        baseline_value: "unknown",
+        current_value: "unknown",
+        direction: "unknown",
+        state: "unknown",
+        confidence_label: "low confidence",
+        confidence_score: 0.4,
+        reason: "No normalized attribute evidence was available for this dimension.",
+    };
+}
+
+function normalizedProfileDimensions(profile) {
+    const desiredOrder = [
+        "guardrail_robustness",
+        "capability_risk",
+        "autonomy_level",
+        "governance_strength",
+        "model_config_posture",
+        "control_surface_type",
+    ];
+    const entriesByKey = new Map(asArray(profile?.attribute_profile || []).map((entry) => [entry.attribute_key, entry]));
+    return desiredOrder.map((key) => entriesByKey.get(key) || fallbackProfileDimension(key));
+}
+
+function profileStateClass(entry) {
+    if (entry.state === "unknown") {
+        return "attribute-profile-row-unknown";
+    }
+    if (entry.state === "no_change") {
+        return "attribute-profile-row-neutral";
+    }
+    if (["weakened", "expanded", "increased", "more exploratory"].includes(String(entry.direction || "").toLowerCase())) {
+        return "attribute-profile-row-regression";
+    }
+    return "attribute-profile-row-improvement";
+}
+
+function renderAttributeProfileSummaryCards(profile) {
+    return normalizedProfileDimensions(profile).map((entry) => `
+        <div class="attribute-profile-summary-card ${profileStateClass(entry)}">
+            <span class="attribute-profile-summary-label">${escapeHtml(entry.label || profileDimensionLabel(entry.attribute_key))}</span>
+            <strong class="attribute-profile-summary-transition">${escapeHtml(`${entry.baseline_value || "unknown"} -> ${entry.current_value || "unknown"}`)}</strong>
+            <span class="attribute-profile-summary-confidence">${escapeHtml(entry.confidence_label || "low confidence")}</span>
+        </div>
+    `).join("");
+}
+
+function renderAttributeProfileTableRows(profile, activeTabKey) {
+    const tab = ATTRIBUTE_PROFILE_TAB_CONFIG.find((item) => item.key === activeTabKey) || ATTRIBUTE_PROFILE_TAB_CONFIG[0];
+    const rows = normalizedProfileDimensions(profile).filter((entry) => tab.dimensionKeys.includes(entry.attribute_key));
+    return rows.map((entry) => `
+        <tr class="${profileStateClass(entry)}">
+            <td>${escapeHtml(entry.label || profileDimensionLabel(entry.attribute_key))}</td>
+            <td>${escapeHtml(`${entry.baseline_value || "unknown"} -> ${entry.current_value || "unknown"}`)}</td>
+            <td>${escapeHtml(entry.reason || "No normalized attribute evidence was available for this dimension.")}</td>
+            <td>${escapeHtml(entry.confidence_label || "low confidence")}</td>
+        </tr>
+    `).join("");
+}
+
+function renderAttributeProfilePanel(profile, activeTabKey = window.__attributeProfileActiveTab || ATTRIBUTE_PROFILE_TAB_CONFIG[0].key) {
+    const activeTab = ATTRIBUTE_PROFILE_TAB_CONFIG.find((item) => item.key === activeTabKey) || ATTRIBUTE_PROFILE_TAB_CONFIG[0];
+    const controlSurface = normalizedProfileDimensions(profile).find((entry) => entry.attribute_key === "control_surface_type");
     return `
-        <div class="triage-card ${tone === "secondary" ? "triage-card-secondary" : ""} ${tone === "featured" ? "triage-card-featured-case" : ""}">
-            <div class="triage-card-header triage-card-header-visual">
-                <div class="triage-card-header-main">
-                    <div class="priority priority-${item.priority}">${priorityGlyph(item.priority)} ${item.priority.replace("_", " ")}</div>
-                    <div class="insight-title">${item.title}</div>
-                    <div class="triage-summary"><strong>${item.artifact_path}</strong> <span class="muted">(${item.artifact_type})</span></div>
-                </div>
-                <div class="triage-meter-wrap">
-                    ${createRingMeter({ value: signalStrength, label: item.confidence_label, tone: item.priority === "review_now" ? "warning" : item.priority === "watch" ? "accent" : "success", centerLabel: "⚑" })}
-                </div>
+        <div class="attribute-profile-panel">
+            <div class="attribute-profile-summary-grid">
+                ${renderAttributeProfileSummaryCards(profile)}
             </div>
-            <div class="triage-card-body">
-                <div class="tag-row">${renderRiskTags(combinedReasons)}</div>
-                <div class="glance-strip">
-                    <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_label}</strong></div>
-                    <div class="glance-chip"><span class="glance-chip-label">Evidence</span><strong>${item.evidence_label || "baseline only"}</strong></div>
-                    <div class="glance-chip"><span class="glance-chip-label">Source</span><strong>${targetMarkup}</strong></div>
-                    ${supportingTargetLabel ? `<div class="glance-chip"><span class="glance-chip-label">Merged context</span><strong>${supportingTargetMarkup}</strong></div>` : ""}
-                    ${updatedAt ? `<div class="glance-chip"><span class="glance-chip-label">Updated</span><strong>${updatedAt}</strong></div>` : ""}
-                </div>
-                ${renderBriefRows({
-                    changeSummary: item.change_summary,
-                    flagSummary: item.flag_summary,
-                    whereLabel: targetLabel,
-                    whereUrl: item.review_url,
-                })}
-                <details class="micro-detail">
-                    <summary>Why this is here</summary>
-                    <div class="micro-detail-body">
-                        ${item.evidence_summary ? `<div class="meta-tight muted">${item.evidence_summary}</div>` : ""}
-                        <div class="meta-tight muted">${item.rationale}</div>
-                        <div class="meta-tight">${item.recommended_action}</div>
-                    </div>
-                </details>
+            <div class="attribute-profile-tabs" role="tablist" aria-label="Attribute profile filters">
+                ${ATTRIBUTE_PROFILE_TAB_CONFIG.map((tab) => `
+                    <button type="button" class="attribute-profile-tab ${tab.key === activeTab.key ? "active" : ""}" data-attribute-profile-tab="${escapeHtml(tab.key)}" role="tab" aria-selected="${tab.key === activeTab.key ? "true" : "false"}">${escapeHtml(tab.label)}</button>
+                `).join("")}
             </div>
-            <div class="triage-card-footer triage-card-footer-split">
-                <span class="muted">Target: ${targetLabel}</span>
-                ${ctaMarkup}
+            <div class="attribute-profile-control-surface">Control surface: ${escapeHtml(controlSurface?.current_value || "unknown")}</div>
+            <div class="attribute-profile-table-wrap">
+                <table class="attribute-profile-table">
+                    <thead>
+                        <tr>
+                            <th>Attribute</th>
+                            <th>Baseline -> Current</th>
+                            <th>Reason</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${renderAttributeProfileTableRows(profile, activeTab.key)}
+                    </tbody>
+                </table>
             </div>
         </div>
     `;
 }
 
-function renderFeaturedInsight(item) {
-    if (!item) {
-        return '<div class="muted">No primary review target yet. Once drift history or PR evidence exists, this case file will feature the strongest item here.</div>';
-    }
-    const designProfiles = Object.fromEntries(asArray(window.__designProfiles).map((entry) => [entry.artifact_path, entry]));
-    return renderInsightCard(item, designProfiles[item.artifact_path], "featured");
+function bindAttributeProfileTabs(profile) {
+    document.querySelectorAll("[data-attribute-profile-tab]").forEach((button) => {
+        if (button.dataset.boundAttributeProfileTab === "true") {
+            return;
+        }
+        button.dataset.boundAttributeProfileTab = "true";
+        button.addEventListener("click", () => {
+            window.__attributeProfileActiveTab = button.getAttribute("data-attribute-profile-tab") || ATTRIBUTE_PROFILE_TAB_CONFIG[0].key;
+            setSectionHtml("detail-attributes", renderAttributeProfilePanel(profile, window.__attributeProfileActiveTab));
+            bindAttributeProfileTabs(profile);
+        });
+    });
 }
 
-function renderInsights(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No additional repo-level review targets are waiting behind the featured case.</div>';
+function renderRepoTriageRow(item, index) {
+    const severity = severityForPriority(item.priority);
+    const profile = findDesignProfile(item.artifact_path);
+    const meta = [item.baseline_label, item.review_target, item.evidence_label].filter(Boolean).join(" · ");
+    return `
+        <div class="triage-row" data-row-index="${index}" data-severity="${severity.label.toLowerCase()}" role="button" tabindex="0">
+            <div class="triage-row-top">
+                <span class="severity-badge ${severity.className}">${severity.label}</span>
+                <span class="artifact-name">${escapeHtml(repoFull)} / ${escapeHtml(item.artifact_path)}</span>
+                <span class="triage-row-chevron" aria-hidden="true">→</span>
+            </div>
+            <div class="triage-row-chips">${renderInsightChips(item, profile)}</div>
+            <div class="triage-row-meta">${escapeHtml(meta || item.title)}</div>
+            <div class="triage-row-reason">${escapeHtml(item.change_summary || item.flag_summary || item.rationale || item.title)}</div>
+        </div>
+    `;
+}
+
+function averageProfileScore(profile, key) {
+    const attributes = asArray(profile?.attribute_profile || []).filter((entry) => entry.attribute_key !== "control_surface_type");
+    if (!attributes.length) {
+        return 0;
     }
-    const designProfiles = Object.fromEntries(asArray(window.__designProfiles).map((item) => [item.artifact_path, item]));
-    return `<div class="queue-list">${items
-        .map(
-            (item, index) => `
-                <div class="queue-card-wrap">
-                    <div class="queue-rank queue-rank-large">#${index + 2}</div>
-                    ${renderInsightCard(item, designProfiles[item.artifact_path], "primary")}
+    const values = attributes
+        .map((entry) => attributeScore(entry, key))
+        .filter((value) => Number.isFinite(value));
+    if (!values.length) {
+        return 0;
+    }
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function renderEvidenceList(item, profile) {
+    const evidence = [
+        item.change_summary,
+        item.flag_summary,
+        item.evidence_summary,
+        item.rationale,
+        ...(profile?.narrative || []),
+    ].filter(Boolean);
+    if (!evidence.length) {
+        return '<li>No detailed evidence summary is available yet.</li>';
+    }
+    return evidence.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("");
+}
+
+function sourceUrlForInsight(item, profile) {
+    return item.review_url || profile?.provenance?.source_url || profile?.baseline_provenance?.source_url || "";
+}
+
+function requestedArtifactPath() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("artifact") || "";
+}
+
+function applyRepoDetail(item, options = {}) {
+    const profile = findDesignProfile(item.artifact_path);
+    const severity = severityForPriority(item.priority);
+    const subtitle = [item.title, item.review_target, item.evidence_label].filter(Boolean).join(" · ") || item.artifact_path;
+    const baselineScore = averageProfileScore(profile, "baseline");
+    const currentScore = averageProfileScore(profile, "current");
+    const delta = currentScore - baselineScore;
+
+    window.__selectedInsight = item;
+
+    setText("detail-artifact-name", `${repoFull} / ${item.artifact_path}`);
+    const badge = document.getElementById("detail-severity-badge");
+    if (badge) {
+        badge.textContent = severity.label;
+        badge.className = `severity-badge ${severity.className}`;
+    }
+    setText("detail-subtitle", subtitle);
+    setText("detail-baseline-score", Math.round(baselineScore * 100).toString());
+    setText("detail-current-score", Math.round(currentScore * 100).toString());
+    setText("detail-baseline-label", "Baseline posture");
+    setText("detail-current-label", "Current posture");
+    setText("detail-score-delta", `${delta >= 0 ? "+" : ""}${Math.round(delta * 100)}`);
+    const deltaElement = document.getElementById("detail-score-delta");
+    if (deltaElement) {
+        deltaElement.className = `score-delta ${delta > 0.02 ? "score-delta-up" : delta < -0.02 ? "score-delta-down" : "score-delta-flat"}`;
+    }
+
+    setSectionHtml("detail-attributes", renderAttributeProfilePanel(profile));
+    bindAttributeProfileTabs(profile);
+    setSectionHtml("detail-evidence-list", renderEvidenceList(item, profile));
+    setText("detail-recommendation-body", item.recommended_action || profile?.headline_summary || "Inspect the selected artifact before merge and confirm the changed control surface is still acceptable.");
+
+    const button = detailButton();
+    if (button) {
+        const targetUrl = sourceUrlForInsight(item, profile);
+        button.disabled = false;
+        button.onclick = () => {
+            if (targetUrl) {
+                window.open(targetUrl, "_blank", "noopener,noreferrer");
+                return;
+            }
+            window.location.href = `/dashboard/${encodeURIComponent(repoFull)}`;
+        };
+    }
+
+    if (options.loadStoryline !== false) {
+        loadArtifactStoryline(item.artifact_path);
+    }
+}
+
+function activateRepoRow(row, items, options = {}) {
+    document.querySelectorAll(".triage-row").forEach((candidate) => {
+        candidate.classList.remove("selected");
+        candidate.removeAttribute("aria-current");
+    });
+    row.classList.add("selected");
+    row.setAttribute("aria-current", "true");
+    const index = Number(row.getAttribute("data-row-index"));
+    if (Number.isFinite(index) && items[index]) {
+        applyRepoDetail(items[index], options);
+    }
+}
+
+function bindRepoRows(items) {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    rows.forEach((row) => {
+        const activate = () => activateRepoRow(row, items);
+        row.addEventListener("click", activate);
+        row.addEventListener("focus", activate);
+        row.addEventListener("keydown", (event) => {
+            const index = Number(row.getAttribute("data-row-index"));
+            if (!Number.isFinite(index)) {
+                return;
+            }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                const nextIndex = clamp(index + delta, 0, rows.length - 1);
+                const nextRow = rows[nextIndex];
+                if (nextRow instanceof HTMLElement) {
+                    nextRow.focus();
+                }
+                return;
+            }
+            if (event.key === "Home") {
+                event.preventDefault();
+                const firstRow = rows[0];
+                if (firstRow instanceof HTMLElement) {
+                    firstRow.focus();
+                }
+                return;
+            }
+            if (event.key === "End") {
+                event.preventDefault();
+                const lastRow = rows[rows.length - 1];
+                if (lastRow instanceof HTMLElement) {
+                    lastRow.focus();
+                }
+                return;
+            }
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activate();
+            }
+        });
+    });
+}
+
+function autoSelectRepoRow(items, preferredArtifactPath = "") {
+    const rows = Array.from(document.querySelectorAll(".triage-row"));
+    if (!rows.length) {
+        return;
+    }
+    if (preferredArtifactPath) {
+        const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
+        if (preferredIndex >= 0 && rows[preferredIndex]) {
+            activateRepoRow(rows[preferredIndex], items);
+            return;
+        }
+    }
+    activateRepoRow(rows[0], items, { loadStoryline: false });
+}
+
+function filteredRepoItems(items, filter) {
+    if (filter === "high") {
+        return items.filter((item) => item.priority === "review_now");
+    }
+    if (filter === "medium") {
+        return items.filter((item) => item.priority === "watch");
+    }
+    return items;
+}
+
+function renderRepoQueue(items, filter = "all", preferredArtifactPath = "") {
+    const filtered = filteredRepoItems(items, filter);
+    setText("repo-triage-count", `${filtered.length} item${filtered.length === 1 ? "" : "s"}`);
+    setSectionHtml("triage-list", filtered.length ? filtered.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No repo insights match this filter.</div>');
+    bindRepoRows(filtered);
+    autoSelectRepoRow(filtered, preferredArtifactPath);
+}
+
+function bindRepoFilters(items, preferredArtifactPath = "") {
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+        button.addEventListener("click", () => {
+            document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.classList.remove("active"));
+            button.classList.add("active");
+            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath);
+        });
+    });
+}
+
+function formatDateLabel(timestamp) {
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return "Unknown date";
+    }
+    try {
+        return new Date(timestamp * 1000).toLocaleDateString();
+    } catch {
+        return "Unknown date";
+    }
+}
+
+function storylineRiskClass(episode) {
+    if (episode?.episode_type === "baseline_milestone" || episode?.source_type === "baseline_promotion") {
+        return "storyline-risk-baseline";
+    }
+    const severity = String(episode?.severity || "low").toLowerCase();
+    if (severity === "high") {
+        return "storyline-risk-high";
+    }
+    if (severity === "medium") {
+        return "storyline-risk-medium";
+    }
+    return "storyline-risk-low";
+}
+
+function storylineRiskLabel(episode) {
+    if (episode?.episode_type === "baseline_milestone" || episode?.source_type === "baseline_promotion") {
+        return "Approved baseline";
+    }
+    const severity = String(episode?.severity || "low").toLowerCase();
+    if (severity === "high") {
+        return "High attention";
+    }
+    if (severity === "medium") {
+        return "Medium attention";
+    }
+    return "Low attention";
+}
+
+function storylineEpisodeTypeLabel(episode) {
+    if (episode?.episode_type === "baseline_milestone") {
+        return "Baseline checkpoint";
+    }
+    if (episode?.episode_type === "current_posture") {
+        return "Current posture";
+    }
+    return String(episode?.episode_type || "mixed").replaceAll("_", " ");
+}
+
+function renderStorylineEpisodeNode(episode, index) {
+    const provenance = episode.source_url
+        ? `<a class="link" href="${episode.source_url}" data-open-source-change="${episode.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(episode.source_ref || "Open provenance")}</a>`
+        : escapeHtml(episode.source_ref || "No provenance link");
+    const riskClass = storylineRiskClass(episode);
+    const laneClass = index % 2 === 0 ? "storyline-node-top" : "storyline-node-bottom";
+    const attributeTags = asArray(episode.top_attributes).slice(0, 3);
+    return `
+        <article class="storyline-node ${laneClass} ${riskClass}">
+            <div class="storyline-node-date">${escapeHtml(formatDateLabel(episode.episode_timestamp))}</div>
+            <div class="storyline-node-rail">
+                <span class="storyline-node-dot" aria-hidden="true"></span>
+            </div>
+            <div class="storyline-node-card">
+                <div class="storyline-node-card-head">
+                    <div>
+                        <strong>${escapeHtml(episode.source_label)}</strong>
+                        <div class="artifact-card-type">${escapeHtml(storylineEpisodeTypeLabel(episode))}</div>
+                    </div>
+                    <span class="storyline-risk-pill">${escapeHtml(storylineRiskLabel(episode))}</span>
                 </div>
-            `
-        )
-        .join("")}</div>`;
+                ${attributeTags.length ? `<div class="tag-row">${attributeTags.map((item) => `<span class="tag tag-muted">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+                <div class="artifact-card-reason">${escapeHtml(episode.episode_summary || "")}</div>
+                <div class="storyline-node-footer muted">
+                    <span>${escapeHtml(episode.confidence || "")}</span>
+                    <span>${provenance}</span>
+                </div>
+            </div>
+        </article>
+    `;
+}
+
+function renderStoryline(storyline) {
+    if (!storyline) {
+        return '<div class="muted">No storyline is available for the selected artifact yet.</div>';
+    }
+    return `
+        <div class="stack compact-stack">
+            <div class="brief-panel">
+                <div class="brief-row"><span class="brief-label">Artifact</span><span class="brief-copy"><strong>${escapeHtml(storyline.artifact_path)}</strong> <span class="muted">(${escapeHtml(storyline.artifact_type)})</span></span></div>
+                <div class="brief-row"><span class="brief-label">Story</span><span class="brief-copy">${escapeHtml(storyline.summary || "")}</span></div>
+                <div class="brief-row"><span class="brief-label">Posture</span><span class="brief-copy">${escapeHtml(storyline.current_posture_label || "")}</span></div>
+            </div>
+            ${storyline.limited_history_note ? `<div class="detail-note">${escapeHtml(storyline.limited_history_note)}</div>` : ""}
+            <div class="storyline-timeline-scroll">
+                <div class="storyline-timeline">${asArray(storyline.episodes).map((episode, index) => renderStorylineEpisodeNode(episode, index)).join("")}</div>
+            </div>
+        </div>
+    `;
+}
+
+async function fetchArtifactStoryline(artifactPath) {
+    if (window.__storylineCache.has(artifactPath)) {
+        return window.__storylineCache.get(artifactPath);
+    }
+    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${encodeURIComponent(artifactPath)}/episodes`);
+    if (!response.ok) {
+        throw new Error(`Artifact storyline request failed with ${response.status}`);
+    }
+    const payload = await response.json();
+    window.__storylineCache.set(artifactPath, payload.storyline || null);
+    return payload.storyline || null;
+}
+
+async function loadArtifactStoryline(artifactPath) {
+    setSectionHtml("featured-storyline", '<div class="muted">Loading selected artifact storyline...</div>');
+    try {
+        const storyline = await fetchArtifactStoryline(artifactPath);
+        setSectionHtml("featured-storyline", renderStoryline(storyline));
+        bindOpenSourceChangeLinks(document.getElementById("featured-storyline") || document);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to load storyline";
+        setSectionHtml("featured-storyline", `<div class="muted">${escapeHtml(message)}</div>`);
+    }
 }
 
 function renderControlSurfaces(items = []) {
     if (!items.length) {
         return '<div class="muted">No grouped control surfaces yet.</div>';
     }
-    const maxArtifacts = Math.max(...items.map((item) => item.artifact_count || 0), 1);
-    return `<div class="surface-orbit">${items
-        .map(
-            (item, index) => {
-                const size = 72 + (item.artifact_count / maxArtifacts) * 54;
-                const positions = [
-                    { left: 10, top: 10 },
-                    { left: 60, top: 8 },
-                    { left: 36, top: 34 },
-                    { left: 12, top: 62 },
-                    { left: 64, top: 58 },
-                    { left: 38, top: 78 },
-                ];
-                const pos = positions[index] || { left: 40, top: 40 };
-                return `
-                <div class="surface-node" style="left:${pos.left}%; top:${pos.top}%; width:${size}px; height:${size}px;">
-                    <div class="surface-node-inner">
-                        <strong>${item.label}</strong>
-                        <span>${item.artifact_count} tracked</span>
-                        <small>${item.high_confidence_count} high confidence</small>
-                    </div>
-                </div>
-            `;
+    const maxArtifacts = Math.max(...items.map((item) => Number(item.artifact_count || 0)), 1);
+    return items.map((item) => `
+        <div class="drift-type-row">
+            <span class="drift-type-label">${escapeHtml(item.label)}</span>
+            <div class="drift-type-track"><div class="drift-type-fill" style="width:${(Number(item.artifact_count || 0) / maxArtifacts) * 100}%"></div></div>
+            <span class="drift-type-count">${Number(item.artifact_count || 0)}</span>
+        </div>
+    `).join("");
+}
+
+function renderCueCards(items = []) {
+    if (!items.length) {
+        return '<div class="muted">No repo-level history cues yet.</div>';
+    }
+    return `<div class="stack compact-stack">${items.map((item) => `
+        <div class="artifact-card">
+            <div class="artifact-card-head">
+                <strong>${escapeHtml(item.label)}</strong>
+                <span class="tag tag-muted">${asArray(item.artifact_paths).length}</span>
+            </div>
+            <div class="artifact-card-reason">${escapeHtml(item.summary)}</div>
+            <div class="tag-row">${asArray(item.artifact_paths).map((artifactPath) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifactPath)}">${escapeHtml(artifactPath)}</button>`).join("")}</div>
+        </div>
+    `).join("")}</div>`;
+}
+
+function bindCueCards() {
+    document.querySelectorAll("[data-storyline-artifact]").forEach((button) => {
+        button.addEventListener("click", () => {
+            const artifactPath = button.getAttribute("data-storyline-artifact");
+            if (artifactPath) {
+                loadArtifactStoryline(decodeURIComponent(artifactPath));
             }
-        )
-        .join("")}</div>`;
-}
-
-function renderLeaderboard(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No pull-request drift samples have been recorded yet.</div>';
-    }
-    const maxDrift = Math.max(...items.map((item) => item.drift_magnitude || 0), 0.001);
-    return `<div class="artifact-ribbon">${items
-        .map(
-            (item) => `
-                <div class="ribbon-item">
-                    <div class="ribbon-bar" style="height:${48 + ((item.drift_magnitude || 0) / maxDrift) * 88}px"></div>
-                    <div class="ribbon-label">${item.artifact_path.split("/").pop()}</div>
-                    <div class="ribbon-meta">${item.drift_magnitude.toFixed(3)}</div>
-                </div>`
-        )
-        .join("")}</div>`;
-}
-
-function renderArtifactConstellation(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No lower-confidence findings are competing for attention right now.</div>';
-    }
-    return `<div class="constellation-map">${items.slice(0, 6)
-        .map((item, index) => {
-            const positions = [
-                { left: 18, top: 22 },
-                { left: 66, top: 16 },
-                { left: 42, top: 42 },
-                { left: 20, top: 70 },
-                { left: 72, top: 64 },
-                { left: 48, top: 82 },
-            ];
-            const pos = positions[index] || { left: 50, top: 50 };
-            return `
-                <div class="constellation-node" style="left:${pos.left}%; top:${pos.top}%;">
-                    <span class="constellation-dot"></span>
-                    <div class="constellation-label">${item.artifact_path.split("/").pop()}</div>
-                </div>
-            `;
-        })
-        .join("")}</div>`;
-}
-
-function renderLowerConfidenceInsights(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No lower-confidence findings are competing for attention right now.</div>';
-    }
-    const designProfiles = Object.fromEntries(asArray(window.__designProfiles).map((item) => [item.artifact_path, item]));
-    return `
-        ${renderArtifactConstellation(items)}
-        <div class="stack compact-stack lower-confidence-list">
-            ${items.slice(0, 4).map((item) => renderInsightCard(item, designProfiles[item.artifact_path], "secondary")).join("")}
-        </div>
-    `;
-}
-
-function renderEvidenceStream({ baselineVersionCount = 0, historicalVersions = 0 }) {
-    const total = Math.max(baselineVersionCount + historicalVersions, 1);
-    return `
-        <div class="evidence-stream">
-            <span class="evidence-segment evidence-segment-baseline" style="width:${(baselineVersionCount / total) * 100}%"></span>
-            <span class="evidence-segment evidence-segment-history" style="width:${(historicalVersions / total) * 100}%"></span>
-        </div>
-    `;
-}
-
-function renderInsightSpectrum(insights = [], lowerConfidenceInsights = []) {
-    const reviewNow = insights.filter((item) => item.priority === "review_now").length;
-    const watch = insights.filter((item) => item.priority === "watch").length;
-    const baseline = Math.max(insights.length - reviewNow - watch, 0);
-    const lower = lowerConfidenceInsights.length;
-    const total = Math.max(reviewNow + watch + baseline + lower, 1);
-    return `
-        <div class="spectrum-wrap">
-            <div class="lane-spectrum lane-spectrum-quad">
-                <span class="lane-segment lane-segment-review" style="width:${(reviewNow / total) * 100}%"></span>
-                <span class="lane-segment lane-segment-watch" style="width:${(watch / total) * 100}%"></span>
-                <span class="lane-segment lane-segment-baseline" style="width:${(baseline / total) * 100}%"></span>
-                <span class="lane-segment lane-segment-lower" style="width:${(lower / total) * 100}%"></span>
-            </div>
-            <div class="lane-spectrum-legend lane-spectrum-legend-dense">
-                <span><strong>${reviewNow}</strong> review now</span>
-                <span><strong>${watch}</strong> watch</span>
-                <span><strong>${baseline}</strong> baseline</span>
-                <span><strong>${lower}</strong> lower confidence</span>
-            </div>
-        </div>
-    `;
-}
-
-function renderRepoCommandDeck({ payload, insights = [], lowerConfidenceInsights = [], controlSurfaces = [], leaderboard = [], backfill = {}, driftSummary = {} }) {
-    const featuredInsight = insights[0] || null;
-    const heat = clamp(
-        (featuredInsight?.priority === "review_now" ? 0.92 : featuredInsight?.priority === "watch" ? 0.64 : 0.38)
-        + Math.min(leaderboard.length * 0.03, 0.12)
-        + Math.min(controlSurfaces.length * 0.02, 0.1),
-        0.12,
-        1,
-    );
-    const highConfidence = controlSurfaces.reduce((sum, item) => sum + (item.high_confidence_count || 0), 0);
-    const totalArtifacts = controlSurfaces.reduce((sum, item) => sum + (item.artifact_count || 0), 0);
-    const coverageRatio = clamp(highConfidence / Math.max(totalArtifacts, 1), 0, 1);
-    const maxDrift = clamp(asNumber(driftSummary.avg_semantic_distance), 0, 1);
-    return `
-        <div class="pulseboard-grid repo-pulse-grid">
-            <div class="card pulse-panel pulse-panel-hero">
-                <div class="section-kicker">Case heat</div>
-                <h2>How hard this repo is pulling attention</h2>
-                <div class="repo-pulse-hero">
-                    ${createRingMeter({ value: heat, label: featuredInsight?.priority ? featuredInsight.priority.replace("_", " ") : "baseline", tone: featuredInsight?.priority === "review_now" ? "warning" : featuredInsight?.priority === "watch" ? "accent" : "success", centerLabel: featuredInsight ? "⚑" : "·" })}
-                    <div class="repo-pulse-copy">
-                        <div class="focus-summary">${featuredInsight?.title || "No dominant review target yet"}</div>
-                        <div class="meta-tight muted">${featuredInsight?.artifact_path || payload.repo_full || repoFull}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="card pulse-panel">
-                <div class="section-kicker">Evidence mix</div>
-                <h2>What the case is built from</h2>
-                ${renderEvidenceStream({
-                    baselineVersionCount: asNumber(payload.baseline_version_count),
-                    historicalVersions: asNumber(backfill.total_historical_versions),
-                })}
-                <div class="lane-spectrum-legend lane-spectrum-legend-dense">
-                    <span><strong>${asNumber(payload.baseline_version_count)}</strong> baselines</span>
-                    <span><strong>${asNumber(backfill.total_historical_versions)}</strong> history</span>
-                </div>
-            </div>
-            <div class="card pulse-panel">
-                <div class="section-kicker">Review mix</div>
-                <h2>How signals break down</h2>
-                ${renderInsightSpectrum(insights, lowerConfidenceInsights)}
-            </div>
-            <div class="card pulse-panel">
-                <div class="section-kicker">Coverage quality</div>
-                <h2>How strong the repo map is</h2>
-                <div class="repo-mini-meters">
-                    ${createRingMeter({ value: coverageRatio, label: "Coverage", tone: "accent", size: 96, stroke: 10, centerLabel: `${Math.round(coverageRatio * 100)}%` })}
-                    ${createRingMeter({ value: maxDrift, label: "Avg drift", tone: "violet", size: 96, stroke: 10, centerLabel: driftSummary.avg_semantic_distance ? asNumber(driftSummary.avg_semantic_distance).toFixed(2) : "0.00" })}
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-function renderHistoryTimelines(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No historical timeline yet. Backfill or PR profile data will populate this view.</div>';
-    }
-    const maxDrift = Math.max(
-        ...items.flatMap((item) => asArray(item.points).map((point) => asNumber(point.drift_magnitude))),
-        1
-    );
-    return `<div class="stack">${items
-        .map(
-            (item) => `
-                <div class="timeline-card timeline-card-graphic">
-                    <div class="timeline-header">
-                        <div>
-                            <div class="insight-title">${item.artifact_path}</div>
-                            <div class="muted meta-tight">${item.artifact_type} · ${item.point_count} recorded points</div>
-                        </div>
-                        <div class="muted">Max drift ${item.max_drift_magnitude.toFixed(3)}</div>
-                    </div>
-                    <div class="timeline-cosmos">${asArray(item.points)
-                        .map(
-                            (point, index) => `
-                                <div class="timeline-star" style="left:${8 + index * (80 / Math.max(item.points.length, 1))}%; bottom:${12 + (point.drift_magnitude / maxDrift) * 70}%;">
-                                    <span></span>
-                                    <div class="timeline-star-label">${point.label}</div>
-                                </div>
-                            `
-                        )
-                        .join("")}</div>
-                </div>
-            `
-        )
-        .join("")}</div>`;
-}
-
-const DESIGN_PROFILE_FIELDS = [
-    { key: "guardrail_robustness", label: "Guardrails" },
-    { key: "capability_risk", label: "Capability" },
-    { key: "autonomy_level", label: "Autonomy" },
-    { key: "stability_vs_creativity", label: "Model config" },
-    { key: "governance_strength", label: "Governance" },
-];
-
-const ATTRIBUTE_SUMMARY = {
-    guardrail_robustness: {
-        stronger: "Guardrails strengthened slightly, suggesting clearer constraints or refusal behavior.",
-        weaker: "Guardrails weakened, which can reduce safety boundaries or escalation discipline.",
-    },
-    capability_risk: {
-        stronger: "Capability risk increased, suggesting broader authority or more operational reach.",
-        weaker: "Capability risk eased slightly relative to baseline.",
-    },
-    autonomy_level: {
-        stronger: "Autonomy increased, implying the system may act with less human intervention.",
-        weaker: "Autonomy decreased, implying more control or supervision than the current baseline.",
-    },
-    stability_vs_creativity: {
-        stronger: "The current model configuration is more stable and deterministic than the baseline.",
-        weaker: "The current model configuration is more creative or variable than the baseline.",
-    },
-    governance_strength: {
-        stronger: "Governance strengthened, suggesting clearer review, ownership, or approval expectations.",
-        weaker: "Governance weakened, which can make approval, audit, or accountability weaker.",
-    },
-};
-
-function clampUnit(value) {
-    const number = typeof value === "number" && Number.isFinite(value) ? value : 0;
-    return Math.max(0, Math.min(1, number));
-}
-
-function polarPoint(centerX, centerY, radius, index, total) {
-    const angle = (-Math.PI / 2) + (index / total) * Math.PI * 2;
-    return {
-        x: centerX + Math.cos(angle) * radius,
-        y: centerY + Math.sin(angle) * radius,
-    };
-}
-
-function radarPolygonPoints(profile, radius, centerX, centerY) {
-    return DESIGN_PROFILE_FIELDS.map((field, index) => {
-        const point = polarPoint(centerX, centerY, radius * clampUnit(profile[field.key]), index, DESIGN_PROFILE_FIELDS.length);
-        return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-    }).join(" ");
-}
-
-function driftLabel(field, baselineValue, currentValue) {
-    const delta = currentValue - baselineValue;
-    const direction = delta > 0 ? "increased" : delta < 0 ? "decreased" : "unchanged";
-    return `${field.label}: ${baselineValue.toFixed(2)} → ${currentValue.toFixed(2)} (${direction} ${Math.abs(delta).toFixed(2)})`;
-}
-
-function sourceHref(provenance) {
-    if (provenance?.source_url) {
-        return provenance.source_url;
-    }
-    if (!provenance?.source_ref) {
-        return null;
-    }
-    const prMatch = provenance.source_ref.match(/PR #(\d+)/i);
-    if (prMatch) {
-        return `https://github.com/${repoFull}/pull/${prMatch[1]}`;
-    }
-    const commitMatch = provenance.source_ref.match(/commit\s+([a-f0-9]+)/i);
-    if (commitMatch) {
-        return `https://github.com/${repoFull}/commit/${commitMatch[1]}`;
-    }
-    return null;
-}
-
-function attributeChangeSummary(item) {
-    return DESIGN_PROFILE_FIELDS.map((field) => {
-        const baselineValue = clampUnit(item.baseline_profile[field.key]);
-        const currentValue = clampUnit(item.current_profile[field.key]);
-        const delta = currentValue - baselineValue;
-        const magnitude = Math.abs(delta);
-        let summary = "No material change relative to baseline.";
-        if (magnitude >= 0.02) {
-            const messages = ATTRIBUTE_SUMMARY[field.key];
-            summary = delta >= 0 ? messages.stronger : messages.weaker;
-        }
-        const impact = magnitude >= 0.12 ? "high" : magnitude >= 0.05 ? "medium" : "low";
-        const state = magnitude < 0.02 ? "no_change" : "drift_detected";
-        return {
-            attributeKey: field.key,
-            label: field.label,
-            baselineValue,
-            currentValue,
-            delta,
-            impact,
-            state,
-            summary,
-        };
-    });
-}
-
-function attributeFindingForLabel(item, label) {
-    const field = DESIGN_PROFILE_FIELDS.find((entry) => entry.label === label);
-    if (!field) {
-        return null;
-    }
-    return asArray(item.attribute_findings || []).find((finding) => finding.attribute_key === field.key) || null;
-}
-
-function renderAttributeFindings(item, sourceLink) {
-    const findings = asArray(item.attribute_findings || []);
-    if (!findings.length) {
-        return "";
-    }
-    return `
-        <details class="micro-detail">
-            <summary>Why PromptDrift thinks so</summary>
-            <div class="micro-detail-body attribute-summary-list">
-                ${findings.map((finding) => `
-                    <div class="attribute-summary-card">
-                        <div class="attribute-summary-header">
-                            <strong>${finding.label}</strong>
-                            <span class="pill pill-${Math.abs(finding.delta) >= 0.12 ? "high" : Math.abs(finding.delta) >= 0.05 ? "medium" : "low"}">${finding.direction}</span>
-                        </div>
-                        <div class="meta-tight muted">${finding.reason}</div>
-                        ${asArray(finding.evidence).length ? `
-                            <div class="meta-tight"><strong>Changed code:</strong></div>
-                            <ul class="evidence-list">
-                                ${asArray(finding.evidence).map((entry) => `<li>${entry}</li>`).join("")}
-                            </ul>
-                        ` : ""}
-                        <div class="meta-tight">${finding.remediation}</div>
-                        ${sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open source change", sourceLink, "link")}</div>` : ""}
-                    </div>
-                `).join("")}
-            </div>
-        </details>
-    `;
-}
-
-function renderBaselineControls(item) {
-    if (!item.can_promote_source_to_baseline) {
-        return `
-            <div class="baseline-controls">
-                <div class="meta-tight muted"><strong>Current baseline:</strong> ${item.baseline_provenance?.label || "No baseline"}</div>
-                <div class="meta-tight muted">Store a PR or history source snapshot before promoting a new baseline.</div>
-            </div>
-        `;
-    }
-    return `
-        <div class="baseline-controls">
-            <div class="meta-tight muted"><strong>Current baseline:</strong> ${item.baseline_provenance?.label || "No baseline"}</div>
-            <button type="button" class="baseline-action-button" data-promote-baseline="${encodeURIComponent(item.artifact_path)}">Use current source as baseline</button>
-        </div>
-    `;
-}
-
-function renderAttributeSummary(item) {
-    const sourceLink = sourceHref(item.provenance);
-    const normalizedProfile = asArray(item.attribute_profile || []);
-    const changes = normalizedProfile.length
-        ? normalizedProfile.map((dimension) => ({
-            attributeKey: dimension.attribute_key,
-            label: dimension.label,
-            baselineValue: dimension.baseline_value,
-            currentValue: dimension.current_value,
-            direction: dimension.direction,
-            impact: dimension.confidence_score >= 0.8 ? "high" : dimension.confidence_score >= 0.6 ? "medium" : "low",
-            state: dimension.state,
-            summary: dimension.reason,
-            evidence: asArray(dimension.evidence || []),
-            remediation: dimension.remediation || "",
-            confidenceLabel: dimension.confidence_label,
-        }))
-        : attributeChangeSummary(item);
-    const controlSurface = normalizedProfile.find((dimension) => dimension.attribute_key === "control_surface_type");
-    return `
-        <div class="stack compact-stack">
-            <div class="glance-strip">
-                <div class="glance-chip"><span class="glance-chip-label">Baseline</span><strong>${item.baseline_provenance?.label || "No baseline"}</strong></div>
-                <div class="glance-chip"><span class="glance-chip-label">Current source</span><strong>${renderProvenance(item.provenance, "Baseline only")}</strong></div>
-                ${sourceLink ? `<div class="glance-chip"><span class="glance-chip-label">Open change</span><strong>${renderOpenChangeLink(item.provenance?.source_ref || "View source change", sourceLink, "link")}</strong></div>` : ""}
-            </div>
-            ${renderBaselineControls(item)}
-            <div class="brief-panel">
-                <div class="brief-row"><span class="brief-label">Summary</span><span class="brief-copy">${item.headline_summary || "Baseline-relative posture changed."}</span></div>
-            </div>
-            ${renderAttributeProfilePanel(changes, controlSurface, sourceLink, item)}
-            ${renderAttributeFindings(item, sourceLink)}
-        </div>
-    `;
-}
-
-function renderAttributeProfilePanel(changes = [], controlSurface, sourceLink, item) {
-    const tabs = asArray(changes).slice(0, 5);
-    if (!tabs.length) {
-        return "";
-    }
-    const panelId = `attribute-profile-${tabs.map((tab) => tab.attributeKey || tab.label).join("-").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
-    return `
-        <section class="attribute-tab-panel" data-attribute-profile-panel>
-            <div class="attribute-tab-panel-header">
-                <div>
-                    <div class="insight-title">Attribute profile</div>
-                    <div class="meta-tight muted">Review the five posture dimensions for the selected artifact.</div>
-                </div>
-                <span class="tag tag-muted">${controlSurface?.current_value || "unknown"}</span>
-            </div>
-            <div class="attribute-tab-list" role="tablist" aria-label="Attribute profile dimensions">
-                ${tabs.map((change, index) => `
-                    <button
-                        type="button"
-                        class="attribute-tab ${index === 0 ? "is-active" : ""}"
-                        id="${panelId}-tab-${index}"
-                        role="tab"
-                        aria-selected="${index === 0 ? "true" : "false"}"
-                        aria-controls="${panelId}-panel-${index}"
-                        data-attribute-profile-tab="${panelId}-panel-${index}"
-                    >
-                        ${change.label}
-                    </button>
-                `).join("")}
-            </div>
-            <div class="attribute-tab-panels">
-                ${tabs.map((change, index) => renderAttributeProfileTabPanel(change, index, panelId, sourceLink, item)).join("")}
-            </div>
-        </section>
-    `;
-}
-
-function renderAttributeProfileTabPanel(change, index, panelId, sourceLink, item) {
-    const finding = attributeFindingForLabel(item, change.label);
-    const evidence = asArray(change.evidence || (finding ? finding.evidence : []));
-    const remediation = change.remediation || finding?.remediation || "Review the changed artifact directly before promoting a new baseline.";
-    return `
-        <section
-            class="attribute-tab-body ${index === 0 ? "is-active" : ""}"
-            id="${panelId}-panel-${index}"
-            role="tabpanel"
-            aria-labelledby="${panelId}-tab-${index}"
-            ${index === 0 ? "" : "hidden"}
-        >
-            <div class="attribute-summary-header">
-                <strong>${change.label}</strong>
-                <span class="pill ${change.state === "no_change" ? "pill-no-change" : change.state === "unknown" ? "pill-medium" : `pill-drift pill-${change.impact}`} ">${change.state === "no_change" ? "no change" : change.state === "unknown" ? "unknown" : "drift detected"}</span>
-            </div>
-            <div class="attribute-tab-metrics">
-                <div><span class="brief-label">Baseline</span><strong>${change.baselineValue}</strong></div>
-                <div><span class="brief-label">Current</span><strong>${change.currentValue}</strong></div>
-                <div><span class="brief-label">Direction</span><strong>${change.direction || "unknown"}</strong></div>
-                <div><span class="brief-label">Confidence</span><strong>${change.confidenceLabel || "low confidence"}</strong></div>
-            </div>
-            <div class="meta-tight muted">${change.summary}</div>
-            ${evidence.length ? `
-                <div class="meta-tight"><strong>What in the code changed:</strong></div>
-                <ul class="evidence-list">
-                    ${evidence.map((entry) => `<li>${entry}</li>`).join("")}
-                </ul>
-            ` : ""}
-            <div class="meta-tight">${remediation}</div>
-            ${change.state !== "no_change" && sourceLink ? `<div class="meta-tight">${renderOpenChangeLink("Open relevant change", sourceLink, "link")}</div>` : ""}
-        </section>
-    `;
-}
-
-function bindAttributeProfileTabs(scope = document) {
-    scope.querySelectorAll("[data-attribute-profile-panel]").forEach((panel) => {
-        if (panel.dataset.boundAttributeProfileTabs === "true") {
-            return;
-        }
-        panel.dataset.boundAttributeProfileTabs = "true";
-        const buttons = Array.from(panel.querySelectorAll("[data-attribute-profile-tab]"));
-        const bodies = Array.from(panel.querySelectorAll(".attribute-tab-body"));
-        const activate = (targetId) => {
-            buttons.forEach((button) => {
-                const isActive = button.dataset.attributeProfileTab === targetId;
-                button.classList.toggle("is-active", isActive);
-                button.setAttribute("aria-selected", isActive ? "true" : "false");
-            });
-            bodies.forEach((body) => {
-                const isActive = body.id === targetId;
-                body.classList.toggle("is-active", isActive);
-                body.hidden = !isActive;
-            });
-        };
-        buttons.forEach((button) => {
-            button.addEventListener("click", () => activate(button.dataset.attributeProfileTab));
         });
     });
+}
+
+function renderArtifactTable(items = []) {
+    if (!items.length) {
+        return '<tr><td colspan="5" class="muted">No onboarded artifacts were found for this repository yet.</td></tr>';
+    }
+    return items.map((item) => `
+        <tr>
+            <td>${escapeHtml(item.artifact_path)}</td>
+            <td><div>${escapeHtml(item.artifact_type)}</div><div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div></td>
+            <td>${Number(item.historical_profile_count || 0)}</td>
+            <td>${Math.max(Number(item.latest_historical_drift_magnitude || 0), Number(item.leaderboard_drift_magnitude || 0)).toFixed(3)}</td>
+            <td><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(item.artifact_path)}">Open storyline</button></td>
+        </tr>
+    `).join("");
+}
+
+function artifactTypeLabel(value) {
+    if (!value || value === "all") {
+        return "All";
+    }
+    return String(value).replaceAll("_", " ");
+}
+
+function renderArtifactFilterChips(items = []) {
+    const types = [...new Set(items.map((item) => String(item.artifact_type || "unknown")).filter(Boolean))].sort();
+    const options = ["all", ...types];
+    return options.map((type) => {
+        const isActive = window.__artifactTypeFilter === type;
+        return `<button type="button" class="triage-filter-btn${isActive ? " active" : ""}" data-artifact-type-filter="${escapeHtml(type)}">${escapeHtml(artifactTypeLabel(type))}</button>`;
+    }).join("");
+}
+
+function filteredArtifactEntries(items = []) {
+    const query = String(window.__artifactQuery || "").trim().toLowerCase();
+    return items.filter((item) => {
+        const typeMatches = window.__artifactTypeFilter === "all" || String(item.artifact_type || "") === window.__artifactTypeFilter;
+        if (!typeMatches) {
+            return false;
+        }
+        if (!query) {
+            return true;
+        }
+        return String(item.artifact_path || "").toLowerCase().includes(query) || String(item.artifact_type || "").toLowerCase().includes(query);
+    });
+}
+
+function renderArtifactResultsSummary(totalCount, filteredCount) {
+    if (!totalCount) {
+        return "No artifacts tracked yet";
+    }
+    if (filteredCount === totalCount) {
+        return `${totalCount} artifact${totalCount === 1 ? "" : "s"}`;
+    }
+    return `${filteredCount} of ${totalCount} artifacts`;
+}
+
+function refreshArtifactsSection() {
+    const items = asArray(window.__artifactEntries);
+    const filtered = filteredArtifactEntries(items);
+    setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
+    const filterHost = document.getElementById("artifact-filter-chips");
+    if (filterHost) {
+        filterHost.innerHTML = renderArtifactFilterChips(items);
+    }
+    const summary = document.getElementById("artifact-results-summary");
+    if (summary) {
+        summary.textContent = renderArtifactResultsSummary(items.length, filtered.length);
+    }
+    const body = document.getElementById("artifacts-panel-body");
+    if (body) {
+        body.hidden = window.__artifactsCollapsed;
+    }
+    const toggle = document.getElementById("artifacts-collapse-toggle");
+    if (toggle) {
+        toggle.textContent = window.__artifactsCollapsed ? "Expand" : "Collapse";
+        toggle.setAttribute("aria-expanded", window.__artifactsCollapsed ? "false" : "true");
+    }
+    bindCueCards();
+}
+
+function bindArtifactControls() {
+    const searchInput = document.getElementById("artifact-search-input");
+    if (searchInput && searchInput.dataset.boundArtifactSearch !== "true") {
+        searchInput.dataset.boundArtifactSearch = "true";
+        searchInput.addEventListener("input", () => {
+            window.__artifactQuery = searchInput.value || "";
+            refreshArtifactsSection();
+        });
+    }
+
+    const collapseToggle = document.getElementById("artifacts-collapse-toggle");
+    if (collapseToggle && collapseToggle.dataset.boundArtifactToggle !== "true") {
+        collapseToggle.dataset.boundArtifactToggle = "true";
+        collapseToggle.addEventListener("click", () => {
+            window.__artifactsCollapsed = !window.__artifactsCollapsed;
+            refreshArtifactsSection();
+        });
+    }
+
+    const filterHost = document.getElementById("artifact-filter-chips");
+    if (filterHost && filterHost.dataset.boundArtifactFilters !== "true") {
+        filterHost.dataset.boundArtifactFilters = "true";
+        filterHost.addEventListener("click", (event) => {
+            const target = event.target instanceof HTMLElement ? event.target.closest("[data-artifact-type-filter]") : null;
+            if (!target) {
+                return;
+            }
+            window.__artifactTypeFilter = target.getAttribute("data-artifact-type-filter") || "all";
+            refreshArtifactsSection();
+        });
+    }
 }
 
 function bindOpenSourceChangeLinks(scope = document) {
@@ -746,250 +1293,694 @@ function bindOpenSourceChangeLinks(scope = document) {
     });
 }
 
-async function promoteBaseline(artifactPath) {
-    const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${artifactPath}/baseline`, {
-        method: "POST",
-    });
-    if (!response.ok) {
-        const message = `Baseline update failed with ${response.status}`;
-        throw new Error(message);
+function journeyToneForRisk(riskLevel) {
+    const normalized = String(riskLevel || "").toLowerCase();
+    if (normalized === "high") {
+        return "journey-tone-medium";
     }
-    await loadDashboard();
+    if (normalized === "medium") {
+        return "journey-tone-gap";
+    }
+    return "journey-tone-low";
 }
 
-function renderRadarChart(item) {
-    const centerX = 160;
-    const centerY = 150;
-    const radius = 98;
-    const rings = [0.25, 0.5, 0.75, 1];
-    const ringStroke = "rgba(157, 176, 208, 0.18)";
-    const axisStroke = "rgba(157, 176, 208, 0.24)";
-    const baselineStroke = "#4fd1a5";
-    const baselineFill = "rgba(79, 209, 165, 0.28)";
-    const currentStroke = "#78a6ff";
-    const currentFill = "rgba(120, 166, 255, 0.26)";
-    const axes = DESIGN_PROFILE_FIELDS.map((field, index) => {
-        const outer = polarPoint(centerX, centerY, radius, index, DESIGN_PROFILE_FIELDS.length);
-        const label = polarPoint(centerX, centerY, radius + 28, index, DESIGN_PROFILE_FIELDS.length);
-        return `
-            <line x1="${centerX}" y1="${centerY}" x2="${outer.x.toFixed(1)}" y2="${outer.y.toFixed(1)}" stroke="${axisStroke}" stroke-width="1" />
-            <text x="${label.x.toFixed(1)}" y="${label.y.toFixed(1)}" fill="#9db0d0" font-size="11" text-anchor="middle">${field.label}</text>
-        `;
-    }).join("");
-
-    const ringMarkup = rings.map((ring) => {
-        const points = DESIGN_PROFILE_FIELDS.map((_, index) => {
-            const point = polarPoint(centerX, centerY, radius * ring, index, DESIGN_PROFILE_FIELDS.length);
-            return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-        }).join(" ");
-        return `<polygon points="${points}" fill="none" stroke="${ringStroke}" stroke-width="1" />`;
-    }).join("");
-
-    return `
-        <svg viewBox="0 0 320 300" class="radar-chart" role="img" aria-label="Baseline versus current posture radar chart">
-            ${ringMarkup}
-            ${axes}
-            <polygon points="${radarPolygonPoints(item.baseline_profile, radius, centerX, centerY)}" fill="${baselineFill}" stroke="${baselineStroke}" stroke-width="2.5" />
-            <polygon points="${radarPolygonPoints(item.current_profile, radius, centerX, centerY)}" fill="${currentFill}" stroke="${currentStroke}" stroke-width="2.5" />
-            ${DESIGN_PROFILE_FIELDS.map((field, index) => {
-                const baselinePoint = polarPoint(centerX, centerY, radius * clampUnit(item.baseline_profile[field.key]), index, DESIGN_PROFILE_FIELDS.length);
-                const currentPoint = polarPoint(centerX, centerY, radius * clampUnit(item.current_profile[field.key]), index, DESIGN_PROFILE_FIELDS.length);
-                return `
-                    <circle cx="${baselinePoint.x.toFixed(1)}" cy="${baselinePoint.y.toFixed(1)}" r="3.5" fill="${baselineStroke}"><title>Baseline · ${driftLabel(field, clampUnit(item.baseline_profile[field.key]), clampUnit(item.current_profile[field.key]))}</title></circle>
-                    <circle cx="${currentPoint.x.toFixed(1)}" cy="${currentPoint.y.toFixed(1)}" r="3.5" fill="${currentStroke}"><title>Current · ${driftLabel(field, clampUnit(item.baseline_profile[field.key]), clampUnit(item.current_profile[field.key]))}</title></circle>
-                `;
-            }).join("")}
-            <circle cx="${centerX}" cy="${centerY}" r="3" fill="rgba(237, 242, 255, 0.75)" />
-        </svg>
-    `;
+function severityClassForRisk(riskLevel) {
+    const normalized = String(riskLevel || "").toLowerCase();
+    if (normalized === "high") {
+        return "severity-high";
+    }
+    if (normalized === "medium") {
+        return "severity-medium";
+    }
+    return "severity-low";
 }
 
-function renderDesignProfileDetail(item) {
+function snapshotTypeLabel(snapshotType) {
+    const normalized = String(snapshotType || "checkpoint").replaceAll("_", " ");
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatSigned(value, digits = 3) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+        return "0.000";
+    }
+    return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}`;
+}
+
+function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId = null) {
+    if (!snapshots.length) {
+        return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
+    }
+    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
+    const selectedBaseline = selectedBaselineSourceSnapshotId
+        ? snapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
+        : null;
+    const baseline = selectedBaseline || snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
+    const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
+    const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
+    const branchHeadCount = snapshots.filter((item) => item.snapshot_type === "branch_head").length;
+    const riskLevel = current?.risk_summary?.risk_level || "low";
+    const baselineValue = baseline ? snapshotTypeLabel(selectedBaseline ? baseline.snapshot_type : "baseline_approved") : "No";
+    const baselineValueClass = baselineValue.length > 12 ? "journey-node-value journey-node-text" : "journey-node-value";
     return `
-        <div class="posture-layout">
-            <div class="radar-wrap">
-                ${renderRadarChart(item)}
-                <div class="radar-legend">
-                    <span class="legend-item"><span class="legend-swatch legend-swatch-baseline"></span>Baseline</span>
-                    <span class="legend-item"><span class="legend-swatch legend-swatch-current"></span>Current</span>
-                </div>
+        <div class="journey-strip">
+            <div class="journey-node journey-tone-primary">
+                <span class="journey-node-value">${snapshots.length}</span>
+                <span class="journey-node-label">Snapshots</span>
+                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
             </div>
-            <div class="posture-details stack compact-stack">
-                <div>
-                    <div class="insight-title">${item.artifact_path}</div>
-                    <div class="muted meta-tight">${item.artifact_type} · <span class="pill pill-${item.drift_tone || "low"}">${item.drift_label || "small drift"}</span></div>
-                </div>
-                ${renderAttributeSummary(item)}
-                <div class="tag-row">${renderRiskTags(item.risk_tags)}</div>
-                <div class="meta-tight muted">${asArray(item.narrative).join(" ")}</div>
+            <div class="journey-node journey-tone-gap">
+                <span class="${baselineValueClass}">${escapeHtml(baselineValue)}</span>
+                <span class="journey-node-label">Baseline</span>
+                <span class="journey-node-caption">${escapeHtml(baseline?.source_ref || "No approved baseline")}</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
+            </div>
+            <div class="journey-node ${journeyToneForRisk(riskLevel)}">
+                <span class="journey-node-value">${escapeHtml(String(riskLevel).toUpperCase())}</span>
+                <span class="journey-node-label">Current risk</span>
+                <span class="journey-node-caption">score ${asNumber(current?.risk_summary?.score).toFixed(3)}</span>
+                <span class="journey-node-link" aria-hidden="true"></span>
+            </div>
+            <div class="journey-node journey-tone-primary">
+                <span class="journey-node-value">${asNumber(current?.distance_from_baseline).toFixed(3)}</span>
+                <span class="journey-node-label">Drift from baseline</span>
+                <span class="journey-node-caption">${asNumber(current?.change_breakdown?.critical_surfaces_changed)} critical surfaces changed</span>
             </div>
         </div>
     `;
 }
 
-function bindDesignProfiles(items = []) {
-    const select = document.getElementById("design-profile-select");
-    const detail = document.getElementById("design-profile-detail");
-    if (!select || !detail || !items.length) {
+function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null) {
+    const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
+    const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
+    const source = snapshot.source_url
+        ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
+        : escapeHtml(snapshot.source_ref || "Stored checkpoint");
+    const labels = asArray(snapshot.change_labels).slice(0, 3);
+    const baselineMeta = isSelectedBaseline
+        ? `<div class="detail-note">Current approved baseline checkpoint${snapshot?.input_summary?.approved_by ? ` · selected by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}` : ""}</div>`
+        : snapshot.snapshot_type === "baseline_approved" && snapshot?.input_summary?.approved_by
+            ? `<div class="detail-note">Approved by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}</div>`
+            : "";
+    const rebaselineButton = snapshot.commit_sha
+        ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Re-baseline from here</button>`
+        : "";
+    return `
+        <div class="artifact-card journey-card ${baselineVerified ? "" : "journey-card-muted"} ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}" ${baselineVerified ? "" : 'title="Baseline not yet approved — drift scores are estimates."'}>
+            <div class="artifact-card-head">
+                <div>
+                    <strong>${escapeHtml(isSelectedBaseline ? "Approved baseline" : snapshotTypeLabel(snapshot.snapshot_type))}</strong>
+                    <div class="artifact-card-type">${escapeHtml(formatDateLabel(snapshot.created_at))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+                </div>
+                <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
+            </div>
+            <div class="journey-metrics-row">
+                <span>drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)}</span>
+                <span>critical ${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)}</span>
+                <span>artifacts ${asNumber(snapshot.artifact_coverage?.artifact_count)}</span>
+            </div>
+            ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="tag tag-muted">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+            <div class="artifact-card-reason">${escapeHtml(snapshot.change_summary?.changed_artifact_count ? `${snapshot.change_summary.changed_artifact_count} changed, ${snapshot.change_summary.added_artifact_count} added, ${snapshot.change_summary.removed_artifact_count} removed.` : "No material artifact changes recorded for this checkpoint.")}</div>
+            ${baselineMeta}
+            <div class="storyline-episode-meta muted">
+                <span>${escapeHtml(snapshot.default_branch || "")}</span>
+                <span>${source}</span>
+            </div>
+            ${rebaselineButton}
+        </div>
+    `;
+}
+
+function openRebaselineModal(snapshot) {
+    const modal = document.getElementById("rebaseline-modal");
+    const summary = document.getElementById("rebaseline-modal-summary");
+    const textarea = document.getElementById("rebaseline-rationale");
+    if (!modal || !summary || !textarea) {
+        return;
+    }
+    window.__pendingRebaselineSnapshot = snapshot;
+    summary.innerHTML = `
+        <div><strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong> · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this will create a candidate pending approval.`)}</div>
+    `;
+    textarea.value = "";
+    setRebaselineBusy(false);
+    modal.hidden = false;
+}
+
+function closeRebaselineModal(force = false) {
+    if (window.__rebaselineBusy && !force) {
+        return;
+    }
+    const modal = document.getElementById("rebaseline-modal");
+    if (modal) {
+        modal.hidden = true;
+    }
+    window.__pendingRebaselineSnapshot = null;
+}
+
+function setRebaselineBusy(isBusy) {
+    window.__rebaselineBusy = Boolean(isBusy);
+    const modal = document.getElementById("rebaseline-modal");
+    const card = modal?.querySelector(".modal-card");
+    const progress = document.getElementById("rebaseline-progress");
+    const progressText = document.getElementById("rebaseline-progress-text");
+    const textarea = document.getElementById("rebaseline-rationale");
+    const confirmButton = document.getElementById("rebaseline-confirm-btn");
+
+    if (card) {
+        card.classList.toggle("modal-card-busy", Boolean(isBusy));
+    }
+    if (progress) {
+        progress.hidden = !isBusy;
+    }
+    if (progressText) {
+        progressText.textContent = isBusy
+            ? "Creating a new baseline candidate for review. This can take a few seconds for large repositories..."
+            : "Preparing a new baseline candidate...";
+    }
+    if (textarea instanceof HTMLTextAreaElement) {
+        textarea.disabled = Boolean(isBusy);
+    }
+    if (confirmButton instanceof HTMLButtonElement) {
+        confirmButton.disabled = Boolean(isBusy);
+        confirmButton.textContent = isBusy ? "Working..." : "Confirm";
+    }
+    document.querySelectorAll("[data-close-rebaseline]").forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+            button.disabled = Boolean(isBusy);
+        }
+    });
+}
+
+function renderDecisionSection(insights, payload) {
+    const topInsight = asArray(insights)[0] || null;
+    if (!topInsight) {
+        const badgeEl = document.getElementById("repo-decision-posture-badge");
+        if (badgeEl) {
+            badgeEl.textContent = "Healthy";
+            badgeEl.className = "severity-badge severity-low";
+        }
+        setText("repo-decision-subtitle", "No audit findings require immediate action.");
+        setSectionHtml("repo-decision-finding", '<div class="muted">No primary findings at this time.</div>');
+        setSectionHtml("repo-decision-action", '<div class="muted">—</div>');
         return;
     }
 
-    const renderSelected = () => {
-        const selected = items.find((item) => item.artifact_path === select.value) || items[0];
-        detail.innerHTML = renderDesignProfileDetail(selected);
-        bindOpenSourceChangeLinks(detail);
-        bindAttributeProfileTabs(detail);
-        detail.querySelectorAll("[data-promote-baseline]").forEach((button) => {
-            button.addEventListener("click", async () => {
-                const encodedPath = button.getAttribute("data-promote-baseline");
-                if (!encodedPath) {
-                    return;
-                }
-                const originalText = button.textContent;
-                button.disabled = true;
-                button.textContent = "Updating baseline...";
-                try {
-                    await promoteBaseline(encodedPath);
-                } catch (error) {
-                    button.disabled = false;
-                    button.textContent = originalText || "Use current source as baseline";
-                    const message = error instanceof Error ? error.message : "Unable to update baseline";
-                    window.alert(message);
-                }
-            });
-        });
-    };
+    const severity = topInsight.priority === "review_now"
+        ? { label: "Review Now", className: "severity-high" }
+        : topInsight.priority === "watch"
+            ? { label: "Watch", className: "severity-medium" }
+            : { label: "Baseline Review", className: "severity-low" };
 
-    select.addEventListener("change", renderSelected);
-    renderSelected();
+    const badgeEl = document.getElementById("repo-decision-posture-badge");
+    if (badgeEl) {
+        badgeEl.textContent = severity.label;
+        badgeEl.className = `severity-badge ${severity.className}`;
+    }
+
+    const reviewCount = asArray(insights).filter((i) => i.priority === "review_now").length;
+    const watchCount = asArray(insights).filter((i) => i.priority === "watch").length;
+    setText("repo-decision-subtitle", `${reviewCount} review now · ${watchCount} watch · ${asArray(payload?.lower_confidence_insights).length} lower-confidence`);
+
+    const artifactName = String(topInsight.artifact_path || "").split("/").pop() || topInsight.artifact_path || "";
+    const deltas = asArray(topInsight.attribute_profile)
+        .filter((d) => d.state && d.state !== "no_change" && d.state !== "unknown")
+        .slice(0, 2);
+
+    setSectionHtml("repo-decision-finding", `
+        <div class="stack compact-stack">
+            <strong>${escapeHtml(topInsight.title || artifactName)}</strong>
+            <div class="muted">${escapeHtml(topInsight.rationale || "")}</div>
+            ${deltas.length ? `<div class="tag-row">${deltas.map((d) => `<span class="drift-chip chip-governance">${escapeHtml(d.label || d.attribute_key)}: ${escapeHtml(`${d.baseline_value || "?"} → ${d.current_value || "?"}`)}</span>`).join("")}</div>` : ""}
+        </div>
+    `);
+
+    setSectionHtml("repo-decision-action", `
+        <div class="stack compact-stack">
+            <div>${escapeHtml(topInsight.recommended_action || "Inspect before merge.")}</div>
+            ${topInsight.review_url ? `<a href="${escapeHtml(topInsight.review_url)}" class="escalation-action-btn">Open review</a>` : ""}
+        </div>
+    `);
 }
 
-function renderDesignProfiles(items = []) {
-    if (!items.length) {
-        return '<div class="muted">No design-profile comparisons yet. Onboarded baseline data is available, but no prioritized surfaces are ready for comparison.</div>';
-    }
-    return `
-        <div class="design-explorer">
-            <div class="explorer-toolbar">
-                <label class="explorer-label" for="design-profile-select">Artifact</label>
-                <select id="design-profile-select" class="explorer-select">
-                    ${items.map((item) => `<option value="${item.artifact_path}">${item.artifact_path}</option>`).join("")}
-                </select>
+function renderRepoActionsSection(insights) {
+    const topInsight = asArray(insights)[0] || null;
+    const reviewUrl = topInsight?.review_url || "";
+    const reviewTarget = topInsight?.review_target || topInsight?.artifact_path || repoFull;
+    const reviewTitle = topInsight?.title || "Open the highest-priority change first";
+    const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
+    const reviewArtifactUrl = repoFull
+        ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
+        : "#repo-triage-section";
+    const relatedAuditsUrl = repoFull
+        ? repoTabUrl("drift", { hash: "repo-triage-section" })
+        : "#repo-triage-section";
+    const exportUrl = repoFull
+        ? repoTabUrl("reports", { hash: "repo-export-section" })
+        : "#repo-export-section";
+
+    setSectionHtml("repo-actions-review", `
+        <div class="stack compact-stack">
+            <div class="detail-note">Inspect the flagged change first, then resolve baseline review and export actions from this same case file.</div>
+            <div class="artifact-card">
+                <strong>${escapeHtml(reviewTitle)}</strong>
+                <div class="artifact-card-reason">${escapeHtml(reviewTarget)}</div>
+                <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
             </div>
-            <div id="design-profile-detail"></div>
+            <div class="export-actions repo-actions-row">
+                <a href="${escapeHtml(reviewArtifactUrl)}" class="export-submit-button">Open flagged change</a>
+                <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Review related audits</a>
+                ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
+                ${reviewUrl && reviewUrl !== repoUrl ? `<a href="${escapeHtml(reviewUrl)}" class="cue-action-button">Open source review</a>` : ""}
+                <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
+            </div>
+        </div>
+    `);
+}
+
+async function loadPendingProposals() {
+    if (!repoFull) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/proposals/pending`);
+        if (!response.ok) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+            return;
+        }
+        const payload = await response.json();
+        const proposals = asArray(payload?.proposals || []);
+        const pendingCount = Number(payload?.pending_count || proposals.length);
+
+        if (!pendingCount) {
+            setSectionHtml("repo-decision-proposals", '<div class="muted">None pending</div>');
+            return;
+        }
+
+        const items = proposals.slice(0, 5).map((p) => {
+            const agentLabel = p.is_agent_proposal ? '<span class="drift-chip chip-model">Agent</span>' : '<span class="drift-chip chip-governance">Human</span>';
+            return `
+                <div class="repo-proposal-row">
+                    ${agentLabel}
+                    <span class="repo-proposal-artifact">${escapeHtml(p.artifact_path || String(p.artifact_id || ""))}</span>
+                    <span class="repo-proposal-rationale">${escapeHtml(String(p.rationale || "").slice(0, 80))}</span>
+                </div>
+            `;
+        }).join("");
+
+        setSectionHtml("repo-decision-proposals", `
+            <div>
+                <strong>${pendingCount}</strong> pending proposal${pendingCount !== 1 ? "s" : ""}
+                <div class="stack compact-stack" style="margin-top: 0.5rem;">${items}</div>
+            </div>
+        `);
+    } catch {
+        setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+    }
+}
+
+function schedulePendingProposalsLoad() {
+    const loadToken = ++window.__pendingProposalsLoadToken;
+    const run = () => {
+        if (loadToken !== window.__pendingProposalsLoadToken) {
+            return;
+        }
+        void loadPendingProposals();
+    };
+    window.setTimeout(run, 1200);
+}
+
+function applyDashboardPayload(payload) {
+    const onboarding = payload.onboarding || null;
+    const insights = asArray(payload.insights);
+    const lowerConfidenceInsights = asArray(payload.lower_confidence_insights);
+    const controlSurfaces = asArray(payload.control_surface_groups);
+    const baselineReview = payload.baseline_review || null;
+    const historyCues = asArray(payload.history_cues);
+    const artifacts = asArray(payload.artifacts);
+    const historyTimelines = asArray(payload.history_timelines);
+    const journeySnapshots = asArray(payload.journey_snapshots);
+    const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
+    const featuredStoryline = payload.featured_storyline || null;
+    const preferredArtifactPath = requestedArtifactPath();
+    const governanceAttention = renderGovernanceAttentionNote(onboarding, artifacts, baselineReview, journeySnapshots);
+    window.__designProfiles = asArray(payload.design_profiles);
+    window.__journeySnapshots = journeySnapshots;
+    const comparison = payload.journey_comparison || null;
+
+    setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
+    setText("repo-stat-review", String(insights.length));
+    setText("repo-stat-baselines", String(asNumber(payload.baseline_version_count)));
+    setText("repo-stat-history", String(historyTimelines.reduce((sum, item) => sum + Number(item.point_count || 0), 0)));
+    setText("repo-governance-attention-headline", governanceAttention.headline);
+    setText("repo-governance-attention-copy", governanceAttention.body);
+
+    setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
+    bindRepoRows(insights);
+    bindRepoFilters(insights, preferredArtifactPath);
+    autoSelectRepoRow(insights, preferredArtifactPath);
+
+    if (featuredStoryline?.artifact_path) {
+        window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
+        setSectionHtml("featured-storyline", renderStoryline(featuredStoryline));
+    } else {
+        setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+    }
+    setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
+    setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
+    setSectionHtml("history-cues", renderCueCards(historyCues));
+    setSectionHtml("baseline-review-panel", renderBaselineReviewPanel(baselineReview));
+    setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
+    setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
+    setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
+    drawRepoRadar(payload);
+    const repoRadarCaption = comparison
+        ? `${comparison.left?.snapshot_key || "baseline"} -> ${comparison.right?.snapshot_key || "current"} with drift delta ${formatSigned(comparison.drift_summary?.drift_delta)}.`
+        : "Version-control posture appears once DriftGuard has both an approved baseline snapshot and a current repository snapshot to compare.";
+    setText("repo-radar-caption", repoRadarCaption);
+    setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
+        ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
+        : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
+    window.__artifactEntries = artifacts;
+    refreshArtifactsSection();
+    bindArtifactControls();
+    bindBaselineReviewActions();
+    bindRebaselineButtons(journeySnapshots);
+    bindOpenSourceChangeLinks(document);
+
+    renderDecisionSection(insights, payload);
+    renderRepoActionsSection(insights);
+    schedulePendingProposalsLoad();
+}
+
+async function submitRebaseline() {
+    const snapshot = window.__pendingRebaselineSnapshot;
+    const textarea = document.getElementById("rebaseline-rationale");
+    if (!snapshot || !(textarea instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    const rationale = textarea.value.trim();
+    setRebaselineBusy(true);
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/baseline/rebaseline`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ snapshot_id: snapshot.id, rationale: rationale || null }),
+        });
+        if (!response.ok) {
+            throw new Error(`Re-baseline request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        closeRebaselineModal(true);
+        if (payload?.dashboard) {
+            applyDashboardPayload(payload.dashboard);
+            return;
+        }
+        await loadDashboard();
+    } finally {
+        setRebaselineBusy(false);
+    }
+}
+
+function bindRebaselineButtons(snapshots = []) {
+    const snapshotById = new Map(asArray(snapshots).map((snapshot) => [String(snapshot.id), snapshot]));
+    document.querySelectorAll("[data-rebaseline-snapshot]").forEach((button) => {
+        if (button.dataset.boundRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundRebaseline = "true";
+        button.addEventListener("click", () => {
+            const snapshot = snapshotById.get(String(button.getAttribute("data-rebaseline-snapshot") || ""));
+            if (snapshot) {
+                openRebaselineModal(snapshot);
+            }
+        });
+    });
+}
+
+function bindRebaselineModal() {
+    document.querySelectorAll("[data-close-rebaseline]").forEach((button) => {
+        if (button.dataset.boundCloseRebaseline === "true") {
+            return;
+        }
+        button.dataset.boundCloseRebaseline = "true";
+        button.addEventListener("click", closeRebaselineModal);
+    });
+    const confirmButton = document.getElementById("rebaseline-confirm-btn");
+    if (confirmButton && confirmButton.dataset.boundConfirmRebaseline !== "true") {
+        confirmButton.dataset.boundConfirmRebaseline = "true";
+        confirmButton.addEventListener("click", async () => {
+            try {
+                await submitRebaseline();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Unable to create a new baseline candidate.";
+                window.alert(message);
+            }
+        });
+    }
+}
+
+function renderJourneyTimeline(snapshots = [], selectedBaselineSourceSnapshotId = null) {
+    if (!snapshots.length) {
+        return '<div class="muted">No timeline is available yet.</div>';
+    }
+    const displaySnapshots = selectedBaselineSourceSnapshotId
+        ? snapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved")
+        : snapshots;
+    const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId)).join("");
+    return `<div class="stack compact-stack">${timeline}</div>`;
+}
+
+function renderJourneyCompare(comparison) {
+    if (!comparison) {
+        return '<div class="muted">Baseline and current snapshots are required before DriftGuard can render a repository-level comparison.</div>';
+    }
+    const deltas = Object.entries(comparison.vector_delta || {})
+        .sort((left, right) => Math.abs(Number(right[1]) || 0) - Math.abs(Number(left[1]) || 0))
+        .slice(0, 6);
+    const labels = asArray(comparison.change_labels);
+    return `
+        <div class="stack compact-stack">
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-gap">
+                    <span class="journey-node-value">${escapeHtml(String(comparison.comparison_kind || "arbitrary").replaceAll("_", " "))}</span>
+                    <span class="journey-node-label">Comparison</span>
+                    <span class="journey-node-caption">${escapeHtml(comparison.left?.snapshot_key || "left")} → ${escapeHtml(comparison.right?.snapshot_key || "right")}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${formatSigned(comparison.drift_summary?.drift_delta)}</span>
+                    <span class="journey-node-label">Drift delta</span>
+                    <span class="journey-node-caption">pair ${asNumber(comparison.drift_summary?.right_distance_from_selected_baseline ?? comparison.drift_summary?.pair_distance ?? comparison.drift_summary?.right_distance_from_baseline).toFixed(3)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node ${journeyToneForRisk(comparison.risk_summary?.risk_level)}">
+                    <span class="journey-node-value">${escapeHtml(String(comparison.risk_summary?.risk_level || "low").toUpperCase())}</span>
+                    <span class="journey-node-label">Risk level</span>
+                    <span class="journey-node-caption">score ${asNumber(comparison.risk_summary?.score).toFixed(3)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-medium">
+                    <span class="journey-node-value">${asNumber(comparison.change_breakdown?.critical_surfaces_changed)}</span>
+                    <span class="journey-node-label">Critical surfaces</span>
+                    <span class="journey-node-caption">${asNumber(comparison.change_breakdown?.changed_artifact_count)} changed artifacts</span>
+                </div>
+            </div>
+            ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="drift-chip chip-model">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+            <div class="journey-compare-grid">
+                ${deltas.map(([key, value]) => `
+                    <div class="journey-compare-row">
+                        <span class="journey-compare-label">${escapeHtml(key.replaceAll("_", " "))}</span>
+                        <span class="journey-compare-value ${Number(value) > 0 ? "journey-compare-up" : Number(value) < 0 ? "journey-compare-down" : ""}">${formatSigned(value, 4)}</span>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="detail-note">${escapeHtml(`${asNumber(comparison.change_breakdown?.added_artifact_count)} added, ${asNumber(comparison.change_breakdown?.removed_artifact_count)} removed, and ${asNumber(comparison.change_breakdown?.changed_artifact_count)} changed artifacts between the approved baseline and the current landed posture.`)}</div>
         </div>
     `;
 }
 
-function renderArtifacts(items = []) {
+function populateAuditRepoLists(repos = []) {
+    const items = asArray(repos);
     if (!items.length) {
-        return '<div class="muted">No onboarded artifacts were found for this repository yet.</div>';
+        setSectionHtml("audit-logs-list", '<div class="muted">No repositories available</div>');
+        return;
     }
-    const maxDrift = Math.max(...items.map((item) => Math.max(item.latest_historical_drift_magnitude, item.leaderboard_drift_magnitude)), 0.001);
-    return `<div class="artifact-card-grid">${items
-        .map((item) => {
-            const latestDrift = Math.max(item.latest_historical_drift_magnitude, item.leaderboard_drift_magnitude);
-            return `
-                <div class="artifact-card">
-                    <div class="artifact-card-head">
-                        <div>
-                            <strong>${item.artifact_path}</strong>
-                            <div class="artifact-card-type">${item.artifact_type}</div>
-                        </div>
-                        <span class="tag tag-muted">${item.discovery_confidence.toFixed(2)}</span>
-                    </div>
-                    <div class="artifact-card-meter"><span style="width:${(latestDrift / maxDrift) * 100}%"></span></div>
-                    <div class="artifact-card-stats">
-                        <span>baseline ${item.baseline_line_count}</span>
-                        <span>history ${item.historical_version_count}</span>
-                        <span>profiles ${item.historical_profile_count}</span>
-                    </div>
-                    <div class="artifact-card-meta">latest drift ${latestDrift.toFixed(3)}</div>
-                    <div class="artifact-card-reason">${item.discovery_reason}</div>
-                </div>
-            `;
-        })
-        .join("")}</div>`;
+
+    const navItems = items.map((repo) => {
+        const repoFullValue = String(repo.repo_full || "");
+        const currentClass = repoFullValue === repoFull ? " sidebar-subitem-active" : "";
+        return `<a class="sidebar-subitem${currentClass}" href="${repoDetailUrl(repo)}">${escapeHtml(repoFullValue)}</a>`;
+    }).join("");
+    setSectionHtml("audit-logs-list", `<nav class="sidebar-sublist-nav">${navItems}</nav>`);
+}
+
+async function loadAvailableRepos() {
+    try {
+        const response = await fetch("/api/repos");
+        if (!response.ok) {
+            throw new Error(`Repo inventory request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        populateAuditRepoLists(asArray(payload.repos));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown repository inventory error";
+        const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;
+        setSectionHtml("audit-logs-list", fallback);
+    }
 }
 
 async function loadDashboard() {
     try {
-        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
-        if (!response.ok) {
-            throw new Error(`Repo dashboard request failed with ${response.status}`);
+        if (!repoFull) {
+            throw new Error("Repository context is missing from this page.");
         }
-        const payload = await response.json();
-        const onboarding = payload.onboarding || null;
-        const backfill = payload.backfill || {};
-        const driftSummary = payload.drift_summary || {};
-        const designProfiles = asArray(payload.design_profiles);
-        const insights = asArray(payload.insights);
-        const lowerConfidenceInsights = asArray(payload.lower_confidence_insights);
-        const controlSurfaces = asArray(payload.control_surface_groups);
-        const leaderboard = asArray(payload.top_drifting_artifacts);
-        const historyTimelines = asArray(payload.history_timelines);
-        const artifacts = asArray(payload.artifacts);
-        window.__designProfiles = designProfiles;
-        const featuredInsight = insights[0] || null;
-        const remainingInsights = featuredInsight ? insights.slice(1) : insights;
+        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
+        if (!dashboardResponse.ok) {
+            throw new Error(`Repo dashboard request failed with ${dashboardResponse.status}`);
+        }
 
-        setSectionHtml(
-            "summary",
-            [
-                renderMetricGlyphCard(
-                    "Tracked artifacts",
-                    onboarding ? onboarding.discovered_artifact_count : 0,
-                    onboarding ? `Default branch: ${onboarding.default_branch}` : "No onboarding yet"
-                ),
-                renderMetricGlyphCard("Approved baselines", asNumber(payload.baseline_version_count), `Repo: ${payload.repo_full || repoFull}`),
-                renderMetricGlyphCard(
-                    "Needs review now",
-                    insights.length,
-                    `Lower confidence lane: ${lowerConfidenceInsights.length}`
-                ),
-                renderMetricGlyphCard(
-                    "Historical versions",
-                    asNumber(backfill.total_historical_versions),
-                    `Historical profiles: ${asNumber(backfill.total_historical_profiles)}`
-                ),
-                renderMetricGlyphCard(
-                    "PR audits (proposal)",
-                    asNumber(payload.pull_request_audit_count),
-                    "Proposal evidence is excluded from landed drift views."
-                ),
-                renderMetricGlyphCard(
-                    "Avg semantic distance",
-                    asNumber(driftSummary.avg_semantic_distance).toFixed(3),
-                    `Highest capability artifact: ${driftSummary.highest_capability_artifact_path || "n/a"}`
-                ),
-            ].join("")
-        );
-
-        setSectionHtml("repo-command-deck", renderRepoCommandDeck({ payload, insights, lowerConfidenceInsights, controlSurfaces, leaderboard, backfill, driftSummary }));
-        setSectionHtml("design-profiles", renderDesignProfiles(designProfiles));
-        bindDesignProfiles(designProfiles);
-        setSectionHtml("featured-insight", renderFeaturedInsight(featuredInsight));
-        setSectionHtml("insights", renderInsights(remainingInsights));
-        setSectionHtml("lower-confidence-insights", renderLowerConfidenceInsights(lowerConfidenceInsights));
-        setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
-        setSectionHtml("leaderboard", renderLeaderboard(leaderboard));
-        setSectionHtml("history-timelines", renderHistoryTimelines(historyTimelines));
-        setSectionHtml("artifacts", renderArtifacts(artifacts));
-        bindOpenSourceChangeLinks(document);
+        const payload = await dashboardResponse.json();
+        applyDashboardPayload(payload);
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
-        const fallback = `<div class="muted">Unable to load repository dashboard. ${message}</div>`;
-        setSectionHtml("repo-command-deck", fallback);
-        setSectionHtml("summary", fallback);
-        setSectionHtml("design-profiles", fallback);
-        setSectionHtml("featured-insight", fallback);
-        setSectionHtml("insights", fallback);
-        setSectionHtml("lower-confidence-insights", fallback);
+        const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
+        setText("repo-stat-artifacts", "-");
+        setText("repo-stat-review", "-");
+        setText("repo-stat-baselines", "-");
+        setText("repo-stat-history", "-");
+        setText("repo-triage-count", "Unavailable");
+        setSectionHtml("triage-list", fallback);
+        setSectionHtml("featured-storyline", fallback);
+        setSectionHtml("detail-attributes", fallback);
+        setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
         setSectionHtml("control-surfaces", fallback);
-        setSectionHtml("leaderboard", fallback);
-        setSectionHtml("history-timelines", fallback);
-        setSectionHtml("artifacts", fallback);
+        setSectionHtml("repo-ai-act-assessment", fallback);
+        setSectionHtml("history-cues", fallback);
+        setSectionHtml("baseline-review-panel", fallback);
+        setSectionHtml("repo-journey-summary", fallback);
+        setSectionHtml("repo-journey-timeline", fallback);
+        setSectionHtml("repo-journey-compare", fallback);
+        setText("repo-radar-title", "Version posture unavailable");
+        setText("repo-radar-meta", message);
+        setText("repo-radar-caption", message);
+        drawRepoRadar(null);
+        setSectionHtml("lower-confidence-insights", fallback);
+        setSectionHtml("repo-actions-review", fallback);
+        setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`);
+        setText("detail-artifact-name", repoFull || "Repository unavailable");
+        setText("detail-subtitle", message);
+        setText("detail-recommendation-body", message);
+        const button = detailButton();
+        if (button) {
+            button.disabled = true;
+        }
     }
 }
 
+bindSidebarNavigation();
+applyRepoTabVisibility();
+bindRebaselineModal();
+bindExportForm();
+loadAvailableRepos();
 loadDashboard();
+
+function bindExportForm() {
+    const form = document.getElementById('export-form');
+    if (!form) return;
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const submitButton = document.getElementById('export-submit-button');
+        const formData = new FormData(form);
+        const data = {
+            from_date: formData.get('from_date'),
+            to_date: formData.get('to_date'),
+            export_mode: formData.get('export_mode'),
+            include_artifact_content: formData.has('include_artifact_content'),
+        };
+
+        const statusDiv = document.getElementById('export-status');
+        statusDiv.hidden = false;
+        statusDiv.className = 'export-status export-status-progress';
+        statusDiv.textContent = 'Generating export package…';
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.textContent = 'Generating…';
+        }
+
+        try {
+            const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/compliance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+
+            if (!response.ok) {
+                let detail = `Export request failed: ${response.status}`;
+                try {
+                    const errorPayload = await response.json();
+                    if (errorPayload && typeof errorPayload.detail === 'string') {
+                        detail = errorPayload.detail;
+                    }
+                } catch (error) {
+                }
+                throw new Error(detail);
+            }
+
+            const result = await response.json();
+            statusDiv.className = 'export-status export-status-success';
+            if (result.download_url) {
+                statusDiv.innerHTML = `Export job <strong>#${escapeHtml(String(result.job_id))}</strong> is ready. <a class="link" href="${escapeHtml(result.download_url)}">Download ZIP</a>.`;
+            } else {
+                statusDiv.textContent = `Export job #${result.job_id} was created.`;
+            }
+            await loadExportHistory();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unknown export error';
+            statusDiv.className = 'export-status export-status-error';
+            statusDiv.textContent = message;
+        } finally {
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Generate Export Package';
+            }
+        }
+    });
+}
+
+async function loadExportHistory() {
+    const tbody = document.getElementById('export-history-tbody');
+    if (!tbody) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/export/history`);
+        if (!response.ok) throw new Error('Failed to load export history');
+
+        const payload = await response.json();
+        const exportJobs = asArray(payload.jobs || []);
+        if (exportJobs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="muted">No exports found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = exportJobs.map(job => `
+            <tr>
+                <td>${escapeHtml(job.export_mode)}</td>
+                <td>${new Date(job.from_ts * 1000).toLocaleDateString()} - ${new Date(job.to_ts * 1000).toLocaleDateString()}</td>
+                <td>${escapeHtml(job.status)}</td>
+                <td>${job.created_at ? new Date(job.created_at * 1000).toLocaleString() : '-'}</td>
+                <td>${job.result_size_bytes ? `${(job.result_size_bytes / 1024).toFixed(1)} KB` : '-'}</td>
+                <td>
+                    ${job.status === 'completed' && job.download_url ? `<a href="${escapeHtml(job.download_url)}" class="btn btn-sm">Download</a>` : '-'}
+                </td>
+            </tr>
+        `).join('');
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">Error loading export history</td></tr>';
+    }
+}

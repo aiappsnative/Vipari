@@ -1,15 +1,17 @@
-fastapi
-uvicorn
-PyGithub
-openai
-python-dotenv
-pyjwt
-cryptography
-boto3
-prometheus-client
-prometheus-fastapi-instrumentator
-pydantic-settings
-redis
+fastapi==0.135.1
+uvicorn==0.41.0
+PyGithub==2.8.1
+openai==2.26.0
+python-dotenv==1.2.2
+PyJWT==2.12.0
+cryptography==46.0.5
+boto3==1.42.82
+prometheus-client==0.24.1
+prometheus-fastapi-instrumentator==7.1.0
+pydantic-settings==2.13.1
+redis==7.4.0
+python-multipart==0.0.24
+psycopg[binary]==3.2.9
 
 # test dependencies
-pytest
+pytest==9.0.2

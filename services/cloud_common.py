@@ -72,11 +72,30 @@ def parse_github_timestamp(value: str | None) -> float | None:
 
 def build_webhook_envelope(payload: dict, *, delivery_id: str | None) -> dict | None:
     action = payload.get("action")
+    installation_id = payload.get("installation", {}).get("id")
+    repo_full = payload.get("repository", {}).get("full_name")
+
+    if payload.get("ref") and payload.get("head_commit", {}).get("id"):
+        branch_ref = payload.get("ref")
+        default_branch = payload.get("repository", {}).get("default_branch")
+        if not installation_id or not repo_full or not branch_ref or not default_branch:
+            return None
+        if branch_ref != f"refs/heads/{default_branch}":
+            return None
+        return {
+            "delivery_id": delivery_id,
+            "event_type": "push",
+            "installation_id": installation_id,
+            "repo_full": repo_full,
+            "commit_sha": payload.get("head_commit", {}).get("id"),
+            "branch_ref": branch_ref,
+            "default_branch": default_branch,
+            "triggered_by": "push_webhook",
+        }
+
     if action not in ("opened", "synchronize", "closed", "reopened"):
         return None
 
-    installation_id = payload.get("installation", {}).get("id")
-    repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
     pull_request = payload.get("pull_request", {})
     head_sha = pull_request.get("head", {}).get("sha")
@@ -86,6 +105,7 @@ def build_webhook_envelope(payload: dict, *, delivery_id: str | None) -> dict | 
 
     return {
         "delivery_id": delivery_id,
+        "event_type": "pull_request",
         "action": action,
         "installation_id": installation_id,
         "repo_full": repo_full,

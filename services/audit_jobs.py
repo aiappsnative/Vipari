@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from .branch_scan_jobs import init_branch_scan_job_db
 from .persistence import connect_sqlite, init_persistence_metadata
 
 
@@ -35,7 +36,7 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path)
 
 
-def init_db(db_path: str) -> None:
+def bootstrap_application_schema(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -77,11 +78,24 @@ def init_db(db_path: str) -> None:
         if "pr_updated_at" not in audit_job_columns:
             conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_updated_at REAL")
     from .audit_records import init_audit_record_db
+    from .control_plane_records import init_control_plane_db
+    from .export_jobs import init_export_job_db
     from .onboarding_records import init_onboarding_record_db
+    from .repo_journey_records import init_repo_journey_db
 
     init_audit_record_db(db_path)
+    init_branch_scan_job_db(db_path)
+    init_export_job_db(db_path)
     init_onboarding_record_db(db_path)
+    init_control_plane_db(db_path)
+    init_repo_journey_db(db_path)
     init_persistence_metadata(db_path)
+
+
+def init_db(db_path: str) -> None:
+    from .schema_migrations import migrate_database
+
+    migrate_database(db_path)
 
 
 def _row_to_job(row: sqlite3.Row) -> AuditJob:

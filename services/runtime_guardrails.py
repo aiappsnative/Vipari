@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+from urllib.parse import urlparse
+
+from fastapi.responses import JSONResponse
+from jwt.exceptions import InvalidKeyError
+
+from config import Settings
+from .github_integration import generate_jwt
+from .persistence import is_sqlite_locator
+from .persistence import connect_sqlite
+from .schema_migrations import MIGRATIONS, list_applied_migrations
+
+
+def _is_https_url(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def _validate_github_app_private_key(settings: Settings) -> None:
+    if not settings.has_github_app_credentials:
+        return
+    try:
+        generate_jwt(
+            settings.github_app_id,
+            settings.github_private_key_path,
+            settings.resolved_github_private_key,
+        )
+    except (InvalidKeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "GitHub App credentials are configured, but the signing key is invalid. "
+            "Set GITHUB_APP_PRIVATE_KEY to a valid PEM private key or point GITHUB_PRIVATE_KEY_PATH to a readable PEM file."
+        ) from exc
+
+
+def validate_migration_configuration(settings: Settings, *, resolved_db_path: str | None = None) -> None:
+    errors: list[str] = []
+    target_locator = resolved_db_path or settings.resolved_db_path
+
+    if settings.is_production and is_sqlite_locator(target_locator):
+        errors.append(
+            "Production migrations cannot target SQLite persistence; run scripts/db_migrate.py against the production PostgreSQL DATABASE_URL."
+        )
+
+    if errors:
+        raise RuntimeError(" ".join(errors))
+
+
+def validate_runtime_configuration(settings: Settings) -> None:
+    errors: list[str] = []
+    app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
+
+    if settings.queue_backend == "redis" and not settings.redis_url:
+        errors.append("QUEUE_BACKEND=redis requires REDIS_URL.")
+    if settings.queue_backend == "sqs" and (not settings.sqs_queue_url or not settings.sqs_dlq_url):
+        errors.append("QUEUE_BACKEND=sqs requires both SQS_QUEUE_URL and SQS_DLQ_URL.")
+
+    if settings.service_role == "webhook" and not settings.github_webhook_secret:
+        errors.append("Webhook service requires GITHUB_WEBHOOK_SECRET.")
+    if settings.service_role == "worker":
+        if not settings.ai_api_key:
+            errors.append("Worker service requires OPENAI_API_KEY or FOUNDRY_API_KEY.")
+        if not settings.has_github_app_credentials:
+            errors.append("Worker service requires GitHub App credentials.")
+
+    if settings.has_github_app_credentials:
+        try:
+            _validate_github_app_private_key(settings)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    # JWT secret length is enforced in all environments — a short secret weakens HS256
+    # below the RFC 7518 §3.2 minimum of 256 bits / 32 bytes regardless of environment.
+    if settings.has_internal_jwt_config and len(settings.internal_jwt_secret.encode("utf-8")) < 32:
+        errors.append(
+            "INTERNAL_JWT_SECRET must be at least 32 bytes for HS256 (RFC 7518 §3.2). "
+            "Use a cryptographically random value, e.g.: openssl rand -hex 32"
+        )
+
+    if settings.is_production:
+        try:
+            validate_migration_configuration(settings)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+        if not _is_https_url(settings.app_base_url):
+            errors.append("Production requires APP_BASE_URL to be an HTTPS URL.")
+        if settings.service_role in {"api", "monolith"} and not settings.session_cookie_secure:
+            errors.append("Production API/control-plane services require SESSION_COOKIE_SECURE=true.")
+        if settings.github_private_key_path and not settings.github_app_private_key:
+            errors.append("Production must use inline GITHUB_APP_PRIVATE_KEY; GITHUB_PRIVATE_KEY_PATH is local-dev only.")
+        if settings.service_role in {"worker", "webhook"} and settings.queue_backend != "redis":
+            errors.append("Production worker and webhook services must use QUEUE_BACKEND=redis.")
+        if settings.service_role in {"api", "monolith"} and not settings.has_internal_jwt_config:
+            errors.append("Production API service requires INTERNAL_JWT_SECRET to be configured.")
+
+    if (
+        settings.service_role in {"api", "monolith"}
+        and not settings.is_production
+        and settings.app_env in {"local", "test"}
+        and app_base_host not in {"127.0.0.1", "localhost", "::1"}
+        and not settings.has_owner_access_config
+    ):
+        errors.append(
+            "Non-production API/control-plane services exposed on non-localhost hosts must configure OWNER_GITHUB_* access; "
+            "local billing-owner fallback is localhost-only."
+        )
+
+    if errors:
+        raise RuntimeError(" ".join(errors))
+
+
+async def build_runtime_readiness(settings: Settings, *, queue_backend=None) -> dict[str, object]:
+    checks: list[dict[str, str]] = []
+
+    try:
+        validate_runtime_configuration(settings)
+        checks.append({"name": "config", "status": "ok", "detail": "Runtime configuration validated."})
+    except RuntimeError as exc:
+        checks.append({"name": "config", "status": "failed", "detail": str(exc)})
+
+    try:
+        with connect_sqlite(settings.resolved_db_path) as conn:
+            conn.execute("SELECT 1").fetchone()
+        checks.append(
+            {
+                "name": "persistence",
+                "status": "ok",
+                "detail": "SQLite connectivity verified." if settings.uses_sqlite else "PostgreSQL connectivity verified.",
+            }
+        )
+    except Exception as exc:
+        checks.append({"name": "persistence", "status": "failed", "detail": str(exc)})
+
+    try:
+        applied_versions = {item.version for item in list_applied_migrations(settings.resolved_db_path)}
+        pending_versions = [version for version, _description, _handler in MIGRATIONS if version not in applied_versions]
+        if pending_versions:
+            checks.append(
+                {
+                    "name": "migrations",
+                    "status": "failed",
+                    "detail": f"Pending schema migrations: {', '.join(pending_versions)}.",
+                }
+            )
+        else:
+            checks.append({"name": "migrations", "status": "ok", "detail": "Schema migrations applied."})
+    except Exception as exc:
+        checks.append({"name": "migrations", "status": "failed", "detail": str(exc)})
+
+    if queue_backend is not None:
+        try:
+            depth = await queue_backend.depth()
+            checks.append({"name": "queue", "status": "ok", "detail": f"Queue backend reachable (depth={depth})."})
+        except Exception as exc:
+            checks.append({"name": "queue", "status": "failed", "detail": str(exc)})
+
+    overall_status = "ok" if all(check["status"] == "ok" for check in checks) else "failed"
+    return {
+        "status": overall_status,
+        "app_env": settings.app_env,
+        "service_role": settings.service_role,
+        "checks": checks,
+    }
+
+
+def readiness_json_response(payload: dict[str, object]) -> JSONResponse:
+    return JSONResponse(payload, status_code=200 if payload.get("status") == "ok" else 503)

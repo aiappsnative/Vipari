@@ -4,19 +4,37 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from services.persistence import is_postgres_locator, is_sqlite_locator, sqlite_path_from_locator
 
 
 DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
+PROJECT_ENV_PATH = Path(__file__).resolve().parent / ".env"
 
 
 class Settings(BaseSettings):
+    app_env: Literal["local", "test", "production"] = "local"
+    service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
+    app_base_url: str = "http://127.0.0.1:8000"
+    local_debug_disable_login: bool = False
+    api_port: int = Field(default=8002, validation_alias=AliasChoices("API_PORT", "PORT"))
+    webhook_port: int = Field(default=8001, validation_alias=AliasChoices("WEBHOOK_PORT", "PORT"))
+    session_cookie_name: str = "promptdrift_session"
+    session_cookie_secure: bool = False
+    session_ttl_seconds: int = 604800
+    app_encryption_key: str = ""
+
     github_app_id: str = ""
     github_private_key_path: str = ""
     github_app_private_key: str = ""
     github_webhook_secret: str = ""
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_callback_url: str = ""
 
-    queue_backend: Literal["sqlite", "sqs"] = "sqlite"
+    queue_backend: Literal["sqlite", "redis", "sqs"] = "sqlite"
     sqs_queue_url: str = ""
     sqs_dlq_url: str = ""
 
@@ -25,6 +43,29 @@ class Settings(BaseSettings):
 
     redis_url: str = ""
     api_admin_token: str = ""
+
+    internal_jwt_secret: str = ""
+    internal_jwt_ttl_seconds: int = 3600
+    internal_jwt_issuer: str = "driftguard"
+    internal_jwt_audience: str = "driftguard-cp"
+    cp_max_principals_per_workspace: int = 10
+
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_portal_configuration_id: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_team: str = ""
+    stripe_price_enterprise: str = ""
+    stripe_price_business: str = ""
+    billing_handoff_secret: str = ""
+    billing_handoff_ttl_seconds: int = 86400
+    base44_checkout_url: str = ""
+    owner_github_login: str = ""
+    owner_github_user_id: str = ""
+    owner_email: str = ""
+    admin_github_logins: str = ""
+    admin_github_user_ids: str = ""
+    admin_emails: str = ""
 
     worker_concurrency: int = 4
     worker_max_retries: int = 3
@@ -44,7 +85,7 @@ class Settings(BaseSettings):
 
     worker_metrics_port: int = 8003
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(PROJECT_ENV_PATH), extra="ignore")
 
     @property
     def ai_api_key(self) -> str:
@@ -61,15 +102,67 @@ class Settings(BaseSettings):
         return bool(self.github_app_id and (self.github_private_key_path or self.resolved_github_private_key))
 
     @property
+    def has_github_oauth_credentials(self) -> bool:
+        return bool(self.github_oauth_client_id and self.github_oauth_client_secret)
+
+    @property
+    def has_stripe_billing_config(self) -> bool:
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
+
+    @property
+    def has_encryption_key(self) -> bool:
+        return bool(self.app_encryption_key)
+
+    @property
+    def has_internal_jwt_config(self) -> bool:
+        return bool(self.internal_jwt_secret)
+
+    @property
+    def admin_github_login_set(self) -> set[str]:
+        return {value.strip().lower() for value in self.admin_github_logins.split(",") if value.strip()}
+
+    @property
+    def admin_github_user_id_set(self) -> set[str]:
+        return {value.strip() for value in self.admin_github_user_ids.split(",") if value.strip()}
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        return {value.strip().lower() for value in self.admin_emails.split(",") if value.strip()}
+
+    @property
+    def has_admin_access_config(self) -> bool:
+        return bool(self.admin_github_login_set or self.admin_github_user_id_set or self.admin_email_set)
+
+    @property
+    def normalized_owner_github_login(self) -> str:
+        return self.owner_github_login.strip().lower()
+
+    @property
+    def normalized_owner_email(self) -> str:
+        return self.owner_email.strip().lower()
+
+    @property
+    def has_owner_access_config(self) -> bool:
+        return bool(self.owner_github_user_id.strip() or self.normalized_owner_github_login or self.normalized_owner_email)
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def uses_sqlite(self) -> bool:
+        return is_sqlite_locator(self.database_url)
+
+    @property
     def resolved_db_path(self) -> str:
+        if is_postgres_locator(self.database_url):
+            return self.database_url
         if "audit_db_path" in self.model_fields_set and self.audit_db_path:
             return self.audit_db_path
-        if self.database_url.startswith("sqlite:///"):
-            sqlite_path = self.database_url.removeprefix("sqlite:///")
+        if is_sqlite_locator(self.database_url):
+            sqlite_path = sqlite_path_from_locator(self.database_url)
             if sqlite_path:
                 return sqlite_path
-        if self.database_url and not self.database_url.startswith("sqlite:///"):
-            return self.audit_db_path
         return self.audit_db_path
 
 

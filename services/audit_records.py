@@ -42,6 +42,7 @@ class PullRequestAuditRecord:
     output_mode: str
     deterministic_score: int
     suggested_risk_level: str
+    fused_confidence: str | None
     semantic_review_completed: bool
     error_message: str | None
     created_at: float
@@ -89,6 +90,19 @@ class AuditCommentRecord:
 
 
 @dataclass(frozen=True)
+class PrCommentEpisodeRecord:
+    audit_comment: AuditCommentRecord
+    repo_full: str
+    pr_number: int
+    head_sha: str
+    audit_status: str
+    audit_completion_mode: str
+    audit_output_mode: str
+    audit_created_at: float
+    audit_updated_at: float
+
+
+@dataclass(frozen=True)
 class ArtifactHistoryRecord:
     audit_id: int
     job_id: int
@@ -100,6 +114,7 @@ class ArtifactHistoryRecord:
     output_mode: str
     deterministic_score: int
     suggested_risk_level: str
+    fused_confidence: str | None
     semantic_review_completed: bool
     artifact_path: str
     artifact_type: str
@@ -215,6 +230,7 @@ def init_audit_record_db(db_path: str) -> None:
                 output_mode TEXT NOT NULL,
                 deterministic_score INTEGER NOT NULL,
                 suggested_risk_level TEXT NOT NULL,
+                fused_confidence TEXT,
                 semantic_review_completed INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
                 created_at REAL NOT NULL,
@@ -236,6 +252,8 @@ def init_audit_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merge_commit_sha TEXT")
         if "pr_updated_at" not in audit_columns:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
+        if "fused_confidence" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS changed_artifacts (
@@ -396,6 +414,7 @@ def record_audit_result(
     comment_mode: str | None,
     semantic_review_completed: bool,
     suggested_risk_level: str | None = None,
+    fused_confidence: str | None = None,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
@@ -435,9 +454,9 @@ def record_audit_result(
                     job_id, repo_full, pr_number, installation_id, head_sha,
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode,
-                    deterministic_score, suggested_risk_level, semantic_review_completed,
+                    deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -456,6 +475,7 @@ def record_audit_result(
                     output_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
+                    fused_confidence,
                     int(semantic_review_completed),
                     error_message,
                     now,
@@ -483,6 +503,7 @@ def record_audit_result(
                     output_mode = ?,
                     deterministic_score = ?,
                     suggested_risk_level = ?,
+                    fused_confidence = ?,
                     semantic_review_completed = ?,
                     error_message = ?,
                     updated_at = ?
@@ -504,6 +525,7 @@ def record_audit_result(
                     output_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
+                    fused_confidence,
                     int(semantic_review_completed),
                     error_message,
                     now,
@@ -617,7 +639,12 @@ def record_audit_result(
                     "semantic_density": 0.0,
                 }
                 narrative = ["No approved baseline available; stored current profile as a new baseline candidate."]
-                onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact.relevance.path)
+                onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(
+                    db_path,
+                    repo_full,
+                    artifact.relevance.path,
+                    only_approved=True,
+                )
 
                 if onboarding_baseline is not None:
                     baseline_provenance = approved_onboarding_provenance(onboarding_baseline.id)
@@ -707,11 +734,42 @@ def record_audit_result(
         else:
             conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
 
+        # After recording audit artifacts and profiles, if this PR was merged, attempt to reconcile
+        # added/removed artifact paths into the repository onboarding so the 'current' state
+        # discovery metrics and baseline coverage reflect the merge.
+        try:
+            from .onboarding import sync_on_pr_merge_artifact_changes
+            added = set()
+            removed = set()
+            for art in deterministic_analysis.artifacts:
+                if getattr(art.change, 'added_count', 0) > 0:
+                    added.add(art.relevance.path)
+                if getattr(art.change, 'removed_count', 0) > 0:
+                    removed.add(art.relevance.path)
+            # artifact_snapshots maps path -> text content when available
+            sync_on_pr_merge_artifact_changes(
+                db_path,
+                repo_full=repo_full,
+                artifact_snapshots=artifact_snapshots or {},
+                added_paths=added,
+                removed_paths=removed,
+            )
+        except Exception:
+            # best-effort sync; do not fail the audit recording on sync errors
+            pass
+
         row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
 
     if row is None:
         raise RuntimeError("Failed to store or reload pull request audit record.")
     return _row_to_pull_request_audit(row)
+
+
+def get_pull_request_audit_by_id(db_path: str, audit_id: int) -> Optional[PullRequestAuditRecord]:
+    """Fetch a pull_request_audit record by its primary key."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM pull_request_audits WHERE id = ?", (audit_id,)).fetchone()
+    return _row_to_pull_request_audit(row) if row is not None else None
 
 
 def get_pull_request_audit_for_job(db_path: str, job_id: int) -> Optional[PullRequestAuditRecord]:
@@ -742,6 +800,58 @@ def get_audit_comment_for_audit(db_path: str, audit_id: int) -> Optional[AuditCo
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM audit_comments WHERE audit_id = ?", (audit_id,)).fetchone()
     return _row_to_audit_comment(row) if row is not None else None
+
+
+def get_audit_comment_episode_for_pr_head_sha(
+    db_path: str,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+) -> Optional[PrCommentEpisodeRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*, pra.repo_full, pra.pr_number, pra.head_sha,
+                   pra.status AS audit_status,
+                   pra.completion_mode AS audit_completion_mode,
+                   pra.output_mode AS audit_output_mode,
+                   pra.created_at AS audit_created_at,
+                   pra.updated_at AS audit_updated_at
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ? AND pra.head_sha = ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+    return _row_to_pr_comment_episode(row) if row is not None else None
+
+
+def get_previous_audit_comment_episode_for_pr(
+    db_path: str,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+) -> Optional[PrCommentEpisodeRecord]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ac.*, pra.repo_full, pra.pr_number, pra.head_sha,
+                   pra.status AS audit_status,
+                   pra.completion_mode AS audit_completion_mode,
+                   pra.output_mode AS audit_output_mode,
+                   pra.created_at AS audit_created_at,
+                   pra.updated_at AS audit_updated_at
+            FROM audit_comments ac
+            INNER JOIN pull_request_audits pra ON pra.id = ac.audit_id
+            WHERE pra.repo_full = ? AND pra.pr_number = ? AND pra.head_sha <> ?
+            ORDER BY ac.posted_at DESC, ac.id DESC
+            LIMIT 1
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchone()
+    return _row_to_pr_comment_episode(row) if row is not None else None
 
 
 def get_latest_audit_comment_for_pr(db_path: str, repo_full: str, pr_number: int) -> Optional[AuditCommentRecord]:
@@ -784,6 +894,7 @@ def list_artifact_history_for_repo(db_path: str, repo_full: str, artifact_path: 
                 pra.output_mode AS output_mode,
                 pra.deterministic_score AS deterministic_score,
                 pra.suggested_risk_level AS suggested_risk_level,
+                pra.fused_confidence AS fused_confidence,
                 pra.semantic_review_completed AS semantic_review_completed,
                 ca.artifact_path AS artifact_path,
                 ca.artifact_type AS artifact_type,
@@ -864,6 +975,21 @@ def list_static_profiles_for_repo_artifact(db_path: str, repo_full: str, artifac
     return [_row_to_static_artifact_profile(row) for row in rows]
 
 
+def list_static_profiles_for_repo(db_path: str, repo_full: str) -> list[StaticArtifactProfileRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT sap.*
+            FROM static_artifact_profiles sap
+            INNER JOIN pull_request_audits pra ON pra.id = sap.audit_id
+            WHERE pra.repo_full = ?
+            ORDER BY sap.artifact_path ASC, sap.created_at ASC, sap.id ASC
+            """,
+            (repo_full,),
+        ).fetchall()
+    return [_row_to_static_artifact_profile(row) for row in rows]
+
+
 def get_latest_static_profile_for_repo_artifact(db_path: str, repo_full: str, artifact_path: str) -> Optional[StaticArtifactProfileRecord]:
     normalized_artifact_id = _build_normalized_artifact_id(repo_full, artifact_path)
     with _connect(db_path) as conn:
@@ -891,7 +1017,12 @@ def preview_static_drift_for_artifacts(
         artifact_type = artifact_types_by_path.get(artifact_path, "generic")
         signal_terms = extract_signal_terms_from_text(snapshot_text)
         profile = build_attribute_profile(snapshot_text)
-        onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(db_path, repo_full, artifact_path)
+        onboarding_baseline = get_latest_onboarding_baseline_for_repo_artifact(
+            db_path,
+            repo_full,
+            artifact_path,
+            only_approved=True,
+        )
         baseline_profile = None if onboarding_baseline is not None else get_latest_static_profile_for_repo_artifact(db_path, repo_full, artifact_path)
 
         baseline_profile_id: int | None = None
@@ -1080,6 +1211,7 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
 
 
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
+    fused_confidence = row["fused_confidence"] if "fused_confidence" in row.keys() else None
     return PullRequestAuditRecord(
         id=row["id"],
         job_id=row["job_id"],
@@ -1098,6 +1230,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         output_mode=row["output_mode"],
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
+        fused_confidence=fused_confidence,
         semantic_review_completed=bool(row["semantic_review_completed"]),
         error_message=row["error_message"],
         created_at=row["created_at"],
@@ -1264,6 +1397,20 @@ def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
     )
 
 
+def _row_to_pr_comment_episode(row: sqlite3.Row) -> PrCommentEpisodeRecord:
+    return PrCommentEpisodeRecord(
+        audit_comment=_row_to_audit_comment(row),
+        repo_full=row["repo_full"],
+        pr_number=row["pr_number"],
+        head_sha=row["head_sha"],
+        audit_status=row["audit_status"],
+        audit_completion_mode=row["audit_completion_mode"],
+        audit_output_mode=row["audit_output_mode"],
+        audit_created_at=row["audit_created_at"],
+        audit_updated_at=row["audit_updated_at"],
+    )
+
+
 def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
     return ArtifactHistoryRecord(
         audit_id=row["audit_id"],
@@ -1276,6 +1423,7 @@ def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
         output_mode=row["output_mode"],
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
+        fused_confidence=row["fused_confidence"],
         semantic_review_completed=bool(row["semantic_review_completed"]),
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],

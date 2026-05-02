@@ -62,9 +62,12 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
             default_branch="main",
             status="completed",
             discovered_artifact_count=1,
+            approved_by=None,
+            approved_at=None,
             created_at=1.0,
             updated_at=1.0,
         ),
+        baseline_review=None,
         backfill=RepoDashboardBackfillSummary(
             job_count=1,
             planned_job_count=0,
@@ -192,6 +195,94 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
 def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="4000",
+        github_login="operator-owner",
+        display_name="Operator Owner",
+        primary_email="operator-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="operator-workspace",
+        display_name="Operator Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_operator",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=2.0,
+        next_payment_at=2.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="operator-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=9999999999.0,
+    )
 
     onboarding_record = RepositoryOnboardingRecord(
         id=1,
@@ -200,6 +291,8 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         default_branch="main",
         status="completed",
         discovered_artifact_count=1,
+        approved_by=None,
+        approved_at=None,
         created_at=1.0,
         updated_at=1.0,
     )
@@ -229,6 +322,10 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
                 signal_terms=["safe"],
                 line_count=4,
                 profile=_profile(),
+                approval_status="pending",
+                approved_by=None,
+                approved_at=None,
+                approval_note=None,
                 created_at=1.0,
             )
         ],
@@ -240,6 +337,7 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         repo_full="doria90/dummyAI",
         artifact_path="prompts/system.txt",
         artifact_type="prompt",
+        job_kind="historical_backfill",
         status="completed",
         commit_count=2,
         completed_commit_count=2,
@@ -260,6 +358,7 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         with TestClient(main.app) as client:
             response = client.post(
                 "/api/repos/doria90/dummyAI/onboard",
+                cookies={main.settings.session_cookie_name: session.session_id},
                 json={
                     "installation_id": 123,
                     "commit_limit_per_artifact": 5,
@@ -278,19 +377,124 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     assert payload["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
 
 
-def test_persistence_api_returns_backend_metadata(tmp_path):
+def test_onboard_api_rejects_installation_mismatch(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="4001",
+        github_login="operator-owner-2",
+        display_name="Operator Owner Two",
+        primary_email="operator-owner-2@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="operator-workspace-2",
+        display_name="Operator Workspace Two",
+        billing_owner_user_id=user.id,
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_operator_2",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=2.0,
+        next_payment_at=2.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="operator-session-2",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=9999999999.0,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/repos/doria90/dummyAI/onboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            json={
+                "installation_id": 999,
+                "commit_limit_per_artifact": 5,
+                "plan_backfill": False,
+                "execute_backfill": False,
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Installation mismatch for workspace access."
+
+
+def test_persistence_api_requires_authentication(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+    main.init_db(main.AUDIT_DB_PATH)
 
     with TestClient(main.app) as client:
         response = client.get("/api/persistence")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["backend"] == "sqlite"
-    assert payload["production_target"] == "postgresql"
-    assert "audit_jobs" in payload["operational_tables"]
-    assert "database_path" not in payload
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."
 
 
 def test_dashboard_html_pages_render(tmp_path):
@@ -305,44 +509,76 @@ def test_dashboard_html_pages_render(tmp_path):
         repo_js_response = client.get("/static/dashboard-repo.js")
 
     assert index_response.status_code == 200
-    assert "PromptDrift Dashboard" in index_response.text
+    assert "DriftGuard Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
-    assert "portfolio-risk-state" in index_response.text
-    assert "Recurring change patterns" in index_response.text
-    assert "No production traffic or user data is analyzed" in index_response.text
-    assert "Why these are rising" in index_response.text
-    assert "Risk by control surface" in index_response.text
-    assert "Ranked queue" in index_response.text
-    assert "Control surface coverage" in index_response.text
+    index_text = index_response.text.lower()
+    assert "ai change overview" in index_text
+    assert "urgent changes to review" in index_text
+    assert "recent changes this week" in index_text
+    assert "posture map" in index_text
+    assert "change timeline" in index_text
+    assert "coverage" in index_text
+    assert "overview-rebaseline-modal" in index_response.text
 
     assert repo_response.status_code == 200
-    assert "Review case file: strongest item first, then the ranked queue, then supporting evidence." in repo_response.text
-    assert "Static-only analysis" in repo_response.text
-    assert "Baseline vs current posture." in repo_response.text
-    assert "Needs review queue" in repo_response.text
-    assert "Control surface coverage" in repo_response.text
-    assert "History and drift timeline" in repo_response.text
-    assert "promptdrift-repo-full" in repo_response.text
+    repo_text = repo_response.text.lower()
+    assert "audit page" in repo_text
+    assert "governance attention" in repo_text
+    assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
+    assert "attribute profile" in repo_text
+    assert "control surface coverage" in repo_text
+    assert "drift storyline" in repo_text
+    assert "baseline-review-panel" in repo_response.text
+    assert "Baseline Review" in repo_response.text
+    assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
+    assert '?tab=drift#repo-triage-section' in repo_response.text
+    assert "available repositories" not in repo_text
+    assert "/api/dashboard/overview" not in repo_response.text
 
     assert css_response.status_code == 200
-    assert ".hero-panel" in css_response.text
-    assert ".risk-surface-card" in css_response.text
-    assert "--panel-border" in css_response.text
+    assert ".app-shell" in css_response.text
+    assert ".posture-strip" in css_response.text
+    assert ".detail-panel" in css_response.text
+    assert "--color-border" in css_response.text
     assert index_js_response.status_code == 200
-    assert "renderRiskState" in index_js_response.text
-    assert "renderHighestRiskItems" in index_js_response.text
-    assert "Attribute profile" in index_js_response.text
-    assert "selectOverviewAttributeRows" in index_js_response.text
-    assert "unknown" in index_js_response.text
-    assert "renderControlSurfaceRisk" in index_js_response.text
-    assert "Unable to load dashboard overview" in index_js_response.text
-    assert "loadOverview" in index_js_response.text
+    assert "renderUrgentRow" in index_js_response.text
+    assert "renderRepoAtlasCard" in index_js_response.text
     assert repo_js_response.status_code == 200
-    assert "renderDesignProfiles" in repo_js_response.text
-    assert "renderAttributeProfilePanel" in repo_js_response.text
-    assert "bindAttributeProfileTabs" in repo_js_response.text
-    assert 'role="tablist"' in repo_js_response.text
-    assert "renderHistoryTimelines" in repo_js_response.text
-    assert "Unable to load repository dashboard" in repo_js_response.text
-    assert "loadDashboard" in repo_js_response.text
+    assert "function repoTabUrl" in repo_js_response.text
+    assert 'repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })' in repo_js_response.text
+    assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
+
+
+def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI?tab=reports")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="reports"' in response.text
+    assert 'data-repo-tab-link="reports"' in response.text
+    assert 'data-repo-tab-link="version-control"' in response.text
+    assert '?tab=version-control' in response.text
+    assert '?tab=baseline' in response.text
+    assert '?tab=compliance' in response.text
+    assert 'secondary-details-summary-static' in response.text
+    assert '<div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">' in response.text
+    assert '<details class="secondary-details"><summary class="secondary-details-summary">Version journey and baseline comparison</summary>' not in response.text
+
+
+def test_dashboard_index_query_params_render_active_controls(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard?range=30d&filter=critical")
+
+    assert response.status_code == 200
+    assert 'data-active-overview-range="30d"' in response.text
+    assert 'data-active-overview-filter="critical"' in response.text
+    assert 'data-overview-range="30d"' in response.text
+    assert 'data-overview-filter="critical"' in response.text
+    assert "Review urgent changes" in response.text

@@ -1,1 +1,1 @@
-"""Service layer for PromptDrift runtime orchestration."""
+"""Service layer for DriftGuard runtime orchestration."""
