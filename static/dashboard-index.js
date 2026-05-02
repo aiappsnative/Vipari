@@ -468,18 +468,70 @@ function renderHighestRiskItems(items = []) {
 
 function renderAttributeProfileChips(dimensions = []) {
     const items = asArray(dimensions);
-    if (!items.length) {
-        return "";
-    }
-    const controlSurface = items.find((dimension) => dimension.attribute_key === "control_surface_type");
-    const changed = items.filter((dimension) => dimension.attribute_key !== "control_surface_type" && dimension.state !== "no_change");
-    const primary = (changed.length ? changed : items.filter((dimension) => dimension.attribute_key !== "control_surface_type")).slice(0, 3);
+    const controlSurface = items.find((dimension) => dimension.attribute_key === "control_surface_type") || fallbackControlSurfaceDimension();
+    const primary = selectOverviewAttributeRows(items);
     return `
-        <div class="tag-row">
-            ${controlSurface ? `<span class="tag tag-muted">${controlSurface.current_value}</span>` : ""}
-            ${primary.map((dimension) => `<span class="tag tag-muted">${dimension.label}: ${dimension.baseline_value} → ${dimension.current_value}</span>`).join("")}
+        <div class="attribute-profile-mini">
+            <div class="attribute-profile-mini-header">
+                <strong>Attribute profile</strong>
+                <span class="tag tag-muted">${controlSurface.current_value}</span>
+            </div>
+            <div class="attribute-profile-mini-grid">
+                ${primary
+                    .map(
+                        (dimension) => `
+                            <div class="attribute-profile-mini-row">
+                                <div class="attribute-profile-mini-label">${dimension.label}</div>
+                                <div class="attribute-profile-mini-values">${dimension.baseline_value} → ${dimension.current_value}</div>
+                                <div class="meta-tight muted">${dimension.reason || "PromptDrift could not determine this attribute yet."}</div>
+                            </div>
+                        `
+                    )
+                    .join("")}
+            </div>
         </div>
     `;
+}
+
+function selectOverviewAttributeRows(dimensions = []) {
+    const items = asArray(dimensions).filter((dimension) => dimension.attribute_key !== "control_surface_type");
+    const changed = items.filter((dimension) => dimension.state !== "no_change" && dimension.state !== "unknown");
+    const unknown = items.filter((dimension) => dimension.state === "unknown");
+    const stable = items.filter((dimension) => dimension.state === "no_change");
+    const ordered = [...changed, ...unknown, ...stable];
+    const primary = ordered.slice(0, Math.max(2, Math.min(3, ordered.length || 2)));
+    if (primary.length >= 2) {
+        return primary;
+    }
+    return [...primary, ...fallbackOverviewAttributeRows()].slice(0, 2);
+}
+
+function fallbackOverviewAttributeRows() {
+    return [
+        {
+            attribute_key: "guardrail_robustness",
+            label: "Guardrail robustness",
+            baseline_value: "unknown",
+            current_value: "unknown",
+            reason: "PromptDrift does not have enough stored profile evidence for this dimension yet.",
+            state: "unknown",
+        },
+        {
+            attribute_key: "governance_strength",
+            label: "Governance strength",
+            baseline_value: "unknown",
+            current_value: "unknown",
+            reason: "PromptDrift does not have enough stored profile evidence for this dimension yet.",
+            state: "unknown",
+        },
+    ];
+}
+
+function fallbackControlSurfaceDimension() {
+    return {
+        attribute_key: "control_surface_type",
+        current_value: "unknown",
+    };
 }
 
 function renderRegressionPatterns(items = []) {

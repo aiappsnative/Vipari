@@ -1781,6 +1781,43 @@ p {
     gap: 8px;
 }
 
+.attribute-profile-mini {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(157, 176, 208, 0.18);
+    background: rgba(11, 16, 32, 0.3);
+}
+
+.attribute-profile-mini-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+}
+
+.attribute-profile-mini-grid {
+    display: grid;
+    gap: 8px;
+}
+
+.attribute-profile-mini-row {
+    display: grid;
+    gap: 2px;
+}
+
+.attribute-profile-mini-label {
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.attribute-profile-mini-values {
+    font-size: 0.82rem;
+    color: var(--ink);
+}
+
 .tag {
     display: inline-flex;
     align-items: center;
