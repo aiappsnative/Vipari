@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "promptdrift": {
+      "command": "python",
+      "args": ["promptdrift_mcp_server.py"],
+      "env": {
+        "PROMPTDRIFT_MCP_BROKER_URL": "{{PROMPTDRIFT_MCP_BROKER_URL}}",
+        "PROMPTDRIFT_CLIENT_ID": "replace-with-your-client-id",
+        "PROMPTDRIFT_CLIENT_SECRET": "replace-with-your-client-secret"
+      }
+    }
+  }
+}

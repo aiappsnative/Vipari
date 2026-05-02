@@ -81,6 +81,7 @@ In practical terms, DriftGuard currently provides:
 - worker-side allocation and entitlement revalidation before queued PR audits run, plus stale webhook-delivery reclaim for crash-safe redelivery
 - customer self-service API key management at `/app/settings/api-keys`: scope-gated machine principal creation with one-time secret flash delivery (atomic creation + flash in a single transaction, consumed on first GET), revocation, and per-workspace principal limits
 - client-credentials token exchange at `/cp/auth/token` with sliding-window rate limiting (20 req/60 s), constant-time secret comparison, and full audit logging per exchange
+- a customer-facing Agent Integrations page at `/app/integrations/mcp` with an authenticated download flow for a website-distributed MCP connector package, plus a hosted workspace-bound MCP broker exposing curated read-first tools over machine-principal Basic auth
 
 Latest merged validation on 2026-05-01:
 
@@ -138,6 +139,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - accepts structured feedback on PR audits at `POST /cp/audits/{audit_id}/feedback` (`drift.write.low`): append-only events with validated `kind` (six values), optional bounded `comment`, and bounded `metadata`; workspace isolation enforced via 404-masking
 - records triage state transitions on PR audits at `POST /cp/audits/{audit_id}/triage` (`drift.write.low`): append-only events with validated `state` (three values) and optional bounded `reason`; never mutates `pull_request_audits`
 - returns export job status (without `result_blob`) at `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`)
+- provides a customer-only MCP integration flow: `/app/integrations/mcp` renders setup guidance, `/app/integrations/mcp/download` returns the connector ZIP, `GET /api/agent-integrations/mcp/tools` lists the allowed MCP tools for a machine principal, and `POST /api/agent-integrations/mcp/invoke` executes those workspace-bound read tools without exposing internal control-plane bearer tokens
 
 ## High-level architecture
 

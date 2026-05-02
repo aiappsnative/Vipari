@@ -3668,6 +3668,19 @@ body.dashboard-index-page[data-theme="light"] {
     line-height: 1.55;
 }
 
+.repo-audit-page .radar-visual-shell {
+    display: grid;
+    place-items: center;
+    padding: 0 0 6px;
+}
+
+.repo-audit-page .radar-axis-caption {
+    padding-top: 8px;
+    color: var(--color-text-faint);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
 .dashboard-index-page[data-theme="light"] .radar-axis-caption {
     border-bottom-color: rgba(112, 98, 84, 0.10);
 }
@@ -4704,6 +4717,31 @@ body.repo-audit-page[data-theme="light"] {
     color: #f3ffff;
 }
 
+.repo-audit-page #repo-version-control-section {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 18px;
+}
+
+.repo-audit-page #repo-radar-section,
+.repo-audit-page #repo-journey-section {
+    grid-column: 1;
+}
+
+.repo-audit-page .secondary-details-static {
+    padding: 14px;
+}
+
+.repo-audit-page .secondary-details-summary-static {
+    cursor: default;
+    padding: 0;
+}
+
+.repo-audit-page .secondary-details-summary-static::after {
+    content: none;
+}
+
 .repo-audit-page[data-theme="light"] .repo-audit-anchor:hover {
     border-color: var(--color-primary-outline);
     color: var(--color-text);
@@ -5334,6 +5372,38 @@ body.control-page[data-theme="light"] {
     padding: 0;
 }
 
+.control-page-checkbox-group {
+    display: grid;
+    gap: 12px;
+    border: 0;
+    margin: 0;
+    padding: 0;
+}
+
+.control-page-checkbox-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    align-items: start;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    cursor: pointer;
+}
+
+.control-page-checkbox-option input {
+    margin: 2px 0 0;
+    width: 16px;
+    height: 16px;
+}
+
+.control-page-checkbox-copy {
+    display: grid;
+    gap: 4px;
+    line-height: 1.5;
+}
+
 .control-page-choice-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -5376,6 +5446,9 @@ body.control-page[data-theme="light"] {
 }
 
 .control-page-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     justify-self: start;
     border: 0;
     border-radius: 999px;
@@ -5384,11 +5457,101 @@ body.control-page[data-theme="light"] {
     color: #f7f7f5;
     font-weight: 700;
     cursor: pointer;
+    text-decoration: none;
 }
 
 .control-page-button[disabled] {
     opacity: 0.56;
     cursor: not-allowed;
+}
+
+.control-page-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.control-page-tab-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(239, 242, 245, 0.82);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.control-page[data-theme="light"] .control-page-tab-link {
+    border-color: rgba(112, 98, 84, 0.14);
+    background: rgba(112, 98, 84, 0.06);
+    color: rgba(47, 41, 37, 0.84);
+}
+
+.control-page-tab-link:hover {
+    border-color: rgba(86, 239, 227, 0.34);
+    color: #f3ffff;
+}
+
+.control-page-tab-link[aria-current="page"] {
+    border-color: rgba(86, 239, 227, 0.4);
+    background: rgba(86, 239, 227, 0.14);
+    color: #f3ffff;
+}
+
+.control-page[data-theme="light"] .control-page-tab-link:hover {
+    border-color: var(--color-primary-outline);
+    color: var(--color-text);
+}
+
+.control-page[data-theme="light"] .control-page-tab-link[aria-current="page"] {
+    border-color: var(--color-primary-outline);
+    background: rgba(0, 131, 143, 0.12);
+    color: var(--color-text);
+}
+
+.control-page-flash-secret {
+    margin: 0 0 24px;
+    padding: 20px;
+    border: 1px solid var(--color-primary-outline);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--color-primary-soft-strong), var(--color-surface));
+}
+
+.control-page-flash-secret-inner {
+    display: grid;
+    gap: 12px;
+}
+
+.control-page-flash-secret-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--color-text);
+}
+
+.control-page-secret-reveal {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.control-page-copy-btn {
+    border-radius: 999px;
+    padding: 10px 14px;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+}
+
+.control-page-table-row-new {
+    background: var(--color-selection-bg);
 }
 
 .control-page-meta-grid {

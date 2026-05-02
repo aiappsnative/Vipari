@@ -532,6 +532,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Baseline Review" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
+    assert '?tab=drift#repo-triage-section' in repo_response.text
     assert "available repositories" not in repo_text
     assert "/api/dashboard/overview" not in repo_response.text
 
@@ -543,6 +544,10 @@ def test_dashboard_html_pages_render(tmp_path):
     assert index_js_response.status_code == 200
     assert "renderUrgentRow" in index_js_response.text
     assert "renderRepoAtlasCard" in index_js_response.text
+    assert repo_js_response.status_code == 200
+    assert "function repoTabUrl" in repo_js_response.text
+    assert 'repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })' in repo_js_response.text
+    assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
 
 
 def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
@@ -555,8 +560,13 @@ def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
     assert response.status_code == 200
     assert 'data-active-repo-tab="reports"' in response.text
     assert 'data-repo-tab-link="reports"' in response.text
+    assert 'data-repo-tab-link="version-control"' in response.text
+    assert '?tab=version-control' in response.text
     assert '?tab=baseline' in response.text
     assert '?tab=compliance' in response.text
+    assert 'secondary-details-summary-static' in response.text
+    assert '<div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">' in response.text
+    assert '<details class="secondary-details"><summary class="secondary-details-summary">Version journey and baseline comparison</summary>' not in response.text
 
 
 def test_dashboard_index_query_params_render_active_controls(tmp_path):
