@@ -4227,7 +4227,9 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     assert response.status_code == 303
     assert response.headers["location"] == "/app/integrations/mcp?tab=api-keys"
     assert page.status_code == 200
-    assert "Only workspace owners and admins can create API keys." in page.text
+    assert "Machine principal credentials" not in page.text
+    assert "Only workspace owners and admins" not in page.text
+    assert "Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins." in page.text
 def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
     """POST create → 303, GET → secret shown; second GET → secret absent."""
     original_db_path = main.AUDIT_DB_PATH
@@ -4505,6 +4507,40 @@ def test_mcp_integrations_page_loads_for_viewer(tmp_path):
     assert response.status_code == 200
     assert "Agent Integrations" in response.text
     assert "Download connector" in response.text
+    assert "API keys" not in response.text
+    assert "Activity" not in response.text
+    assert "Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins." in response.text
+    assert "Recent integration and API-key activity stays visible only to workspace owners and admins." in response.text
+    assert "Client ID" not in response.text
+
+
+def test_mcp_integrations_sensitive_tabs_fall_back_to_overview_for_viewer(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+
+    _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-viewer-tabs", "1106", role="viewer")
+
+    api_keys_response = client.get(
+        "/app/integrations/mcp?tab=api-keys",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+    activity_response = client.get(
+        "/app/integrations/mcp?tab=activity",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert api_keys_response.status_code == 200
+    assert activity_response.status_code == 200
+    assert "Download connector" in api_keys_response.text
+    assert "Download connector" in activity_response.text
+    assert "Machine principal credentials" not in api_keys_response.text
+    assert "Recent integration and API-key events" not in activity_response.text
+    assert 'aria-current="page">Overview<' in api_keys_response.text
+    assert 'aria-current="page">Overview<' in activity_response.text
 
 
 def test_settings_page_links_to_mcp_integrations(tmp_path):

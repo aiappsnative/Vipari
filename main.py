@@ -28,6 +28,13 @@ from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_acc
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_worker import AuditWorker, WorkerSettings
+from services.mcp_broker import (
+    authenticate_mcp_broker_request,
+    invoke_mcp_broker_tool,
+    issue_mcp_broker_token_via_client_credentials,
+    list_mcp_tools_for_scopes,
+    record_mcp_broker_invocation,
+)
 from services.mcp_package import build_customer_mcp_bundle
 from services.baseline_approval_service import (
     approve_repo_baseline,
@@ -290,6 +297,16 @@ class ComplianceExportRequest(BaseModel):
     to_date: str | None = None
     export_mode: str
     include_artifact_content: bool = False
+
+
+class McpBrokerTokenRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+class McpBrokerInvokeRequest(BaseModel):
+    tool_name: str
+    arguments: dict[str, object] = {}
 
 
 def _control_plane_active() -> bool:
@@ -2177,16 +2194,21 @@ async def mcp_integrations_page(request: Request):
     entitlement = access_context["entitlement"]
     membership = access_context["membership"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    can_manage = bool(membership and membership.role in {"owner", "admin"})
     active_tab = (request.query_params.get("tab") or "overview").strip().lower()
     if active_tab not in {"overview", "api-keys", "activity"}:
         active_tab = "overview"
+    if not can_manage and active_tab in {"api-keys", "activity"}:
+        active_tab = "overview"
 
-    principals = list_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id)
-    audit_logs = list_control_plane_audit_logs_for_workspace(AUDIT_DB_PATH, workspace.id, limit=50)
+    principals = list_machine_principals_for_workspace(AUDIT_DB_PATH, workspace.id) if can_manage else []
+    audit_logs = list_control_plane_audit_logs_for_workspace(AUDIT_DB_PATH, workspace.id, limit=50) if can_manage else []
     flash = pop_all_session_flash(AUDIT_DB_PATH, session.session_id)
     one_time_secret = flash.get("new_api_key_secret")
     new_client_id = flash.get("new_api_key_client_id")
-    can_manage = bool(membership and membership.role in {"owner", "admin"})
+    if not can_manage:
+        one_time_secret = None
+        new_client_id = None
     entitlement_allows = _has_cp_api_access(access_context)
     broker_url = settings.app_base_url.rstrip("/") + "/api/agent-integrations/mcp"
     config_snippet = (
@@ -2228,6 +2250,61 @@ async def mcp_integrations_download(request: Request):
         content=bundle_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="promptdrift-mcp-connector.zip"'},
+    )
+
+
+@app.post("/api/agent-integrations/mcp/token")
+async def mcp_broker_token(request: Request, payload: McpBrokerTokenRequest):
+    client_ip = request.client.host if request.client else "unknown"
+    result = issue_mcp_broker_token_via_client_credentials(
+        payload.client_id,
+        payload.client_secret,
+        settings=settings,
+        db_path=AUDIT_DB_PATH,
+        client_ip=client_ip,
+    )
+    return JSONResponse(result)
+
+
+@app.get("/api/agent-integrations/mcp/tools")
+async def mcp_broker_tools(request: Request):
+    context = authenticate_mcp_broker_request(
+        request.headers.get("Authorization"),
+        settings=settings,
+        db_path=AUDIT_DB_PATH,
+    )
+    return JSONResponse(
+        {
+            "workspace_id": context.workspace_id,
+            "tools": list_mcp_tools_for_scopes(context.scopes),
+        }
+    )
+
+
+@app.post("/api/agent-integrations/mcp/invoke")
+async def mcp_broker_invoke(request: Request, payload: McpBrokerInvokeRequest):
+    context = authenticate_mcp_broker_request(
+        request.headers.get("Authorization"),
+        settings=settings,
+        db_path=AUDIT_DB_PATH,
+    )
+    result = invoke_mcp_broker_tool(
+        payload.tool_name,
+        payload.arguments,
+        context=context,
+        db_path=AUDIT_DB_PATH,
+    )
+    record_mcp_broker_invocation(
+        db_path=AUDIT_DB_PATH,
+        context=context,
+        tool_name=payload.tool_name,
+    )
+    return JSONResponse(
+        {
+            "tool_name": payload.tool_name,
+            "workspace_id": context.workspace_id,
+            "result": result,
+        }
     )
 
 

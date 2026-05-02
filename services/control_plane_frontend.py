@@ -882,19 +882,19 @@ def render_control_plane_mcp_page(
     if admin_url:
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
 
-    tab_urls = {
-        "overview": "/app/integrations/mcp?tab=overview",
-        "api-keys": "/app/integrations/mcp?tab=api-keys",
-        "activity": "/app/integrations/mcp?tab=activity",
-    }
-    tab_labels = {
-        "overview": "Overview",
-        "api-keys": "API keys",
-        "activity": "Activity",
-    }
+    tab_urls = {"overview": "/app/integrations/mcp?tab=overview"}
+    tab_labels = {"overview": "Overview"}
+    if can_manage:
+        tab_urls.update(
+            {
+                "api-keys": "/app/integrations/mcp?tab=api-keys",
+                "activity": "/app/integrations/mcp?tab=activity",
+            }
+        )
+        tab_labels.update({"api-keys": "API keys", "activity": "Activity"})
     tab_bar = "".join(
         f'''<a class="control-page-tab-link" href="{html_escape(tab_urls[tab_key])}"{' aria-current="page"' if tab_key == active_tab else ''}>{html_escape(tab_labels[tab_key])}</a>'''
-        for tab_key in ("overview", "api-keys", "activity")
+        for tab_key in tab_urls
     )
 
     if one_time_secret:
@@ -915,7 +915,7 @@ def render_control_plane_mcp_page(
     else:
         secret_block = ""
 
-    active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active")
+    active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active") if can_manage else None
     api_keys_section = _render_api_keys_section(
         principals=principals,
         can_manage=can_manage,
@@ -977,11 +977,49 @@ def render_control_plane_mcp_page(
             <p class="control-page-copy">No integration activity has been recorded for this workspace yet.</p>
         </article>"""
 
-    if active_tab == "api-keys":
+    if active_tab == "api-keys" and can_manage:
         active_panel = api_keys_section
-    elif active_tab == "activity":
+    elif active_tab == "activity" and can_manage:
         active_panel = activity_section
     else:
+        workspace_principal_card = """
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Workspace machine principals</div>
+            <h2 class="control-page-section-title">API-key posture</h2>
+            <p class="control-page-copy">Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins.</p>
+        </article>"""
+        if can_manage:
+            workspace_principal_card = f"""
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Workspace machine principals</div>
+            <h2 class="control-page-section-title">API-key posture</h2>
+            <p class="control-page-copy">{html_escape(str(active_principal_count or 0))} active workspace API key(s) are currently available for connector setup. Use the API keys tab to review scopes, create a new key, or revoke an old one.</p>
+            <a class="control-page-button" href="{html_escape(tab_urls['api-keys'])}">Open API keys</a>
+        </article>"""
+
+        activity_card = """
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Operational visibility</div>
+            <h2 class="control-page-section-title">Recent integration activity</h2>
+            <p class="control-page-copy">Recent integration and API-key activity stays visible only to workspace owners and admins.</p>
+        </article>"""
+        if can_manage:
+            activity_card = f"""
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Operational visibility</div>
+            <h2 class="control-page-section-title">Recent integration activity</h2>
+            <p class="control-page-copy">Keep connector rollout, key changes, and broker actions together by reviewing the Activity tab before handing the package to a customer host.</p>
+            <a class="control-page-button" href="{html_escape(tab_urls['activity'])}">Open Activity</a>
+        </article>"""
+
+        workflow_card_two = """
+                <div class="help-page-action-card"><span class="help-page-action-step">2</span><strong>Request API-key access</strong><p>Workspace owners and admins manage machine principals, scope selection, and one-time secret handoff for connector setup.</p></div>
+                <div class="help-page-action-card"><span class="help-page-action-step">3</span><strong>Coordinate rollout</strong><p>Ask an owner or admin to verify recent integration activity before the connector is handed to a customer host.</p></div>"""
+        if can_manage:
+            workflow_card_two = f"""
+                <a class="help-page-action-card" href="{html_escape(tab_urls['api-keys'])}"><span class="help-page-action-step">2</span><strong>Review API keys</strong><p>Use the API keys tab for the workspace machine principal list, scope choices, and one-time secret handoff.</p></a>
+                <a class="help-page-action-card" href="{html_escape(tab_urls['activity'])}"><span class="help-page-action-step">3</span><strong>Check activity</strong><p>Recent integration activity stays on this page so connector rollout, key rotation, and broker actions can be reviewed together.</p></a>"""
+
         active_panel = f"""
         <article class="control-page-section control-page-section-wide">
             <div class="secondary-panel-title">Download</div>
@@ -989,8 +1027,7 @@ def render_control_plane_mcp_page(
             <p class="control-page-copy">This downloadable package is meant for authenticated customers only. It runs as a thin local MCP server in the customer environment, exchanges workspace-scoped machine-principal credentials for a short-lived broker token, and forwards allowed tool calls to the hosted PromptDrift broker.</p>
             <div class="help-page-workflow-grid">
                 <a class="help-page-action-card" href="{html_escape(download_url)}"><span class="help-page-action-step">1</span><strong>Download connector</strong><p>Includes the local MCP server script, dependency list, environment template, and example host configuration.</p></a>
-                <a class="help-page-action-card" href="{html_escape(tab_urls['api-keys'])}"><span class="help-page-action-step">2</span><strong>Review API keys</strong><p>Use the API keys tab for the workspace machine principal list, scope choices, and one-time secret handoff.</p></a>
-                <a class="help-page-action-card" href="{html_escape(tab_urls['activity'])}"><span class="help-page-action-step">3</span><strong>Check activity</strong><p>Recent integration activity stays on this page so connector rollout, key rotation, and broker actions can be reviewed together.</p></a>
+                {workflow_card_two}
             </div>
         </article>
 
@@ -1017,19 +1054,9 @@ def render_control_plane_mcp_page(
             <div class="help-page-card-grid">{tool_cards}</div>
         </article>
 
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Workspace machine principals</div>
-            <h2 class="control-page-section-title">API-key posture</h2>
-            <p class="control-page-copy">{html_escape(str(active_principal_count))} active workspace API key(s) are currently available for connector setup. Use the API keys tab to review scopes, create a new key, or revoke an old one.</p>
-            <a class="control-page-button" href="{html_escape(tab_urls['api-keys'])}">Open API keys</a>
-        </article>
+        {workspace_principal_card}
 
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Operational visibility</div>
-            <h2 class="control-page-section-title">Recent integration activity</h2>
-            <p class="control-page-copy">Keep connector rollout, key changes, and broker actions together by reviewing the Activity tab before handing the package to a customer host.</p>
-            <a class="control-page-button" href="{html_escape(tab_urls['activity'])}">Open Activity</a>
-        </article>"""
+        {activity_card}"""
 
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -1038,7 +1065,8 @@ def render_control_plane_mcp_page(
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{BROKER_HOST}}", html_escape(broker_host))
         .replace("{{TOOL_COUNT}}", html_escape(str(len(MCP_BROKER_TOOLS))))
-        .replace("{{ACTIVE_API_KEY_COUNT}}", html_escape(str(active_principal_count)))
+        .replace("{{ACTIVE_API_KEY_LABEL}}", html_escape("Active API keys" if can_manage else "API-key access"))
+        .replace("{{ACTIVE_API_KEY_COUNT}}", html_escape(str(active_principal_count or "Restricted")))
         .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
         .replace("{{MCP_TAB_BAR}}", tab_bar)
         .replace("{{MCP_ACTIVE_PANEL}}", active_panel)
