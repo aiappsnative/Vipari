@@ -1062,9 +1062,53 @@ index 1..2
     )
 
     assert "Attribute profile:" in comment
-    assert "| Attribute | Baseline | Current | Direction | Confidence |" in comment
-    assert "| Guardrail robustness | strong | weak | weakened | high confidence |" in comment
+    assert "| Attribute | Baseline → Current | Reason |" in comment
+    assert "| Guardrail robustness | strong → weak | PromptDrift detected weaker guardrail posture because explicit limits dropped. (high confidence) |" in comment
+    assert "| Capability risk | unknown → unknown | PromptDrift does not have enough stored profile evidence for this dimension yet. (low confidence) |" in comment
     assert "`prompts/policy.md` [system_prompt]" in comment
+
+
+def test_build_llm_comment_renders_unknown_attribute_profile_when_missing(monkeypatch):
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt now allows disclosure of internal policy details, which weakens existing safeguards.\nRisk Level: High\nRecommendation: Revert before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        attribute_profiles=None,
+    )
+
+    assert "Attribute profile:" in comment
+    assert "`unknown artifact` [unknown]" in comment
+    assert "| Guardrail robustness | unknown → unknown | PromptDrift does not have enough stored profile evidence for this dimension yet. (low confidence) |" in comment
+    assert "| Model config posture | unknown → unknown | PromptDrift does not have enough stored profile evidence for this dimension yet. (low confidence) |" in comment
 
 
 def test_worker_persists_failed_audit_when_comment_posting_fails(tmp_path, monkeypatch):

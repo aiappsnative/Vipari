@@ -11,7 +11,7 @@ from engine.analysis import DiffAnalysis, analyze_diff
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
-from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
+from .dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension, build_artifact_attribute_profile
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
@@ -197,21 +197,31 @@ def _format_comment_body(
 
 
 def _render_attribute_profile_markdown(attribute_profiles: list[ArtifactAttributeProfile] | None) -> str:
-    profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
+    profiles = list(attribute_profiles or [])
     if not profiles:
-        return ""
+        profiles = [
+            ArtifactAttributeProfile(
+                artifact_path="unknown artifact",
+                artifact_type="unknown",
+                control_surface_label="Unknown",
+                dimensions=[],
+            )
+        ]
     lines = ["Attribute profile:"]
     for profile in profiles[:3]:
         lines.append(f"- `{profile.artifact_path}` [{profile.artifact_type}]")
         lines.append("")
-        lines.append("| Attribute | Baseline | Current | Direction | Confidence |")
-        lines.append("| --- | --- | --- | --- | --- |")
-        for dimension in profile.dimensions:
+        lines.append("| Attribute | Baseline → Current | Reason |")
+        lines.append("| --- | --- | --- |")
+        normalized_dimensions = _comment_attribute_dimensions(profile)
+        for dimension in normalized_dimensions:
             lines.append(
-                f"| {dimension.label} | {dimension.baseline_value} | {dimension.current_value} | {dimension.direction} | {dimension.confidence_label} |"
+                f"| {dimension.label} | {dimension.baseline_value} → {dimension.current_value} | {dimension.reason} ({dimension.confidence_label}) |"
             )
         interesting_dimensions = [
-            dimension for dimension in profile.dimensions if dimension.state != "no_change" or dimension.attribute_key == "control_surface_type"
+            dimension
+            for dimension in normalized_dimensions
+            if dimension.state != "no_change" or dimension.attribute_key == "control_surface_type"
         ]
         if interesting_dimensions:
             lines.append("")
@@ -219,6 +229,46 @@ def _render_attribute_profile_markdown(attribute_profiles: list[ArtifactAttribut
                 lines.append(f"  - {dimension.label}: {dimension.reason}")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def _comment_attribute_dimensions(profile: ArtifactAttributeProfile) -> list[AttributeProfileDimension]:
+    ordered_keys = (
+        "guardrail_robustness",
+        "capability_risk",
+        "autonomy_level",
+        "governance_strength",
+        "model_config_posture",
+        "control_surface_type",
+    )
+    dimensions_by_key = {dimension.attribute_key: dimension for dimension in profile.dimensions}
+    return [dimensions_by_key.get(attribute_key) or _unknown_attribute_dimension(attribute_key) for attribute_key in ordered_keys]
+
+
+def _unknown_attribute_dimension(attribute_key: str) -> AttributeProfileDimension:
+    label_by_key = {
+        "guardrail_robustness": "Guardrail robustness",
+        "capability_risk": "Capability risk",
+        "autonomy_level": "Autonomy level",
+        "governance_strength": "Governance strength",
+        "model_config_posture": "Model config posture",
+        "control_surface_type": "Control surface type",
+    }
+    return AttributeProfileDimension(
+        attribute_key=attribute_key,
+        label=label_by_key[attribute_key],
+        baseline_value="unknown",
+        current_value="unknown",
+        direction="unknown",
+        state="unknown",
+        confidence_label="low confidence",
+        confidence_score=0.2,
+        reason="PromptDrift does not have enough stored profile evidence for this dimension yet.",
+        evidence=[],
+        remediation="Review the changed artifact directly for this dimension.",
+        baseline_score=None,
+        current_score=None,
+        delta=None,
+    )
 
 
 def _format_escalation_line(recommendation: EscalationRecommendation) -> str:
