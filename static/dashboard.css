@@ -3034,6 +3034,53 @@ body.dashboard-index-page[data-theme="light"] {
     font-style: normal;
 }
 
+.repo-governance-attention-details,
+.repo-governance-anomaly-list {
+    display: grid;
+    gap: 10px;
+}
+
+.repo-governance-anomaly-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.repo-governance-anomaly-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.repo-governance-anomaly-copy strong {
+    color: #eef3f6;
+    font-size: 13px;
+}
+
+.repo-governance-anomaly-copy span {
+    color: rgba(194, 200, 206, 0.74);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.repo-audit-page[data-theme="light"] .repo-governance-anomaly-row {
+    border-color: rgba(112, 98, 84, 0.12);
+    background: rgba(112, 98, 84, 0.04);
+}
+
+.repo-audit-page[data-theme="light"] .repo-governance-anomaly-copy strong {
+    color: var(--color-text);
+}
+
+.repo-audit-page[data-theme="light"] .repo-governance-anomaly-copy span {
+    color: var(--color-text-muted);
+}
+
 .dashboard-index-page .page-scroll {
     overflow: visible;
     padding: 0;
@@ -3706,6 +3753,74 @@ body.dashboard-index-page[data-theme="light"] {
 .dashboard-index-page .coverage-bars {
     display: grid;
     gap: 14px;
+}
+
+.dashboard-index-page .governance-attention-list,
+.dashboard-index-page .governance-issue-list {
+    display: grid;
+    gap: 12px;
+}
+
+.dashboard-index-page .governance-issue-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: start;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.dashboard-index-page .governance-issue-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.dashboard-index-page .governance-issue-copy strong {
+    color: #eef3f6;
+}
+
+.dashboard-index-page .governance-issue-copy span {
+    color: rgba(194, 200, 206, 0.74);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.dashboard-index-page .governance-surface-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.dashboard-index-page .governance-surface-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(78, 103, 255, 0.16);
+    color: #dfe5ff;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.dashboard-index-page[data-theme="light"] .governance-issue-row {
+    border-color: rgba(112, 98, 84, 0.12);
+    background: rgba(112, 98, 84, 0.04);
+}
+
+.dashboard-index-page[data-theme="light"] .governance-issue-copy strong {
+    color: var(--color-text);
+}
+
+.dashboard-index-page[data-theme="light"] .governance-issue-copy span {
+    color: var(--color-text-muted);
+}
+
+.dashboard-index-page[data-theme="light"] .governance-surface-chip {
+    background: rgba(0, 131, 143, 0.12);
+    color: var(--color-text);
 }
 
 .dashboard-index-page .coverage-bar-row {
