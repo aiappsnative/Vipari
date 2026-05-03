@@ -636,7 +636,7 @@ index 1..2
     settings.app_base_url = "https://driftguard.example.com"
 
     try:
-        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42&head_sha=abc123456"
 
         comment = build_fallback_comment(
             analysis,
@@ -694,7 +694,7 @@ index 1..2
     settings.app_base_url = "https://driftguard.example.com"
 
     try:
-        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42&head_sha=abc123456"
 
         comment = build_llm_comment(
             "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",

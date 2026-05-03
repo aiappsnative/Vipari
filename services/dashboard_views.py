@@ -349,6 +349,7 @@ class RepoDashboardInsightEntry:
     provenance_summary: str = ""
     review_target: str | None = None
     review_url: str | None = None
+    review_head_sha: str | None = None
     supporting_review_target: str | None = None
     supporting_review_url: str | None = None
     change_summary: str = ""
@@ -1988,6 +1989,7 @@ class _RepoArtifactProfileContext:
     label: str
     source_ref: str | None
     source_url: str | None
+    review_head_sha: str | None
     review_context: str | None
     created_at: float
     baseline_provenance: BaselineProvenance | None
@@ -2072,6 +2074,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
         pr_rows = conn.execute(
             """
             SELECT sap.artifact_path, pra.pr_number, pra.output_mode, pra.suggested_risk_level, pra.status, pra.semantic_review_completed,
+                pra.head_sha,
                 sap.created_at, sap.baseline_profile_id, sap.baseline_provenance_json, sap.artifact_version_id,
                 sap.semantic_distance, sap.profile_json, sap.attribute_deltas_json, sap.narrative_json, sap.signal_terms_json,
                 av.content_text AS content_text
@@ -2107,6 +2110,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
                 label=pr_source["label"],
                 source_ref=pr_source["source_ref"],
                 source_url=pr_source["source_url"],
+                review_head_sha=str(row["head_sha"] or "").strip() or None,
                 review_context=pr_source["review_context"],
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
@@ -2153,6 +2157,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
                 label=historical_source["label"],
                 source_ref=historical_source["source_ref"],
                 source_url=historical_source["source_url"],
+                review_head_sha=None,
                 review_context=historical_source["review_context"],
                 created_at=float(row["created_at"]),
                 baseline_provenance=baseline_provenance,
@@ -2314,6 +2319,7 @@ def _build_repo_insights(
             provenance_summary=_provenance_summary(evidence_bundle),
             review_target=_review_target(evidence_bundle),
             review_url=_review_url(evidence_bundle),
+            review_head_sha=(review_context.review_head_sha if review_context is not None else None),
             supporting_review_target=_supporting_review_target(evidence_bundle),
             supporting_review_url=_supporting_review_url(evidence_bundle),
             change_summary=_change_summary(artifact, evidence_bundle),

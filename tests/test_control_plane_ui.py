@@ -625,6 +625,14 @@ def test_dashboard_deep_link_renders_shell_for_free_tier_workspace(tmp_path):
     assert 'data-dashboard-shell-state="active_comments_only"' in deep_link_response.text
     assert "dashboard views require a paid plan" in deep_link_response.text
     assert 'data-dashboard-deep-link-pr="42"' in deep_link_response.text
+    assert 'data-dashboard-deep-link-head-sha="abc123456"' in client.get(
+        "/dashboard?pr=42&head_sha=abc123456",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    ).text
+    assert 'class="main-content dashboard-shell-blocked"' in client.get(
+        "/dashboard?pr=42&head_sha=abc123456",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    ).text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -735,7 +743,7 @@ def test_repo_dashboard_deep_link_renders_onboarding_shell_for_visible_repo(tmp_
     update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "active")
 
     response = client.get(
-        "/dashboard/doria90/dummyAI?artifact=prompts%2Fpolicy.md&pr=42",
+        "/dashboard/doria90/dummyAI?artifact=prompts%2Fpolicy.md&pr=42&head_sha=sha-current",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -744,7 +752,9 @@ def test_repo_dashboard_deep_link_renders_onboarding_shell_for_visible_repo(tmp_
     assert "doria90/dummyAI has not yet been onboarded" in response.text
     assert 'content="prompts/policy.md"' in response.text
     assert 'content="42"' in response.text
-    assert 'href="/dashboard/doria90%2FdummyAI?tab=drift&artifact=prompts%2Fpolicy.md&pr=42"' in response.text
+    assert 'content="sha-current"' in response.text
+    assert 'class="main-content dashboard-shell-blocked"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI?tab=drift&artifact=prompts%2Fpolicy.md&pr=42&head_sha=sha-current"' in response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

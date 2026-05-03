@@ -171,6 +171,15 @@ function deepLinkPullRequestNumber() {
     return params.get("pr") || "";
 }
 
+function deepLinkHeadSha() {
+    const metaValue = document.querySelector('meta[name="driftguard-deep-link-head-sha"]')?.getAttribute("content")?.trim();
+    if (metaValue) {
+        return metaValue;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("head_sha") || "";
+}
+
 function repoDetailUrl(repo) {
     const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
     const artifactPath = repo.highest_insight_artifact_path || "";
@@ -192,6 +201,10 @@ function repoTabUrl(tab, options = {}) {
     const prNumber = options.prNumber || deepLinkPullRequestNumber();
     if (prNumber) {
         url.searchParams.set("pr", prNumber);
+    }
+    const headSha = options.headSha || deepLinkHeadSha();
+    if (headSha) {
+        url.searchParams.set("head_sha", headSha);
     }
     if (options.hash) {
         url.hash = options.hash;
@@ -906,6 +919,14 @@ function insightMatchesPullRequest(item, prNumber) {
     return markers.some((value) => value.includes(`/pull/${normalizedPr}`) || value.includes(`PR #${normalizedPr}`) || value.includes(`pull ${normalizedPr}`));
 }
 
+function insightMatchesHeadSha(item, headSha) {
+    const normalizedHeadSha = String(headSha || "").trim().toLowerCase();
+    if (!normalizedHeadSha) {
+        return false;
+    }
+    return String(item?.review_head_sha || "").trim().toLowerCase() === normalizedHeadSha;
+}
+
 function applyRepoDetail(item, options = {}) {
     const profile = findDesignProfile(item.artifact_path);
     const severity = severityForPriority(item.priority);
@@ -1014,13 +1035,20 @@ function bindRepoRows(items) {
     });
 }
 
-function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber = "") {
+function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     if (!rows.length) {
-        if (preferredArtifactPath || preferredPrNumber) {
-            renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber);
+        if (preferredArtifactPath || preferredPrNumber || preferredHeadSha) {
+            renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber, preferredHeadSha);
         }
         return false;
+    }
+    if (preferredHeadSha) {
+        const preferredIndex = items.findIndex((item) => insightMatchesHeadSha(item, preferredHeadSha));
+        if (preferredIndex >= 0 && rows[preferredIndex]) {
+            activateRepoRow(rows[preferredIndex], items);
+            return true;
+        }
     }
     if (preferredArtifactPath) {
         const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
@@ -1036,21 +1064,24 @@ function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber 
             return true;
         }
     }
-    if (preferredArtifactPath || preferredPrNumber) {
-        renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber);
+    if (preferredArtifactPath || preferredPrNumber || preferredHeadSha) {
+        renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber, preferredHeadSha);
         return false;
     }
     activateRepoRow(rows[0], items, { loadStoryline: false });
     return true;
 }
 
-function renderMissingDeepLinkContext(preferredArtifactPath = "", preferredPrNumber = "") {
+function renderMissingDeepLinkContext(preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     const requestedParts = [];
     if (preferredArtifactPath) {
         requestedParts.push(`artifact ${preferredArtifactPath}`);
     }
     if (preferredPrNumber) {
         requestedParts.push(`PR #${preferredPrNumber}`);
+    }
+    if (preferredHeadSha) {
+        requestedParts.push(`review ${preferredHeadSha.slice(0, 7)}`);
     }
     const requestedLabel = requestedParts.length ? requestedParts.join(" and ") : "the requested review context";
     const message = `The linked dashboard context for ${requestedLabel} is not available in this repository view yet. Choose another item from the queue or refresh after the next audit finishes.`;
@@ -1085,20 +1116,20 @@ function filteredRepoItems(items, filter) {
     return items;
 }
 
-function renderRepoQueue(items, filter = "all", preferredArtifactPath = "", preferredPrNumber = "") {
+function renderRepoQueue(items, filter = "all", preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     const filtered = filteredRepoItems(items, filter);
     setText("repo-triage-count", `${filtered.length} item${filtered.length === 1 ? "" : "s"}`);
     setSectionHtml("triage-list", filtered.length ? filtered.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No repo insights match this filter.</div>');
     bindRepoRows(filtered);
-    autoSelectRepoRow(filtered, preferredArtifactPath, preferredPrNumber);
+    autoSelectRepoRow(filtered, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
 }
 
-function bindRepoFilters(items, preferredArtifactPath = "", preferredPrNumber = "") {
+function bindRepoFilters(items, preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     document.querySelectorAll("[data-filter]").forEach((button) => {
         button.addEventListener("click", () => {
             document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.classList.remove("active"));
             button.classList.add("active");
-            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath, preferredPrNumber);
+            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath, preferredPrNumber, preferredHeadSha);
         });
     });
 }
@@ -1733,6 +1764,7 @@ function applyDashboardPayload(payload) {
     const featuredStoryline = payload.featured_storyline || null;
     const preferredArtifactPath = requestedArtifactPath();
     const preferredPrNumber = deepLinkPullRequestNumber();
+    const preferredHeadSha = deepLinkHeadSha();
     const governanceAttention = renderGovernanceAttentionNote(payload.governance_posture || null);
     window.__designProfiles = asArray(payload.design_profiles);
     window.__journeySnapshots = journeySnapshots;
@@ -1748,8 +1780,8 @@ function applyDashboardPayload(payload) {
 
     setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
     bindRepoRows(insights);
-    bindRepoFilters(insights, preferredArtifactPath, preferredPrNumber);
-    autoSelectRepoRow(insights, preferredArtifactPath, preferredPrNumber);
+    bindRepoFilters(insights, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
+    autoSelectRepoRow(insights, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
 
     if (featuredStoryline?.artifact_path) {
         window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
@@ -1947,40 +1979,7 @@ async function loadAvailableRepos() {
 }
 
 function renderBlockedRepoShell() {
-    const shell = dashboardShellCopy();
-    const callToAction = shell.ctaHref && shell.ctaLabel
-        ? `<div class="detail-note"><a class="filter-add" href="${escapeHtml(shell.ctaHref)}">${escapeHtml(shell.ctaLabel)}</a></div>`
-        : "";
-    const notice = `<div class="muted"><strong>${escapeHtml(shell.title)}</strong><br>${escapeHtml(shell.body)}</div>${callToAction}`;
-    setText("repo-stat-artifacts", "-");
-    setText("repo-stat-review", "Locked");
-    setText("repo-stat-baselines", "-");
-    setText("repo-stat-history", "-");
-    setText("repo-triage-count", "Unavailable");
-    setText("repo-governance-attention-headline", shell.title);
-    setHtml("repo-governance-attention-copy", escapeHtml(shell.body));
-    setSectionHtml("repo-governance-attention-details", notice);
-    setSectionHtml("triage-list", notice);
-    setSectionHtml("featured-storyline", notice);
-    setSectionHtml("detail-attributes", notice);
-    setSectionHtml("detail-evidence-list", `<li>${escapeHtml(shell.body)}</li>`);
-    setSectionHtml("control-surfaces", notice);
-    setSectionHtml("repo-ai-act-assessment", notice);
-    setSectionHtml("history-cues", notice);
-    setSectionHtml("baseline-review-panel", notice);
-    setSectionHtml("repo-journey-summary", notice);
-    setSectionHtml("repo-journey-timeline", notice);
-    setSectionHtml("repo-journey-compare", notice);
-    setText("repo-radar-title", shell.title);
-    setText("repo-radar-meta", shell.body);
-    setText("repo-radar-caption", shell.body);
-    drawRepoRadar(null);
-    setSectionHtml("lower-confidence-insights", notice);
-    setSectionHtml("repo-actions-review", notice);
-    setSectionHtml("artifacts-tbody", `<tr><td colspan="5" class="muted">${escapeHtml(shell.body)}</td></tr>`);
-    setText("detail-artifact-name", repoFull || "Repository dashboard locked");
-    setText("detail-subtitle", shell.body);
-    setText("detail-recommendation-body", shell.body);
+    document.body.classList.add("dashboard-shell-obscured");
     const button = detailButton();
     if (button) {
         button.disabled = true;

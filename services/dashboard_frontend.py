@@ -60,9 +60,12 @@ def render_dashboard_index_page(
     shell_cta_label: str | None = None,
     deep_link_artifact: str = "",
     deep_link_pr: str = "",
+    deep_link_head_sha: str = "",
 ) -> str:
     shell_notice = ""
+    blocked_class = ""
     if shell_state != "active":
+        blocked_class = " dashboard-shell-blocked"
         shell_notice = _dashboard_shell_notice_html(
             shell_title=shell_title,
             shell_body=shell_body,
@@ -81,7 +84,9 @@ def render_dashboard_index_page(
         .replace("{{DASHBOARD_SHELL_CTA_LABEL}}", _shell_data_value(shell_cta_label))
         .replace("{{DASHBOARD_DEEP_LINK_ARTIFACT}}", _shell_data_value(deep_link_artifact))
         .replace("{{DASHBOARD_DEEP_LINK_PR}}", _shell_data_value(deep_link_pr))
+        .replace("{{DASHBOARD_DEEP_LINK_HEAD_SHA}}", _shell_data_value(deep_link_head_sha))
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
+        .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
         .replace("{{OVERVIEW_RANGE_24H_URL}}", _dashboard_index_url(active_range="24h", active_filter=active_filter))
         .replace("{{OVERVIEW_RANGE_7D_URL}}", _dashboard_index_url(active_range="7d", active_filter=active_filter))
         .replace("{{OVERVIEW_RANGE_30D_URL}}", _dashboard_index_url(active_range="30d", active_filter=active_filter))
@@ -103,11 +108,14 @@ def render_repo_dashboard_page(
     shell_cta_label: str | None = None,
     deep_link_artifact: str = "",
     deep_link_pr: str = "",
+    deep_link_head_sha: str = "",
 ) -> str:
     encoded_repo_full = quote(repo_full, safe="")
     base_url = f"/dashboard/{encoded_repo_full}"
     shell_notice = ""
+    blocked_class = ""
     if shell_state != "active":
+        blocked_class = " dashboard-shell-blocked"
         shell_notice = _dashboard_shell_notice_html(
             shell_title=shell_title,
             shell_body=shell_body,
@@ -115,12 +123,14 @@ def render_repo_dashboard_page(
             shell_cta_label=shell_cta_label,
         )
     query_suffix = ""
-    if deep_link_artifact or deep_link_pr:
+    if deep_link_artifact or deep_link_pr or deep_link_head_sha:
         params: list[str] = []
         if deep_link_artifact:
             params.append(f"artifact={quote(deep_link_artifact, safe='')}")
         if deep_link_pr:
             params.append(f"pr={quote(deep_link_pr, safe='')}")
+        if deep_link_head_sha:
+            params.append(f"head_sha={quote(deep_link_head_sha, safe='')}")
         query_suffix = "&" + "&".join(params)
     template = (
         _load_template("dashboard_repo.html")
@@ -134,7 +144,9 @@ def render_repo_dashboard_page(
         .replace("{{DASHBOARD_SHELL_CTA_LABEL}}", _shell_data_value(shell_cta_label))
         .replace("{{DASHBOARD_DEEP_LINK_ARTIFACT}}", _shell_data_value(deep_link_artifact))
         .replace("{{DASHBOARD_DEEP_LINK_PR}}", _shell_data_value(deep_link_pr))
+        .replace("{{DASHBOARD_DEEP_LINK_HEAD_SHA}}", _shell_data_value(deep_link_head_sha))
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
+        .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
         .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift{query_suffix}")
         .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control{query_suffix}")
         .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline{query_suffix}")

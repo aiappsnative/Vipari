@@ -2803,6 +2803,43 @@ body.dashboard-index-page[data-theme="light"] {
     min-height: auto;
 }
 
+.dashboard-shell-notice {
+    position: sticky;
+    top: 18px;
+    z-index: 30;
+    margin: 18px 24px 0;
+}
+
+.dashboard-shell-blocked {
+    position: relative;
+}
+
+.dashboard-shell-blocked::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.28);
+    backdrop-filter: blur(8px) saturate(0.7);
+    pointer-events: none;
+    z-index: 12;
+}
+
+.dashboard-shell-blocked > *:not(#dashboard-shell-notice) {
+    position: relative;
+    z-index: 1;
+}
+
+.dashboard-shell-blocked > #dashboard-shell-notice {
+    position: sticky;
+    top: 18px;
+    z-index: 20;
+}
+
+.dashboard-index-page[data-theme="light"] .dashboard-shell-blocked::after,
+.repo-audit-page[data-theme="light"] .dashboard-shell-blocked::after {
+    background: rgba(245, 239, 232, 0.34);
+}
+
 .dashboard-index-page .posture-strip {
     padding-inline: 24px;
     border-bottom-color: rgba(255, 255, 255, 0.08);

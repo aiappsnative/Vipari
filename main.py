@@ -3303,7 +3303,7 @@ async def base44_billing_handoff(request: Request):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all", artifact: str | None = None, pr: str | None = None):
+async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -3339,6 +3339,7 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
             shell_cta_label=shell_cta_label,
             deep_link_artifact=(artifact or "").strip(),
             deep_link_pr=(pr or "").strip(),
+            deep_link_head_sha=(head_sha or "").strip(),
         )
     )
     _record_server_timing_metric(timing_metrics, "render", render_started)
@@ -3347,7 +3348,7 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
 
 
 @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
-async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None):
+async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -3382,6 +3383,7 @@ async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drif
             shell_cta_label=shell_cta_label,
             deep_link_artifact=(artifact or "").strip(),
             deep_link_pr=(pr or "").strip(),
+            deep_link_head_sha=(head_sha or "").strip(),
         )
     )
     _record_server_timing_metric(timing_metrics, "render", render_started)

@@ -260,7 +260,7 @@ def _build_pr_comment_review(
             profiles,
         ),
         episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
-        dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles),
+        dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles, episode_context),
     )
 
 
@@ -637,6 +637,7 @@ def _build_pr_comment_dashboard_deep_link(
     repo_full: str | None,
     pr_number: int | None,
     attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext | None = None,
 ) -> str | None:
     normalized_repo_full = (repo_full or "").strip()
     if not normalized_repo_full:
@@ -653,6 +654,9 @@ def _build_pr_comment_dashboard_deep_link(
         query_params.append(("artifact", artifact_path))
     if pr_number is not None and pr_number > 0:
         query_params.append(("pr", str(pr_number)))
+    episode_head_sha = (episode_context.head_sha if episode_context is not None else "").strip()
+    if episode_head_sha:
+        query_params.append(("head_sha", episode_head_sha))
 
     path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
     if not query_params:
