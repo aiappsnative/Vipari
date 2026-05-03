@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import quote, urlencode
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
@@ -111,6 +112,7 @@ class PrCommentReview:
     governance_findings: tuple[GovernanceFinding, ...]
     recommended_next_step: str
     episode_context: PrCommentEpisodeContext
+    dashboard_deep_link: str | None = None
 
 
 def build_llm_comment(
@@ -123,6 +125,8 @@ def build_llm_comment(
     escalation_recommendation: EscalationRecommendation | None = None,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
     episode_context: PrCommentEpisodeContext | None = None,
+    repo_full: str | None = None,
+    pr_number: int | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
@@ -181,6 +185,8 @@ def build_llm_comment(
         escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
         attribute_profiles=attribute_profiles,
         episode_context=episode_context,
+        repo_full=repo_full,
+        pr_number=pr_number,
     )
     return _render_pr_comment_review(review)
 
@@ -192,6 +198,8 @@ def build_fallback_comment(
     escalation_recommendation: EscalationRecommendation | None = None,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
     episode_context: PrCommentEpisodeContext | None = None,
+    repo_full: str | None = None,
+    pr_number: int | None = None,
 ) -> str:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     summary = _build_fallback_summary(deterministic_analysis)
@@ -206,6 +214,8 @@ def build_fallback_comment(
         escalation_recommendation=recommendation,
         attribute_profiles=attribute_profiles,
         episode_context=episode_context,
+        repo_full=repo_full,
+        pr_number=pr_number,
     )
     return _render_pr_comment_review(review)
 
@@ -221,6 +231,8 @@ def _build_pr_comment_review(
     escalation_recommendation: EscalationRecommendation,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
     episode_context: PrCommentEpisodeContext | None = None,
+    repo_full: str | None = None,
+    pr_number: int | None = None,
 ) -> PrCommentReview:
     profiles = [profile for profile in (attribute_profiles or []) if profile.dimensions]
     primary_profile = _select_primary_attribute_profile(profiles)
@@ -246,6 +258,7 @@ def _build_pr_comment_review(
             profiles,
         ),
         episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
+        dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles),
     )
 
 
@@ -296,6 +309,13 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
             _episode_metadata_line(review.episode_context),
         ]
     )
+    if review.dashboard_deep_link:
+        lines.extend(
+            [
+                "",
+                f"[Open this review in DriftGuard dashboard]({review.dashboard_deep_link})",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -609,6 +629,29 @@ def _episode_metadata_line(context: PrCommentEpisodeContext) -> str:
         f"{base[:-2]} Previous DriftGuard analysis for `{_short_sha(previous_episode.head_sha)}` "
         f"recommended {previous_recommendation.lower()}._"
     )
+
+
+def _build_pr_comment_dashboard_deep_link(
+    repo_full: str | None,
+    pr_number: int | None,
+    attribute_profiles: list[ArtifactAttributeProfile],
+) -> str | None:
+    normalized_repo_full = (repo_full or "").strip()
+    if not normalized_repo_full:
+        return None
+
+    query_params: list[tuple[str, str]] = []
+    primary_profile = _select_primary_attribute_profile(attribute_profiles)
+    artifact_path = (primary_profile.artifact_path if primary_profile is not None else "").strip()
+    if artifact_path:
+        query_params.append(("artifact", artifact_path))
+    if pr_number is not None and pr_number > 0:
+        query_params.append(("pr", str(pr_number)))
+
+    path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
+    if not query_params:
+        return path
+    return f"{path}?{urlencode(query_params)}"
 
 
 def _extract_previous_episode_recommendation(comment_body: str) -> str:
@@ -1153,6 +1196,8 @@ def _handle_fallback(
         escalation_recommendation=recommendation,
         attribute_profiles=comment_attribute_profiles,
         episode_context=episode_context,
+        repo_full=job.repo_full,
+        pr_number=job.pr_number,
     )
     try:
         installation_token = _get_installation_token_for_job(job, settings)
@@ -1238,6 +1283,8 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             escalation_recommendation=escalation_recommendation,
             attribute_profiles=attribute_profiles,
             episode_context=episode_context,
+            repo_full=job.repo_full,
+            pr_number=job.pr_number,
         )
         fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
     except Exception as exc:

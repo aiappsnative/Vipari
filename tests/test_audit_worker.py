@@ -634,6 +634,8 @@ index 1..2
         analysis,
         error_message="RateLimitError: too many requests",
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+        repo_full="doria90/dummyAI",
+        pr_number=42,
     )
 
     assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
@@ -646,6 +648,7 @@ index 1..2
     assert "Add AI platform review before merge." in comment
     assert "RateLimitError" not in comment
     assert "head `abc1234`" in comment
+    assert "[Open this review in DriftGuard dashboard](/dashboard/doria90%2FdummyAI?pr=42)" in comment
 
 
 def test_build_llm_comment_renders_v3_structure(monkeypatch):
@@ -683,6 +686,8 @@ index 1..2
         model="gpt-4o",
         timeout_seconds=30.0,
         episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+        repo_full="doria90/dummyAI",
+        pr_number=42,
     )
 
     assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
@@ -693,6 +698,7 @@ index 1..2
     assert "### Evidence" in comment
     assert "### Recommended next step" in comment
     assert "Add AI platform review before merge." in comment
+    assert "[Open this review in DriftGuard dashboard](/dashboard/doria90%2FdummyAI?pr=42)" in comment
 
 
 def test_build_llm_comment_uses_first_meaningful_line_and_rebaseline_header_when_baseline_missing():

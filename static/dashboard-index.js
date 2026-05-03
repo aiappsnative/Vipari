@@ -43,6 +43,51 @@ function setHtml(elementId, html) {
     }
 }
 
+function dashboardShellState() {
+    return String(document.body?.dataset?.dashboardShellState || "active").trim().toLowerCase() || "active";
+}
+
+function dashboardShellCopy() {
+    return {
+        title: String(document.body?.dataset?.dashboardShellTitle || "Dashboard access status"),
+        body: String(document.body?.dataset?.dashboardShellBody || "Dashboard data is unavailable for this workspace."),
+        ctaHref: String(document.body?.dataset?.dashboardShellCtaHref || ""),
+        ctaLabel: String(document.body?.dataset?.dashboardShellCtaLabel || ""),
+    };
+}
+
+function renderBlockedOverviewShell() {
+    const shell = dashboardShellCopy();
+    const callToAction = shell.ctaHref && shell.ctaLabel
+        ? `<div class="detail-note"><a class="filter-add" href="${escapeHtml(shell.ctaHref)}">${escapeHtml(shell.ctaLabel)}</a></div>`
+        : "";
+    const notice = `<div class="muted"><strong>${escapeHtml(shell.title)}</strong><br>${escapeHtml(shell.body)}</div>${callToAction}`;
+    setText("stat-needs-review", "Locked");
+    setText("stat-high-risk", "Locked");
+    setText("stat-approved", "Locked");
+    setText("repos-count", "Unavailable");
+    setSectionHtml("triage-list", notice);
+    setSectionHtml("repo-atlas-grid", notice);
+    setSectionHtml("repo-journey-strip", notice);
+    setSectionHtml("coverage-bars", notice);
+    setText("governance-attention-headline", shell.title);
+    setText("governance-attention-copy", shell.body);
+    setSectionHtml("governance-attention-list", notice);
+    setHtml("detail-summary", notice);
+    setText("detail-repo-name", "Dashboard locked");
+    setText("detail-subtitle", shell.body);
+    setText("detail-recommendation-body", shell.body);
+    setText("repo-radar-title", shell.title);
+    setText("journey-repo-title", shell.title);
+    setText("journey-repo-name", "Dashboard locked");
+    setText("repo-radar-meta", shell.body);
+    setText("repo-journey-note", shell.body);
+    setText("coverage-note", shell.body);
+    setText("drift-ring-value", "--%");
+    drawDriftRing(0);
+    setText("selected-repo-summary", shell.body);
+}
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
@@ -1496,8 +1541,12 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
 }
 
     bindOverviewRebaselineModal();
-loadOverview();
-loadEscalationQueue();
+if (dashboardShellState() === "active") {
+    loadOverview();
+    loadEscalationQueue();
+} else {
+    renderBlockedOverviewShell();
+}
 
 // Audit Logs toggle behavior: expand/collapse the repo list
 function bindAuditLogsToggle() {

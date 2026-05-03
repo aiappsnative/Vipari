@@ -6,6 +6,8 @@
     <title>{{REPO_FULL}} · Audit Page · DriftGuard</title>
     <meta name="driftguard-repo-full" content="{{REPO_FULL}}" />
     <meta name="driftguard-active-repo-tab" content="{{ACTIVE_REPO_TAB}}" />
+    <meta name="driftguard-deep-link-artifact" content="{{DASHBOARD_DEEP_LINK_ARTIFACT}}" />
+    <meta name="driftguard-deep-link-pr" content="{{DASHBOARD_DEEP_LINK_PR}}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,7 +15,7 @@
     <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-repo.js"></script>
 </head>
-<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}" data-active-repo-tab="{{ACTIVE_REPO_TAB}}">
+<body class="repo-audit-page" data-theme="{{THEME_PREFERENCE}}" data-active-repo-tab="{{ACTIVE_REPO_TAB}}" data-dashboard-shell-state="{{DASHBOARD_SHELL_STATE}}" data-dashboard-shell-title="{{DASHBOARD_SHELL_TITLE}}" data-dashboard-shell-body="{{DASHBOARD_SHELL_BODY}}" data-dashboard-shell-cta-href="{{DASHBOARD_SHELL_CTA_HREF}}" data-dashboard-shell-cta-label="{{DASHBOARD_SHELL_CTA_LABEL}}" data-dashboard-deep-link-artifact="{{DASHBOARD_DEEP_LINK_ARTIFACT}}" data-dashboard-deep-link-pr="{{DASHBOARD_DEEP_LINK_PR}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
@@ -75,6 +77,7 @@
         </nav>
 
         <div class="main-content">
+            {{DASHBOARD_SHELL_NOTICE}}
             <section class="posture-strip" aria-label="Repository posture">
                 <div class="posture-strip-left">
                     <span class="posture-title">{{REPO_FULL}}</span>

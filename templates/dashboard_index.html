@@ -11,7 +11,7 @@
     <script defer src="/static/theme-toggle.js"></script>
     <script defer src="/static/dashboard-index.js"></script>
 </head>
-<body class="dashboard-index-page" data-theme="{{THEME_PREFERENCE}}" data-active-overview-range="{{ACTIVE_OVERVIEW_RANGE}}" data-active-overview-filter="{{ACTIVE_OVERVIEW_FILTER}}">
+<body class="dashboard-index-page" data-theme="{{THEME_PREFERENCE}}" data-active-overview-range="{{ACTIVE_OVERVIEW_RANGE}}" data-active-overview-filter="{{ACTIVE_OVERVIEW_FILTER}}" data-dashboard-shell-state="{{DASHBOARD_SHELL_STATE}}" data-dashboard-shell-title="{{DASHBOARD_SHELL_TITLE}}" data-dashboard-shell-body="{{DASHBOARD_SHELL_BODY}}" data-dashboard-shell-cta-href="{{DASHBOARD_SHELL_CTA_HREF}}" data-dashboard-shell-cta-label="{{DASHBOARD_SHELL_CTA_LABEL}}" data-dashboard-deep-link-artifact="{{DASHBOARD_DEEP_LINK_ARTIFACT}}" data-dashboard-deep-link-pr="{{DASHBOARD_DEEP_LINK_PR}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
@@ -68,6 +68,7 @@
         </nav>
 
         <div class="main-content">
+            {{DASHBOARD_SHELL_NOTICE}}
 
                 <div id="overview-rebaseline-modal" class="modal-shell" hidden>
                     <div class="modal-backdrop" data-close-overview-rebaseline="true"></div>

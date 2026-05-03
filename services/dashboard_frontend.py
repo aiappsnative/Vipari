@@ -31,12 +31,57 @@ def _dashboard_index_url(*, active_range: str, active_filter: str) -> str:
     return f"/dashboard?range={active_range}&filter={active_filter}"
 
 
-def render_dashboard_index_page(theme_preference: str = "dark", active_range: str = "7d", active_filter: str = "all") -> str:
+def _shell_data_value(value: str | int | None) -> str:
+    return html_escape("" if value is None else str(value), quote=True)
+
+
+def _dashboard_shell_notice_html(*, shell_title: str, shell_body: str, shell_cta_href: str | None, shell_cta_label: str | None) -> str:
+    cta_markup = ""
+    if shell_cta_href and shell_cta_label:
+        cta_markup = f'<a class="filter-add" href="{html_escape(shell_cta_href, quote=True)}">{html_escape(shell_cta_label)}</a>'
+    return (
+        '<section class="card-shell dashboard-shell-notice" id="dashboard-shell-notice" aria-label="Dashboard access status">'
+        f'<div class="secondary-panel-title">{html_escape(shell_title)}</div>'
+        f'<div class="muted">{html_escape(shell_body)}</div>'
+        f'{cta_markup}'
+        '</section>'
+    )
+
+
+def render_dashboard_index_page(
+    theme_preference: str = "dark",
+    active_range: str = "7d",
+    active_filter: str = "all",
+    *,
+    shell_state: str = "active",
+    shell_title: str = "",
+    shell_body: str = "",
+    shell_cta_href: str | None = None,
+    shell_cta_label: str | None = None,
+    deep_link_artifact: str = "",
+    deep_link_pr: str = "",
+) -> str:
+    shell_notice = ""
+    if shell_state != "active":
+        shell_notice = _dashboard_shell_notice_html(
+            shell_title=shell_title,
+            shell_body=shell_body,
+            shell_cta_href=shell_cta_href,
+            shell_cta_label=shell_cta_label,
+        )
     return (
         _load_template("dashboard_index.html")
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{ACTIVE_OVERVIEW_RANGE}}", html_escape(active_range))
         .replace("{{ACTIVE_OVERVIEW_FILTER}}", html_escape(active_filter))
+        .replace("{{DASHBOARD_SHELL_STATE}}", _shell_data_value(shell_state))
+        .replace("{{DASHBOARD_SHELL_TITLE}}", _shell_data_value(shell_title))
+        .replace("{{DASHBOARD_SHELL_BODY}}", _shell_data_value(shell_body))
+        .replace("{{DASHBOARD_SHELL_CTA_HREF}}", _shell_data_value(shell_cta_href))
+        .replace("{{DASHBOARD_SHELL_CTA_LABEL}}", _shell_data_value(shell_cta_label))
+        .replace("{{DASHBOARD_DEEP_LINK_ARTIFACT}}", _shell_data_value(deep_link_artifact))
+        .replace("{{DASHBOARD_DEEP_LINK_PR}}", _shell_data_value(deep_link_pr))
+        .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{OVERVIEW_RANGE_24H_URL}}", _dashboard_index_url(active_range="24h", active_filter=active_filter))
         .replace("{{OVERVIEW_RANGE_7D_URL}}", _dashboard_index_url(active_range="7d", active_filter=active_filter))
         .replace("{{OVERVIEW_RANGE_30D_URL}}", _dashboard_index_url(active_range="30d", active_filter=active_filter))
@@ -46,18 +91,54 @@ def render_dashboard_index_page(theme_preference: str = "dark", active_range: st
     )
 
 
-def render_repo_dashboard_page(repo_full: str, theme_preference: str = "dark", active_tab: str = "drift") -> str:
+def render_repo_dashboard_page(
+    repo_full: str,
+    theme_preference: str = "dark",
+    active_tab: str = "drift",
+    *,
+    shell_state: str = "active",
+    shell_title: str = "",
+    shell_body: str = "",
+    shell_cta_href: str | None = None,
+    shell_cta_label: str | None = None,
+    deep_link_artifact: str = "",
+    deep_link_pr: str = "",
+) -> str:
     encoded_repo_full = quote(repo_full, safe="")
     base_url = f"/dashboard/{encoded_repo_full}"
+    shell_notice = ""
+    if shell_state != "active":
+        shell_notice = _dashboard_shell_notice_html(
+            shell_title=shell_title,
+            shell_body=shell_body,
+            shell_cta_href=shell_cta_href,
+            shell_cta_label=shell_cta_label,
+        )
+    query_suffix = ""
+    if deep_link_artifact or deep_link_pr:
+        params: list[str] = []
+        if deep_link_artifact:
+            params.append(f"artifact={quote(deep_link_artifact, safe='')}")
+        if deep_link_pr:
+            params.append(f"pr={quote(deep_link_pr, safe='')}")
+        query_suffix = "&" + "&".join(params)
     template = (
         _load_template("dashboard_repo.html")
         .replace("{{REPO_FULL}}", html_escape(repo_full))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{ACTIVE_REPO_TAB}}", html_escape(active_tab))
-        .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift")
-        .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control")
-        .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline")
-        .replace("{{REPO_TAB_COMPLIANCE_URL}}", f"{base_url}?tab=compliance")
-        .replace("{{REPO_TAB_REPORTS_URL}}", f"{base_url}?tab=reports")
+        .replace("{{DASHBOARD_SHELL_STATE}}", _shell_data_value(shell_state))
+        .replace("{{DASHBOARD_SHELL_TITLE}}", _shell_data_value(shell_title))
+        .replace("{{DASHBOARD_SHELL_BODY}}", _shell_data_value(shell_body))
+        .replace("{{DASHBOARD_SHELL_CTA_HREF}}", _shell_data_value(shell_cta_href))
+        .replace("{{DASHBOARD_SHELL_CTA_LABEL}}", _shell_data_value(shell_cta_label))
+        .replace("{{DASHBOARD_DEEP_LINK_ARTIFACT}}", _shell_data_value(deep_link_artifact))
+        .replace("{{DASHBOARD_DEEP_LINK_PR}}", _shell_data_value(deep_link_pr))
+        .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
+        .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift{query_suffix}")
+        .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control{query_suffix}")
+        .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline{query_suffix}")
+        .replace("{{REPO_TAB_COMPLIANCE_URL}}", f"{base_url}?tab=compliance{query_suffix}")
+        .replace("{{REPO_TAB_REPORTS_URL}}", f"{base_url}?tab=reports{query_suffix}")
     )
     return template

@@ -486,6 +486,251 @@ def test_dashboard_api_rejects_free_tier_workspace(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_dashboard_deep_link_renders_shell_for_free_tier_workspace(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "free-dashboard-shell.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="902-shell",
+        github_login="free-shell-user",
+        display_name="Free Shell User",
+        primary_email="free-shell@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-shell-workspace",
+        display_name="Free Shell Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="free-shell-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-shell",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:shell",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "basic",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9021,
+        account_id="9021",
+        account_login="free-shell-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9021,
+        repositories=[
+            {
+                "repo_github_id": "free-shell-org/repo-one",
+                "repo_full": "free-shell-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9021,
+        repo_github_id="free-shell-org/repo-one",
+        repo_full="free-shell-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    redirect_response = client.get(
+        "/dashboard",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+    deep_link_response = client.get(
+        "/dashboard?pr=42",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert redirect_response.status_code == 303
+    assert redirect_response.headers["location"] == "/app"
+    assert deep_link_response.status_code == 200
+    assert 'data-dashboard-shell-state="active_comments_only"' in deep_link_response.text
+    assert "dashboard views require a paid plan" in deep_link_response.text
+    assert 'data-dashboard-deep-link-pr="42"' in deep_link_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_dashboard_deep_link_renders_onboarding_shell_for_visible_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-onboarding-shell.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="903-shell",
+        github_login="paid-shell-user",
+        display_name="Paid Shell User",
+        primary_email="paid-shell@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="paid-shell-workspace",
+        display_name="Paid Shell Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="paid-shell-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-paid-shell",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:shell",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 3,
+            "seat_limit": 10,
+            "retention_policy": "extended",
+            "support_tier": "priority",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9031,
+        account_id="9031",
+        account_login="paid-shell-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9031,
+        repositories=[
+            {
+                "repo_github_id": "doria90/dummyAI",
+                "repo_full": "doria90/dummyAI",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9031,
+        repo_github_id="doria90/dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "active")
+
+    response = client.get(
+        "/dashboard/doria90/dummyAI?artifact=prompts%2Fpolicy.md&pr=42",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert 'data-dashboard-shell-state="awaiting_repo_onboarding"' in response.text
+    assert "doria90/dummyAI has not yet been onboarded" in response.text
+    assert 'content="prompts/policy.md"' in response.text
+    assert 'content="42"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI?tab=drift&artifact=prompts%2Fpolicy.md&pr=42"' in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_profile_page_requires_dashboard_access(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "profile-free.db")
@@ -3307,8 +3552,6 @@ def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
     assert jobs[0].status == "completed"
 
     main.AUDIT_DB_PATH = original_db_path
-
-
 def test_compliance_page_marks_failed_exports_and_reports_retryable_status(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "compliance-export-failure.db")
