@@ -5,9 +5,10 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urljoin
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
+from config import get_settings
 
 from engine.analysis import DiffAnalysis, analyze_diff
 from engine.diff_parser import extract_signal_terms_from_text
@@ -650,8 +651,8 @@ def _build_pr_comment_dashboard_deep_link(
 
     path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
     if not query_params:
-        return path
-    return f"{path}?{urlencode(query_params)}"
+        return urljoin(get_settings().app_base_url.rstrip('/') + '/', path.lstrip('/'))
+    return urljoin(get_settings().app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
 
 
 def _extract_previous_episode_recommendation(comment_body: str) -> str:

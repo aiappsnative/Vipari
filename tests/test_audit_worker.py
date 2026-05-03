@@ -3,6 +3,7 @@ import sys
 import time
 from types import SimpleNamespace
 
+from config import get_settings
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -630,6 +631,8 @@ index 1..2
 
     from services.audit_worker import PrCommentEpisodeContext
 
+    expected_link = f"{get_settings().app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+
     comment = build_fallback_comment(
         analysis,
         error_message="RateLimitError: too many requests",
@@ -648,7 +651,7 @@ index 1..2
     assert "Add AI platform review before merge." in comment
     assert "RateLimitError" not in comment
     assert "head `abc1234`" in comment
-    assert "[Open this review in DriftGuard dashboard](/dashboard/doria90%2FdummyAI?pr=42)" in comment
+    assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
 
 
 def test_build_llm_comment_renders_v3_structure(monkeypatch):
@@ -679,6 +682,8 @@ index 1..2
 
     from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
+    expected_link = f"{get_settings().app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+
     comment = build_llm_comment(
         "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
         analysis,
@@ -698,7 +703,7 @@ index 1..2
     assert "### Evidence" in comment
     assert "### Recommended next step" in comment
     assert "Add AI platform review before merge." in comment
-    assert "[Open this review in DriftGuard dashboard](/dashboard/doria90%2FdummyAI?pr=42)" in comment
+    assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
 
 
 def test_build_llm_comment_uses_first_meaningful_line_and_rebaseline_header_when_baseline_missing():

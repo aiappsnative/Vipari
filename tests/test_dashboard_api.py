@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastAPITestClient
 from unittest.mock import PropertyMock, patch
 
 import main
@@ -20,6 +20,24 @@ from services.entitlements import derive_entitlement_payload
 from services.persistence import connect_sqlite
 from services.repo_journey import build_repo_journey
 from services.repo_journey_records import list_repo_posture_snapshots_for_repo
+
+
+class TestClient(FastAPITestClient):
+    def request(self, method, url, *args, cookies=None, **kwargs):
+        if not cookies:
+            return super().request(method, url, *args, **kwargs)
+
+        previous = {key: self.cookies.get(key) for key in cookies}
+        for key, value in cookies.items():
+            self.cookies.set(key, value)
+        try:
+            return super().request(method, url, *args, **kwargs)
+        finally:
+            for key, previous_value in previous.items():
+                if previous_value is None:
+                    self.cookies.pop(key, None)
+                else:
+                    self.cookies.set(key, previous_value)
 
 
 PROMPT_BASELINE = """# Refund Copilot

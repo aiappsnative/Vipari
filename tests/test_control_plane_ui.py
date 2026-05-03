@@ -23,7 +23,25 @@ from services.auth_service import GithubOAuthToken, GithubUserProfile
 from services.secure_store import decrypt_text, encrypt_text
 
 
-client = TestClient(main.app)
+class CookieCompatTestClient(TestClient):
+    def request(self, method, url, *args, cookies=None, **kwargs):
+        if not cookies:
+            return super().request(method, url, *args, **kwargs)
+
+        previous = {key: self.cookies.get(key) for key in cookies}
+        for key, value in cookies.items():
+            self.cookies.set(key, value)
+        try:
+            return super().request(method, url, *args, **kwargs)
+        finally:
+            for key, previous_value in previous.items():
+                if previous_value is None:
+                    self.cookies.pop(key, None)
+                else:
+                    self.cookies.set(key, previous_value)
+
+
+client = CookieCompatTestClient(main.app)
 
 
 @pytest.fixture(autouse=True)
