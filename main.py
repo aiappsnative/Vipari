@@ -414,6 +414,15 @@ def _dashboard_redirect_for_request(request: Request):
     return None, session, access_context, False
 
 
+def _normalize_dashboard_redirect_result(result):
+    if isinstance(result, tuple) and len(result) == 4:
+        return result
+    if isinstance(result, tuple) and len(result) == 2:
+        redirect, session = result
+        return redirect, session, None, False
+    raise ValueError("_dashboard_redirect_for_request returned an unexpected result")
+
+
 def _is_dashboard_deep_link_request(request: Request) -> bool:
     artifact = str(request.query_params.get("artifact") or "").strip()
     pr = str(request.query_params.get("pr") or "").strip()
@@ -3298,7 +3307,7 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    redirect, _session, access_context, shell_mode = _dashboard_redirect_for_request(request)
+    redirect, _session, access_context, shell_mode = _normalize_dashboard_redirect_result(_dashboard_redirect_for_request(request))
     _record_server_timing_metric(timing_metrics, "access", access_started)
     if redirect is not None:
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
@@ -3342,7 +3351,7 @@ async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drif
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    redirect, _session, access_context, shell_mode = _dashboard_redirect_for_request(request)
+    redirect, _session, access_context, shell_mode = _normalize_dashboard_redirect_result(_dashboard_redirect_for_request(request))
     _record_server_timing_metric(timing_metrics, "access", access_started)
     if redirect is not None:
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
