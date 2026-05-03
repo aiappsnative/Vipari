@@ -43,6 +43,23 @@ function setHtml(elementId, html) {
     }
 }
 
+function dashboardShellState() {
+    return String(document.body?.dataset?.dashboardShellState || "active").trim().toLowerCase() || "active";
+}
+
+function dashboardShellCopy() {
+    return {
+        title: String(document.body?.dataset?.dashboardShellTitle || "Dashboard access status"),
+        body: String(document.body?.dataset?.dashboardShellBody || "Dashboard data is unavailable for this workspace."),
+        ctaHref: String(document.body?.dataset?.dashboardShellCtaHref || ""),
+        ctaLabel: String(document.body?.dataset?.dashboardShellCtaLabel || ""),
+    };
+}
+
+function renderBlockedOverviewShell() {
+    document.body.classList.add("dashboard-shell-obscured");
+}
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
@@ -1496,8 +1513,12 @@ async function loadOverview(preferredRepoFull = null, preferredRepoPayload = nul
 }
 
     bindOverviewRebaselineModal();
-loadOverview();
-loadEscalationQueue();
+if (dashboardShellState() === "active") {
+    loadOverview();
+    loadEscalationQueue();
+} else {
+    renderBlockedOverviewShell();
+}
 
 // Audit Logs toggle behavior: expand/collapse the repo list
 function bindAuditLogsToggle() {

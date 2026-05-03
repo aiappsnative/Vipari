@@ -149,6 +149,37 @@ function escapeHtml(value) {
         .replaceAll("'", "&#39;");
 }
 
+function dashboardShellState() {
+    return String(document.body?.dataset?.dashboardShellState || "active").trim().toLowerCase() || "active";
+}
+
+function dashboardShellCopy() {
+    return {
+        title: String(document.body?.dataset?.dashboardShellTitle || "Dashboard access status"),
+        body: String(document.body?.dataset?.dashboardShellBody || "Repository dashboard data is unavailable for this workspace."),
+        ctaHref: String(document.body?.dataset?.dashboardShellCtaHref || ""),
+        ctaLabel: String(document.body?.dataset?.dashboardShellCtaLabel || ""),
+    };
+}
+
+function deepLinkPullRequestNumber() {
+    const metaValue = document.querySelector('meta[name="driftguard-deep-link-pr"]')?.getAttribute("content")?.trim();
+    if (metaValue) {
+        return metaValue;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("pr") || "";
+}
+
+function deepLinkHeadSha() {
+    const metaValue = document.querySelector('meta[name="driftguard-deep-link-head-sha"]')?.getAttribute("content")?.trim();
+    if (metaValue) {
+        return metaValue;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("head_sha") || "";
+}
+
 function repoDetailUrl(repo) {
     const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
     const artifactPath = repo.highest_insight_artifact_path || "";
@@ -163,8 +194,17 @@ function repoTabUrl(tab, options = {}) {
     if (tab) {
         url.searchParams.set("tab", tab);
     }
-    if (options.artifactPath) {
-        url.searchParams.set("artifact", options.artifactPath);
+    const artifactPath = options.artifactPath || requestedArtifactPath();
+    if (artifactPath) {
+        url.searchParams.set("artifact", artifactPath);
+    }
+    const prNumber = options.prNumber || deepLinkPullRequestNumber();
+    if (prNumber) {
+        url.searchParams.set("pr", prNumber);
+    }
+    const headSha = options.headSha || deepLinkHeadSha();
+    if (headSha) {
+        url.searchParams.set("head_sha", headSha);
     }
     if (options.hash) {
         url.hash = options.hash;
@@ -857,8 +897,34 @@ function sourceUrlForInsight(item, profile) {
 }
 
 function requestedArtifactPath() {
+    const metaValue = document.querySelector('meta[name="driftguard-deep-link-artifact"]')?.getAttribute("content")?.trim();
+    if (metaValue) {
+        return metaValue;
+    }
     const params = new URLSearchParams(window.location.search);
     return params.get("artifact") || "";
+}
+
+function insightMatchesPullRequest(item, prNumber) {
+    const normalizedPr = String(prNumber || "").trim();
+    if (!normalizedPr) {
+        return false;
+    }
+    const markers = [
+        String(item?.review_target || ""),
+        String(item?.supporting_review_target || ""),
+        String(item?.review_url || ""),
+        String(item?.supporting_review_url || ""),
+    ];
+    return markers.some((value) => value.includes(`/pull/${normalizedPr}`) || value.includes(`PR #${normalizedPr}`) || value.includes(`pull ${normalizedPr}`));
+}
+
+function insightMatchesHeadSha(item, headSha) {
+    const normalizedHeadSha = String(headSha || "").trim().toLowerCase();
+    if (!normalizedHeadSha) {
+        return false;
+    }
+    return String(item?.review_head_sha || "").trim().toLowerCase() === normalizedHeadSha;
 }
 
 function applyRepoDetail(item, options = {}) {
@@ -969,19 +1035,75 @@ function bindRepoRows(items) {
     });
 }
 
-function autoSelectRepoRow(items, preferredArtifactPath = "") {
+function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     if (!rows.length) {
-        return;
+        if (preferredArtifactPath || preferredPrNumber || preferredHeadSha) {
+            renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber, preferredHeadSha);
+        }
+        return false;
+    }
+    if (preferredHeadSha) {
+        const preferredIndex = items.findIndex((item) => insightMatchesHeadSha(item, preferredHeadSha));
+        if (preferredIndex >= 0 && rows[preferredIndex]) {
+            activateRepoRow(rows[preferredIndex], items);
+            return true;
+        }
     }
     if (preferredArtifactPath) {
         const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
         if (preferredIndex >= 0 && rows[preferredIndex]) {
             activateRepoRow(rows[preferredIndex], items);
-            return;
+            return true;
         }
     }
+    if (preferredPrNumber) {
+        const preferredIndex = items.findIndex((item) => insightMatchesPullRequest(item, preferredPrNumber));
+        if (preferredIndex >= 0 && rows[preferredIndex]) {
+            activateRepoRow(rows[preferredIndex], items);
+            return true;
+        }
+    }
+    if (preferredArtifactPath || preferredPrNumber || preferredHeadSha) {
+        renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber, preferredHeadSha);
+        return false;
+    }
     activateRepoRow(rows[0], items, { loadStoryline: false });
+    return true;
+}
+
+function renderMissingDeepLinkContext(preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
+    const requestedParts = [];
+    if (preferredArtifactPath) {
+        requestedParts.push(`artifact ${preferredArtifactPath}`);
+    }
+    if (preferredPrNumber) {
+        requestedParts.push(`PR #${preferredPrNumber}`);
+    }
+    if (preferredHeadSha) {
+        requestedParts.push(`review ${preferredHeadSha.slice(0, 7)}`);
+    }
+    const requestedLabel = requestedParts.length ? requestedParts.join(" and ") : "the requested review context";
+    const message = `The linked dashboard context for ${requestedLabel} is not available in this repository view yet. Choose another item from the queue or refresh after the next audit finishes.`;
+    const notice = `<div class="muted">${escapeHtml(message)}</div>`;
+
+    setSectionHtml("featured-storyline", notice);
+    setSectionHtml("detail-attributes", notice);
+    setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
+    setText("detail-artifact-name", repoFull || "Requested dashboard context unavailable");
+    setText("detail-subtitle", message);
+    setText("detail-recommendation-body", message);
+
+    const badge = document.getElementById("detail-severity-badge");
+    if (badge) {
+        badge.textContent = "Context unavailable";
+        badge.className = "severity-badge severity-low";
+    }
+
+    const button = detailButton();
+    if (button) {
+        button.disabled = true;
+    }
 }
 
 function filteredRepoItems(items, filter) {
@@ -994,20 +1116,20 @@ function filteredRepoItems(items, filter) {
     return items;
 }
 
-function renderRepoQueue(items, filter = "all", preferredArtifactPath = "") {
+function renderRepoQueue(items, filter = "all", preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     const filtered = filteredRepoItems(items, filter);
     setText("repo-triage-count", `${filtered.length} item${filtered.length === 1 ? "" : "s"}`);
     setSectionHtml("triage-list", filtered.length ? filtered.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No repo insights match this filter.</div>');
     bindRepoRows(filtered);
-    autoSelectRepoRow(filtered, preferredArtifactPath);
+    autoSelectRepoRow(filtered, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
 }
 
-function bindRepoFilters(items, preferredArtifactPath = "") {
+function bindRepoFilters(items, preferredArtifactPath = "", preferredPrNumber = "", preferredHeadSha = "") {
     document.querySelectorAll("[data-filter]").forEach((button) => {
         button.addEventListener("click", () => {
             document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.classList.remove("active"));
             button.classList.add("active");
-            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath);
+            renderRepoQueue(items, button.getAttribute("data-filter") || "all", preferredArtifactPath, preferredPrNumber, preferredHeadSha);
         });
     });
 }
@@ -1641,6 +1763,8 @@ function applyDashboardPayload(payload) {
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
     const featuredStoryline = payload.featured_storyline || null;
     const preferredArtifactPath = requestedArtifactPath();
+    const preferredPrNumber = deepLinkPullRequestNumber();
+    const preferredHeadSha = deepLinkHeadSha();
     const governanceAttention = renderGovernanceAttentionNote(payload.governance_posture || null);
     window.__designProfiles = asArray(payload.design_profiles);
     window.__journeySnapshots = journeySnapshots;
@@ -1656,8 +1780,8 @@ function applyDashboardPayload(payload) {
 
     setSectionHtml("triage-list", insights.length ? insights.map((item, index) => renderRepoTriageRow(item, index)).join("") : '<div class="muted">No primary repo insights are available yet.</div>');
     bindRepoRows(insights);
-    bindRepoFilters(insights, preferredArtifactPath);
-    autoSelectRepoRow(insights, preferredArtifactPath);
+    bindRepoFilters(insights, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
+    autoSelectRepoRow(insights, preferredArtifactPath, preferredPrNumber, preferredHeadSha);
 
     if (featuredStoryline?.artifact_path) {
         window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
@@ -1836,6 +1960,11 @@ function populateAuditRepoLists(repos = []) {
 
 async function loadAvailableRepos() {
     try {
+        if (dashboardShellState() !== "active") {
+            const shell = dashboardShellCopy();
+            setSectionHtml("audit-logs-list", `<div class="muted">${escapeHtml(shell.body)}</div>`);
+            return;
+        }
         const response = await fetch("/api/repos");
         if (!response.ok) {
             throw new Error(`Repo inventory request failed with ${response.status}`);
@@ -1846,6 +1975,14 @@ async function loadAvailableRepos() {
         const message = error instanceof Error ? error.message : "Unknown repository inventory error";
         const fallback = `<div class="muted">Unable to load workspace repositories. ${escapeHtml(message)}</div>`;
         setSectionHtml("audit-logs-list", fallback);
+    }
+}
+
+function renderBlockedRepoShell() {
+    document.body.classList.add("dashboard-shell-obscured");
+    const button = detailButton();
+    if (button) {
+        button.disabled = true;
     }
 }
 
@@ -1905,7 +2042,11 @@ applyRepoTabVisibility();
 bindRebaselineModal();
 bindExportForm();
 loadAvailableRepos();
-loadDashboard();
+if (dashboardShellState() === "active") {
+    loadDashboard();
+} else {
+    renderBlockedRepoShell();
+}
 
 function bindExportForm() {
     const form = document.getElementById('export-form');
