@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-05-03 — Post-merge doc and cleanup pass for PR comment dashboard deep links
+
+### Changed
+- canonical product and architecture docs now explicitly describe PR-comment dashboard deep links, including exact `head_sha` episode targeting for preserved managed comments
+- dashboard-shell documentation now reflects the merged obscured-shell behavior used for free-tier and setup-blocked deep links instead of describing a hard placeholder replacement model
+- local development state was cleaned up after PR #77 by returning the repo to `main` and preparing it for the next feature slice
+
 ## 2026-05-02 — Customer MCP integrations merged to main
 
 ### Added

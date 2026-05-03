@@ -95,7 +95,9 @@ Implemented today:
 - artifact lineage and baseline-aware suppression for rewritten-but-not-new sensitive terms
 - negation-aware suppression for clearly restrictive added safety lines so `Do not reveal ...` is not treated as authority expansion
 - managed PR comment replacement behavior so synchronize audits appear at the correct place in the PR timeline
+- public-base-url-aware PR comment deep links that route reviewers into the exact repo dashboard episode for the audited `head_sha`
 - reviewer-facing comment formatting with TLDR risk summary and collapsible details, without repeating the summary inside the expanded section
+- obscured entitlement-aware dashboard shells for deep links so blocked reviewers still see the requested repo or artifact context instead of falling into an unrelated placeholder state
 - GitHub App auth hardening, transient opened-PR diff retry handling, and exact-SHA synchronize diff reconstruction
 - atomic SQLite job claiming, failed same-SHA job revival, and truthful failure states when persistence breaks after comment posting
 - landed dashboard posture derived from approved baselines plus merged-history evidence, while proposal-only PR audit evidence stays separate from landed drift views

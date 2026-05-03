@@ -36,13 +36,13 @@ The current `main` branch now includes the merged static-first drift engine mile
 
 In practical terms, DriftGuard currently provides:
 
-- queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, and episode-aware managed PR comments
+- queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, episode-aware managed PR comments, and exact dashboard deep links for the current PR review episode when a public app URL is configured
 - escalation-aware PR review with decision-first comments, risk-emoji headers, concrete evidence panels, and GitHub label sync for before-merge escalation cases
 - persisted pull-request lifecycle state across audit jobs and durable audit records, including close/reopen and merge metadata
 - approved-baseline-aware static drift profiling for prompts, configs, and related AI control surfaces
 - onboarding and selective historical backfill for repository-level artifact inventories and profile history
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
-- a shared audit-focused dashboard shell across portfolio, repo audit, and repo setup surfaces, with repo-level journey context and direct audit navigation from repository setup
+- a shared audit-focused dashboard shell across portfolio, repo audit, and repo setup surfaces, with repo-level journey context, direct audit navigation from repository setup, and obscured entitlement-aware deep-link shells that preserve the requested review context when full dashboard access is unavailable
 - explicit repo and artifact baseline approval review, including pending candidate state, approval history, and snapshot-driven rebaseline proposals
 - live default-branch posture tracking driven by push-triggered branch scans so landed drift stays current between PRs
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
@@ -131,6 +131,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - prepares structured semantic review context for the LLM
 - falls back to a deterministic preliminary audit when the model call is permanently unavailable
 - upserts the managed PR comment for the current PR head SHA while preserving prior-episode comments for earlier commits
+- includes a dashboard deep link in managed PR comments when the configured app base URL is publicly reachable, and carries the exact `head_sha` episode through to the repo dashboard selector
 - persists audit, finding, artifact, and comment history for later analysis
 - updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
