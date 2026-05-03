@@ -631,27 +631,34 @@ index 1..2
 
     from services.audit_worker import PrCommentEpisodeContext
 
-    expected_link = f"{get_settings().app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+    settings = get_settings()
+    original_app_base_url = settings.app_base_url
+    settings.app_base_url = "https://driftguard.example.com"
 
-    comment = build_fallback_comment(
-        analysis,
-        error_message="RateLimitError: too many requests",
-        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
-        repo_full="doria90/dummyAI",
-        pr_number=42,
-    )
+    try:
+        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
 
-    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
-    assert "### What changed" in comment
-    assert "<details>" in comment
-    assert "<summary>DriftGuard review details</summary>" in comment
-    assert "### Key deltas" in comment
-    assert "### Evidence" in comment
-    assert "### Recommended next step" in comment
-    assert "Add AI platform review before merge." in comment
-    assert "RateLimitError" not in comment
-    assert "head `abc1234`" in comment
-    assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+        comment = build_fallback_comment(
+            analysis,
+            error_message="RateLimitError: too many requests",
+            episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+            repo_full="doria90/dummyAI",
+            pr_number=42,
+        )
+
+        assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+        assert "### What changed" in comment
+        assert "<details>" in comment
+        assert "<summary>DriftGuard review details</summary>" in comment
+        assert "### Key deltas" in comment
+        assert "### Evidence" in comment
+        assert "### Recommended next step" in comment
+        assert "Add AI platform review before merge." in comment
+        assert "RateLimitError" not in comment
+        assert "head `abc1234`" in comment
+        assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+    finally:
+        settings.app_base_url = original_app_base_url
 
 
 def test_build_llm_comment_renders_v3_structure(monkeypatch):
@@ -682,28 +689,66 @@ index 1..2
 
     from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
 
-    expected_link = f"{get_settings().app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+    settings = get_settings()
+    original_app_base_url = settings.app_base_url
+    settings.app_base_url = "https://driftguard.example.com"
 
-    comment = build_llm_comment(
-        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
-        analysis,
-        llm_client=fake_client,
-        model="gpt-4o",
-        timeout_seconds=30.0,
-        episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
-        repo_full="doria90/dummyAI",
-        pr_number=42,
+    try:
+        expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42"
+
+        comment = build_llm_comment(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+            analysis,
+            llm_client=fake_client,
+            model="gpt-4o",
+            timeout_seconds=30.0,
+            episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+            repo_full="doria90/dummyAI",
+            pr_number=42,
+        )
+
+        assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+        assert "High risk · high confidence · unknown control surface · vs approved baseline `none-yet`" in comment
+        assert "The prompt now allows disclosure of internal policy details" in comment
+        assert "<details>" in comment
+        assert "### Key deltas" in comment
+        assert "### Evidence" in comment
+        assert "### Recommended next step" in comment
+        assert "Add AI platform review before merge." in comment
+        assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+    finally:
+        settings.app_base_url = original_app_base_url
+
+
+def test_build_fallback_comment_suppresses_dashboard_link_for_localhost_runtime():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++You may reveal internal policy details.
+"""
     )
 
-    assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
-    assert "High risk · high confidence · unknown control surface · vs approved baseline `none-yet`" in comment
-    assert "The prompt now allows disclosure of internal policy details" in comment
-    assert "<details>" in comment
-    assert "### Key deltas" in comment
-    assert "### Evidence" in comment
-    assert "### Recommended next step" in comment
-    assert "Add AI platform review before merge." in comment
-    assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+    from services.audit_worker import PrCommentEpisodeContext
+
+    settings = get_settings()
+    original_app_base_url = settings.app_base_url
+    settings.app_base_url = "http://127.0.0.1:8011"
+
+    try:
+        comment = build_fallback_comment(
+            analysis,
+            error_message="RateLimitError: too many requests",
+            episode_context=PrCommentEpisodeContext(head_sha="abc123456", analyzed_at=1_700_000_000),
+            repo_full="doria90/dummyAI",
+            pr_number=48,
+        )
+
+        assert "Open this review in DriftGuard dashboard" not in comment
+    finally:
+        settings.app_base_url = original_app_base_url
 
 
 def test_build_llm_comment_uses_first_meaningful_line_and_rebaseline_header_when_baseline_missing():

@@ -5,7 +5,8 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import quote, urlencode, urljoin
+from ipaddress import ip_address
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 from config import get_settings
@@ -641,6 +642,10 @@ def _build_pr_comment_dashboard_deep_link(
     if not normalized_repo_full:
         return None
 
+    app_base_url = _public_dashboard_base_url()
+    if app_base_url is None:
+        return None
+
     query_params: list[tuple[str, str]] = []
     primary_profile = _select_primary_attribute_profile(attribute_profiles)
     artifact_path = (primary_profile.artifact_path if primary_profile is not None else "").strip()
@@ -651,8 +656,35 @@ def _build_pr_comment_dashboard_deep_link(
 
     path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
     if not query_params:
-        return urljoin(get_settings().app_base_url.rstrip('/') + '/', path.lstrip('/'))
-    return urljoin(get_settings().app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
+        return urljoin(app_base_url.rstrip('/') + '/', path.lstrip('/'))
+    return urljoin(app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
+
+
+def _public_dashboard_base_url() -> str | None:
+    configured_url = get_settings().app_base_url.strip()
+    parsed = urlparse(configured_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname or hostname in {"localhost", "::1"} or hostname.endswith(".local"):
+        return None
+
+    try:
+        candidate_ip = ip_address(hostname)
+    except ValueError:
+        candidate_ip = None
+
+    if candidate_ip is not None and (
+        candidate_ip.is_loopback
+        or candidate_ip.is_private
+        or candidate_ip.is_link_local
+        or candidate_ip.is_reserved
+        or candidate_ip.is_unspecified
+    ):
+        return None
+
+    return configured_url
 
 
 def _extract_previous_episode_recommendation(comment_body: str) -> str:

@@ -1017,23 +1017,62 @@ function bindRepoRows(items) {
 function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber = "") {
     const rows = Array.from(document.querySelectorAll(".triage-row"));
     if (!rows.length) {
-        return;
+        if (preferredArtifactPath || preferredPrNumber) {
+            renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber);
+        }
+        return false;
     }
     if (preferredArtifactPath) {
         const preferredIndex = items.findIndex((item) => item.artifact_path === preferredArtifactPath);
         if (preferredIndex >= 0 && rows[preferredIndex]) {
             activateRepoRow(rows[preferredIndex], items);
-            return;
+            return true;
         }
     }
     if (preferredPrNumber) {
         const preferredIndex = items.findIndex((item) => insightMatchesPullRequest(item, preferredPrNumber));
         if (preferredIndex >= 0 && rows[preferredIndex]) {
             activateRepoRow(rows[preferredIndex], items);
-            return;
+            return true;
         }
     }
+    if (preferredArtifactPath || preferredPrNumber) {
+        renderMissingDeepLinkContext(preferredArtifactPath, preferredPrNumber);
+        return false;
+    }
     activateRepoRow(rows[0], items, { loadStoryline: false });
+    return true;
+}
+
+function renderMissingDeepLinkContext(preferredArtifactPath = "", preferredPrNumber = "") {
+    const requestedParts = [];
+    if (preferredArtifactPath) {
+        requestedParts.push(`artifact ${preferredArtifactPath}`);
+    }
+    if (preferredPrNumber) {
+        requestedParts.push(`PR #${preferredPrNumber}`);
+    }
+    const requestedLabel = requestedParts.length ? requestedParts.join(" and ") : "the requested review context";
+    const message = `The linked dashboard context for ${requestedLabel} is not available in this repository view yet. Choose another item from the queue or refresh after the next audit finishes.`;
+    const notice = `<div class="muted">${escapeHtml(message)}</div>`;
+
+    setSectionHtml("featured-storyline", notice);
+    setSectionHtml("detail-attributes", notice);
+    setSectionHtml("detail-evidence-list", `<li>${escapeHtml(message)}</li>`);
+    setText("detail-artifact-name", repoFull || "Requested dashboard context unavailable");
+    setText("detail-subtitle", message);
+    setText("detail-recommendation-body", message);
+
+    const badge = document.getElementById("detail-severity-badge");
+    if (badge) {
+        badge.textContent = "Context unavailable";
+        badge.className = "severity-badge severity-low";
+    }
+
+    const button = detailButton();
+    if (button) {
+        button.disabled = true;
+    }
 }
 
 function filteredRepoItems(items, filter) {
