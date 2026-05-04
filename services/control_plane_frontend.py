@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
-from .compliance_readiness import ComplianceExportSummary, ComplianceFrameworkCard, ComplianceGapItem, ComplianceRepoReadinessRow, ComplianceWorkspaceView, filter_compliance_evidence_view, normalize_compliance_gap_filter
+from .compliance_readiness import ComplianceExportSummary, ComplianceFrameworkCard, ComplianceGapItem, ComplianceRepoReadinessRow, ComplianceWorkspaceView, filter_compliance_evidence_view, normalize_compliance_gap_filter, normalize_compliance_repo_filter
 from .entitlements import PLAN_DEFINITIONS
 from .export_jobs import ExportJob
 from .mcp_broker import MCP_BROKER_TOOLS
@@ -1398,15 +1398,20 @@ def _render_compliance_evidence_rows(rows: tuple[ComplianceRepoReadinessRow, ...
     return f'<div class="compliance-assessment-grid">{"".join(cards)}</div>'
 
 
-def _render_compliance_evidence_filter_note(gap_filter: str | None, filtered_count: int, total_count: int) -> str:
+def _render_compliance_evidence_filter_note(gap_filter: str | None, repo_filter: str | None, filtered_count: int, total_count: int) -> str:
     active_filter = normalize_compliance_gap_filter(gap_filter)
-    if active_filter is None:
+    active_repo = normalize_compliance_repo_filter(repo_filter)
+    if active_filter is None and active_repo is None:
         return ""
-    label = active_filter.replace("_", " ").title()
     repo_label = "repo" if filtered_count == 1 else "repos"
+    fragments: list[str] = [f"Showing {filtered_count} of {total_count} {repo_label}"]
+    if active_filter is not None:
+        fragments.append(f"for <strong>{html_escape(active_filter.replace('_', ' ').title())}</strong>")
+    if active_repo is not None:
+        fragments.append(f"for <strong>{html_escape(active_repo)}</strong>")
     return (
         f'<div class="control-page-inline-note">'
-        f'Showing {filtered_count} of {total_count} {repo_label} for <strong>{html_escape(label)}</strong>. '
+        f"{' '.join(fragments)}. "
         f'<a class="subtle-link" href="/app/compliance/evidence">Show all evidence</a>'
         f'</div>'
     )
@@ -1518,6 +1523,7 @@ def _render_compliance_page_content(
     csrf_token: str,
     export_jobs: tuple[ExportJob, ...],
     evidence_filter: str = "",
+    evidence_repo: str = "",
 ) -> str:
     if active_tab == "frameworks":
         return f'''
@@ -1540,7 +1546,7 @@ def _render_compliance_page_content(
             </section>
         '''
     if active_tab == "evidence":
-        active_filter, evidence_rows, repo_rows = filter_compliance_evidence_view(view, evidence_filter)
+        active_filter, active_repo, evidence_rows, repo_rows = filter_compliance_evidence_view(view, evidence_filter, evidence_repo)
         return f'''
             <section class="control-page-section stack compact-stack">
                 <div>
@@ -1548,7 +1554,7 @@ def _render_compliance_page_content(
                     <h2 class="control-page-section-title">Repository evidence posture</h2>
                     <p>Inspect missing governance artifacts, stale evidence, and pending approvals without the export form competing for attention.</p>
                 </div>
-                {_render_compliance_evidence_filter_note(active_filter, len(evidence_rows), len(view.evidence_rows))}
+                {_render_compliance_evidence_filter_note(active_filter, active_repo, len(evidence_rows), len(view.evidence_rows))}
                 {_render_compliance_evidence_rows(repo_rows)}
             </section>
         '''
@@ -1590,6 +1596,7 @@ def render_control_plane_compliance_page(
     export_jobs: tuple[ExportJob, ...] | None = None,
     csrf_token: str = "",
     evidence_filter: str = "",
+    evidence_repo: str = "",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
@@ -1604,7 +1611,7 @@ def render_control_plane_compliance_page(
         .replace("{{PAGE_DESCRIPTION}}", html_escape(page_description))
         .replace("{{PAGE_NOTE}}", html_escape(page_note))
         .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
-        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter))
+        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter, evidence_repo))
     )
 
 

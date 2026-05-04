@@ -2457,6 +2457,7 @@ def _render_compliance_tab_page(
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     status_note = request.query_params.get("status") or ""
     evidence_filter = request.query_params.get("gap") or ""
+    evidence_repo = request.query_params.get("repo") or ""
     return HTMLResponse(
         render_control_plane_compliance_page(
             workspace_name=workspace.display_name,
@@ -2472,6 +2473,7 @@ def _render_compliance_tab_page(
             export_jobs=tuple(export_jobs),
             csrf_token=session.csrf_secret if session is not None else "",
             evidence_filter=evidence_filter,
+            evidence_repo=evidence_repo,
         )
     )
 
@@ -3601,10 +3603,11 @@ def compliance_exports_api(request: Request):
 def compliance_evidence_api(request: Request):
     access_context = _current_workspace_context(request)
     view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    active_gap, evidence_rows, repo_rows = _filtered_compliance_evidence_payload(view, request.query_params.get("gap"))
+    active_gap, active_repo, evidence_rows, repo_rows = filter_compliance_evidence_view(view, request.query_params.get("gap"), request.query_params.get("repo"))
     return JSONResponse(
         {
             "active_gap": active_gap,
+            "active_repo": active_repo,
             "top_gaps": [asdict(item) for item in view.top_gaps],
             "evidence_rows": [asdict(item) for item in evidence_rows],
             "repo_rows": [asdict(item) for item in repo_rows],

@@ -3453,14 +3453,15 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Baseline Review" in evidence_response.text
     assert "Missing Governance" in evidence_response.text
     assert '/app/compliance/evidence?gap=missing_governance' in response.text
+    assert '/app/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
 
     filtered_evidence_response = client.get(
-        "/app/compliance/evidence?gap=missing_governance",
+        "/app/compliance/evidence?gap=baseline_review&repo=compliance-org/repo-two",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
     assert filtered_evidence_response.status_code == 200
-    assert "Showing 1 of 2 repo for <strong>Missing Governance</strong>." in filtered_evidence_response.text
+    assert "Showing 1 of 2 repo for <strong>Baseline Review</strong> for <strong>compliance-org/repo-two</strong>." in filtered_evidence_response.text
     assert "compliance-org/repo-two" in filtered_evidence_response.text
     assert "compliance-org/repo-one" not in filtered_evidence_response.text
 

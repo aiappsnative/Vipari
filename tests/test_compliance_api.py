@@ -193,6 +193,7 @@ def test_compliance_api_exposes_readiness_frameworks_and_evidence_payloads(tmp_p
         frameworks_response = client.get("/api/compliance/frameworks")
         evidence_response = client.get("/api/compliance/evidence")
         filtered_evidence_response = client.get("/api/compliance/evidence?gap=missing_governance")
+        repo_filtered_evidence_response = client.get("/api/compliance/evidence?gap=missing_governance&repo=compliance-org/repo-two")
 
     assert readiness_response.status_code == 200
     readiness_payload = readiness_response.json()
@@ -217,6 +218,12 @@ def test_compliance_api_exposes_readiness_frameworks_and_evidence_payloads(tmp_p
     assert filtered_evidence_payload["active_gap"] == "missing_governance"
     assert [row["repo_full"] for row in filtered_evidence_payload["evidence_rows"]] == ["compliance-org/repo-two"]
     assert [row["repo_full"] for row in filtered_evidence_payload["repo_rows"]] == ["compliance-org/repo-two"]
+
+    assert repo_filtered_evidence_response.status_code == 200
+    repo_filtered_evidence_payload = repo_filtered_evidence_response.json()
+    assert repo_filtered_evidence_payload["active_gap"] == "missing_governance"
+    assert repo_filtered_evidence_payload["active_repo"] == "compliance-org/repo-two"
+    assert [row["repo_full"] for row in repo_filtered_evidence_payload["repo_rows"]] == ["compliance-org/repo-two"]
 
     main.AUDIT_DB_PATH = original_db_path
 

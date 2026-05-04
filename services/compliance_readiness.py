@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+from urllib.parse import urlencode
 
 from .dashboard_views import RepoDashboardIndexEntry
 from .export_jobs import ExportJob
@@ -23,6 +24,10 @@ _ALLOWED_GAP_FILTERS = frozenset(_GAP_PRIORITY)
 
 def _gap_cta_href(gap_key: str) -> str:
     return f"/app/compliance/evidence?gap={gap_key}"
+
+
+def _repo_gap_cta_href(repo_full: str, gap_key: str) -> str:
+    return f"/app/compliance/evidence?{urlencode({'gap': gap_key, 'repo': repo_full})}"
 
 
 @dataclass(frozen=True)
@@ -123,18 +128,26 @@ def normalize_compliance_gap_filter(gap_filter: str | None) -> str | None:
     return candidate if candidate in _ALLOWED_GAP_FILTERS else None
 
 
+def normalize_compliance_repo_filter(repo_filter: str | None) -> str | None:
+    candidate = (repo_filter or "").strip()
+    return candidate or None
+
+
 def filter_compliance_evidence_view(
     view: ComplianceWorkspaceView,
     gap_filter: str | None,
-) -> tuple[str | None, tuple[ComplianceEvidenceRow, ...], tuple[ComplianceRepoReadinessRow, ...]]:
+    repo_filter: str | None = None,
+) -> tuple[str | None, str | None, tuple[ComplianceEvidenceRow, ...], tuple[ComplianceRepoReadinessRow, ...]]:
     active_gap = normalize_compliance_gap_filter(gap_filter)
-    if active_gap is None:
-        return None, tuple(view.evidence_rows), tuple(view.repo_rows)
-
-    evidence_rows = tuple(row for row in view.evidence_rows if active_gap in row.gaps)
+    active_repo = normalize_compliance_repo_filter(repo_filter)
+    evidence_rows = tuple(view.evidence_rows)
+    if active_gap is not None:
+        evidence_rows = tuple(row for row in evidence_rows if active_gap in row.gaps)
+    if active_repo is not None:
+        evidence_rows = tuple(row for row in evidence_rows if row.repo_full == active_repo)
     allowed_repo_fulls = {row.repo_full for row in evidence_rows}
     repo_rows = tuple(row for row in view.repo_rows if row.repo_full in allowed_repo_fulls)
-    return active_gap, evidence_rows, repo_rows
+    return active_gap, active_repo, evidence_rows, repo_rows
 
 
 def _freshness_payload(last_onboarded_at: float | None) -> tuple[str, str, int | None]:
@@ -162,17 +175,17 @@ def _collect_artifact_families(db_path: str, repo_full: str) -> tuple[tuple[str,
     return tuple(families), onboarding.updated_at, onboarding.status
 
 
-def _repo_action(row_href: str, gap_keys: Sequence[str]) -> tuple[str, str, str]:
+def _repo_action(row_href: str, repo_full: str, gap_keys: Sequence[str]) -> tuple[str, str, str]:
     if "needs_setup" in gap_keys:
-        return ("Complete onboarding", row_href, "No stored baseline or evidence package yet.")
+        return ("Complete onboarding", _repo_gap_cta_href(repo_full, "needs_setup"), "No stored baseline or evidence package yet.")
     if "baseline_review" in gap_keys:
-        return ("Review baseline", row_href, "Approve the pending baseline before exporting evidence.")
+        return ("Review baseline", _repo_gap_cta_href(repo_full, "baseline_review"), "Approve the pending baseline before exporting evidence.")
     if "missing_governance" in gap_keys:
-        return ("Add governance evidence", row_href, "Capture policy or approval artifacts for this repo.")
+        return ("Add governance evidence", _repo_gap_cta_href(repo_full, "missing_governance"), "Capture policy or approval artifacts for this repo.")
     if "stale_evidence" in gap_keys:
-        return ("Refresh evidence", row_href, "Run a fresh onboarding pass so the evidence pack is current.")
+        return ("Refresh evidence", _repo_gap_cta_href(repo_full, "stale_evidence"), "Run a fresh onboarding pass so the evidence pack is current.")
     if "aging_evidence" in gap_keys:
-        return ("Monitor freshness", row_href, "Evidence is still usable, but it is moving out of the fresh window.")
+        return ("Monitor freshness", _repo_gap_cta_href(repo_full, "aging_evidence"), "Evidence is still usable, but it is moving out of the fresh window.")
     return ("Open repo dashboard", row_href, "Review the current drift and evidence trail.")
 
 
@@ -229,7 +242,7 @@ def _build_repo_row(
         gap_keys.append("aging_evidence")
 
     overall_label, overall_tone = _overall_status(gap_keys)
-    action_label, action_href, action_detail = _repo_action(repo_href, gap_keys)
+    action_label, action_href, action_detail = _repo_action(repo_href, repo_full, gap_keys)
     has_ai_surface = "ai" in artifact_families or "runtime" in artifact_families
     has_model_surface = "model_config" in artifact_families or "model" in artifact_families
     export_ready = overall_label == "Ready"
