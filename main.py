@@ -169,6 +169,13 @@ from services.repo_journey import build_repo_journey, compare_repo_snapshots, ge
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
+from services.workspace_access import (
+    build_access_context as build_workspace_access_context,
+    current_authenticated_identity_context as current_workspace_authenticated_identity_context,
+    current_workspace_context as current_workspace_access_context,
+    get_session as get_workspace_session,
+    require_dashboard_access as require_workspace_dashboard_access,
+)
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -320,56 +327,11 @@ def _control_plane_active() -> bool:
 
 
 def _get_session(request: Request):
-    session_id = request.cookies.get(settings.session_cookie_name)
-    if not session_id:
-        return None
-    return get_user_session(AUDIT_DB_PATH, session_id)
+    return get_workspace_session(settings, AUDIT_DB_PATH, request)
 
 
 def _build_access_context(session) -> dict[str, object]:
-    if session is None:
-        resolution = resolve_workspace_access_state(WorkspaceAccessSnapshot(is_authenticated=False))
-        return {"session": None, "user": None, "identity": None, "workspace": None, "resolution": resolution}
-
-    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
-    identity = get_github_identity_for_user(AUDIT_DB_PATH, session.user_id)
-    workspace = get_workspace_by_id(AUDIT_DB_PATH, session.workspace_id) if session.workspace_id else None
-    membership = get_workspace_membership(AUDIT_DB_PATH, workspace.id, session.user_id) if workspace else None
-    subscription = get_workspace_subscription(AUDIT_DB_PATH, workspace.id) if workspace else None
-    entitlement = get_workspace_entitlement(AUDIT_DB_PATH, workspace.id) if workspace else None
-    installation = get_workspace_installation(AUDIT_DB_PATH, workspace.id) if workspace else None
-    allocated_repo_count, onboarded_repo_count = count_workspace_repo_allocations(AUDIT_DB_PATH, workspace.id) if workspace else (0, 0)
-
-    subscription_status = (subscription.status if subscription else "").lower()
-    snapshot = WorkspaceAccessSnapshot(
-        is_authenticated=True,
-        has_workspace=workspace is not None,
-        invitation_pending=bool(membership and membership.invitation_state != "accepted"),
-        has_membership=membership is not None,
-        role=membership.role if membership else None,
-        has_subscription_record=subscription is not None,
-        billing_pending_confirmation=subscription_status in {"incomplete", "pending", "trialing_pending"},
-        payment_failed=subscription_status in {"past_due", "unpaid", "payment_failed"},
-        dashboard_enabled=bool(entitlement.dashboard_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
-        pr_comments_enabled=bool(entitlement.pr_comments_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
-        has_linked_installation=installation is not None,
-        allocated_repo_count=allocated_repo_count,
-        onboarded_repo_count=onboarded_repo_count,
-        cancel_at_period_end=bool(subscription.cancel_at_period_end) if subscription else False,
-        subscription_expired=subscription_status in {"incomplete_expired", "expired"},
-    )
-    resolution = resolve_workspace_access_state(snapshot)
-    return {
-        "session": session,
-        "user": user,
-        "identity": identity,
-        "workspace": workspace,
-        "membership": membership,
-        "subscription": subscription,
-        "entitlement": entitlement,
-        "installation": installation,
-        "resolution": resolution,
-    }
+    return build_workspace_access_context(AUDIT_DB_PATH, session)
 
 
 def _parse_optional_timestamp(value: object) -> float | None:
@@ -863,34 +825,26 @@ def _github_oauth_callback_url(request: Request) -> str:
 
 
 def _current_workspace_context(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
-    session = _get_session(request)
-    if session is None:
-        debug_context = _local_debug_workspace_context() if allow_local_debug else None
-        if debug_context is not None:
-            return debug_context
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    access_context = _build_access_context(session)
-    if access_context["workspace"] is None:
-        raise HTTPException(status_code=400, detail="Workspace context is required.")
-    return access_context
+    return current_workspace_access_context(
+        settings,
+        AUDIT_DB_PATH,
+        request,
+        allow_local_debug=allow_local_debug,
+        local_debug_context_factory=_local_debug_workspace_context,
+    )
 
 
 def _current_authenticated_identity_context(request: Request) -> dict[str, object]:
-    session = _get_session(request)
-    if session is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
-    identity = get_github_identity_for_user(AUDIT_DB_PATH, session.user_id)
-    if user is None or identity is None:
-        raise HTTPException(status_code=403, detail="Authenticated GitHub identity is required.")
-    return {"session": session, "user": user, "identity": identity}
+    return current_workspace_authenticated_identity_context(settings, AUDIT_DB_PATH, request)
 
 
 def _require_dashboard_access(request: Request) -> dict[str, object]:
-    access_context = _current_workspace_context(request, allow_local_debug=False)
-    if not access_context["resolution"].can_access_dashboard:
-        raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
-    return access_context
+    return require_workspace_dashboard_access(
+        settings,
+        AUDIT_DB_PATH,
+        request,
+        local_debug_context_factory=_local_debug_workspace_context,
+    )
 
 
 def _require_dashboard_read_access(request: Request) -> dict[str, object]:
