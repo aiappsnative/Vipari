@@ -33,6 +33,7 @@ from .control_plane_records import (
     list_machine_principals_for_workspace,
     revoke_machine_principal,
 )
+from .dashboard_api_payloads import build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_repo_index_payload
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
@@ -255,17 +256,21 @@ def create_api_app() -> FastAPI:
     @app.get("/api/repos")
     async def list_repos(request: Request):
         _require_admin_token(request, settings)
-        return JSONResponse({"repos": [asdict(item) for item in list_repo_dashboard_index(db_path)]})
+        return JSONResponse(build_repo_index_payload(db_path, list_repo_dashboard_index_fn=list_repo_dashboard_index))
 
     @app.get("/api/dashboard/overview")
     def dashboard_overview(request: Request):
         _require_admin_token(request, settings)
-        return JSONResponse(asdict(build_dashboard_overview_view(db_path)))
+        return JSONResponse(build_dashboard_overview_payload(db_path, build_dashboard_overview_view_fn=build_dashboard_overview_view))
 
     @app.get("/api/dashboard/escalation-queue")
     def dashboard_escalation_queue(request: Request, include_watch: bool = False):
         _require_admin_token(request, settings)
-        result = build_workspace_escalation_queue(db_path, include_watch=include_watch)
+        result = build_dashboard_escalation_queue_payload(
+            db_path,
+            include_watch=include_watch,
+            build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
+        )
         return JSONResponse(result)
 
     @app.get("/api/repos/{repo_full:path}/proposals/pending")

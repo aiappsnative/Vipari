@@ -153,6 +153,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
+from services.dashboard_api_payloads import build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_repo_index_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
@@ -3416,17 +3417,13 @@ async def list_repos(request: Request):
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     list_started = time.perf_counter()
     response = JSONResponse(
-        {
-            "repos": [
-                asdict(item)
-                for item in list_repo_dashboard_index(
-                    AUDIT_DB_PATH,
-                    allowed_repo_fulls=visibility["allowed_repo_fulls"],
-                    repo_scope_by_full=visibility["repo_scope_by_full"],
-                    allocation_status_by_full=visibility["allocation_status_by_full"],
-                )
-            ]
-        }
+        build_repo_index_payload(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visibility["allowed_repo_fulls"],
+            repo_scope_by_full=visibility["repo_scope_by_full"],
+            allocation_status_by_full=visibility["allocation_status_by_full"],
+            list_repo_dashboard_index_fn=list_repo_dashboard_index,
+        )
     )
     _record_server_timing_metric(timing_metrics, "list", list_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
@@ -3444,42 +3441,20 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     visibility = _dashboard_repo_visibility(access_context)
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     build_started = time.perf_counter()
-    overview_view = build_dashboard_overview_view(
-        AUDIT_DB_PATH,
-        allowed_repo_fulls=visibility["allowed_repo_fulls"],
-        repo_scope_by_full=visibility["repo_scope_by_full"],
-        allocation_status_by_full=visibility["allocation_status_by_full"],
-    )
-    active_filter = filter.strip().lower() if filter else "all"
-    if active_filter not in {"all", "critical", "mine"}:
-        active_filter = "all"
-    owned_repo_fulls: set[str] | None = None
-    if active_filter == "mine":
-        owned_repo_fulls = set()
-        if access_context:
-            workspace = access_context.get("workspace")
-            session = access_context.get("session")
-            if workspace is not None and session is not None:
-                owned_repo_fulls = {
-                    allocation.repo_full
-                    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
-                    if allocation.activated_by_user_id == session.user_id
-                }
-    active_range = range.strip().lower() if range else "7d"
-    if active_range not in {"24h", "7d", "30d"}:
-        active_range = "7d"
-    filtered_overview_view = filter_dashboard_overview_view(
-        overview_view,
-        active_filter,
-        overview_range=active_range,
-        allowed_repo_fulls=owned_repo_fulls,
-    )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    payload = asdict(filtered_overview_view)
-    nav_repos = filtered_overview_view.repos if active_filter == "mine" else overview_view.repos
-    payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
-    response = JSONResponse(payload)
+    response = JSONResponse(
+        build_dashboard_overview_payload(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visibility["allowed_repo_fulls"],
+            repo_scope_by_full=visibility["repo_scope_by_full"],
+            allocation_status_by_full=visibility["allocation_status_by_full"],
+            active_filter=filter,
+            active_range=range,
+            access_context=access_context,
+            build_dashboard_overview_view_fn=build_dashboard_overview_view,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
@@ -3495,10 +3470,11 @@ def persistence_status(request: Request):
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     access_context = _require_dashboard_read_access(request)
     visibility = _dashboard_repo_visibility(access_context)
-    result = build_workspace_escalation_queue(
+    result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
+        build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     return JSONResponse(result)
 
