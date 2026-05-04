@@ -72,7 +72,7 @@ from .baseline_approval_service import (
     reject_repo_baseline_artifact,
 )
 from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
-from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo
+from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo, list_export_jobs_for_requester
 from .onboarding_records import get_onboarded_artifact_by_id, promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
@@ -80,7 +80,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_repo_history_router, create_repo_read_router
+from routers.dashboard import create_dashboard_read_router, create_repo_dashboard_router, create_repo_history_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -303,14 +303,21 @@ def create_api_app() -> FastAPI:
         )
     )
 
-    def repo_dashboard(repo_full: str, request: Request):
-        _require_admin_token(request, settings)
-        return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
-
     app.include_router(
         create_repo_read_router(
             pending_proposals_handler=list_pending_proposals_for_repo,
-            repo_dashboard_handler=repo_dashboard,
+        )
+    )
+
+    app.include_router(
+        create_repo_dashboard_router(
+            authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings) or {},
+            resolve_db_path_fn=lambda: db_path,
+            build_repo_dashboard_view_with_timings_fn=lambda active_db_path, repo_full: (build_repo_dashboard_view(active_db_path, repo_full), []),
+            list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
+            export_job_payload_fn=lambda job: job,
+            record_server_timing_metric_fn=lambda metrics, name, started: None,
+            attach_server_timing_fn=lambda response, _metrics: response,
         )
     )
 

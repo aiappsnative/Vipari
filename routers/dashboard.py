@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -92,31 +93,62 @@ def create_compliance_api_router(
 def create_repo_read_router(
 	*,
 	pending_proposals_handler: Callable | None = None,
-	repo_dashboard_handler: Callable,
-	artifact_storyline_handler: Callable | None = None,
-	repo_journey_handler: Callable | None = None,
-	repo_snapshot_detail_handler: Callable | None = None,
-	repo_snapshot_compare_handler: Callable | None = None,
-	export_history_handler: Callable | None = None,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	if pending_proposals_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/proposals/pending", pending_proposals_handler, methods=["GET"])
-	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard_handler, methods=["GET"])
-	if artifact_storyline_handler is not None:
-		router.add_api_route(
-			"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes",
-			artifact_storyline_handler,
-			methods=["GET"],
-		)
-	if repo_journey_handler is not None:
-		router.add_api_route("/api/repos/{repo_full:path}/journey", repo_journey_handler, methods=["GET"])
-	if repo_snapshot_detail_handler is not None:
-		router.add_api_route("/api/repos/{repo_full:path}/snapshots/{snapshot_id}", repo_snapshot_detail_handler, methods=["GET"])
-	if repo_snapshot_compare_handler is not None:
-		router.add_api_route("/api/repos/{repo_full:path}/compare", repo_snapshot_compare_handler, methods=["GET"])
-	if export_history_handler is not None:
-		router.add_api_route("/api/repos/{repo_full:path}/export/history", export_history_handler, methods=["GET"])
+	return router
+
+
+def create_repo_dashboard_router(
+	*,
+	authorize_repo_read_fn: Callable,
+	resolve_db_path_fn: Callable[[], str],
+	build_repo_dashboard_view_with_timings_fn: Callable,
+	list_export_jobs_for_requester_fn: Callable,
+	export_job_payload_fn: Callable,
+	record_server_timing_metric_fn: Callable,
+	attach_server_timing_fn: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+
+	def repo_dashboard(request: Request, repo_full: str):
+		request_started = time.perf_counter()
+		timing_metrics: list[tuple[str, float]] = []
+		access_started = time.perf_counter()
+		access_context = authorize_repo_read_fn(request, repo_full)
+		record_server_timing_metric_fn(timing_metrics, "access", access_started)
+		build_started = time.perf_counter()
+		repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings_fn(resolve_db_path_fn(), repo_full)
+		record_server_timing_metric_fn(timing_metrics, "build", build_started)
+		timing_metrics.extend(repo_stage_timings)
+		json_started = time.perf_counter()
+		payload = asdict(repo_view)
+		workspace = access_context.get("workspace")
+		session = access_context.get("session")
+		if workspace is not None and session is not None:
+			payload["export_jobs"] = [
+				export_job_payload_fn(job)
+				for job in list_export_jobs_for_requester_fn(resolve_db_path_fn(), repo_full, workspace.id, session.user_id)
+			]
+		else:
+			payload["export_jobs"] = []
+		response = JSONResponse(payload)
+		record_server_timing_metric_fn(timing_metrics, "json", json_started)
+		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+		return attach_server_timing_fn(response, timing_metrics)
+
+	def export_history(request: Request, repo_full: str):
+		access_context = authorize_repo_read_fn(request, repo_full)
+		workspace = access_context.get("workspace")
+		session = access_context.get("session")
+		if workspace is None or session is None:
+			return JSONResponse({"repo_full": repo_full, "jobs": []})
+		jobs = list_export_jobs_for_requester_fn(resolve_db_path_fn(), repo_full, workspace.id, session.user_id)
+		return JSONResponse({"repo_full": repo_full, "jobs": [export_job_payload_fn(job) for job in jobs]})
+
+	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/export/history", export_history, methods=["GET"])
 	return router
 
 

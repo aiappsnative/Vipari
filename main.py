@@ -177,7 +177,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_history_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_dashboard_router, create_repo_history_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3517,48 +3517,21 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
     )
 
 
-def repo_dashboard(request: Request, repo_full: str):
-    request_started = time.perf_counter()
-    timing_metrics: list[tuple[str, float]] = []
-    access_started = time.perf_counter()
-    access_context = _require_repo_dashboard_read_access(request, repo_full)
-    _record_server_timing_metric(timing_metrics, "access", access_started)
-    build_started = time.perf_counter()
-    repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings(AUDIT_DB_PATH, repo_full)
-    _record_server_timing_metric(timing_metrics, "build", build_started)
-    timing_metrics.extend(repo_stage_timings)
-    json_started = time.perf_counter()
-    payload = asdict(repo_view)
-    workspace = access_context.get("workspace")
-    session = access_context.get("session")
-    if workspace is not None and session is not None:
-        payload["export_jobs"] = [
-            _export_job_payload(job)
-            for job in list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
-        ]
-    else:
-        payload["export_jobs"] = []
-    response = JSONResponse(payload)
-    _record_server_timing_metric(timing_metrics, "json", json_started)
-    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
-    return _attach_server_timing(response, timing_metrics)
-
-
-def export_history(request: Request, repo_full: str):
-    access_context = _require_repo_dashboard_read_access(request, repo_full)
-    workspace = access_context.get("workspace")
-    session = access_context.get("session")
-    if workspace is None or session is None:
-        return JSONResponse({"repo_full": repo_full, "jobs": []})
-    jobs = list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
-    return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
-
-
 app.include_router(
     create_repo_read_router(
         pending_proposals_handler=list_pending_proposals_for_repo,
-        repo_dashboard_handler=repo_dashboard,
-        export_history_handler=export_history,
+    )
+)
+
+app.include_router(
+    create_repo_dashboard_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_repo_dashboard_view_with_timings_fn=build_repo_dashboard_view_with_timings,
+        list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
+        export_job_payload_fn=_export_job_payload,
+        record_server_timing_metric_fn=_record_server_timing_metric,
+        attach_server_timing_fn=_attach_server_timing,
     )
 )
 
