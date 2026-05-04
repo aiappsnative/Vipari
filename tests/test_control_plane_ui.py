@@ -3422,28 +3422,48 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     )
 
     response = client.get("/app/compliance", cookies={main.settings.session_cookie_name: session.session_id})
+    frameworks_response = client.get("/app/compliance/frameworks", cookies={main.settings.session_cookie_name: session.session_id})
+    exports_response = client.get("/app/compliance/exports", cookies={main.settings.session_cookie_name: session.session_id})
+    evidence_response = client.get("/app/compliance/evidence", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
+    assert frameworks_response.status_code == 200
+    assert exports_response.status_code == 200
+    assert evidence_response.status_code == 200
     assert "Compliance workspace" in response.text
+    assert "Workspace readiness" in response.text
+    assert "Readiness verdict" in response.text
+    assert "Readiness by repository" in response.text
+    assert "Generate export" in response.text
+    assert "Download latest export" in response.text
     assert "compliance-org/repo-one" in response.text
     assert "compliance-org/repo-two" in response.text
-    assert "Run compliance exports" in response.text
-    assert "Download" in response.text
     assert 'aria-label="Audit Logs"' in response.text
-    assert "EU AI Act relevance assessment" in response.text
-    assert "Next actions for stronger review packs" in response.text
-    assert "How current the stored review evidence is" in response.text
-    assert "AI control surface" in response.text
-    assert "Governance surface" in response.text
-    assert "AI-assisted tool surface" in response.text
-    assert "Model/config surface" in response.text
-    assert "Human-reviewed baseline" in response.text
-    assert "No governance or policy artifact detected" in response.text
-    assert "Approve or reject the pending baseline" in response.text
-    assert "Stale evidence (45d)" in response.text
-    assert "Review-ready preset" in response.text
-    assert "Not review-ready yet" in response.text
-    assert "Pending baseline approval keeps this repo out of review-ready presets" in response.text
+    assert "Framework mapping" in frameworks_response.text
+    assert "EU AI Act" in frameworks_response.text
+    assert "SOC 2" in frameworks_response.text
+    assert "ISO 27001" in frameworks_response.text
+    assert "Run compliance exports" in exports_response.text
+    assert "Export history" in exports_response.text
+    assert "Review-ready preset" in exports_response.text
+    assert "Needs readiness work" in exports_response.text
+    assert "Download" in exports_response.text
+    assert "Repository evidence posture" in evidence_response.text
+    assert "Stale (45d)" in evidence_response.text
+    assert "Baseline Review" in evidence_response.text
+    assert "Missing Governance" in evidence_response.text
+    assert '/app/compliance/evidence?gap=missing_governance' in response.text
+    assert '/app/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
+
+    filtered_evidence_response = client.get(
+        "/app/compliance/evidence?gap=baseline_review&repo=compliance-org/repo-two",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert filtered_evidence_response.status_code == 200
+    assert "Showing 1 of 2 repo for <strong>Baseline Review</strong> for <strong>compliance-org/repo-two</strong>." in filtered_evidence_response.text
+    assert "compliance-org/repo-two" in filtered_evidence_response.text
+    assert "compliance-org/repo-one" not in filtered_evidence_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -3572,7 +3592,7 @@ def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/app/compliance?status=")
+    assert response.headers["location"].startswith("/app/compliance/exports?status=")
 
     jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
     assert len(jobs) == 1
@@ -3869,7 +3889,7 @@ def test_compliance_page_can_create_exports_for_review_ready_preset(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/app/compliance?status=")
+    assert response.headers["location"].startswith("/app/compliance/exports?status=")
 
     jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
     assert len(jobs) == 1

@@ -5864,6 +5864,159 @@ body.control-page[data-theme="light"] {
     margin: 0 0 8px;
 }
 
+.control-page-inline-note {
+    margin: 0 0 20px;
+    padding: 14px 18px;
+    border-radius: 16px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+}
+
+.compliance-hero {
+    align-items: start;
+}
+
+.compliance-hero-note {
+    max-width: 360px;
+}
+
+.compliance-shell-section,
+.compliance-content-shell {
+    width: 100%;
+}
+
+.compliance-header-bar {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: start;
+    flex-wrap: wrap;
+}
+
+.compliance-plan-chip {
+    min-width: 140px;
+}
+
+.compliance-readiness-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr);
+    gap: 16px;
+}
+
+.compliance-gap-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.compliance-gap-card,
+.compliance-export-summary-card,
+.compliance-verdict-card {
+    display: grid;
+    gap: 12px;
+}
+
+.compliance-gap-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 16px;
+}
+
+.compliance-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.compliance-status-pill.tone-success,
+.compliance-verdict-card.tone-success {
+    border-color: rgba(76, 175, 80, 0.28);
+    background: rgba(76, 175, 80, 0.14);
+    color: #c7f2cb;
+}
+
+.compliance-status-pill.tone-warning,
+.compliance-verdict-card.tone-warning {
+    border-color: rgba(255, 193, 7, 0.28);
+    background: rgba(255, 193, 7, 0.12);
+    color: #ffe5a0;
+}
+
+.compliance-status-pill.tone-danger,
+.compliance-verdict-card.tone-danger {
+    border-color: rgba(255, 107, 107, 0.28);
+    background: rgba(255, 107, 107, 0.12);
+    color: #ffc1c1;
+}
+
+.compliance-status-pill.tone-muted,
+.compliance-verdict-card.tone-muted {
+    border-color: var(--color-border);
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+}
+
+.compliance-export-summary-grid {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.compliance-inline-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.compliance-export-summary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.compliance-framework-detail-card {
+    display: grid;
+    gap: 12px;
+}
+
+.compliance-framework-list {
+    gap: 10px;
+}
+
+.compliance-framework-list .checklist-item {
+    align-items: start;
+}
+
+@media (max-width: 960px) {
+    .compliance-readiness-grid,
+    .compliance-export-summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.control-page[data-theme="light"] .compliance-status-pill.tone-success,
+.control-page[data-theme="light"] .compliance-verdict-card.tone-success {
+    color: #246b2e;
+}
+
+.control-page[data-theme="light"] .compliance-status-pill.tone-warning,
+.control-page[data-theme="light"] .compliance-verdict-card.tone-warning {
+    color: #7a5600;
+}
+
+.control-page[data-theme="light"] .compliance-status-pill.tone-danger,
+.control-page[data-theme="light"] .compliance-verdict-card.tone-danger {
+    color: #8a2f2f;
+}
+
 .control-page-admin-link {
     display: inline-flex;
     align-items: center;

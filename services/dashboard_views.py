@@ -1989,7 +1989,6 @@ class _RepoArtifactProfileContext:
     label: str
     source_ref: str | None
     source_url: str | None
-    review_head_sha: str | None
     review_context: str | None
     created_at: float
     baseline_provenance: BaselineProvenance | None
@@ -1998,6 +1997,7 @@ class _RepoArtifactProfileContext:
     narrative: list[str]
     signal_terms: list[str]
     content_text: str | None
+    review_head_sha: str | None = None
 
 
 @dataclass(frozen=True)
