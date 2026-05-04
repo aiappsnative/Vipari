@@ -158,6 +158,7 @@ from services.entitlements import derive_entitlement_payload, get_plan_definitio
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
+from services.compliance_readiness import build_compliance_workspace_view
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -2396,6 +2397,56 @@ async def policies_page(request: Request):
 
 @app.get("/app/compliance", response_class=HTMLResponse)
 async def compliance_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="readiness",
+        page_title="Workspace readiness",
+        page_description="See whether the workspace is export-ready, which gaps are blocking it, and which repositories need action next.",
+        page_note="The main page stays focused on the immediate readiness answer. Framework detail, export execution, and evidence inspection live in their own tabs.",
+    )
+
+
+@app.get("/app/compliance/frameworks", response_class=HTMLResponse)
+async def compliance_frameworks_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="frameworks",
+        page_title="Framework mapping",
+        page_description="Review how the monitored repositories map to EU AI Act, SOC 2, and ISO 27001 expectations without the operational export controls competing for attention.",
+        page_note="These cards summarize the framework story for the current workspace evidence set.",
+    )
+
+
+@app.get("/app/compliance/exports", response_class=HTMLResponse)
+async def compliance_exports_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="exports",
+        page_title="Export operations",
+        page_description="Generate evidence bundles and review recent export activity for the repositories already in scope.",
+        page_note="Server-side presets still reuse baseline approval, governance evidence, and freshness checks from the readiness model.",
+    )
+
+
+@app.get("/app/compliance/evidence", response_class=HTMLResponse)
+async def compliance_evidence_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="evidence",
+        page_title="Evidence posture",
+        page_description="Inspect stale evidence, missing governance artifacts, and pending baseline approvals repository by repository.",
+        page_note="Use this view when you are clearing blockers rather than making the overall readiness call.",
+    )
+
+
+def _render_compliance_tab_page(
+    request: Request,
+    *,
+    active_tab: str,
+    page_title: str,
+    page_description: str,
+    page_note: str,
+) -> HTMLResponse:
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
@@ -2413,10 +2464,13 @@ async def compliance_page(request: Request):
         allowed_repo_fulls={str(item["repo_full"]) for item in repo_rows},
         allocation_status_by_full=allocation_status_by_full,
     )
-    export_jobs = list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
-    status_note = request.query_params.get("status") or (
-        "Centralize EU AI Act, SOC 2, and ISO 27001 evidence work here. Existing exports still reuse the repo-level evidence model."
+    export_jobs = (
+        list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
+        if session is not None
+        else []
     )
+    view = build_compliance_workspace_view(AUDIT_DB_PATH, repo_rows, repo_summaries, export_jobs)
+    status_note = request.query_params.get("status") or ""
     return HTMLResponse(
         render_control_plane_compliance_page(
             workspace_name=workspace.display_name,
@@ -2424,16 +2478,13 @@ async def compliance_page(request: Request):
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             status_note=status_note,
-            tracked_repo_count=len(repo_rows),
-            baseline_approved_repo_count=sum(1 for item in repo_summaries if item.onboarding_status == "baseline_approved"),
-            export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
-            export_pending_count=sum(1 for job in export_jobs if job.status != "completed"),
-            ai_act_assessment_html=_render_compliance_ai_act_assessment(repo_summaries),
-            evidence_gaps_html=_render_compliance_evidence_gaps(repo_summaries),
-            evidence_freshness_html=_render_compliance_evidence_freshness(repo_summaries),
-            repo_rows_html=_render_compliance_repo_rows(repo_rows),
-            export_history_html=_render_compliance_export_history(export_jobs),
-            csrf_token=session.csrf_secret,
+            active_tab=active_tab,
+            page_title=page_title,
+            page_description=page_description,
+            page_note=page_note,
+            view=view,
+            export_jobs=tuple(export_jobs),
+            csrf_token=session.csrf_secret if session is not None else "",
         )
     )
 
@@ -2494,24 +2545,24 @@ async def compliance_export_page_submit(
     workspace = access_context["workspace"]
     session = access_context["session"]
     if not from_date or not to_date:
-        return RedirectResponse("/app/compliance?status=Choose+an+export+date+range+before+running+Compliance+exports.", status_code=303)
+        return RedirectResponse("/app/compliance/exports?status=Choose+an+export+date+range+before+running+Compliance+exports.", status_code=303)
     from_ts = datetime.fromisoformat(from_date).timestamp()
     to_ts = datetime.fromisoformat(to_date).timestamp()
     if from_ts > to_ts:
-        return RedirectResponse("/app/compliance?status=The+export+start+date+must+be+earlier+than+the+end+date.", status_code=303)
+        return RedirectResponse("/app/compliance/exports?status=The+export+start+date+must+be+earlier+than+the+end+date.", status_code=303)
     if export_mode not in {"compliance", "compliance_plus_drift"}:
-        return RedirectResponse("/app/compliance?status=Choose+a+valid+export+mode.", status_code=303)
+        return RedirectResponse("/app/compliance/exports?status=Choose+a+valid+export+mode.", status_code=303)
     if export_preset not in {"none", "review_ready", "fresh_review_ready"}:
-        return RedirectResponse("/app/compliance?status=Choose+a+valid+export+preset.", status_code=303)
+        return RedirectResponse("/app/compliance/exports?status=Choose+a+valid+export+preset.", status_code=303)
 
     visible_repo_rows = _workspace_repo_rows(workspace.id)
     visible_repo_fulls = {str(item["repo_full"]) for item in visible_repo_rows}
     if export_preset != "none":
         selected_repo_fulls = _compliance_export_preset_repo_fulls(visible_repo_fulls, export_preset)
     else:
-        selected_repo_fulls = sorted(visible_repo_fulls) if export_scope == "all" else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
+        selected_repo_fulls = sorted(visible_repo_fulls) if export_scope == "all_visible" else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
     if not selected_repo_fulls:
-        return RedirectResponse("/app/compliance?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
+        return RedirectResponse("/app/compliance/exports?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
 
     completed = 0
     failed = 0
@@ -2533,7 +2584,7 @@ async def compliance_export_page_submit(
     status_message = f"Completed exports for {completed} repo(s)."
     if failed:
         status_message += f" {failed} repo(s) failed and can be retried."
-    return RedirectResponse(f"/app/compliance?status={quote(status_message)}", status_code=303)
+    return RedirectResponse(f"/app/compliance/exports?status={quote(status_message)}", status_code=303)
 
 
 @app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)

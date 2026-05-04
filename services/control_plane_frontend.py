@@ -7,7 +7,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
+from .compliance_readiness import ComplianceExportSummary, ComplianceFrameworkCard, ComplianceGapItem, ComplianceRepoReadinessRow, ComplianceWorkspaceView
 from .entitlements import PLAN_DEFINITIONS
+from .export_jobs import ExportJob
 from .mcp_broker import MCP_BROKER_TOOLS
 
 
@@ -1207,6 +1209,355 @@ def _build_help_context(
     }
 
 
+def _compliance_tone_class(tone: str) -> str:
+    normalized = (tone or "muted").strip().lower()
+    if normalized in {"success", "warning", "danger", "muted"}:
+        return f"tone-{normalized}"
+    return "tone-muted"
+
+
+def _render_compliance_tab_bar(active_tab: str) -> str:
+    items = (
+        ("readiness", "Readiness", "/app/compliance"),
+        ("frameworks", "Frameworks", "/app/compliance/frameworks"),
+        ("exports", "Exports", "/app/compliance/exports"),
+        ("evidence", "Evidence", "/app/compliance/evidence"),
+    )
+    return "".join(
+        f'<a class="control-page-tab-link" href="{html_escape(href)}"{(" aria-current=\"page\"" if key == active_tab else "")}>{html_escape(label)}</a>'
+        for key, label, href in items
+    )
+
+
+def _render_compliance_metrics(view: ComplianceWorkspaceView) -> str:
+    return "".join(
+        f'''
+        <article class="control-page-stat-card compliance-metric-card">
+            <span class="control-page-stat-label">{html_escape(metric.label)}</span>
+            <strong>{html_escape(metric.value)}</strong>
+            <span class="control-page-microcopy">{html_escape(metric.detail)}</span>
+        </article>
+        '''
+        for metric in view.metrics
+    )
+
+
+def _render_compliance_verdict(view: ComplianceWorkspaceView) -> str:
+    verdict = view.verdict
+    return f'''
+        <article class="control-page-section compliance-verdict-card {_compliance_tone_class(verdict.tone)}">
+            <p class="secondary-panel-title">Readiness verdict</p>
+            <h2 class="control-page-section-title">{html_escape(verdict.headline)}</h2>
+            <p>{html_escape(verdict.detail)}</p>
+            <a class="control-page-button" href="{html_escape(verdict.cta_href)}">{html_escape(verdict.cta_label)}</a>
+        </article>
+    '''
+
+
+def _render_compliance_gaps(gaps: tuple[ComplianceGapItem, ...]) -> str:
+    if not gaps:
+        return '<div class="control-page-empty">No blocking readiness gaps are open right now.</div>'
+    return "".join(
+        f'''
+        <article class="control-page-section compliance-gap-card">
+            <div class="compliance-gap-head">
+                <div>
+                    <p class="secondary-panel-title">Top gap</p>
+                    <h3 class="control-page-section-title">{html_escape(item.title)}</h3>
+                </div>
+                <span class="compliance-status-pill tone-warning">{item.affected_count} repos</span>
+            </div>
+            <p>{html_escape(item.detail)}</p>
+            <p class="control-page-microcopy">{html_escape(', '.join(item.repo_fulls))}</p>
+            <a class="subtle-link" href="{html_escape(item.cta_href)}">{html_escape(item.cta_label)}</a>
+        </article>
+        '''
+        for item in gaps
+    )
+
+
+def _render_compliance_repo_table(rows: tuple[ComplianceRepoReadinessRow, ...]) -> str:
+    if not rows:
+        return '<div class="control-page-empty">No repositories are visible to this workspace yet.</div>'
+    body = "".join(
+        f'''
+        <tr>
+            <td>
+                <div class="stack compact-stack">
+                    <a class="link" href="{html_escape(row.repo_href)}">{html_escape(row.repo_full)}</a>
+                    <span class="control-page-microcopy">{html_escape(row.connection_status)} · default branch {html_escape(row.default_branch)}</span>
+                </div>
+            </td>
+            <td><span class="compliance-status-pill {_compliance_tone_class(row.overall_tone)}">{html_escape(row.overall_label)}</span></td>
+            <td><span class="compliance-status-pill {_compliance_tone_class(row.baseline_tone)}">{html_escape(row.baseline_label)}</span></td>
+            <td><span class="compliance-status-pill {_compliance_tone_class(row.governance_tone)}">{html_escape(row.governance_label)}</span></td>
+            <td><span class="compliance-status-pill {_compliance_tone_class(row.freshness_tone)}">{html_escape(row.freshness_label)}</span></td>
+            <td>
+                <div class="stack compact-stack">
+                    <a class="subtle-link" href="{html_escape(row.action_href)}">{html_escape(row.action_label)}</a>
+                    <span class="control-page-microcopy">{html_escape(row.action_detail)}</span>
+                </div>
+            </td>
+        </tr>
+        '''
+        for row in rows
+    )
+    return (
+        '<div class="table-shell"><table class="data-table"><thead><tr>'
+        '<th>Repository</th><th>Status</th><th>Baseline</th><th>Governance</th><th>Freshness</th><th>Next action</th>'
+        f'</tr></thead><tbody>{body}</tbody></table></div>'
+    )
+
+
+def _render_compliance_export_summary(summary: ComplianceExportSummary) -> str:
+    download_markup = ""
+    if summary.latest_download_href:
+        download_markup = f'<a class="subtle-link" href="{html_escape(summary.latest_download_href)}">Download latest export</a>'
+    return f'''
+        <article class="control-page-section compliance-export-summary-card">
+            <div class="compliance-export-summary-grid">
+                <div>
+                    <p class="secondary-panel-title">Export readiness</p>
+                    <h2 class="control-page-section-title">{summary.ready_repo_count} repos can export immediately</h2>
+                    <p>{html_escape(summary.latest_detail)}</p>
+                </div>
+                <div class="control-page-stat-grid compliance-inline-stat-grid">
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Completed</span><strong>{summary.completed_count}</strong></article>
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Pending</span><strong>{summary.pending_count}</strong></article>
+                    <article class="control-page-stat-card"><span class="control-page-stat-label">Failed</span><strong>{summary.failed_count}</strong></article>
+                </div>
+            </div>
+            <div class="compliance-export-summary-actions">
+                <span class="compliance-status-pill {_compliance_tone_class('success' if summary.ready_repo_count else 'warning')}">{html_escape(summary.latest_status_label)}</span>
+                <a class="control-page-button" href="/app/compliance/exports#new-export">Generate export</a>
+                {download_markup}
+            </div>
+        </article>
+    '''
+
+
+def _render_compliance_framework_cards(cards: tuple[ComplianceFrameworkCard, ...]) -> str:
+    return "".join(
+        f'''
+        <article class="compliance-framework-card compliance-framework-detail-card">
+            <div class="compliance-gap-head">
+                <div>
+                    <p class="secondary-panel-title">Framework</p>
+                    <h3 class="control-page-section-title">{html_escape(card.title)}</h3>
+                </div>
+                <span class="compliance-status-pill tone-muted">{html_escape(card.status_label)}</span>
+            </div>
+            <p>{html_escape(card.detail)}</p>
+            <ul class="control-page-checklist compliance-framework-list">
+                {''.join(f'<li class="checklist-item"><span>{html_escape(bullet)}</span></li>' for bullet in card.bullets)}
+            </ul>
+        </article>
+        '''
+        for card in cards
+    )
+
+
+def _render_compliance_evidence_rows(rows: tuple[ComplianceRepoReadinessRow, ...]) -> str:
+    if not rows:
+        return '<div class="control-page-empty">No evidence rows are available yet.</div>'
+    cards: list[str] = []
+    for row in rows:
+        if not row.gap_keys and row.freshness_tone == "success":
+            summary = "Evidence is current and governance-backed."
+            next_step = "Keep this repo inside the regular review cadence."
+        elif "needs_setup" in row.gap_keys:
+            summary = "No onboarding record is stored for this repo yet."
+            next_step = "Run onboarding to create the first evidence pack."
+        elif "baseline_review" in row.gap_keys:
+            summary = "A baseline exists, but the approval decision is still pending."
+            next_step = "Approve or reject the pending baseline before export."
+        elif "missing_governance" in row.gap_keys:
+            summary = "Governance or policy evidence is missing from the stored artifact set."
+            next_step = "Attach governance artifacts to strengthen the review trail."
+        elif "stale_evidence" in row.gap_keys:
+            summary = "Stored evidence has moved outside the fresh review window."
+            next_step = "Refresh onboarding output before the next evidence pack."
+        else:
+            summary = "Evidence is usable, but it is aging out of the fresh window."
+            next_step = "Schedule a refresh before the stale threshold is crossed."
+        chips = ''.join(f'<span class="compliance-status-pill tone-warning">{html_escape(gap.replace("_", " ").title())}</span>' for gap in row.gap_keys) or '<span class="compliance-status-pill tone-success">Healthy evidence</span>'
+        cards.append(
+            f'''
+            <article class="compliance-assessment-card">
+                <div class="compliance-assessment-head">
+                    <strong>{html_escape(row.repo_full)}</strong>
+                    <span class="compliance-status-pill {_compliance_tone_class(row.freshness_tone)}">{html_escape(row.freshness_label)}</span>
+                </div>
+                <div class="tag-row">{chips}</div>
+                <p>{html_escape(summary)}</p>
+                <p class="control-page-microcopy">{html_escape(next_step)}</p>
+                <a class="subtle-link" href="{html_escape(row.repo_href)}">Open audit page</a>
+            </article>
+            '''
+        )
+    return f'<div class="compliance-assessment-grid">{"".join(cards)}</div>'
+
+
+def _render_compliance_export_scope_rows(rows: tuple[ComplianceRepoReadinessRow, ...]) -> str:
+    if not rows:
+        return '<div class="control-page-empty">No repositories are connected to this workspace yet.</div>'
+    rendered: list[str] = []
+    for row in rows:
+        eligibility_chips = []
+        if row.export_ready:
+            eligibility_chips.append('<span class="compliance-status-pill tone-success">Review-ready preset</span>')
+        else:
+            eligibility_chips.append('<span class="compliance-status-pill tone-warning">Needs readiness work</span>')
+        eligibility_chips.append(f'<span class="compliance-status-pill {_compliance_tone_class(row.freshness_tone)}">{html_escape(row.freshness_label)}</span>')
+        rendered.append(
+            f'''
+            <label class="compliance-repo-row">
+                <input type="checkbox" name="repo_fulls" value="{html_escape(row.repo_full)}" />
+                <div class="compliance-repo-main">
+                    <div class="compliance-repo-copy">
+                        <strong>{html_escape(row.repo_full)}</strong>
+                        <span>{html_escape(row.connection_status)} · default branch {html_escape(row.default_branch)}</span>
+                        <div class="tag-row">{"".join(eligibility_chips)}</div>
+                        <span>{html_escape(row.action_detail)}</span>
+                    </div>
+                    <a class="subtle-link" href="{html_escape(row.repo_href)}">Open audit page</a>
+                </div>
+            </label>
+            '''
+        )
+    return "".join(rendered)
+
+
+def _render_compliance_export_history(jobs: tuple[ExportJob, ...] | list[ExportJob]) -> str:
+    if not jobs:
+        return '<div class="control-page-empty">No compliance exports have been generated for this workspace yet.</div>'
+    rows: list[str] = []
+    for job in jobs:
+        range_label = (
+            f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')} to {datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}"
+        )
+        if job.status == "completed" and job.download_token and job.result_blob:
+            download_markup = f'<a class="link" href="/api/export/{job.id}/download?token={quote(job.download_token)}">Download</a>'
+        else:
+            download_markup = html_escape(job.status.replace("_", " ").title())
+        rows.append(
+            f'''
+            <tr>
+                <td>{html_escape(job.repo_full)}</td>
+                <td>{html_escape(job.export_mode.replace('_', ' ').title())}</td>
+                <td>{html_escape(range_label)}</td>
+                <td>{html_escape(job.status.replace('_', ' ').title())}</td>
+                <td>{download_markup}</td>
+            </tr>
+            '''
+        )
+    return (
+        '<div class="table-shell"><table class="data-table"><thead><tr>'
+        '<th>Repository</th><th>Mode</th><th>Date range</th><th>Status</th><th>Download</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
+def _render_compliance_export_form(view: ComplianceWorkspaceView, csrf_token: str) -> str:
+    return f'''
+        <article id="new-export" class="control-page-section stack compact-stack">
+            <div>
+                <p class="secondary-panel-title">Generate evidence pack</p>
+                <h2 class="control-page-section-title">Run compliance exports</h2>
+                <p>Generate a focused export for selected repositories or let the server-side presets choose the repos that are already ready.</p>
+            </div>
+            <form method="post" action="/app/compliance/export" class="stack compact-stack">
+                {_csrf_input(csrf_token)}
+                <label class="settings-field">
+                    <span>Server-side repo preset</span>
+                    <select name="export_preset">
+                        <option value="none">No preset</option>
+                        <option value="review_ready">Review-ready repos</option>
+                        <option value="fresh_review_ready">Fresh review-ready repos</option>
+                    </select>
+                </label>
+                <fieldset class="settings-field">
+                    <legend>Scope</legend>
+                    <label><input type="radio" name="export_scope" value="all_visible" checked /> All visible repos</label>
+                    <label><input type="radio" name="export_scope" value="selected" /> Selected repos only</label>
+                </fieldset>
+                <fieldset class="settings-field">
+                    <legend>Export mode</legend>
+                    <label><input type="radio" name="export_mode" value="compliance" checked /> Compliance evidence bundle</label>
+                    <label><input type="radio" name="export_mode" value="compliance_plus_drift" /> Compliance plus drift context</label>
+                </fieldset>
+                <div class="control-page-meta-grid">
+                    <label class="settings-field"><span>From</span><input type="date" name="from_date" required /></label>
+                    <label class="settings-field"><span>To</span><input type="date" name="to_date" required /></label>
+                </div>
+                <label><input type="checkbox" name="include_artifact_content" value="true" checked /> Include artifact content when available</label>
+                <div class="compliance-repo-list">{_render_compliance_export_scope_rows(view.repo_rows)}</div>
+                <button class="control-page-button" type="submit">Generate export</button>
+            </form>
+        </article>
+    '''
+
+
+def _render_compliance_page_content(
+    active_tab: str,
+    view: ComplianceWorkspaceView,
+    csrf_token: str,
+    export_jobs: tuple[ExportJob, ...],
+) -> str:
+    if active_tab == "frameworks":
+        return f'''
+            <section class="control-page-section stack compact-stack">
+                <h2 class="control-page-section-title">Framework coverage</h2>
+                <p>Use this view when you need the framework-oriented narrative rather than the day-to-day readiness summary.</p>
+                <div class="compliance-framework-grid">{_render_compliance_framework_cards(view.framework_cards)}</div>
+            </section>
+        '''
+    if active_tab == "exports":
+        return f'''
+            {_render_compliance_export_summary(view.export_summary)}
+            {_render_compliance_export_form(view, csrf_token)}
+            <section class="control-page-section stack compact-stack">
+                <div>
+                    <p class="secondary-panel-title">Recent activity</p>
+                    <h2 class="control-page-section-title">Export history</h2>
+                </div>
+                {_render_compliance_export_history(export_jobs)}
+            </section>
+        '''
+    if active_tab == "evidence":
+        return f'''
+            <section class="control-page-section stack compact-stack">
+                <div>
+                    <p class="secondary-panel-title">Evidence detail</p>
+                    <h2 class="control-page-section-title">Repository evidence posture</h2>
+                    <p>Inspect missing governance artifacts, stale evidence, and pending approvals without the export form competing for attention.</p>
+                </div>
+                {_render_compliance_evidence_rows(view.repo_rows)}
+            </section>
+        '''
+    return f'''
+        <div class="control-page-stat-grid">{_render_compliance_metrics(view)}</div>
+        <div class="compliance-readiness-grid">
+            {_render_compliance_verdict(view)}
+            <section class="control-page-section stack compact-stack">
+                <div>
+                    <p class="secondary-panel-title">Priority gaps</p>
+                    <h2 class="control-page-section-title">What needs attention next</h2>
+                </div>
+                <div class="compliance-gap-grid">{_render_compliance_gaps(view.top_gaps)}</div>
+            </section>
+        </div>
+        <section class="control-page-section stack compact-stack">
+            <div>
+                <p class="secondary-panel-title">Repository view</p>
+                <h2 class="control-page-section-title">Readiness by repository</h2>
+            </div>
+            {_render_compliance_repo_table(view.repo_rows)}
+        </section>
+        {_render_compliance_export_summary(view.export_summary)}
+    '''
+
+
 def render_control_plane_compliance_page(
     *,
     workspace_name: str,
@@ -1214,34 +1565,28 @@ def render_control_plane_compliance_page(
     plan_label: str,
     theme_preference: str,
     status_note: str,
-    tracked_repo_count: int,
-    baseline_approved_repo_count: int,
-    export_ready_count: int,
-    export_pending_count: int,
-    ai_act_assessment_html: str,
-    evidence_gaps_html: str,
-    evidence_freshness_html: str,
-    repo_rows_html: str,
-    export_history_html: str,
-    csrf_token: str,
+    active_tab: str,
+    page_title: str,
+    page_description: str,
+    page_note: str,
+    view: ComplianceWorkspaceView,
+    export_jobs: tuple[ExportJob, ...] | None = None,
+    csrf_token: str = "",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
+    export_job_items = export_jobs or tuple()
+    status_markup = f'<div class="control-page-inline-note">{html_escape(status_note)}</div>' if status_note else ""
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
-        .replace("{{STATUS_NOTE}}", html_escape(status_note))
-        .replace("{{TRACKED_REPO_COUNT}}", html_escape(str(tracked_repo_count)))
-        .replace("{{BASELINE_APPROVED_REPO_COUNT}}", html_escape(str(baseline_approved_repo_count)))
-        .replace("{{EXPORT_READY_COUNT}}", html_escape(str(export_ready_count)))
-        .replace("{{EXPORT_PENDING_COUNT}}", html_escape(str(export_pending_count)))
-        .replace("{{AI_ACT_ASSESSMENT}}", ai_act_assessment_html)
-        .replace("{{EVIDENCE_GAPS}}", evidence_gaps_html)
-        .replace("{{EVIDENCE_FRESHNESS}}", evidence_freshness_html)
-        .replace("{{REPO_ROWS}}", repo_rows_html)
-        .replace("{{EXPORT_HISTORY}}", export_history_html)
-        .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
+        .replace("{{STATUS_NOTE}}", status_markup)
+        .replace("{{PAGE_TITLE}}", html_escape(page_title))
+        .replace("{{PAGE_DESCRIPTION}}", html_escape(page_description))
+        .replace("{{PAGE_NOTE}}", html_escape(page_note))
+        .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
+        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items)))
     )
 
 
