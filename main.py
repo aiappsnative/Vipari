@@ -153,7 +153,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_api_payloads import build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_repo_index_payload
+from services.dashboard_api_payloads import build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
@@ -3503,42 +3503,18 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
     from services.proposals_records import list_pending_baseline_proposals_for_repo_in_workspace
     from services.onboarding_records import list_onboarded_artifacts_for_onboarding
     workspace = access_context.get("workspace")
-    if workspace is None:
-        return JSONResponse({"proposals": [], "pending_count": 0})
-    proposals = list_pending_baseline_proposals_for_repo_in_workspace(AUDIT_DB_PATH, repo_full, workspace.id)
-    if not proposals:
-        return JSONResponse({"proposals": [], "pending_count": 0})
-    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
-    artifact_path_by_id: dict[int, str] = {}
-    if onboarding:
-        for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id):
-            artifact_path_by_id[artifact.id] = artifact.artifact_path
-    principals_cache: dict[int, object | None] = {}
-    proposals_out: list[dict] = []
-    for proposal in proposals:
-        if proposal.proposer_principal_id not in principals_cache:
-            principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
-                AUDIT_DB_PATH,
-                proposal.proposer_principal_id,
-            )
-        proposer = principals_cache.get(proposal.proposer_principal_id)
-        is_agent = (
-            proposer is not None
-            and getattr(proposer, "principal_kind", None) == PRINCIPAL_KIND_SERVICE_ACCOUNT
+    return JSONResponse(
+        build_pending_proposals_payload(
+            AUDIT_DB_PATH,
+            repo_full,
+            workspace_id=workspace.id if workspace is not None else None,
+            list_pending_proposals_fn=list_pending_baseline_proposals_for_repo_in_workspace,
+            get_latest_repository_onboarding_fn=get_latest_repository_onboarding,
+            list_onboarded_artifacts_for_onboarding_fn=list_onboarded_artifacts_for_onboarding,
+            get_machine_principal_by_id_fn=get_machine_principal_by_id,
+            service_account_principal_kind=PRINCIPAL_KIND_SERVICE_ACCOUNT,
         )
-        proposals_out.append({
-            "proposal_id": proposal.id,
-            "artifact_id": proposal.artifact_id,
-            "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
-            "status": proposal.status,
-            "rationale": proposal.rationale,
-            "proposer_principal_id": proposal.proposer_principal_id,
-            "is_agent_proposal": is_agent,
-            "created_at": proposal.created_at,
-            "expires_at": proposal.expires_at,
-        })
-    proposals_out.sort(key=lambda p: p["created_at"])
-    return JSONResponse({"proposals": proposals_out, "pending_count": len(proposals_out)})
+    )
 
 
 @app.get("/api/repos/{repo_full:path}/dashboard")

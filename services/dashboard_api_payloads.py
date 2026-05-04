@@ -90,3 +90,58 @@ def build_dashboard_escalation_queue_payload(
         allowed_repo_fulls=allowed_repo_fulls,
         include_watch=include_watch,
     )
+
+
+def build_pending_proposals_payload(
+    db_path: str,
+    repo_full: str,
+    *,
+    workspace_id: int | None,
+    list_pending_proposals_fn: Callable[..., list],
+    get_latest_repository_onboarding_fn: Callable[..., object | None],
+    list_onboarded_artifacts_for_onboarding_fn: Callable[..., list],
+    get_machine_principal_by_id_fn: Callable[..., object | None],
+    service_account_principal_kind: str,
+) -> dict[str, object]:
+    if workspace_id is None:
+        return {"proposals": [], "pending_count": 0}
+
+    proposals = list_pending_proposals_fn(db_path, repo_full, workspace_id)
+    if not proposals:
+        return {"proposals": [], "pending_count": 0}
+
+    onboarding = get_latest_repository_onboarding_fn(db_path, repo_full)
+    artifact_path_by_id: dict[int, str] = {}
+    if onboarding:
+        for artifact in list_onboarded_artifacts_for_onboarding_fn(db_path, onboarding.id):
+            artifact_path_by_id[artifact.id] = artifact.artifact_path
+
+    principals_cache: dict[int, object | None] = {}
+    proposals_out: list[dict[str, object]] = []
+    for proposal in proposals:
+        if proposal.proposer_principal_id not in principals_cache:
+            principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id_fn(
+                db_path,
+                proposal.proposer_principal_id,
+            )
+        proposer = principals_cache.get(proposal.proposer_principal_id)
+        is_agent = (
+            proposer is not None
+            and getattr(proposer, "principal_kind", None) == service_account_principal_kind
+        )
+        proposals_out.append(
+            {
+                "proposal_id": proposal.id,
+                "artifact_id": proposal.artifact_id,
+                "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
+                "status": proposal.status,
+                "rationale": proposal.rationale,
+                "proposer_principal_id": proposal.proposer_principal_id,
+                "is_agent_proposal": is_agent,
+                "created_at": proposal.created_at,
+                "expires_at": proposal.expires_at,
+            }
+        )
+
+    proposals_out.sort(key=lambda proposal: proposal["created_at"])
+    return {"proposals": proposals_out, "pending_count": len(proposals_out)}
