@@ -91,6 +91,7 @@ def create_compliance_api_router(
 
 def create_repo_read_router(
 	*,
+	pending_proposals_handler: Callable | None = None,
 	repo_dashboard_handler: Callable,
 	artifact_storyline_handler: Callable,
 	repo_journey_handler: Callable,
@@ -99,6 +100,8 @@ def create_repo_read_router(
 	export_history_handler: Callable | None = None,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
+	if pending_proposals_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/proposals/pending", pending_proposals_handler, methods=["GET"])
 	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard_handler, methods=["GET"])
 	router.add_api_route(
 		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes",

@@ -3613,6 +3613,7 @@ def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: in
 
 app.include_router(
     create_repo_read_router(
+        pending_proposals_handler=list_pending_proposals_for_repo,
         repo_dashboard_handler=repo_dashboard,
         artifact_storyline_handler=artifact_storyline,
         repo_journey_handler=repo_journey,

@@ -271,7 +271,6 @@ def create_api_app() -> FastAPI:
         )
         return JSONResponse(result)
 
-    @app.get("/api/repos/{repo_full:path}/proposals/pending")
     def list_pending_proposals_for_repo(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         from .proposals_records import list_pending_baseline_proposals_for_repo
@@ -362,6 +361,7 @@ def create_api_app() -> FastAPI:
 
     app.include_router(
         create_repo_read_router(
+            pending_proposals_handler=list_pending_proposals_for_repo,
             repo_dashboard_handler=repo_dashboard,
             artifact_storyline_handler=artifact_storyline,
             repo_journey_handler=repo_journey,
