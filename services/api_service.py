@@ -33,7 +33,7 @@ from .control_plane_records import (
     list_machine_principals_for_workspace,
     revoke_machine_principal,
 )
-from .dashboard_api_payloads import build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload
+from .dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
@@ -312,43 +312,58 @@ def create_api_app() -> FastAPI:
     @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
     def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
         _require_admin_token(request, settings)
-        storyline = build_repo_artifact_storyline(db_path, repo_full, artifact_path)
-        if storyline is None:
-            raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
-        return JSONResponse(
-            {
-                "repo_full": repo_full,
-                "artifact_path": artifact_path,
-                "storyline": asdict(storyline),
-            }
-        )
+        try:
+            payload = build_artifact_storyline_payload(
+                db_path,
+                repo_full,
+                artifact_path,
+                build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload)
 
     @app.get("/api/repos/{repo_full:path}/journey")
     def repo_journey(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(
-            {
-                "repo_full": repo_full,
-                "snapshots": [snapshot_to_public_payload(item) for item in build_repo_journey(db_path, repo_full)],
-            }
+            build_repo_journey_payload(
+                db_path,
+                repo_full,
+                build_repo_journey_fn=build_repo_journey,
+                snapshot_to_public_payload_fn=snapshot_to_public_payload,
+            )
         )
 
     @app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
     def repo_snapshot_detail(repo_full: str, snapshot_id: int, request: Request):
         _require_admin_token(request, settings)
-        snapshot = get_repo_snapshot_detail(db_path, repo_full, snapshot_id)
-        if snapshot is None:
-            raise HTTPException(status_code=404, detail="Repo posture snapshot was not found.")
-        return JSONResponse({"repo_full": repo_full, "snapshot": snapshot_to_public_payload(snapshot)})
+        try:
+            payload = build_repo_snapshot_detail_payload(
+                db_path,
+                repo_full,
+                snapshot_id,
+                get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
+                snapshot_to_public_payload_fn=snapshot_to_public_payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload)
 
     @app.get("/api/repos/{repo_full:path}/compare")
     def repo_snapshot_compare(repo_full: str, left: int, right: int, request: Request):
         _require_admin_token(request, settings)
         try:
-            comparison = compare_repo_snapshots(db_path, repo_full, left, right)
+            payload = build_repo_snapshot_compare_payload(
+                db_path,
+                repo_full,
+                left,
+                right,
+                compare_repo_snapshots_fn=compare_repo_snapshots,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(asdict(comparison))
+        return JSONResponse(payload)
 
     @app.post("/api/repos/{repo_full:path}/onboard")
     async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):

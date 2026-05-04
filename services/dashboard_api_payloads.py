@@ -145,3 +145,59 @@ def build_pending_proposals_payload(
 
     proposals_out.sort(key=lambda proposal: proposal["created_at"])
     return {"proposals": proposals_out, "pending_count": len(proposals_out)}
+
+
+def build_artifact_storyline_payload(
+    db_path: str,
+    repo_full: str,
+    artifact_path: str,
+    *,
+    build_repo_artifact_storyline_fn: Callable[..., object | None],
+) -> dict[str, object]:
+    storyline = build_repo_artifact_storyline_fn(db_path, repo_full, artifact_path)
+    if storyline is None:
+        raise ValueError("No artifact storyline is available for this repo artifact.")
+    return {
+        "repo_full": repo_full,
+        "artifact_path": artifact_path,
+        "storyline": asdict(storyline),
+    }
+
+
+def build_repo_journey_payload(
+    db_path: str,
+    repo_full: str,
+    *,
+    build_repo_journey_fn: Callable[..., list],
+    snapshot_to_public_payload_fn: Callable[..., dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "repo_full": repo_full,
+        "snapshots": [snapshot_to_public_payload_fn(item) for item in build_repo_journey_fn(db_path, repo_full)],
+    }
+
+
+def build_repo_snapshot_detail_payload(
+    db_path: str,
+    repo_full: str,
+    snapshot_id: int,
+    *,
+    get_repo_snapshot_detail_fn: Callable[..., object | None],
+    snapshot_to_public_payload_fn: Callable[..., dict[str, object]],
+) -> dict[str, object]:
+    snapshot = get_repo_snapshot_detail_fn(db_path, repo_full, snapshot_id)
+    if snapshot is None:
+        raise ValueError("Repo posture snapshot was not found.")
+    return {"repo_full": repo_full, "snapshot": snapshot_to_public_payload_fn(snapshot)}
+
+
+def build_repo_snapshot_compare_payload(
+    db_path: str,
+    repo_full: str,
+    left: int,
+    right: int,
+    *,
+    compare_repo_snapshots_fn: Callable[..., object],
+) -> dict[str, object]:
+    comparison = compare_repo_snapshots_fn(db_path, repo_full, left, right)
+    return asdict(comparison)
