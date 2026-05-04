@@ -20,6 +20,10 @@ _GAP_PRIORITY = {
 }
 
 
+def _gap_cta_href(gap_key: str) -> str:
+    return f"/app/compliance/evidence?gap={gap_key}"
+
+
 @dataclass(frozen=True)
 class ComplianceMetric:
     label: str
@@ -250,31 +254,31 @@ def _gap_items(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[Complia
             "Complete onboarding",
             "Some connected repos still have no baseline or evidence history.",
             "Review repos",
-            "/app/compliance/evidence",
+            _gap_cta_href("needs_setup"),
         ),
         "baseline_review": (
             "Approve pending baselines",
             "Evidence exists, but the baseline still needs a human decision.",
             "Review baselines",
-            "/app/compliance/evidence",
+            _gap_cta_href("baseline_review"),
         ),
         "missing_governance": (
             "Add governance artifacts",
             "Policy or approval evidence is missing from the current review pack.",
             "Open evidence",
-            "/app/compliance/evidence",
+            _gap_cta_href("missing_governance"),
         ),
         "stale_evidence": (
             "Refresh stale evidence",
             "Stored evidence is older than the fresh-review window.",
             "Plan refresh",
-            "/app/compliance/evidence",
+            _gap_cta_href("stale_evidence"),
         ),
         "aging_evidence": (
             "Watch aging evidence",
             "Evidence is still valid, but it is drifting toward the stale threshold.",
             "Review freshness",
-            "/app/compliance/evidence",
+            _gap_cta_href("aging_evidence"),
         ),
     }
     items: list[ComplianceGapItem] = []

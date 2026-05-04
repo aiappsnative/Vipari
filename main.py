@@ -2456,6 +2456,7 @@ def _render_compliance_tab_page(
     session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     status_note = request.query_params.get("status") or ""
+    evidence_filter = request.query_params.get("gap") or ""
     return HTMLResponse(
         render_control_plane_compliance_page(
             workspace_name=workspace.display_name,
@@ -2470,6 +2471,7 @@ def _render_compliance_tab_page(
             view=view,
             export_jobs=tuple(export_jobs),
             csrf_token=session.csrf_secret if session is not None else "",
+            evidence_filter=evidence_filter,
         )
     )
 
