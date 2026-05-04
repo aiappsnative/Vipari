@@ -177,6 +177,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
+from routers.dashboard import create_dashboard_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3405,7 +3406,6 @@ async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drif
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/repos")
 async def list_repos(request: Request):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3430,7 +3430,6 @@ async def list_repos(request: Request):
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/dashboard/overview")
 def dashboard_overview(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3466,7 +3465,6 @@ def persistence_status(request: Request):
     return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
 
 
-@app.get("/api/dashboard/escalation-queue")
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     access_context = _require_dashboard_read_access(request)
     visibility = _dashboard_repo_visibility(access_context)
@@ -3477,6 +3475,15 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
         build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     return JSONResponse(result)
+
+
+app.include_router(
+    create_dashboard_read_router(
+        list_repos_handler=list_repos,
+        dashboard_overview_handler=dashboard_overview,
+        dashboard_escalation_queue_handler=dashboard_escalation_queue,
+    )
+)
 
 
 @app.get("/api/compliance/readiness")

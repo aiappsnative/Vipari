@@ -80,6 +80,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
+from routers.dashboard import create_dashboard_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -253,17 +254,14 @@ def create_api_app() -> FastAPI:
         _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full))
 
-    @app.get("/api/repos")
     async def list_repos(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(build_repo_index_payload(db_path, list_repo_dashboard_index_fn=list_repo_dashboard_index))
 
-    @app.get("/api/dashboard/overview")
     def dashboard_overview(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(build_dashboard_overview_payload(db_path, build_dashboard_overview_view_fn=build_dashboard_overview_view))
 
-    @app.get("/api/dashboard/escalation-queue")
     def dashboard_escalation_queue(request: Request, include_watch: bool = False):
         _require_admin_token(request, settings)
         result = build_dashboard_escalation_queue_payload(
@@ -272,6 +270,14 @@ def create_api_app() -> FastAPI:
             build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
         )
         return JSONResponse(result)
+
+    app.include_router(
+        create_dashboard_read_router(
+            list_repos_handler=list_repos,
+            dashboard_overview_handler=dashboard_overview,
+            dashboard_escalation_queue_handler=dashboard_escalation_queue,
+        )
+    )
 
     @app.get("/api/repos/{repo_full:path}/proposals/pending")
     def list_pending_proposals_for_repo(repo_full: str, request: Request):
