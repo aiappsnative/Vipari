@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import main
 from services.audit_jobs import init_db
 from services.dashboard_views import EscalationQueueItem, build_workspace_escalation_queue
+from services.entitlements import derive_entitlement_payload
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
 
@@ -57,6 +58,100 @@ def _seed_repo_with_drift(db_path: str, repo_full: str = "org/drifted-ai") -> No
             "sha-2": PROMPT_CURRENT,
         }[ref],
     )
+
+
+def _create_dashboard_owner_session(db_path: str, *, repo_full: str = "org/drifted-ai", installation_id: int = 123):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id=f"tower-user-{installation_id}",
+        github_login=f"tower-owner-{installation_id}",
+        display_name="Tower Owner",
+        primary_email=f"tower-owner-{installation_id}@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug=f"tower-workspace-{installation_id}",
+        display_name="Tower Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        db_path,
+        session_id=f"tower-session-{installation_id}",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=10_000_000_000,
+    )
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id=f"sub_tower_{installation_id}",
+        stripe_price_id=f"price_tower_{installation_id}",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1,
+        current_period_end_at=2,
+        next_payment_at=3,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=f"acct-{installation_id}",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+        status="active",
+    )
+    if repo_full:
+        replace_repo_connections(
+            db_path,
+            workspace_id=workspace.id,
+            installation_id=installation_id,
+            repositories=[
+                {
+                    "repo_github_id": repo_full.split("/", 1)[1],
+                    "repo_full": repo_full,
+                    "default_branch": "main",
+                    "is_private": True,
+                    "status": "available",
+                }
+            ],
+        )
+        allocation = allocate_repo_to_workspace(
+            db_path,
+            workspace_id=workspace.id,
+            installation_id=installation_id,
+            repo_github_id=repo_full.split("/", 1)[1],
+            repo_full=repo_full,
+            baseline_mode="onboarding",
+            activated_by_user_id=user.id,
+        )
+        update_repo_allocation_status(db_path, allocation.id, "onboarded")
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +305,10 @@ def test_escalation_queue_api_returns_200(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="org/drifted-ai")
 
     with TestClient(main.app) as client:
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
         response = client.get("/api/dashboard/escalation-queue")
 
     assert response.status_code == 200
@@ -227,15 +324,14 @@ def test_escalation_queue_api_healthy_for_empty_db(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="")
 
     with TestClient(main.app) as client:
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
         response = client.get("/api/dashboard/escalation-queue")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["workspace_posture"] == "healthy"
-    assert payload["escalation_count"] == 0
-    assert payload["items"] == []
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Dashboard access is not available for this workspace."
 
 
 def test_escalation_queue_api_with_seeded_repo(tmp_path):
@@ -244,13 +340,18 @@ def test_escalation_queue_api_with_seeded_repo(tmp_path):
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
     _seed_repo_with_drift(db_path)
+    session = _create_dashboard_owner_session(db_path, repo_full="org/drifted-ai")
 
     with TestClient(main.app) as client:
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
         response = client.get("/api/dashboard/escalation-queue")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["workspace_posture"] in ("risk", "watch", "healthy")
+    assert payload["workspace_posture"] in {"watch", "escalated", "healthy", "risk"}
+    assert "items" in payload
+    assert "escalation_count" in payload
+    assert "watch_count" in payload
 
 
 def test_escalation_queue_api_include_watch_param(tmp_path):
@@ -258,8 +359,10 @@ def test_escalation_queue_api_include_watch_param(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="org/drifted-ai")
 
     with TestClient(main.app) as client:
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
         response_default = client.get("/api/dashboard/escalation-queue")
         response_watch = client.get("/api/dashboard/escalation-queue?include_watch=true")
 
@@ -276,9 +379,13 @@ def test_pending_proposals_api_no_onboarding_returns_empty(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="org/missing-repo")
 
     with TestClient(main.app) as client:
-        response = client.get("/api/repos/org/missing-repo/proposals/pending")
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
+        response = client.get(
+            "/api/repos/org/missing-repo/proposals/pending",
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -300,9 +407,13 @@ def test_pending_proposals_api_onboarded_repo_with_no_proposals(tmp_path):
         list_repository_files_fn=lambda repo, token, ref: ["prompts/safe.txt"],
         fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
     )
+    session = _create_dashboard_owner_session(db_path, repo_full="org/clean-repo")
 
     with TestClient(main.app) as client:
-        response = client.get("/api/repos/org/clean-repo/proposals/pending")
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
+        response = client.get(
+            "/api/repos/org/clean-repo/proposals/pending",
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -316,9 +427,13 @@ def test_pending_proposals_api_response_shape(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="org/any-repo")
 
     with TestClient(main.app) as client:
-        response = client.get("/api/repos/org/any-repo/proposals/pending")
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
+        response = client.get(
+            "/api/repos/org/any-repo/proposals/pending",
+        )
 
     assert response.status_code == 200
     payload = response.json()

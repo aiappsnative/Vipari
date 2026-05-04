@@ -8,7 +8,7 @@ from main import app
 
 def main() -> None:
     settings = get_settings()
-    uvicorn.run("run_api:app", host="0.0.0.0", port=settings.api_port)
+    uvicorn.run("run_api:app", host=settings.api_host, port=settings.api_port)
 
 
 if __name__ == "__main__":

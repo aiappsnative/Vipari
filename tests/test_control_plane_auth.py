@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
+from config import AppEnv
 from services.api_service import create_api_app
 from services.audit_jobs import init_db
 from services.control_plane_records import (
@@ -380,7 +381,10 @@ def test_short_jwt_secret_fails_runtime_validation():
     mock_settings.is_production = False
     mock_settings.has_owner_access_config = False
     mock_settings.app_base_url = "http://127.0.0.1:8000"
-    mock_settings.app_env = "local"
+    mock_settings.app_env = AppEnv.LOCAL
+    mock_settings.is_local = True
+    mock_settings.is_internet_reachable_env = False
+    mock_settings.local_debug_disable_login = False
 
     with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET must be at least 32 bytes"):
         validate_runtime_configuration(mock_settings)
@@ -405,7 +409,10 @@ def test_production_api_requires_jwt_secret():
     mock_settings.session_cookie_secure = True
     mock_settings.github_private_key_path = ""
     mock_settings.has_owner_access_config = False
-    mock_settings.app_env = "production"
+    mock_settings.app_env = AppEnv.PRODUCTION
+    mock_settings.is_local = False
+    mock_settings.is_internet_reachable_env = True
+    mock_settings.local_debug_disable_login = False
 
     with pytest.raises(RuntimeError, match="INTERNAL_JWT_SECRET"):
         validate_runtime_configuration(mock_settings)

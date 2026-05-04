@@ -41,6 +41,50 @@ def _reset_settings_cache():
     get_settings.cache_clear()
 
 
+def _seed_worker_control_plane_state(db_path: str, *, installation_id: int, repo_full: str) -> None:
+    init_control_plane_db(db_path)
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id=f"worker-{installation_id}",
+        github_login="worker-owner",
+        display_name="Worker Owner",
+        primary_email="worker-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug=f"worker-workspace-{installation_id}",
+        display_name="Worker Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=str(installation_id),
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id=repo_full,
+        repo_full=repo_full,
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "active")
+
+
 def test_local_sqlite_queue_round_trip(tmp_path):
     queue = LocalSQLiteQueue(str(tmp_path / "queue.db"), visibility_timeout_seconds=1)
 
@@ -157,6 +201,7 @@ def test_webhook_delivery_dedupe_survives_restart_for_postgres_locator_simulatio
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "webhook")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
@@ -285,7 +330,7 @@ def test_run_api_uses_configured_api_port(monkeypatch):
     with patch.object(run_api.uvicorn, "run") as run_server:
         run_api.main()
 
-    run_server.assert_called_once_with("run_api:app", host="0.0.0.0", port=9012)
+    run_server.assert_called_once_with("run_api:app", host="127.0.0.1", port=9012)
 
 
 def test_run_webhook_uses_configured_webhook_port(monkeypatch):
@@ -296,7 +341,7 @@ def test_run_webhook_uses_configured_webhook_port(monkeypatch):
     with patch.object(run_webhook.uvicorn, "run") as run_server:
         run_webhook.main()
 
-    run_server.assert_called_once_with("run_webhook:app", host="0.0.0.0", port=9011)
+    run_server.assert_called_once_with("run_webhook:app", host="127.0.0.1", port=9011)
 
 
 def test_run_api_falls_back_to_railway_port(monkeypatch):
@@ -308,7 +353,7 @@ def test_run_api_falls_back_to_railway_port(monkeypatch):
     with patch.object(run_api.uvicorn, "run") as run_server:
         run_api.main()
 
-    run_server.assert_called_once_with("run_api:app", host="0.0.0.0", port=7810)
+    run_server.assert_called_once_with("run_api:app", host="127.0.0.1", port=7810)
 
 
 def test_run_webhook_falls_back_to_railway_port(monkeypatch):
@@ -320,7 +365,31 @@ def test_run_webhook_falls_back_to_railway_port(monkeypatch):
     with patch.object(run_webhook.uvicorn, "run") as run_server:
         run_webhook.main()
 
-    run_server.assert_called_once_with("run_webhook:app", host="0.0.0.0", port=7811)
+    run_server.assert_called_once_with("run_webhook:app", host="127.0.0.1", port=7811)
+
+
+def test_run_api_uses_explicit_host_override(monkeypatch):
+    monkeypatch.setenv("API_HOST", "0.0.0.0")
+    monkeypatch.setenv("API_PORT", "9013")
+    _reset_settings_cache()
+    import run_api
+
+    with patch.object(run_api.uvicorn, "run") as run_server:
+        run_api.main()
+
+    run_server.assert_called_once_with("run_api:app", host="0.0.0.0", port=9013)
+
+
+def test_run_webhook_uses_explicit_host_override(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_HOST", "0.0.0.0")
+    monkeypatch.setenv("WEBHOOK_PORT", "9014")
+    _reset_settings_cache()
+    import run_webhook
+
+    with patch.object(run_webhook.uvicorn, "run") as run_server:
+        run_webhook.main()
+
+    run_server.assert_called_once_with("run_webhook:app", host="0.0.0.0", port=9014)
 
 
 def test_api_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
@@ -352,6 +421,7 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
     monkeypatch.setenv("API_ADMIN_TOKEN", "admin-token")
     monkeypatch.setenv("SERVICE_ROLE", "api")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
     monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
@@ -449,6 +519,7 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
     monkeypatch.setenv("SERVICE_ROLE", "webhook")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
     monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
@@ -558,6 +629,25 @@ def test_message_authorization_respects_workspace_pr_comments_setting(tmp_path, 
     assert _message_still_authorized(payload, settings) is False
 
 
+def test_message_authorization_denies_pull_request_events_without_control_plane_state(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-no-control-plane.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    settings = get_settings()
+    payload = {
+        "installation_id": 888,
+        "repo_full": "doria90/dummyAI",
+        "event_type": "pull_request",
+    }
+
+    assert _message_still_authorized(payload, settings) is False
+
+
 def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):
     db_path = str(tmp_path / "webhook-push.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -633,6 +723,7 @@ def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "worker")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
@@ -785,6 +876,7 @@ def test_worker_completed_pr_audit_survives_restart_for_postgres_locator_simulat
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "worker")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
@@ -798,6 +890,7 @@ def test_worker_completed_pr_audit_survives_restart_for_postgres_locator_simulat
     _reset_settings_cache()
 
     init_db(str(backing_db_path))
+    _seed_worker_control_plane_state(str(backing_db_path), installation_id=123, repo_full="doria90/dummyAI")
 
     class AckQueue:
         def __init__(self):
@@ -882,6 +975,9 @@ def test_worker_completed_pr_audit_survives_restart_for_postgres_locator_simulat
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
     ), patch(
+        "services.cloud_worker._message_still_authorized",
+        return_value=True,
+    ), patch(
         "services.cloud_worker._get_installation_token_for_worker",
         return_value="installation-token",
     ), patch(
@@ -906,6 +1002,7 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator_simulation(
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "worker")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
@@ -919,6 +1016,7 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator_simulation(
     _reset_settings_cache()
 
     init_db(str(backing_db_path))
+    _seed_worker_control_plane_state(str(backing_db_path), installation_id=123, repo_full="doria90/dummyAI")
 
     class AckQueue:
         def __init__(self):
@@ -992,6 +1090,9 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator_simulation(
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
     ), patch(
+        "services.cloud_worker._message_still_authorized",
+        return_value=True,
+    ), patch(
         "services.cloud_worker._get_installation_token_for_worker",
         return_value="installation-token",
     ), patch(
@@ -1020,6 +1121,7 @@ def test_audit_job_retry_wait_survives_restart_for_postgres_locator_simulation(t
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "worker")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")
@@ -1033,6 +1135,7 @@ def test_audit_job_retry_wait_survives_restart_for_postgres_locator_simulation(t
     _reset_settings_cache()
 
     init_db(str(backing_db_path))
+    _seed_worker_control_plane_state(str(backing_db_path), installation_id=123, repo_full="doria90/dummyAI")
 
     class RetryQueue:
         def __init__(self):
@@ -1091,6 +1194,9 @@ def test_audit_job_retry_wait_survives_restart_for_postgres_locator_simulation(t
 
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
+        "services.cloud_worker._message_still_authorized",
+        return_value=True,
     ), patch(
         "services.cloud_worker._get_installation_token_for_worker",
         return_value="installation-token",
@@ -1250,6 +1356,7 @@ def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", locator)
     monkeypatch.setenv("AUDIT_DB_PATH", "ignored.db")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
     monkeypatch.setenv("SERVICE_ROLE", "worker")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setenv("QUEUE_BACKEND", "redis")

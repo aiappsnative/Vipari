@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import pytest
 
-from config import get_settings
+from config import AppEnv, get_settings
 from services.audit_jobs import init_db
 from services.cloud_worker import build_queue_backend as build_worker_queue_backend
 from services.queue import RedisQueue
@@ -85,6 +85,51 @@ def test_runtime_configuration_rejects_local_owner_fallback_on_remote_host(monke
     assert "local billing-owner fallback is localhost-only" in str(exc_info.value)
 
 
+def test_staging_rejects_dev_auth_fallbacks(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://staging.example.com")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "true")
+    monkeypatch.setenv("OWNER_GITHUB_USER_ID", "")
+    monkeypatch.setenv("OWNER_GITHUB_LOGIN", "")
+    monkeypatch.setenv("OWNER_EMAIL", "")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    message = str(exc_info.value)
+    assert "Staging forbids dev auth fallbacks" in message
+    assert "local_debug_disable_login" in message
+    assert "local_owner_fallback" in message
+
+
+def test_local_debug_disable_login_requires_local_env_and_localhost(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "true")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "LOCAL_DEBUG_DISABLE_LOGIN is allowed only when APP_ENV=local." in str(exc_info.value)
+
+
+def test_app_env_supports_staging(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.app_env == AppEnv.STAGING
+    assert settings.is_staging is True
+    assert settings.is_internet_reachable_env is True
+
+
 @pytest.mark.anyio
 async def test_readiness_reports_invalid_github_private_key(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
@@ -109,7 +154,7 @@ async def test_readiness_verifies_postgres_connectivity(monkeypatch):
     monkeypatch.setenv("SERVICE_ROLE", "api")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
-    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
     _reset_settings_cache()
 
     settings = get_settings()

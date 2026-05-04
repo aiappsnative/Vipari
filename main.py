@@ -321,7 +321,7 @@ def _control_plane_active() -> bool:
         return True
     if settings.service_role != "monolith":
         return True
-    if settings.app_env not in {"local", "test"}:
+    if not settings.is_local:
         return True
     app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
     return app_base_host not in {"127.0.0.1", "localhost", "::1"}
@@ -477,7 +477,7 @@ def _dashboard_shell_copy(access_context: dict[str, object] | None, *, repo_full
 
 
 def _local_debug_dashboard_enabled() -> bool:
-    return settings.app_env == "local" and bool(settings.local_debug_disable_login)
+    return settings.is_local and settings.service_role == "monolith" and bool(settings.local_debug_disable_login)
 
 
 def _local_debug_workspace_context() -> dict[str, object] | None:
@@ -870,7 +870,7 @@ def _github_oauth_callback_url(request: Request) -> str:
     return str(request.url_for("github_auth_callback"))
 
 
-def _current_workspace_context(request: Request, *, allow_local_debug: bool = True) -> dict[str, object]:
+def _current_workspace_context(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
     session = _get_session(request)
     if session is None:
         debug_context = _local_debug_workspace_context() if allow_local_debug else None
@@ -902,8 +902,6 @@ def _require_dashboard_access(request: Request) -> dict[str, object]:
 
 
 def _require_dashboard_read_access(request: Request) -> dict[str, object]:
-    if not _control_plane_active():
-        return {}
     return _require_dashboard_access(request)
 
 
@@ -1044,8 +1042,6 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
     access_context = _require_dashboard_read_access(request)
-    if not access_context:
-        return access_context
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
@@ -1610,7 +1606,7 @@ def _has_local_owner_fallback(user, workspace) -> bool:
         return False
     if user is None or workspace is None:
         return False
-    if settings.app_env not in {"local", "test"}:
+    if not settings.is_local:
         return False
     app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
     if app_base_host not in {"127.0.0.1", "localhost", "::1"}:
@@ -2094,11 +2090,11 @@ async def settings_invite_user(
 def _has_cp_api_access(access_context: dict[str, object]) -> bool:
     """Return True if the workspace is entitled to the CP API.
 
-    In local/test environments always returns True so tests run without
+    In local environments always returns True so local development can run without
     feature-flag plumbing.  In production, checks ``cp_api_enabled`` in
     the entitlement's ``feature_flags_json``; absent key means True.
     """
-    if not settings.is_production:
+    if settings.is_local:
         return True
     entitlement = access_context.get("entitlement")
     if entitlement is None:

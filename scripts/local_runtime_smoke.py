@@ -89,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["APP_ENV"] = args.app_env
     os.environ["SERVICE_ROLE"] = args.service_role
     os.environ.setdefault("APP_BASE_URL", "https://example.com")
+    os.environ["LOCAL_DEBUG_DISABLE_LOGIN"] = "false"
     os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
     os.environ.setdefault("API_ADMIN_TOKEN", "smoke-token")
 
