@@ -78,7 +78,7 @@ def _control_plane_active(db_path: str) -> bool:
 
 def _message_still_authorized(payload: dict[str, object], settings: Settings) -> bool:
     if not _control_plane_active(settings.resolved_db_path):
-        return True
+        return False
 
     allocation = get_repo_allocation_for_installation(
         settings.resolved_db_path,

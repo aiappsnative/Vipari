@@ -37,7 +37,7 @@ async def _run_readiness(settings):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate DriftGuard Railway production configuration.")
     parser.add_argument("--service-role", choices=["monolith", "api", "webhook", "worker"], help="Override SERVICE_ROLE for this check.")
-    parser.add_argument("--app-env", choices=["local", "test", "production"], help="Override APP_ENV for this check.")
+    parser.add_argument("--app-env", choices=["local", "test", "staging", "production"], help="Override APP_ENV for this check.")
     args = parser.parse_args(argv)
 
     get_settings.cache_clear()

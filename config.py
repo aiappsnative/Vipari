@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -14,13 +15,22 @@ DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "promptdrift.db")
 PROJECT_ENV_PATH = Path(__file__).resolve().parent / ".env"
 
 
+class AppEnv(str, Enum):
+    LOCAL = "local"
+    TEST = "test"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+
 class Settings(BaseSettings):
-    app_env: Literal["local", "test", "production"] = "local"
+    app_env: AppEnv = AppEnv.LOCAL
     service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
     app_base_url: str = "http://127.0.0.1:8000"
     local_debug_disable_login: bool = False
     api_port: int = Field(default=8002, validation_alias=AliasChoices("API_PORT", "PORT"))
     webhook_port: int = Field(default=8001, validation_alias=AliasChoices("WEBHOOK_PORT", "PORT"))
+    api_host: str = Field(default="127.0.0.1", validation_alias=AliasChoices("API_HOST"))
+    webhook_host: str = Field(default="127.0.0.1", validation_alias=AliasChoices("WEBHOOK_HOST"))
     session_cookie_name: str = "promptdrift_session"
     session_cookie_secure: bool = False
     session_ttl_seconds: int = 604800
@@ -147,7 +157,19 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.app_env == "production"
+        return self.app_env == AppEnv.PRODUCTION
+
+    @property
+    def is_local(self) -> bool:
+        return self.app_env == AppEnv.LOCAL
+
+    @property
+    def is_staging(self) -> bool:
+        return self.app_env == AppEnv.STAGING
+
+    @property
+    def is_internet_reachable_env(self) -> bool:
+        return self.app_env in {AppEnv.STAGING, AppEnv.PRODUCTION}
 
     @property
     def uses_sqlite(self) -> bool:

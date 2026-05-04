@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from fastapi.responses import JSONResponse
 from jwt.exceptions import InvalidKeyError
 
-from config import Settings
+from config import AppEnv, Settings
 from .github_integration import generate_jwt
 from .persistence import is_sqlite_locator
 from .persistence import connect_sqlite
@@ -15,6 +15,20 @@ from .schema_migrations import MIGRATIONS, list_applied_migrations
 def _is_https_url(value: str) -> bool:
     parsed = urlparse(value.strip())
     return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def _is_localhost_host(value: str) -> bool:
+    host = (urlparse(value.strip()).hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _dev_auth_fallbacks_enabled(settings: Settings) -> list[str]:
+    flags: list[str] = []
+    if settings.local_debug_disable_login:
+        flags.append("local_debug_disable_login")
+    if not settings.has_owner_access_config:
+        flags.append("local_owner_fallback")
+    return flags
 
 
 def _validate_github_app_private_key(settings: Settings) -> None:
@@ -48,7 +62,7 @@ def validate_migration_configuration(settings: Settings, *, resolved_db_path: st
 
 def validate_runtime_configuration(settings: Settings) -> None:
     errors: list[str] = []
-    app_base_host = (urlparse(settings.app_base_url).hostname or "").strip().lower()
+    app_base_is_localhost = _is_localhost_host(settings.app_base_url)
 
     if settings.queue_backend == "redis" and not settings.redis_url:
         errors.append("QUEUE_BACKEND=redis requires REDIS_URL.")
@@ -77,6 +91,19 @@ def validate_runtime_configuration(settings: Settings) -> None:
             "Use a cryptographically random value, e.g.: openssl rand -hex 32"
         )
 
+    if settings.is_internet_reachable_env:
+        active_fallbacks = _dev_auth_fallbacks_enabled(settings)
+        if active_fallbacks:
+            errors.append(
+                f"{settings.app_env.value.title()} forbids dev auth fallbacks: {', '.join(active_fallbacks)}."
+            )
+
+    if settings.local_debug_disable_login:
+        if settings.app_env != AppEnv.LOCAL:
+            errors.append("LOCAL_DEBUG_DISABLE_LOGIN is allowed only when APP_ENV=local.")
+        if not app_base_is_localhost:
+            errors.append("LOCAL_DEBUG_DISABLE_LOGIN requires APP_BASE_URL to resolve to localhost.")
+
     if settings.is_production:
         try:
             validate_migration_configuration(settings)
@@ -95,9 +122,8 @@ def validate_runtime_configuration(settings: Settings) -> None:
 
     if (
         settings.service_role in {"api", "monolith"}
-        and not settings.is_production
-        and settings.app_env in {"local", "test"}
-        and app_base_host not in {"127.0.0.1", "localhost", "::1"}
+        and settings.app_env in {AppEnv.LOCAL, AppEnv.TEST}
+        and not app_base_is_localhost
         and not settings.has_owner_access_config
     ):
         errors.append(

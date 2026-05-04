@@ -195,6 +195,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -223,9 +224,9 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        overview_response = client.get("/api/dashboard/overview")
-        index_response = client.get("/api/repos")
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        overview_response = client.get("/api/dashboard/overview", cookies={main.settings.session_cookie_name: session.session_id})
+        index_response = client.get("/api/repos", cookies={main.settings.session_cookie_name: session.session_id})
+        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert overview_response.status_code == 200
     overview_payload = overview_response.json()
@@ -340,6 +341,7 @@ def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="doria90/dummyAI", installation_id=1)
 
     onboard_repository(
         db_path,
@@ -375,12 +377,15 @@ def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        response = client.get("/api/dashboard/overview?filter=critical")
+        response = client.get(
+            "/api/dashboard/overview?filter=critical",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 200
     payload = response.json()
     assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
-    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI", "doria90/repo-two"]
+    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["attention_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
     assert payload["overview_sections"]["urgent_queue"]["watch_count"] == 0
@@ -391,6 +396,7 @@ def test_dashboard_overview_api_range_24h_limits_recent_activity(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path, repo_full="doria90/dummyAI", installation_id=1)
 
     onboard_repository(
         db_path,
@@ -434,12 +440,15 @@ def test_dashboard_overview_api_range_24h_limits_recent_activity(tmp_path):
         conn.commit()
 
     with TestClient(main.app) as client:
-        response = client.get("/api/dashboard/overview?range=24h")
+        response = client.get(
+            "/api/dashboard/overview?range=24h",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 200
     payload = response.json()
     assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
-    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI", "doria90/repo-two"]
+    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
     assert payload["risk_state"]["review_now_repo_count"] >= 1
 
@@ -449,6 +458,7 @@ def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -471,7 +481,10 @@ def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert repo_response.status_code == 200
     payload = repo_response.json()
@@ -1023,15 +1036,23 @@ def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):
             "sha-2": PROMPT_CURRENT,
         }[ref],
     )
+    session = _create_dashboard_owner_session(db_path)
     snapshots = build_repo_journey(db_path, "doria90/dummyAI")
     baseline_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "baseline_approved")
     current_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "current")
 
     with TestClient(main.app) as client:
-        journey_response = client.get("/api/repos/doria90/dummyAI/journey")
-        snapshot_response = client.get(f"/api/repos/doria90/dummyAI/snapshots/{baseline_snapshot.id}")
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        snapshot_response = client.get(
+            f"/api/repos/doria90/dummyAI/snapshots/{baseline_snapshot.id}",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
         compare_response = client.get(
-            f"/api/repos/doria90/dummyAI/compare?left={baseline_snapshot.id}&right={current_snapshot.id}"
+            f"/api/repos/doria90/dummyAI/compare?left={baseline_snapshot.id}&right={current_snapshot.id}",
+            cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert journey_response.status_code == 200
@@ -1075,11 +1096,15 @@ def test_dashboard_api_snapshot_detail_is_repo_scoped(tmp_path):
         fetch_file_content_fn=lambda repo, path, token, ref: "def run_agent():\n    return 'ok'\n",
     )
 
+    session = _create_dashboard_owner_session(db_path, repo_full="doria90/openfang", installation_id=124)
     dummy_snapshot = build_repo_journey(db_path, "doria90/dummyAI")[0]
     build_repo_journey(db_path, "doria90/openfang")
 
     with TestClient(main.app) as client:
-        response = client.get(f"/api/repos/doria90/openfang/snapshots/{dummy_snapshot.id}")
+        response = client.get(
+            f"/api/repos/doria90/openfang/snapshots/{dummy_snapshot.id}",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 404
 
@@ -1249,9 +1274,11 @@ def test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator(tm
     init_control_plane_db(db_path)
     original_db_path = main.AUDIT_DB_PATH
     original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
     main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
 
     primary_user, _primary_identity = upsert_github_identity(
         db_path,
@@ -1380,6 +1407,7 @@ def test_dashboard_overview_api_filter_mine_limits_repos_to_current_allocator(tm
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
 
     assert response.status_code == 200
     payload = response.json()
@@ -1408,9 +1436,11 @@ def test_pending_proposals_api_requires_repo_visibility(tmp_path):
     init_control_plane_db(db_path)
     original_db_path = main.AUDIT_DB_PATH
     original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
     main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
 
     user, _identity = upsert_github_identity(
         db_path,
@@ -1518,6 +1548,7 @@ def test_pending_proposals_api_requires_repo_visibility(tmp_path):
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
 
     assert response.status_code == 404
 
@@ -1544,9 +1575,11 @@ def test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin(tm
     init_control_plane_db(db_path)
     original_db_path = main.AUDIT_DB_PATH
     original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
     main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
 
     primary_user, _primary_identity = upsert_github_identity(
         db_path,
@@ -1742,6 +1775,7 @@ def test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin(tm
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
 
     assert response.status_code == 200
     payload = response.json()
@@ -1800,6 +1834,7 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -1829,7 +1864,10 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     _record_pr_profile(db_path)
 
     with TestClient(main.app) as client:
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert repo_response.status_code == 200
     payload = repo_response.json()
@@ -1847,6 +1885,7 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -1859,7 +1898,10 @@ def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert repo_response.status_code == 200
     payload = repo_response.json()
@@ -1875,6 +1917,7 @@ def test_dashboard_api_returns_artifact_storyline_endpoint(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -1903,7 +1946,10 @@ def test_dashboard_api_returns_artifact_storyline_endpoint(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        response = client.get("/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/episodes")
+        response = client.get(
+            "/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/episodes",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -1921,6 +1967,7 @@ def test_dashboard_api_returns_404_for_missing_artifact_storyline(tmp_path):
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     onboard_repository(
         db_path,
@@ -1933,7 +1980,10 @@ def test_dashboard_api_returns_404_for_missing_artifact_storyline(tmp_path):
     )
 
     with TestClient(main.app) as client:
-        response = client.get("/api/repos/doria90/dummyAI/artifacts/prompts/missing.txt/episodes")
+        response = client.get(
+            "/api/repos/doria90/dummyAI/artifacts/prompts/missing.txt/episodes",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "No artifact storyline is available for this repo artifact."
@@ -1944,6 +1994,7 @@ def test_dashboard_api_groups_low_signal_artifacts_into_one_lower_confidence_ite
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
     main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
 
     files = {
         "notes/assistant-checklist.md": "Assistant operator checklist.",
@@ -1963,7 +2014,10 @@ def test_dashboard_api_groups_low_signal_artifacts_into_one_lower_confidence_ite
     )
 
     with TestClient(main.app) as client:
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
 
     assert repo_response.status_code == 200
     payload = repo_response.json()

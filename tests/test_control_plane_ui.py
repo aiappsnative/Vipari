@@ -1652,6 +1652,59 @@ def test_profile_page_shows_admin_link_for_local_billing_owner_without_owner_con
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_page_denies_billing_owner_fallback_outside_local_env(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    original_app_env = main.settings.app_env
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-test-owner.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = ""
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+    main.settings.app_env = "test"
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity, upsert_workspace_membership
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="977",
+        github_login="doria90",
+        display_name="Doria",
+        primary_email="doria@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="Test Owner Workspace",
+        slug="test-owner-workspace",
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="test-owner-admin-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "System owner access is not enabled for this GitHub identity."
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_settings_help_and_policies_show_admin_link_for_local_billing_owner_without_owner_config(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
@@ -2492,12 +2545,47 @@ def test_dashboard_allows_local_operator_mode_when_control_plane_is_inactive(tmp
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_dashboard_api_requires_session_when_control_plane_is_inactive(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    main.AUDIT_DB_PATH = str(tmp_path / "inactive-dashboard-api.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "local"
+
+    overview_response = client.get("/api/dashboard/overview")
+    repos_response = client.get("/api/repos")
+
+    assert overview_response.status_code == 401
+    assert overview_response.json()["detail"] == "Authentication required."
+    assert repos_response.status_code == 401
+    assert repos_response.json()["detail"] == "Authentication required."
+
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_dashboard_requires_session_in_production_even_without_workspaces(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_app_env = main.settings.app_env
     main.AUDIT_DB_PATH = str(tmp_path / "production-gated.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.app_env = "production"
+
+    response = client.get("/dashboard", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_requires_session_in_test_env_without_workspaces(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    main.AUDIT_DB_PATH = str(tmp_path / "test-gated.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "test"
 
     response = client.get("/dashboard", follow_redirects=False)
 
@@ -2531,11 +2619,13 @@ def test_dashboard_local_debug_disable_login_uses_first_workspace_without_sessio
     original_db_path = main.AUDIT_DB_PATH
     original_app_env = main.settings.app_env
     original_app_base_url = main.settings.app_base_url
+    original_service_role = main.settings.service_role
     original_local_debug_disable_login = main.settings.local_debug_disable_login
     main.AUDIT_DB_PATH = str(tmp_path / "dashboard-local-debug.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.app_env = "local"
     main.settings.app_base_url = "http://127.0.0.1:8011"
+    main.settings.service_role = "monolith"
     main.settings.local_debug_disable_login = True
 
     from services.control_plane_records import create_workspace, upsert_github_identity
@@ -2565,7 +2655,98 @@ def test_dashboard_local_debug_disable_login_uses_first_workspace_without_sessio
     assert overview_response.status_code == 401
     assert overview_response.json()["detail"] == "Authentication required."
 
+    main.settings.service_role = original_service_role
     main.settings.local_debug_disable_login = original_local_debug_disable_login
+    main.settings.app_base_url = original_app_base_url
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_local_debug_does_not_unlock_app_profile_without_session(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    original_app_base_url = main.settings.app_base_url
+    original_service_role = main.settings.service_role
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = str(tmp_path / "profile-local-debug.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "local"
+    main.settings.app_base_url = "http://127.0.0.1:8011"
+    main.settings.service_role = "monolith"
+    main.settings.local_debug_disable_login = True
+
+    from services.control_plane_records import create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="703",
+        github_login="profile-debug-owner",
+        display_name="Profile Debug Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="profile-debug-workspace",
+        display_name="Profile Debug Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    with TestClient(main.app) as local_client:
+        response = local_client.get("/app/profile")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."
+
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+    main.settings.service_role = original_service_role
+    main.settings.app_base_url = original_app_base_url
+    main.settings.app_env = original_app_env
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_local_debug_does_not_activate_for_api_service_dashboard(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_env = main.settings.app_env
+    original_app_base_url = main.settings.app_base_url
+    original_service_role = main.settings.service_role
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = str(tmp_path / "dashboard-local-debug-api.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.app_env = "local"
+    main.settings.app_base_url = "http://127.0.0.1:8011"
+    main.settings.service_role = "api"
+    main.settings.local_debug_disable_login = True
+
+    from services.control_plane_records import create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="704",
+        github_login="api-debug-owner",
+        display_name="API Debug Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="api-debug-workspace",
+        display_name="API Debug Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    with TestClient(main.app) as local_client:
+        response = local_client.get("/dashboard", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+    main.settings.service_role = original_service_role
     main.settings.app_base_url = original_app_base_url
     main.settings.app_env = original_app_env
     main.AUDIT_DB_PATH = original_db_path
@@ -4565,6 +4746,52 @@ def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
     assert "This secret will not be shown again" not in get2.text
 
     main.settings.app_encryption_key = original_enc
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_api_keys_create_respects_staging_cp_api_entitlement_flag(tmp_path):
+    from services.control_plane_records import upsert_entitlement
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    original_app_env = main.settings.app_env
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.app_env = "staging"
+
+    _user, workspace, session = _setup_api_keys_db(tmp_path, "staging-gate", "1004")
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": '{"cp_api_enabled": false}',
+        },
+    )
+
+    response = client.post(
+        "/app/settings/api-keys",
+        data={
+            "display_name": "staging-gated-bot",
+            "csrf_token": "csrf-staging-gate",
+            "scope_drift_read": "on",
+        },
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Control plane API is not enabled for this workspace."
+
+    main.settings.app_encryption_key = original_enc
+    main.settings.app_env = original_app_env
     main.AUDIT_DB_PATH = original_db_path
 
 

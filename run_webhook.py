@@ -11,7 +11,7 @@ app = create_webhook_app()
 
 def main() -> None:
     settings = get_settings()
-    uvicorn.run("run_webhook:app", host="0.0.0.0", port=settings.webhook_port)
+    uvicorn.run("run_webhook:app", host=settings.webhook_host, port=settings.webhook_port)
 
 
 if __name__ == "__main__":

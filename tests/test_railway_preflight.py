@@ -49,6 +49,23 @@ def test_railway_preflight_returns_success_when_readiness_passes(capsys):
     assert '"status": "ok"' in captured.out
 
 
+def test_railway_preflight_accepts_staging_env(capsys):
+    payload = {
+        "status": "ok",
+        "app_env": "staging",
+        "service_role": "api",
+        "checks": [{"name": "config", "status": "ok", "detail": "Runtime configuration validated."}],
+    }
+
+    with patch("scripts.railway_preflight._run_readiness", return_value=payload):
+        exit_code = railway_preflight.main(["--service-role", "api", "--app-env", "staging"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Preflight passed" in captured.out
+    assert '"app_env": "staging"' in captured.out
+
+
 def test_preflight_does_not_build_sqlite_queue_for_invalid_production_worker():
     settings = SimpleNamespace(
         service_role="worker",
