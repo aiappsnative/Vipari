@@ -2503,6 +2503,23 @@ def _build_compliance_workspace_api_context(access_context: dict[str, object]) -
     return view, export_jobs
 
 
+def _normalize_compliance_gap_filter(gap_filter: str | None) -> str | None:
+    allowed = {"needs_setup", "baseline_review", "missing_governance", "stale_evidence", "aging_evidence"}
+    candidate = (gap_filter or "").strip().lower()
+    return candidate if candidate in allowed else None
+
+
+def _filtered_compliance_evidence_payload(view, gap_filter: str | None):
+    active_gap = _normalize_compliance_gap_filter(gap_filter)
+    if active_gap is None:
+        return None, tuple(view.evidence_rows), tuple(view.repo_rows)
+
+    evidence_rows = tuple(row for row in view.evidence_rows if active_gap in row.gaps)
+    allowed_repo_fulls = {row.repo_full for row in evidence_rows}
+    repo_rows = tuple(row for row in view.repo_rows if row.repo_full in allowed_repo_fulls)
+    return active_gap, evidence_rows, repo_rows
+
+
 @app.get("/app/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -3597,11 +3614,13 @@ def compliance_exports_api(request: Request):
 def compliance_evidence_api(request: Request):
     access_context = _current_workspace_context(request)
     view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    active_gap, evidence_rows, repo_rows = _filtered_compliance_evidence_payload(view, request.query_params.get("gap"))
     return JSONResponse(
         {
+            "active_gap": active_gap,
             "top_gaps": [asdict(item) for item in view.top_gaps],
-            "evidence_rows": [asdict(item) for item in view.evidence_rows],
-            "repo_rows": [asdict(item) for item in view.repo_rows],
+            "evidence_rows": [asdict(item) for item in evidence_rows],
+            "repo_rows": [asdict(item) for item in repo_rows],
         }
     )
 

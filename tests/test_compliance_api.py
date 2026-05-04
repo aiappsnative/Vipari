@@ -192,6 +192,7 @@ def test_compliance_api_exposes_readiness_frameworks_and_evidence_payloads(tmp_p
         readiness_response = client.get("/api/compliance/readiness")
         frameworks_response = client.get("/api/compliance/frameworks")
         evidence_response = client.get("/api/compliance/evidence")
+        filtered_evidence_response = client.get("/api/compliance/evidence?gap=missing_governance")
 
     assert readiness_response.status_code == 200
     readiness_payload = readiness_response.json()
@@ -210,6 +211,12 @@ def test_compliance_api_exposes_readiness_frameworks_and_evidence_payloads(tmp_p
     stale_row = next(row for row in evidence_payload["evidence_rows"] if row["repo_full"] == "compliance-org/repo-two")
     assert stale_row["freshness_label"] == "Stale (45d)"
     assert any(row["repo_full"] == "compliance-org/repo-two" for row in evidence_payload["repo_rows"])
+
+    assert filtered_evidence_response.status_code == 200
+    filtered_evidence_payload = filtered_evidence_response.json()
+    assert filtered_evidence_payload["active_gap"] == "missing_governance"
+    assert [row["repo_full"] for row in filtered_evidence_payload["evidence_rows"]] == ["compliance-org/repo-two"]
+    assert [row["repo_full"] for row in filtered_evidence_payload["repo_rows"]] == ["compliance-org/repo-two"]
 
     main.AUDIT_DB_PATH = original_db_path
 
