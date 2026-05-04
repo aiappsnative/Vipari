@@ -271,14 +271,6 @@ def create_api_app() -> FastAPI:
         )
         return JSONResponse(result)
 
-    app.include_router(
-        create_dashboard_read_router(
-            list_repos_handler=list_repos,
-            dashboard_overview_handler=dashboard_overview,
-            dashboard_escalation_queue_handler=dashboard_escalation_queue,
-        )
-    )
-
     @app.get("/api/repos/{repo_full:path}/proposals/pending")
     def list_pending_proposals_for_repo(repo_full: str, request: Request):
         _require_admin_token(request, settings)
@@ -325,6 +317,15 @@ def create_api_app() -> FastAPI:
     def persistence_status(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(persistence_status_payload(get_persistence_status(db_path)))
+
+    app.include_router(
+        create_dashboard_read_router(
+            list_repos_handler=list_repos,
+            dashboard_overview_handler=dashboard_overview,
+            dashboard_escalation_queue_handler=dashboard_escalation_queue,
+            persistence_status_handler=persistence_status,
+        )
+    )
 
     @app.get("/api/repos/{repo_full:path}/dashboard")
     def repo_dashboard(repo_full: str, request: Request):

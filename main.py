@@ -3482,6 +3482,7 @@ app.include_router(
         list_repos_handler=list_repos,
         dashboard_overview_handler=dashboard_overview,
         dashboard_escalation_queue_handler=dashboard_escalation_queue,
+        persistence_status_handler=persistence_status,
     )
 )
 
