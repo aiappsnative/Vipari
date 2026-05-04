@@ -87,3 +87,27 @@ def create_compliance_api_router(
 	router.add_api_route("/api/compliance/exports", compliance_exports_api, methods=["GET"])
 	router.add_api_route("/api/compliance/evidence", compliance_evidence_api, methods=["GET"])
 	return router
+
+
+def create_repo_read_router(
+	*,
+	repo_dashboard_handler: Callable,
+	artifact_storyline_handler: Callable,
+	repo_journey_handler: Callable,
+	repo_snapshot_detail_handler: Callable,
+	repo_snapshot_compare_handler: Callable,
+	export_history_handler: Callable | None = None,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard_handler, methods=["GET"])
+	router.add_api_route(
+		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes",
+		artifact_storyline_handler,
+		methods=["GET"],
+	)
+	router.add_api_route("/api/repos/{repo_full:path}/journey", repo_journey_handler, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/snapshots/{snapshot_id}", repo_snapshot_detail_handler, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/compare", repo_snapshot_compare_handler, methods=["GET"])
+	if export_history_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/export/history", export_history_handler, methods=["GET"])
+	return router

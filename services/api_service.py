@@ -80,7 +80,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router
+from routers.dashboard import create_dashboard_read_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -304,12 +304,10 @@ def create_api_app() -> FastAPI:
         )
     )
 
-    @app.get("/api/repos/{repo_full:path}/dashboard")
     def repo_dashboard(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
 
-    @app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
     def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
         _require_admin_token(request, settings)
         try:
@@ -323,7 +321,6 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
 
-    @app.get("/api/repos/{repo_full:path}/journey")
     def repo_journey(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(
@@ -335,7 +332,6 @@ def create_api_app() -> FastAPI:
             )
         )
 
-    @app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
     def repo_snapshot_detail(repo_full: str, snapshot_id: int, request: Request):
         _require_admin_token(request, settings)
         try:
@@ -350,7 +346,6 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
 
-    @app.get("/api/repos/{repo_full:path}/compare")
     def repo_snapshot_compare(repo_full: str, left: int, right: int, request: Request):
         _require_admin_token(request, settings)
         try:
@@ -364,6 +359,16 @@ def create_api_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
+
+    app.include_router(
+        create_repo_read_router(
+            repo_dashboard_handler=repo_dashboard,
+            artifact_storyline_handler=artifact_storyline,
+            repo_journey_handler=repo_journey,
+            repo_snapshot_detail_handler=repo_snapshot_detail,
+            repo_snapshot_compare_handler=repo_snapshot_compare,
+        )
+    )
 
     @app.post("/api/repos/{repo_full:path}/onboard")
     async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):

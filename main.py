@@ -177,7 +177,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3517,7 +3517,6 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
     )
 
 
-@app.get("/api/repos/{repo_full:path}/dashboard")
 def repo_dashboard(request: Request, repo_full: str):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3545,7 +3544,6 @@ def repo_dashboard(request: Request, repo_full: str):
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/repos/{repo_full:path}/export/history")
 def export_history(request: Request, repo_full: str):
     access_context = _require_repo_dashboard_read_access(request, repo_full)
     workspace = access_context.get("workspace")
@@ -3556,7 +3554,6 @@ def export_history(request: Request, repo_full: str):
     return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
 
 
-@app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
 def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
     _require_repo_dashboard_read_access(request, repo_full)
     try:
@@ -3571,7 +3568,6 @@ def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
     return JSONResponse(payload)
 
 
-@app.get("/api/repos/{repo_full:path}/journey")
 def repo_journey(request: Request, repo_full: str):
     _require_repo_dashboard_read_access(request, repo_full)
     return JSONResponse(
@@ -3584,7 +3580,6 @@ def repo_journey(request: Request, repo_full: str):
     )
 
 
-@app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
 def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
     _require_repo_dashboard_read_access(request, repo_full)
     snapshot = get_repo_snapshot_detail(AUDIT_DB_PATH, repo_full, snapshot_id)
@@ -3601,7 +3596,6 @@ def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
     return JSONResponse(payload)
 
 
-@app.get("/api/repos/{repo_full:path}/compare")
 def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: int):
     _require_repo_dashboard_read_access(request, repo_full)
     try:
@@ -3615,6 +3609,18 @@ def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: in
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return JSONResponse(payload)
+
+
+app.include_router(
+    create_repo_read_router(
+        repo_dashboard_handler=repo_dashboard,
+        artifact_storyline_handler=artifact_storyline,
+        repo_journey_handler=repo_journey,
+        repo_snapshot_detail_handler=repo_snapshot_detail,
+        repo_snapshot_compare_handler=repo_snapshot_compare,
+        export_history_handler=export_history,
+    )
+)
 
 
 @app.post("/api/repos/{repo_full:path}/onboard")
