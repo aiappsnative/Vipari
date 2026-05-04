@@ -356,9 +356,9 @@ def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
         return_value=[HistoricalBackfillExecutionResult(job=backfill_job, versions=[], profiles=[])],
     ), patch("main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")):
         with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
             response = client.post(
                 "/api/repos/doria90/dummyAI/onboard",
-                cookies={main.settings.session_cookie_name: session.session_id},
                 json={
                     "installation_id": 123,
                     "commit_limit_per_artifact": 5,
@@ -470,9 +470,9 @@ def test_onboard_api_rejects_installation_mismatch(tmp_path):
     )
 
     with TestClient(main.app) as client:
+        client.cookies.set(main.settings.session_cookie_name, session.session_id)
         response = client.post(
             "/api/repos/doria90/dummyAI/onboard",
-            cookies={main.settings.session_cookie_name: session.session_id},
             json={
                 "installation_id": 999,
                 "commit_limit_per_artifact": 5,
