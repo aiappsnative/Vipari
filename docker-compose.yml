@@ -8,6 +8,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-local}
       SERVICE_ROLE: webhook
+      WEBHOOK_HOST: ${WEBHOOK_HOST:-0.0.0.0}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set}
       # QUEUE_BACKEND selects the queue implementation; DATABASE_URL/AUDIT_DB_PATH still point at app persistence.
       QUEUE_BACKEND: ${QUEUE_BACKEND:-sqlite}
@@ -62,6 +63,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-local}
       SERVICE_ROLE: api
+      API_HOST: ${API_HOST:-0.0.0.0}
       APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:8002}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-promptdrift_session}
