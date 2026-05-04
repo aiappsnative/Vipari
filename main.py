@@ -177,7 +177,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_dashboard_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3485,59 +3485,14 @@ app.include_router(
     )
 )
 
-
-@app.get("/api/compliance/readiness")
-def compliance_readiness_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    workspace = access_context.get("workspace") if access_context else None
-    payload = {
-        "workspace_id": workspace.id if workspace is not None else None,
-        "workspace_name": workspace.display_name if workspace is not None else None,
-        **asdict(view),
-    }
-    return JSONResponse(payload)
-
-
-@app.get("/api/compliance/frameworks")
-def compliance_frameworks_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    return JSONResponse(
-        {
-            "metrics": [asdict(metric) for metric in view.metrics],
-            "verdict": asdict(view.verdict),
-            "framework_cards": [asdict(card) for card in view.framework_cards],
-        }
+app.include_router(
+    create_compliance_api_router(
+        current_workspace_context_fn=_current_workspace_context,
+        build_compliance_workspace_api_context_fn=_build_compliance_workspace_api_context,
+        filter_compliance_evidence_view_fn=filter_compliance_evidence_view,
+        export_job_payload_fn=_export_job_payload,
     )
-
-
-@app.get("/api/compliance/exports")
-def compliance_exports_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, export_jobs = _build_compliance_workspace_api_context(access_context)
-    return JSONResponse(
-        {
-            "summary": asdict(view.export_summary),
-            "jobs": [_export_job_payload(job) for job in export_jobs],
-        }
-    )
-
-
-@app.get("/api/compliance/evidence")
-def compliance_evidence_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    active_gap, active_repo, evidence_rows, repo_rows = filter_compliance_evidence_view(view, request.query_params.get("gap"), request.query_params.get("repo"))
-    return JSONResponse(
-        {
-            "active_gap": active_gap,
-            "active_repo": active_repo,
-            "top_gaps": [asdict(item) for item in view.top_gaps],
-            "evidence_rows": [asdict(item) for item in evidence_rows],
-            "repo_rows": [asdict(item) for item in repo_rows],
-        }
-    )
+)
 
 
 @app.get("/api/repos/{repo_full:path}/proposals/pending")
