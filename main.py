@@ -177,7 +177,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_history_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3554,72 +3554,27 @@ def export_history(request: Request, repo_full: str):
     return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
 
 
-def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
-    _require_repo_dashboard_read_access(request, repo_full)
-    try:
-        payload = build_artifact_storyline_payload(
-            AUDIT_DB_PATH,
-            repo_full,
-            artifact_path,
-            build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(payload)
-
-
-def repo_journey(request: Request, repo_full: str):
-    _require_repo_dashboard_read_access(request, repo_full)
-    return JSONResponse(
-        build_repo_journey_payload(
-            AUDIT_DB_PATH,
-            repo_full,
-            build_repo_journey_fn=build_repo_journey,
-            snapshot_to_public_payload_fn=snapshot_to_public_payload,
-        )
-    )
-
-
-def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
-    _require_repo_dashboard_read_access(request, repo_full)
-    snapshot = get_repo_snapshot_detail(AUDIT_DB_PATH, repo_full, snapshot_id)
-    try:
-        payload = build_repo_snapshot_detail_payload(
-            AUDIT_DB_PATH,
-            repo_full,
-            snapshot_id,
-            get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
-            snapshot_to_public_payload_fn=snapshot_to_public_payload,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(payload)
-
-
-def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: int):
-    _require_repo_dashboard_read_access(request, repo_full)
-    try:
-        payload = build_repo_snapshot_compare_payload(
-            AUDIT_DB_PATH,
-            repo_full,
-            left,
-            right,
-            compare_repo_snapshots_fn=compare_repo_snapshots,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(payload)
-
-
 app.include_router(
     create_repo_read_router(
         pending_proposals_handler=list_pending_proposals_for_repo,
         repo_dashboard_handler=repo_dashboard,
-        artifact_storyline_handler=artifact_storyline,
-        repo_journey_handler=repo_journey,
-        repo_snapshot_detail_handler=repo_snapshot_detail,
-        repo_snapshot_compare_handler=repo_snapshot_compare,
         export_history_handler=export_history,
+    )
+)
+
+app.include_router(
+    create_repo_history_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_artifact_storyline_payload_fn=build_artifact_storyline_payload,
+        build_repo_journey_payload_fn=build_repo_journey_payload,
+        build_repo_snapshot_detail_payload_fn=build_repo_snapshot_detail_payload,
+        build_repo_snapshot_compare_payload_fn=build_repo_snapshot_compare_payload,
+        build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
+        build_repo_journey_fn=build_repo_journey,
+        get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
+        snapshot_to_public_payload_fn=snapshot_to_public_payload,
+        compare_repo_snapshots_fn=compare_repo_snapshots,
     )
 )
 

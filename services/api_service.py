@@ -80,7 +80,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_repo_read_router
+from routers.dashboard import create_dashboard_read_router, create_repo_history_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -307,66 +307,26 @@ def create_api_app() -> FastAPI:
         _require_admin_token(request, settings)
         return JSONResponse(asdict(build_repo_dashboard_view(db_path, repo_full)))
 
-    def artifact_storyline(repo_full: str, artifact_path: str, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            payload = build_artifact_storyline_payload(
-                db_path,
-                repo_full,
-                artifact_path,
-                build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(payload)
-
-    def repo_journey(repo_full: str, request: Request):
-        _require_admin_token(request, settings)
-        return JSONResponse(
-            build_repo_journey_payload(
-                db_path,
-                repo_full,
-                build_repo_journey_fn=build_repo_journey,
-                snapshot_to_public_payload_fn=snapshot_to_public_payload,
-            )
-        )
-
-    def repo_snapshot_detail(repo_full: str, snapshot_id: int, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            payload = build_repo_snapshot_detail_payload(
-                db_path,
-                repo_full,
-                snapshot_id,
-                get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
-                snapshot_to_public_payload_fn=snapshot_to_public_payload,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(payload)
-
-    def repo_snapshot_compare(repo_full: str, left: int, right: int, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            payload = build_repo_snapshot_compare_payload(
-                db_path,
-                repo_full,
-                left,
-                right,
-                compare_repo_snapshots_fn=compare_repo_snapshots,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(payload)
-
     app.include_router(
         create_repo_read_router(
             pending_proposals_handler=list_pending_proposals_for_repo,
             repo_dashboard_handler=repo_dashboard,
-            artifact_storyline_handler=artifact_storyline,
-            repo_journey_handler=repo_journey,
-            repo_snapshot_detail_handler=repo_snapshot_detail,
-            repo_snapshot_compare_handler=repo_snapshot_compare,
+        )
+    )
+
+    app.include_router(
+        create_repo_history_router(
+            authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings),
+            resolve_db_path_fn=lambda: db_path,
+            build_artifact_storyline_payload_fn=build_artifact_storyline_payload,
+            build_repo_journey_payload_fn=build_repo_journey_payload,
+            build_repo_snapshot_detail_payload_fn=build_repo_snapshot_detail_payload,
+            build_repo_snapshot_compare_payload_fn=build_repo_snapshot_compare_payload,
+            build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
+            build_repo_journey_fn=build_repo_journey,
+            get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
+            snapshot_to_public_payload_fn=snapshot_to_public_payload,
+            compare_repo_snapshots_fn=compare_repo_snapshots,
         )
     )
 

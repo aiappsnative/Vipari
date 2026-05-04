@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 
@@ -93,24 +93,107 @@ def create_repo_read_router(
 	*,
 	pending_proposals_handler: Callable | None = None,
 	repo_dashboard_handler: Callable,
-	artifact_storyline_handler: Callable,
-	repo_journey_handler: Callable,
-	repo_snapshot_detail_handler: Callable,
-	repo_snapshot_compare_handler: Callable,
+	artifact_storyline_handler: Callable | None = None,
+	repo_journey_handler: Callable | None = None,
+	repo_snapshot_detail_handler: Callable | None = None,
+	repo_snapshot_compare_handler: Callable | None = None,
 	export_history_handler: Callable | None = None,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	if pending_proposals_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/proposals/pending", pending_proposals_handler, methods=["GET"])
 	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard_handler, methods=["GET"])
-	router.add_api_route(
-		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes",
-		artifact_storyline_handler,
-		methods=["GET"],
-	)
-	router.add_api_route("/api/repos/{repo_full:path}/journey", repo_journey_handler, methods=["GET"])
-	router.add_api_route("/api/repos/{repo_full:path}/snapshots/{snapshot_id}", repo_snapshot_detail_handler, methods=["GET"])
-	router.add_api_route("/api/repos/{repo_full:path}/compare", repo_snapshot_compare_handler, methods=["GET"])
+	if artifact_storyline_handler is not None:
+		router.add_api_route(
+			"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes",
+			artifact_storyline_handler,
+			methods=["GET"],
+		)
+	if repo_journey_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/journey", repo_journey_handler, methods=["GET"])
+	if repo_snapshot_detail_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/snapshots/{snapshot_id}", repo_snapshot_detail_handler, methods=["GET"])
+	if repo_snapshot_compare_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/compare", repo_snapshot_compare_handler, methods=["GET"])
 	if export_history_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/export/history", export_history_handler, methods=["GET"])
+	return router
+
+
+def create_repo_history_router(
+	*,
+	authorize_repo_read_fn: Callable,
+	resolve_db_path_fn: Callable[[], str],
+	build_artifact_storyline_payload_fn: Callable,
+	build_repo_journey_payload_fn: Callable,
+	build_repo_snapshot_detail_payload_fn: Callable,
+	build_repo_snapshot_compare_payload_fn: Callable,
+	build_repo_artifact_storyline_fn: Callable,
+	build_repo_journey_fn: Callable,
+	get_repo_snapshot_detail_fn: Callable,
+	snapshot_to_public_payload_fn: Callable,
+	compare_repo_snapshots_fn: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+
+	def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
+		authorize_repo_read_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			payload = build_artifact_storyline_payload_fn(
+				db_path,
+				repo_full,
+				artifact_path,
+				build_repo_artifact_storyline_fn=build_repo_artifact_storyline_fn,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		return JSONResponse(payload)
+
+	def repo_journey(request: Request, repo_full: str):
+		authorize_repo_read_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		return JSONResponse(
+			build_repo_journey_payload_fn(
+				db_path,
+				repo_full,
+				build_repo_journey_fn=build_repo_journey_fn,
+				snapshot_to_public_payload_fn=snapshot_to_public_payload_fn,
+			)
+		)
+
+	def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
+		authorize_repo_read_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			payload = build_repo_snapshot_detail_payload_fn(
+				db_path,
+				repo_full,
+				snapshot_id,
+				get_repo_snapshot_detail_fn=get_repo_snapshot_detail_fn,
+				snapshot_to_public_payload_fn=snapshot_to_public_payload_fn,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		return JSONResponse(payload)
+
+	def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: int):
+		authorize_repo_read_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			payload = build_repo_snapshot_compare_payload_fn(
+				db_path,
+				repo_full,
+				left,
+				right,
+				compare_repo_snapshots_fn=compare_repo_snapshots_fn,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		return JSONResponse(payload)
+
+	router.add_api_route("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes", artifact_storyline, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/journey", repo_journey, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/snapshots/{snapshot_id}", repo_snapshot_detail, methods=["GET"])
+	router.add_api_route("/api/repos/{repo_full:path}/compare", repo_snapshot_compare, methods=["GET"])
 	return router
