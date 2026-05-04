@@ -3461,8 +3461,8 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
 
     assert filtered_evidence_response.status_code == 200
     assert "Showing 1 of 2 repo for <strong>Missing Governance</strong>." in filtered_evidence_response.text
-    assert "compliance-org/repo-one" in filtered_evidence_response.text
-    assert "compliance-org/repo-two" not in filtered_evidence_response.text
+    assert "compliance-org/repo-two" in filtered_evidence_response.text
+    assert "compliance-org/repo-one" not in filtered_evidence_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

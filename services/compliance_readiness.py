@@ -18,6 +18,7 @@ _GAP_PRIORITY = {
     "stale_evidence": 3,
     "aging_evidence": 4,
 }
+_ALLOWED_GAP_FILTERS = frozenset(_GAP_PRIORITY)
 
 
 def _gap_cta_href(gap_key: str) -> str:
@@ -115,6 +116,25 @@ class ComplianceWorkspaceView:
     framework_cards: tuple[ComplianceFrameworkCard, ...]
     evidence_rows: tuple[ComplianceEvidenceRow, ...]
     export_summary: ComplianceExportSummary
+
+
+def normalize_compliance_gap_filter(gap_filter: str | None) -> str | None:
+    candidate = (gap_filter or "").strip().lower()
+    return candidate if candidate in _ALLOWED_GAP_FILTERS else None
+
+
+def filter_compliance_evidence_view(
+    view: ComplianceWorkspaceView,
+    gap_filter: str | None,
+) -> tuple[str | None, tuple[ComplianceEvidenceRow, ...], tuple[ComplianceRepoReadinessRow, ...]]:
+    active_gap = normalize_compliance_gap_filter(gap_filter)
+    if active_gap is None:
+        return None, tuple(view.evidence_rows), tuple(view.repo_rows)
+
+    evidence_rows = tuple(row for row in view.evidence_rows if active_gap in row.gaps)
+    allowed_repo_fulls = {row.repo_full for row in evidence_rows}
+    repo_rows = tuple(row for row in view.repo_rows if row.repo_full in allowed_repo_fulls)
+    return active_gap, evidence_rows, repo_rows
 
 
 def _freshness_payload(last_onboarded_at: float | None) -> tuple[str, str, int | None]:

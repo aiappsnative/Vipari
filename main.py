@@ -158,7 +158,7 @@ from services.entitlements import derive_entitlement_payload, get_plan_definitio
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
-from services.compliance_readiness import build_compliance_workspace_view
+from services.compliance_readiness import build_compliance_workspace_view, filter_compliance_evidence_view
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -2503,21 +2503,8 @@ def _build_compliance_workspace_api_context(access_context: dict[str, object]) -
     return view, export_jobs
 
 
-def _normalize_compliance_gap_filter(gap_filter: str | None) -> str | None:
-    allowed = {"needs_setup", "baseline_review", "missing_governance", "stale_evidence", "aging_evidence"}
-    candidate = (gap_filter or "").strip().lower()
-    return candidate if candidate in allowed else None
-
-
 def _filtered_compliance_evidence_payload(view, gap_filter: str | None):
-    active_gap = _normalize_compliance_gap_filter(gap_filter)
-    if active_gap is None:
-        return None, tuple(view.evidence_rows), tuple(view.repo_rows)
-
-    evidence_rows = tuple(row for row in view.evidence_rows if active_gap in row.gaps)
-    allowed_repo_fulls = {row.repo_full for row in evidence_rows}
-    repo_rows = tuple(row for row in view.repo_rows if row.repo_full in allowed_repo_fulls)
-    return active_gap, evidence_rows, repo_rows
+    return filter_compliance_evidence_view(view, gap_filter)
 
 
 @app.get("/app/help", response_class=HTMLResponse)

@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .access_state import WorkspaceAccessResolution, WorkspaceAccessSnapshot, resolve_workspace_access_state
-from .compliance_readiness import ComplianceExportSummary, ComplianceFrameworkCard, ComplianceGapItem, ComplianceRepoReadinessRow, ComplianceWorkspaceView
+from .compliance_readiness import ComplianceExportSummary, ComplianceFrameworkCard, ComplianceGapItem, ComplianceRepoReadinessRow, ComplianceWorkspaceView, filter_compliance_evidence_view, normalize_compliance_gap_filter
 from .entitlements import PLAN_DEFINITIONS
 from .export_jobs import ExportJob
 from .mcp_broker import MCP_BROKER_TOOLS
@@ -1398,14 +1398,8 @@ def _render_compliance_evidence_rows(rows: tuple[ComplianceRepoReadinessRow, ...
     return f'<div class="compliance-assessment-grid">{"".join(cards)}</div>'
 
 
-def _normalize_compliance_gap_filter(gap_filter: str | None) -> str | None:
-    allowed = {"needs_setup", "baseline_review", "missing_governance", "stale_evidence", "aging_evidence"}
-    candidate = (gap_filter or "").strip().lower()
-    return candidate if candidate in allowed else None
-
-
 def _render_compliance_evidence_filter_note(gap_filter: str | None, filtered_count: int, total_count: int) -> str:
-    active_filter = _normalize_compliance_gap_filter(gap_filter)
+    active_filter = normalize_compliance_gap_filter(gap_filter)
     if active_filter is None:
         return ""
     label = active_filter.replace("_", " ").title()
@@ -1546,10 +1540,7 @@ def _render_compliance_page_content(
             </section>
         '''
     if active_tab == "evidence":
-        active_filter = _normalize_compliance_gap_filter(evidence_filter)
-        evidence_rows = tuple(
-            row for row in view.evidence_rows if active_filter is None or active_filter in row.gaps
-        )
+        active_filter, evidence_rows, repo_rows = filter_compliance_evidence_view(view, evidence_filter)
         return f'''
             <section class="control-page-section stack compact-stack">
                 <div>
@@ -1558,7 +1549,7 @@ def _render_compliance_page_content(
                     <p>Inspect missing governance artifacts, stale evidence, and pending approvals without the export form competing for attention.</p>
                 </div>
                 {_render_compliance_evidence_filter_note(active_filter, len(evidence_rows), len(view.evidence_rows))}
-                {_render_compliance_evidence_rows(tuple(view.repo_rows[i] for i, item in enumerate(view.evidence_rows) if active_filter is None or active_filter in item.gaps))}
+                {_render_compliance_evidence_rows(repo_rows)}
             </section>
         '''
     return f'''
