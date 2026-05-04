@@ -169,6 +169,7 @@ from services.repo_journey import build_repo_journey, compare_repo_snapshots, ge
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
+from routers.health import create_health_router
 
 settings = get_settings()
 
@@ -249,16 +250,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
-
-
-@app.get("/health")
-async def health_live():
-    return {"status": "ok", "service_role": settings.service_role}
-
-
-@app.get("/health/ready")
-async def health_ready():
-    return readiness_json_response(await build_runtime_readiness(settings))
+app.include_router(create_health_router(settings))
 
 
 class RepositoryOnboardingRequest(BaseModel):

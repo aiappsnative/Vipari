@@ -79,6 +79,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
+from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
     VALID_TRIAGE_STATES,
@@ -239,14 +240,7 @@ def create_api_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
     instrument_fastapi(app, enabled=settings.enable_metrics)
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "service_role": settings.service_role}
-
-    @app.get("/health/ready")
-    async def ready():
-        return readiness_json_response(await build_runtime_readiness(settings))
+    app.include_router(create_health_router(settings))
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_index_page(request: Request):
