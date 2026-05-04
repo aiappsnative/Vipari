@@ -2448,28 +2448,13 @@ def _render_compliance_tab_page(
     page_note: str,
 ) -> HTMLResponse:
     access_context = _current_workspace_context(request)
+    view, export_jobs = _build_compliance_workspace_api_context(access_context)
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     user = access_context["user"]
     session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
-    repo_rows = _workspace_repo_rows(workspace.id)
-    allocation_status_by_full = {
-        allocation.repo_full: allocation.allocation_status
-        for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
-    }
-    repo_summaries = list_repo_dashboard_index(
-        AUDIT_DB_PATH,
-        allowed_repo_fulls={str(item["repo_full"]) for item in repo_rows},
-        allocation_status_by_full=allocation_status_by_full,
-    )
-    export_jobs = (
-        list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id)
-        if session is not None
-        else []
-    )
-    view = build_compliance_workspace_view(AUDIT_DB_PATH, repo_rows, repo_summaries, export_jobs)
     status_note = request.query_params.get("status") or ""
     return HTMLResponse(
         render_control_plane_compliance_page(
@@ -2487,6 +2472,33 @@ def _render_compliance_tab_page(
             csrf_token=session.csrf_secret if session is not None else "",
         )
     )
+
+
+def _build_compliance_workspace_api_context(access_context: dict[str, object]) -> tuple[object, tuple[object, ...]]:
+    workspace = access_context.get("workspace") if access_context else None
+    session = access_context.get("session") if access_context else None
+    if workspace is None:
+        return build_compliance_workspace_view(AUDIT_DB_PATH, [], (), ()), tuple()
+
+    visibility = _dashboard_repo_visibility(access_context)
+    allowed_repo_fulls = visibility.get("allowed_repo_fulls")
+    repo_rows = _workspace_repo_rows(workspace.id)
+    if allowed_repo_fulls is not None:
+        repo_rows = [row for row in repo_rows if str(row.get("repo_full") or "") in allowed_repo_fulls]
+
+    repo_summaries = list_repo_dashboard_index(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=allowed_repo_fulls,
+        repo_scope_by_full=visibility.get("repo_scope_by_full"),
+        allocation_status_by_full=visibility.get("allocation_status_by_full"),
+    )
+    export_jobs = (
+        tuple(list_export_jobs_for_workspace_requester(AUDIT_DB_PATH, workspace.id, session.user_id))
+        if session is not None
+        else tuple()
+    )
+    view = build_compliance_workspace_view(AUDIT_DB_PATH, repo_rows, repo_summaries, export_jobs)
+    return view, export_jobs
 
 
 @app.get("/app/help", response_class=HTMLResponse)
@@ -3539,6 +3551,57 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
         include_watch=include_watch,
     )
     return JSONResponse(result)
+
+
+@app.get("/api/compliance/readiness")
+def compliance_readiness_api(request: Request):
+    access_context = _current_workspace_context(request)
+    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    workspace = access_context.get("workspace") if access_context else None
+    payload = {
+        "workspace_id": workspace.id if workspace is not None else None,
+        "workspace_name": workspace.display_name if workspace is not None else None,
+        **asdict(view),
+    }
+    return JSONResponse(payload)
+
+
+@app.get("/api/compliance/frameworks")
+def compliance_frameworks_api(request: Request):
+    access_context = _current_workspace_context(request)
+    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    return JSONResponse(
+        {
+            "metrics": [asdict(metric) for metric in view.metrics],
+            "verdict": asdict(view.verdict),
+            "framework_cards": [asdict(card) for card in view.framework_cards],
+        }
+    )
+
+
+@app.get("/api/compliance/exports")
+def compliance_exports_api(request: Request):
+    access_context = _current_workspace_context(request)
+    view, export_jobs = _build_compliance_workspace_api_context(access_context)
+    return JSONResponse(
+        {
+            "summary": asdict(view.export_summary),
+            "jobs": [_export_job_payload(job) for job in export_jobs],
+        }
+    )
+
+
+@app.get("/api/compliance/evidence")
+def compliance_evidence_api(request: Request):
+    access_context = _current_workspace_context(request)
+    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    return JSONResponse(
+        {
+            "top_gaps": [asdict(item) for item in view.top_gaps],
+            "evidence_rows": [asdict(item) for item in view.evidence_rows],
+            "repo_rows": [asdict(item) for item in view.repo_rows],
+        }
+    )
 
 
 @app.get("/api/repos/{repo_full:path}/proposals/pending")
