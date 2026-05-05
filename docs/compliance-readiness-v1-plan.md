@@ -1,6 +1,6 @@
 # Compliance Readiness V1 Plan
 
-This document turns GitHub issue `#76` into an implementation-ready plan for redesigning DriftGuard's compliance surface around readiness, gaps, and next actions.
+This document turns GitHub issue `#76` into an implementation-ready plan for redesigning Vipari's compliance surface around readiness, gaps, and next actions.
 
 ## Goal
 

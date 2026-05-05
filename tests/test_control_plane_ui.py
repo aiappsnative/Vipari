@@ -5007,7 +5007,7 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
     assert "Vipari MCP connector" in response.text
     assert "hosted Vipari broker" in response.text
     assert "internal Vipari bearer tokens" in response.text
-    assert "promptdrift.list_repos" in response.text
+    assert "vipari.list_repos" in response.text
     assert "/app/integrations/mcp/download" in response.text
     assert "API keys" in response.text
     assert "Activity" in response.text
@@ -5107,20 +5107,20 @@ def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/zip")
-    assert "promptdrift-mcp-connector.zip" in response.headers["content-disposition"]
+    assert "vipari-mcp-connector.zip" in response.headers["content-disposition"]
 
     archive = _zipfile.ZipFile(_io.BytesIO(response.content))
     names = set(archive.namelist())
-    assert "promptdrift_mcp_server.py" in names
+    assert "vipari_mcp_server.py" in names
     assert "requirements.txt" in names
-    assert "promptdrift.env.example" in names
+    assert "vipari.env.example" in names
     assert "claude-desktop-config.json.example" in names
     assert "tool-manifest.json" in names
-    env_example = archive.read("promptdrift.env.example").decode("utf-8")
-    expected_broker_url = f"PROMPTDRIFT_MCP_BROKER_URL={main.settings.app_base_url}/api/agent-integrations/mcp"
+    env_example = archive.read("vipari.env.example").decode("utf-8")
+    expected_broker_url = f"VIPARI_MCP_BROKER_URL={main.settings.app_base_url}/api/agent-integrations/mcp"
     assert expected_broker_url in env_example
     claude_example = archive.read("claude-desktop-config.json.example").decode("utf-8")
-    assert f'"PROMPTDRIFT_MCP_BROKER_URL": "{main.settings.app_base_url}/api/agent-integrations/mcp"' in claude_example
+    assert f'"VIPARI_MCP_BROKER_URL": "{main.settings.app_base_url}/api/agent-integrations/mcp"' in claude_example
 
 
 def test_mcp_activity_tab_shows_workspace_audit_events(tmp_path):

@@ -1,6 +1,6 @@
-# DriftGuard Development Plan
+# Vipari Development Plan
 
-This document outlines the phased roadmap for building the DriftGuard backend. It is intended as a living guide and will evolve as the project grows.
+This document outlines the phased roadmap for building the Vipari backend. It is intended as a living guide and will evolve as the project grows.
 
 This is the canonical roadmap document. Product/usage guidance belongs in [README.md](README.md), while deeper architecture belongs in [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
@@ -10,7 +10,7 @@ For the enduring product thesis, guardrails, and design principles that should o
 
 ## Product value north star
 
-DriftGuard exists to help customers safely ship AI changes.
+Vipari exists to help customers safely ship AI changes.
 
 The core value is not generic PR summarization. The core value is:
 
@@ -538,13 +538,13 @@ Planned scope:
 #### Completed: `feature/mcp-map-server-v1` (issue #59)
 
 Purpose:
-- build a brokered MCP server that exposes curated PromptDrift tools to customer agents without leaking internal credentials or collapsing the product boundary
+- build a brokered MCP server that exposes curated Vipari tools to customer agents without leaking internal credentials or collapsing the product boundary
 
 Final status at merge:
 - added `/app/integrations/mcp` as the customer-facing Agent Integrations page, with overview, API-key, and activity sections constrained by workspace role
 - added downloadable connector packaging at `/app/integrations/mcp/download`, backed by the dedicated `customer_mcp_server/` package directory
 - added hosted broker endpoints for short-lived MCP tokens, tool discovery, and workspace-bound tool invocation under `/api/agent-integrations/mcp/*`
-- shipped the first read-first broker tool set: `promptdrift.list_repos`, `promptdrift.get_repo_posture`, `promptdrift.get_repo_casefile`, and `promptdrift.list_escalations`
+- shipped the first read-first broker tool set: `vipari.list_repos`, `vipari.get_repo_posture`, `vipari.get_repo_casefile`, and `vipari.list_escalations`
 - enforced a broker/package contract via `tool-manifest.json` matching tests so the distributed connector cannot silently drift from the hosted broker surface
 - kept the trust boundary intact: machine-principal credentials only mint short-lived broker tokens, and high-risk write tools remain out of scope
 
@@ -571,7 +571,7 @@ Purpose:
 
 Likely scope:
 - passive PR outcome capture tied to audited head SHA
-- lightweight feedback collection on managed DriftGuard comments
+- lightweight feedback collection on managed Vipari comments
 - derived learning signals for reporting and later evaluation work
 
 Guardrails:

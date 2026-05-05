@@ -114,7 +114,7 @@ def issue_mcp_broker_token_via_client_credentials(
 
 MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
     {
-        "name": "promptdrift.list_repos",
+        "name": "vipari.list_repos",
         "title": "List workspace repositories",
         "description": "List repositories allocated to the authenticated workspace with lightweight posture context.",
         "required_scope": MCP_READ_SCOPE,
@@ -126,7 +126,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.get_repo_posture",
+        "name": "vipari.get_repo_posture",
         "title": "Get repository posture",
         "description": "Return the current review posture, top reasons, and next action for one workspace-visible repository.",
         "required_scope": MCP_READ_SCOPE,
@@ -139,7 +139,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.get_repo_casefile",
+        "name": "vipari.get_repo_casefile",
         "title": "Get repository case file",
         "description": "Return a compact repository case file with baseline status, leading findings, and review targets.",
         "required_scope": MCP_READ_SCOPE,
@@ -152,7 +152,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.list_escalations",
+        "name": "vipari.list_escalations",
         "title": "List workspace escalations",
         "description": "Return the workspace escalation queue with review-now and optional watch items.",
         "required_scope": MCP_READ_SCOPE,
@@ -272,6 +272,10 @@ def invoke_mcp_broker_tool(
 ) -> dict[str, Any]:
     _require_scope(context, MCP_READ_SCOPE)
     handlers = {
+        "vipari.list_repos": _tool_list_repos,
+        "vipari.get_repo_posture": _tool_get_repo_posture,
+        "vipari.get_repo_casefile": _tool_get_repo_casefile,
+        "vipari.list_escalations": _tool_list_escalations,
         "promptdrift.list_repos": _tool_list_repos,
         "promptdrift.get_repo_posture": _tool_get_repo_posture,
         "promptdrift.get_repo_casefile": _tool_get_repo_casefile,
@@ -502,7 +506,7 @@ def _fallback_repo_action(view, posture: str, leading=None) -> str:
     if posture == "baseline_review":
         return "Review the pending baseline candidate before treating this repo as authoritative."
     if posture == "not_onboarded":
-        return "Finish onboarding so PromptDrift can build a review-ready baseline and posture model."
+        return "Finish onboarding so Vipari can build a review-ready baseline and posture model."
     if view.onboarding is None:
         return "Allocate and onboard the repository before asking agents for posture advice."
     return "Continue normal review; no urgent repo-level escalation is open right now."
@@ -516,5 +520,5 @@ def _repo_casefile_summary(view, posture: str, leading) -> str:
             f"{view.baseline_review.pending_count} baseline candidate(s) are waiting for approval before this repo has a fully authoritative reference point."
         )
     if view.onboarding is None:
-        return "This repository is not onboarded yet, so PromptDrift cannot assemble a full case file."
-    return "PromptDrift has current onboarding state for this repository and no urgent repo-level escalation is open."
+        return "This repository is not onboarded yet, so Vipari cannot assemble a full case file."
+    return "Vipari has current onboarding state for this repository and no urgent repo-level escalation is open."

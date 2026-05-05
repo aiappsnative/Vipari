@@ -10,7 +10,7 @@ It should be read as a bridge between:
 - the next product-first iterations (`feature/repo-evidence-v1`, `feature/signal-fusion-v1`, and `feature/discovery-precision-v1`)
 - the later need for a repeatable evaluation harness that keeps those improvements honest
 
-The goal is no longer to prove that DriftGuard can touch a public repository at all.
+The goal is no longer to prove that Vipari can touch a public repository at all.
 That proof now exists.
 
 The current goal is to turn ad hoc real-repository validation into a repeatable product-evaluation loop, building on the harness groundwork that already exists on `main`.
@@ -29,7 +29,7 @@ Shipped groundwork on `main` already includes:
 
 ## Current validated baseline
 
-DriftGuard has already validated meaningful onboarding behavior on real repositories.
+Vipari has already validated meaningful onboarding behavior on real repositories.
 
 Confirmed on `main` today:
 
@@ -46,7 +46,7 @@ Known completed live validations:
 
 Current takeaway:
 
-- DriftGuard is already past the "toy demo" stage for real-repository onboarding
+- Vipari is already past the "toy demo" stage for real-repository onboarding
 - the biggest remaining trust gaps are discovery precision, proposal-vs-landed evidence synthesis, and repeatability of evaluation outputs
 - the harness should therefore optimize for product usefulness, not only ingest success
 
@@ -54,7 +54,7 @@ Current takeaway:
 
 ## Evaluation objective
 
-For each selected evaluation target, DriftGuard should be able to answer these questions with useful, reviewable evidence:
+For each selected evaluation target, Vipari should be able to answer these questions with useful, reviewable evidence:
 
 - where are the likely AI control surfaces?
 - which discovered artifacts look authoritative enough to baseline?
@@ -131,31 +131,31 @@ When a scenario also carries a checked-in reference package, the CLI can compare
 ## Product capabilities this evaluation must validate
 
 ### 1. Discovery quality
-DriftGuard should:
+Vipari should:
 - detect likely prompts, policies, tool definitions, model-routing config, and agent wiring
 - keep obviously generic code out of the primary artifact set
 - expose confidence or lower-confidence handling when discovery is uncertain
 
 ### 2. Baseline-first onboarding quality
-DriftGuard should:
+Vipari should:
 - persist a usable initial artifact inventory
 - store baseline versions for discovered control surfaces
 - distinguish stronger findings from weaker discovery guesses
 
 ### 3. Historical/backfill usefulness
-DriftGuard should:
+Vipari should:
 - build enough artifact history to explain meaningful drift
 - avoid replaying irrelevant repository history
 - preserve clear lineage and provenance for stored versions
 
 ### 4. Reviewer usefulness
-DriftGuard should:
+Vipari should:
 - surface plausible high-priority artifacts
 - explain why an artifact is risky or important
 - avoid letting urgency come only from noisy history accumulation
 
 ### 5. Dashboard usefulness
-DriftGuard should:
+Vipari should:
 - make `/dashboard` useful as a triage surface
 - make `/dashboard/{owner/repo}` useful as a case file
 - help a reviewer decide what to inspect next in GitHub
@@ -299,18 +299,18 @@ Recommended components:
 - a fixed evaluator rubric stored alongside run results
 - one branch-comparison summary that calls out product regressions or improvements
 
-It should not become a heavyweight benchmarking platform before DriftGuard has stronger repo evidence and discovery quality.
+It should not become a heavyweight benchmarking platform before Vipari has stronger repo evidence and discovery quality.
 
 ---
 
 ## Summary
 
-DriftGuard has already shown it can onboard and render real OSS repositories.
+Vipari has already shown it can onboard and render real OSS repositories.
 
 The next step is to make that proof repeatable.
 
 This evaluation plan exists to ensure that future product work is judged by whether it improves discovery trust, reviewer-target quality, and real decision usefulness on repositories we do not control.
 
-**a real public repository installs DriftGuard, DriftGuard discovers its AI control surface, digests enough history to build drift intelligence, and produces PR and dashboard outputs that are actually useful.**
+**a real public repository installs Vipari, Vipari discovers its AI control surface, digests enough history to build drift intelligence, and produces PR and dashboard outputs that are actually useful.**
 
 That is the correct end-goal test for this feature.

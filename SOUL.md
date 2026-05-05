@@ -1,8 +1,8 @@
-# DriftGuard Soul
+# Vipari Soul
 
 ## What this document is
 
-This is the soul of DriftGuard.
+This is the soul of Vipari.
 
 If `Plan.MD` is the execution tracker, this document is the durable source of truth for why the project exists, what problem it solves, what it is not trying to be, and what principles should guide product and engineering decisions.
 
@@ -23,13 +23,13 @@ That drift often starts in places that are already visible in GitHub:
 - approval flows,
 - and the pull requests that change them.
 
-DriftGuard exists to make that design-level drift visible, understandable, and governable.
+Vipari exists to make that design-level drift visible, understandable, and governable.
 
 ---
 
 ## Our value offering
 
-DriftGuard helps teams govern AI systems in GitHub by detecting how prompts, policies, tool access, and agent wiring drift from an approved baseline.
+Vipari helps teams govern AI systems in GitHub by detecting how prompts, policies, tool access, and agent wiring drift from an approved baseline.
 
 It surfaces:
 - weakened guardrails,
@@ -44,13 +44,13 @@ We do this without requiring runtime traffic, production logs, or access to cust
 
 Our first practical job is narrower than “full AI governance.”
 
-DriftGuard should help teams decide when an AI-related pull request must be escalated before merge because it changed what the AI is allowed to do, how tightly it is constrained, or how broadly it can act.
+Vipari should help teams decide when an AI-related pull request must be escalated before merge because it changed what the AI is allowed to do, how tightly it is constrained, or how broadly it can act.
 
 ---
 
 ## What we are building
 
-DriftGuard is a GitHub-native design drift engine for AI systems.
+Vipari is a GitHub-native design drift engine for AI systems.
 
 It analyzes AI systems as code and configuration.
 
@@ -80,13 +80,13 @@ Even without runtime data, teams still need clear answers to these questions:
 - Which agents have drifted furthest from their intended design?
 - Who changed them, how often, and under what review conditions?
 
-DriftGuard is built to answer those questions directly from GitHub-visible artifacts.
+Vipari is built to answer those questions directly from GitHub-visible artifacts.
 
 ---
 
 ## What we can know without runtime access
 
-Everything DriftGuard produces must be grounded in information extractable from code, prompts, config, and GitHub metadata.
+Everything Vipari produces must be grounded in information extractable from code, prompts, config, and GitHub metadata.
 
 That includes:
 
@@ -167,7 +167,7 @@ That includes:
 - autonomy changes,
 - governance changes.
 
-DriftGuard should be able to say:
+Vipari should be able to say:
 
 - what changed,
 - how far it moved from baseline,
@@ -178,7 +178,7 @@ DriftGuard should be able to say:
 
 ## What we are not
 
-DriftGuard is not a runtime observability platform.
+Vipari is not a runtime observability platform.
 
 We are not primarily building:
 - latency monitoring,
@@ -196,7 +196,7 @@ Our center is design drift and governance in GitHub.
 ## Product surfaces
 
 ### GitHub PR experience
-On every PR that touches AI-relevant files, DriftGuard should explain:
+On every PR that touches AI-relevant files, Vipari should explain:
 - what changed,
 - which attributes moved,
 - whether risk increased or decreased,
@@ -204,7 +204,7 @@ On every PR that touches AI-relevant files, DriftGuard should explain:
 
 This is the product wedge.
 
-DriftGuard should first win as a high-signal PR reviewer for AI control-surface changes, not as a generic governance dashboard.
+Vipari should first win as a high-signal PR reviewer for AI control-surface changes, not as a generic governance dashboard.
 
 The primary workflow outcome is not automatic allow/deny.
 It is an escalation decision:
@@ -212,7 +212,7 @@ It is an escalation decision:
 - or does it require AI platform, security, or product review before merge?
 
 ### Agent history view
-For each agent, DriftGuard should show:
+For each agent, Vipari should show:
 - baseline vs current profile,
 - a timeline of major attribute changes,
 - drift history,
@@ -238,13 +238,13 @@ Organizations need a way to:
 
 without giving vendors access to sensitive production data.
 
-DriftGuard exists to meet that need.
+Vipari exists to meet that need.
 
 ---
 
 ## Who this is for
 
-DriftGuard is for teams building and governing AI systems in software organizations.
+Vipari is for teams building and governing AI systems in software organizations.
 
 The primary first buyer is:
 - a Head of AI Platform or Head of Engineering at a mid-size SaaS company shipping AI features
@@ -270,7 +270,7 @@ The buyer values:
 ## Our design principles
 
 ### 1. GitHub-native first
-If it cannot be grounded in GitHub-visible artifacts, it is not core to DriftGuard.
+If it cannot be grounded in GitHub-visible artifacts, it is not core to Vipari.
 
 ### 2. Static analysis with real business value
 We do not apologize for being static-first.
@@ -295,7 +295,7 @@ Signals should help reviewers decide what deserves attention right now.
 
 ## The standard we should hold ourselves to
 
-A good DriftGuard result should help a reviewer answer:
+A good Vipari result should help a reviewer answer:
 
 - Is this AI system materially different from what we approved?
 - Did guardrails get weaker or stronger?
@@ -306,7 +306,7 @@ A good DriftGuard result should help a reviewer answer:
 
 And a good product trial should be able to prove:
 
-- DriftGuard found real, non-obvious, high-impact AI changes in live repos
+- Vipari found real, non-obvious, high-impact AI changes in live repos
 - those findings were difficult to catch in ordinary code review alone
 - the visible PR noise remained low enough that engineers kept trusting the product
 
@@ -316,7 +316,7 @@ If we answer those well, we are building the right thing.
 
 ## The one-line version
 
-DriftGuard makes AI system design drift visible in GitHub before it becomes a production problem.
+Vipari makes AI system design drift visible in GitHub before it becomes a production problem.
 
 ---
 

@@ -2221,9 +2221,9 @@ async def mcp_integrations_page(request: Request):
     entitlement_allows = _has_cp_api_access(access_context)
     broker_url = settings.app_base_url.rstrip("/") + "/api/agent-integrations/mcp"
     config_snippet = (
-        f"PROMPTDRIFT_MCP_BROKER_URL={broker_url}\n"
-        "PROMPTDRIFT_CLIENT_ID=replace-with-your-client-id\n"
-        "PROMPTDRIFT_CLIENT_SECRET=replace-with-your-client-secret"
+        f"VIPARI_MCP_BROKER_URL={broker_url}\n"
+        "VIPARI_CLIENT_ID=replace-with-your-client-id\n"
+        "VIPARI_CLIENT_SECRET=replace-with-your-client-secret"
     )
 
     return HTMLResponse(
@@ -2258,7 +2258,7 @@ async def mcp_integrations_download(request: Request):
     return Response(
         content=bundle_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="promptdrift-mcp-connector.zip"'},
+        headers={"Content-Disposition": 'attachment; filename="vipari-mcp-connector.zip"'},
     )
 
 

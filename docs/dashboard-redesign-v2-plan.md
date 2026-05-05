@@ -1,6 +1,6 @@
 # Dashboard Redesign V2 Plan
 
-This document turns GitHub issue `#20` into an execution plan for the next frontend-only DriftGuard slice.
+This document turns GitHub issue `#20` into an execution plan for the next frontend-only Vipari slice.
 
 ## Goal
 

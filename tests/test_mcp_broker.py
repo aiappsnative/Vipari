@@ -159,22 +159,22 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
         )
         repos_response = client.post(
             "/api/agent-integrations/mcp/invoke",
-            json={"tool_name": "promptdrift.list_repos", "arguments": {}},
+            json={"tool_name": "vipari.list_repos", "arguments": {}},
             headers=_bearer_header(broker_token),
         )
         posture_response = client.post(
             "/api/agent-integrations/mcp/invoke",
-            json={"tool_name": "promptdrift.get_repo_posture", "arguments": {"repo_full": "doria90/dummyAI"}},
+            json={"tool_name": "vipari.get_repo_posture", "arguments": {"repo_full": "doria90/dummyAI"}},
             headers=_bearer_header(broker_token),
         )
         casefile_response = client.post(
             "/api/agent-integrations/mcp/invoke",
-            json={"tool_name": "promptdrift.get_repo_casefile", "arguments": {"repo_full": "doria90/dummyAI"}},
+            json={"tool_name": "vipari.get_repo_casefile", "arguments": {"repo_full": "doria90/dummyAI"}},
             headers=_bearer_header(broker_token),
         )
         escalations_response = client.post(
             "/api/agent-integrations/mcp/invoke",
-            json={"tool_name": "promptdrift.list_escalations", "arguments": {}},
+            json={"tool_name": "vipari.list_escalations", "arguments": {}},
             headers=_bearer_header(broker_token),
         )
 
@@ -184,8 +184,8 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
 
     assert tools_response.status_code == 200
     tool_names = {tool["name"] for tool in tools_response.json()["tools"]}
-    assert "promptdrift.list_repos" in tool_names
-    assert "promptdrift.get_repo_posture" in tool_names
+    assert "vipari.list_repos" in tool_names
+    assert "vipari.get_repo_posture" in tool_names
     assert repos_response.status_code == 200
     assert repos_response.json()["result"]["repos"][0]["repo_full"] == "doria90/dummyAI"
     assert posture_response.status_code == 200
@@ -214,7 +214,7 @@ def test_mcp_broker_blocks_repo_outside_workspace(tmp_path):
         broker_token = _issue_broker_token(client, client_id, client_secret)
         response = client.post(
             "/api/agent-integrations/mcp/invoke",
-            json={"tool_name": "promptdrift.get_repo_posture", "arguments": {"repo_full": "doria90/not-allocated"}},
+            json={"tool_name": "vipari.get_repo_posture", "arguments": {"repo_full": "doria90/not-allocated"}},
             headers=_bearer_header(broker_token),
         )
 
@@ -223,6 +223,33 @@ def test_mcp_broker_blocks_repo_outside_workspace(tmp_path):
     main.settings.internal_jwt_secret = original_jwt_secret
 
     assert response.status_code == 404
+
+
+def test_mcp_broker_accepts_legacy_promptdrift_aliases(tmp_path):
+    db_path = str(tmp_path / "mcp-broker-legacy.db")
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
+    main.AUDIT_DB_PATH = db_path
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
+
+    client_id, client_secret = _seed_mcp_workspace(db_path)
+
+    with TestClient(main.app) as client:
+        broker_token = _issue_broker_token(client, client_id, client_secret)
+        response = client.post(
+            "/api/agent-integrations/mcp/invoke",
+            json={"tool_name": "promptdrift.list_repos", "arguments": {}},
+            headers=_bearer_header(broker_token),
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
+
+    assert response.status_code == 200
+    assert response.json()["result"]["repos"][0]["repo_full"] == "doria90/dummyAI"
 
 
 def test_mcp_broker_requires_bearer_auth(tmp_path):

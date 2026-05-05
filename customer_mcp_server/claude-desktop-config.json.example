@@ -1,12 +1,12 @@
 {
   "mcpServers": {
-    "promptdrift": {
+    "vipari": {
       "command": "python",
-      "args": ["promptdrift_mcp_server.py"],
+      "args": ["vipari_mcp_server.py"],
       "env": {
-        "PROMPTDRIFT_MCP_BROKER_URL": "{{PROMPTDRIFT_MCP_BROKER_URL}}",
-        "PROMPTDRIFT_CLIENT_ID": "replace-with-your-client-id",
-        "PROMPTDRIFT_CLIENT_SECRET": "replace-with-your-client-secret"
+        "VIPARI_MCP_BROKER_URL": "{{VIPARI_MCP_BROKER_URL}}",
+        "VIPARI_CLIENT_ID": "replace-with-your-client-id",
+        "VIPARI_CLIENT_SECRET": "replace-with-your-client-secret"
       }
     }
   }

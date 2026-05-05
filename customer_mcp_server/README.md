@@ -19,28 +19,31 @@ The connector also does not keep sending your long-lived client secret on every 
 1. Create or reuse a Vipari API key with `drift.read` scope.
 2. Copy the files from this package into a local directory.
 3. Install the dependencies from `requirements.txt`.
-4. Copy `promptdrift.env.example` to `.env` or set the environment variables in your MCP host.
-5. Point your MCP host at `promptdrift_mcp_server.py`.
+4. Copy `vipari.env.example` to `.env` or set the environment variables in your MCP host.
+5. Point your MCP host at `vipari_mcp_server.py`.
+6. If you already have an older PromptDrift connector deployment, the legacy `PROMPTDRIFT_*` environment variables remain accepted for compatibility.
 
 ## Directory contents
 
-- `promptdrift_mcp_server.py`: local MCP server entrypoint
+- `vipari_mcp_server.py`: local MCP server entrypoint
 - `requirements.txt`: connector-specific dependencies
-- `promptdrift.env.example`: environment template for broker URL and credentials
+- `vipari.env.example`: environment template for broker URL and credentials
 - `claude-desktop-config.json.example`: example MCP host configuration
 - `tool-manifest.json`: shipped inventory of the current broker-exposed tools, contract-checked against the hosted broker registry
 
 ## Environment variables
 
-- `PROMPTDRIFT_MCP_BROKER_URL`
-- `PROMPTDRIFT_CLIENT_ID`
-- `PROMPTDRIFT_CLIENT_SECRET`
+- `VIPARI_MCP_BROKER_URL`
+- `VIPARI_CLIENT_ID`
+- `VIPARI_CLIENT_SECRET`
+
+Legacy PromptDrift variable names remain accepted for existing deployments.
 
 ## Supported tools in v1
 
-- `promptdrift.list_repos`
-- `promptdrift.get_repo_posture`
-- `promptdrift.get_repo_casefile`
-- `promptdrift.list_escalations`
+- `vipari.list_repos`
+- `vipari.get_repo_posture`
+- `vipari.get_repo_casefile`
+- `vipari.list_escalations`
 
 The connector is intentionally thin. Vipari owns workspace binding, output shaping, and broker-side authorization.
