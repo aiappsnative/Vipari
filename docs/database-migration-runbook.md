@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This runbook defines the supported bootstrap and migration path for PromptDrift databases.
+This runbook defines the supported bootstrap and migration path for Vipari databases.
+
+For production, this runbook is part of the single blessed Docker-based deployment path. Use it alongside `scripts/railway_preflight.py` and the split-service Docker deploy flow; do not substitute local smoke helpers for this migration step.
 
 Current migration contract:
 
@@ -31,6 +33,7 @@ Current migration contract:
 - use the final production `DATABASE_URL` and environment variables when running the command
 - when `APP_ENV=production`, `scripts/db_migrate.py` now rejects SQLite targets and must point at the production PostgreSQL locator
 - do not rely on ad hoc first-request bootstrapping as the operational migration step
+- do not treat local monolith, local Docker helper, or internal smoke workflows as substitutes for this production migration sequence
 
 ## First deploy procedure
 
@@ -38,14 +41,14 @@ Current migration contract:
 2. Set the production `DATABASE_URL`.
 3. Run `python scripts/db_migrate.py` with the production environment loaded.
 4. Confirm the command exits successfully and records `0001_bootstrap_relational_schema`.
-5. Start the API, webhook, and worker services.
+5. Deploy or start the Docker-based `api`, `webhook`, and `worker` services.
 6. Confirm `/health/ready` passes on the public services.
 
 ## Repeat deploy procedure
 
 1. Run `python scripts/db_migrate.py` against the target database.
 2. Confirm the command reports no pending migrations.
-3. Deploy the new application version.
+3. Deploy the new Docker images for the application version.
 4. Verify health checks and core smoke flows.
 
 ## Failure handling
@@ -68,4 +71,5 @@ Current migration contract:
 - SQLite remains supported for local development only
 - PostgreSQL is the intended production backend
 - the migration command now enforces that same production backend contract before applying schema changes
+- production assumes split-service Docker deployment, not direct monolith startup
 - future schema changes should add new versioned migrations rather than expanding `0001_bootstrap_relational_schema`

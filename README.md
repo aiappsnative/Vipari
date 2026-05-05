@@ -454,9 +454,11 @@ Then confirm:
 3. `/pricing` renders Free, Starter, Team, and Enterprise plans
 4. `/app` redirects to `/login` when no session exists
 
-### Real provider-backed E2E
+### Internal provider-backed E2E rehearsal
 
 For a true end-to-end pass with GitHub OAuth, GitHub App install, and Base44/Wix payment-first handoff, the local server must be reachable from GitHub and the external billing provider.
+
+This is internal rehearsal infrastructure, not the recommended production deployment path.
 
 Recommended flow:
 
@@ -495,9 +497,9 @@ The control-plane branch is now implemented, locally validated, and tunnel-valid
 
 The main unfinished validation item is a real Base44/Wix signed handoff pass without local simulation. Stripe fallback remains available, and persisted `workspaces.setup_state` is now synchronized from entitlement/install/onboarding facts. See [docs/base44-stripe-handoff-v1-handoff.md](docs/base44-stripe-handoff-v1-handoff.md) for the updated branch handoff summary and next-step checklist.
 
-## Local operator and dashboard testing
+## Internal operator and dashboard testing
 
-Once the app is running locally, you can inspect the current drift dashboard in the browser:
+Once the app is running locally, you can inspect the current drift dashboard in the browser for engineering validation:
 
 - `/dashboard` — triage-first portfolio inbox with a primary review target, ranked queue, coverage trust, and a secondary coverage scan mode
 - `/dashboard/<owner>/<repo>` — repo case file with one featured review target, ranked follow-on queue, posture/provenance context, and collapsed history inventory
@@ -510,7 +512,7 @@ Recommended 5-minute local inspection flow:
 4. In the repo case file, confirm the provenance links open the backing PR or commit, the posture explorer shows per-attribute findings, and the baseline action is available when a stored source version exists.
 5. If the local data store is sparse or an older API payload is still being served, the frontend should degrade gracefully instead of throwing browser errors.
 
-You can also inspect or drive the workflow locally with the CLI:
+You can also inspect or drive the workflow locally with the CLI. These commands are for development, debugging, and internal evaluation, not for production operations:
 
 ```bash
 python scripts/local_runtime_smoke.py --service-role monolith
