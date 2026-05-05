@@ -178,7 +178,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3723,7 +3723,6 @@ app.include_router(
 )
 
 
-@app.post("/api/repos/{repo_full:path}/export/compliance")
 async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
     access_context = _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3764,6 +3763,13 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
         "status": job.status,
         "download_url": _export_download_url(job),
     })
+
+
+app.include_router(
+    create_export_create_router(
+        create_export_handler=create_compliance_export,
+    )
+)
 
 
 app.include_router(

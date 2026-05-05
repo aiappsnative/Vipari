@@ -274,6 +274,15 @@ def create_export_job_router(
 	return router
 
 
+def create_export_create_router(
+	*,
+	create_export_handler: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+	router.add_api_route("/api/repos/{repo_full:path}/export/compliance", create_export_handler, methods=["POST"])
+	return router
+
+
 def create_repo_baseline_router(
 	*,
 	authorize_repo_read_fn: Callable,

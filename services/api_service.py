@@ -81,7 +81,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -355,7 +355,6 @@ def create_api_app() -> FastAPI:
         )
     )
 
-    @app.post("/api/repos/{repo_full:path}/export/compliance")
     async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
         _require_admin_token(request, settings)
         try:
@@ -374,6 +373,12 @@ def create_api_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"job_id": job.id})
+
+    app.include_router(
+        create_export_create_router(
+            create_export_handler=create_compliance_export,
+        )
+    )
 
     def export_status_payload(job):
         return {
