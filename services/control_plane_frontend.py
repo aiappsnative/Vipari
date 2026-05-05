@@ -433,7 +433,7 @@ def render_control_plane_workspace_new_page(*, selected_plan_label: str | None =
         context_lines.append(f"Selected plan: {selected_plan_label}.")
     if source_label:
         context_lines.append(f"Entry source: {source_label}.")
-    context_message = " ".join(context_lines) if context_lines else "Create the first DriftGuard workspace before billing and GitHub installation continue."
+    context_message = " ".join(context_lines) if context_lines else "Create the first Vipari workspace before billing and GitHub installation continue."
     return template.replace("{{WORKSPACE_CONTEXT}}", html_escape(context_message)).replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
 
 
@@ -559,8 +559,8 @@ def _repo_setup_inventory_copy(connection: dict[str, object] | None, allocation:
         if onboarding_status == "baseline_approved":
             return "Baseline and onboarding are locked in, so this repository is already feeding posture, coverage, and version-history views."
         if onboarding_status == "pending_baseline_approval":
-            return "The repository is onboarded, but its latest baseline still needs approval before DriftGuard treats it as the authoritative posture checkpoint."
-        return "The repository has been allocated and partially onboarded, so DriftGuard is collecting artifacts and building its first stable baseline."
+            return "The repository is onboarded, but its latest baseline still needs approval before Vipari treats it as the authoritative posture checkpoint."
+        return "The repository has been allocated and partially onboarded, so Vipari is collecting artifacts and building its first stable baseline."
     if allocation is not None:
         return "This repository is already attached to the workspace and ready for its next onboarding or baseline pass."
     return "Allocate this repository to start onboarding, baseline capture, and repo-level journey tracking."
@@ -572,7 +572,7 @@ def _repo_setup_summary_copy(summary: dict[str, object]) -> str:
         return "Stable baseline coverage is in place and the repo is contributing full posture tracking."
     if onboarding_status == "pending_baseline_approval":
         return "Artifact discovery is complete, but the baseline still needs approval before it becomes the reference posture."
-    return "DriftGuard has started collecting artifacts and history for this repo, but onboarding is still maturing."
+    return "Vipari has started collecting artifacts and history for this repo, but onboarding is still maturing."
 
 
 def _repo_setup_state_key(connection: dict[str, object] | None, allocation: dict[str, object] | None, summary: dict[str, object] | None) -> str:
@@ -1026,7 +1026,7 @@ def render_control_plane_mcp_page(
         <article class="control-page-section control-page-section-wide">
             <div class="secondary-panel-title">Download</div>
             <h2 class="control-page-section-title">Customer MCP connector package</h2>
-            <p class="control-page-copy">This downloadable package is meant for authenticated customers only. It runs as a thin local MCP server in the customer environment, exchanges workspace-scoped machine-principal credentials for a short-lived broker token, and forwards allowed tool calls to the hosted PromptDrift broker.</p>
+            <p class="control-page-copy">This downloadable package is meant for authenticated customers only. It runs as a thin local MCP server in the customer environment, exchanges workspace-scoped machine-principal credentials for a short-lived broker token, and forwards allowed tool calls to the hosted Vipari broker.</p>
             <div class="help-page-workflow-grid">
                 <a class="help-page-action-card" href="{html_escape(download_url)}"><span class="help-page-action-step">1</span><strong>Download connector</strong><p>Includes the local MCP server script, dependency list, environment template, and example host configuration.</p></a>
                 {workflow_card_two}
@@ -1037,7 +1037,7 @@ def render_control_plane_mcp_page(
             <div class="secondary-panel-title">Quickstart</div>
             <h2 class="control-page-section-title">Host configuration</h2>
             <pre class="help-page-flow">{html_escape(config_snippet)}</pre>
-            <p class="control-page-copy">The connector never receives internal PromptDrift bearer tokens. It uses the machine-principal credentials you create for this workspace only to obtain a short-lived broker token.</p>
+            <p class="control-page-copy">The connector never receives internal Vipari bearer tokens. It uses the machine-principal credentials you create for this workspace only to obtain a short-lived broker token.</p>
         </article>
 
         <article class="control-page-section">
@@ -1045,9 +1045,9 @@ def render_control_plane_mcp_page(
             <h2 class="control-page-section-title">Trust boundary</h2>
             <pre class="help-page-flow">Your AI agent
   -&gt; customer MCP connector
-  -&gt; PromptDrift broker
-  -&gt; curated PromptDrift control-plane reads</pre>
-            <p class="control-page-copy">One connector session maps to one workspace. The connector package is thin on purpose so PromptDrift can keep product semantics, output shaping, and credential handling server-side.</p>
+    -&gt; Vipari broker
+    -&gt; curated Vipari control-plane reads</pre>
+                        <p class="control-page-copy">One connector session maps to one workspace. The connector package is thin on purpose so Vipari can keep product semantics, output shaping, and credential handling server-side.</p>
         </article>
 
         <article class="control-page-section control-page-section-wide">
@@ -1966,7 +1966,7 @@ def _render_api_keys_section(
         <div class="secondary-panel-title">Workspace API keys</div>
         <h2 class="control-page-section-title">Machine principal credentials</h2>
         <p class="control-page-copy">
-            API keys let trusted automation access the DriftGuard control plane API without user credentials.
+            API keys let trusted automation access the Vipari control plane API without user credentials.
             Each key is scoped to this workspace. Store secrets securely &mdash; they are shown only once.
         </p>
         {table_html}

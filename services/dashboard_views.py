@@ -959,7 +959,7 @@ def _build_dashboard_overview_view_uncached(
         DashboardOverviewMetric(
             label="Onboarded repositories",
             value=len(repos),
-            detail="Repos with a stored onboarding record in the local DriftGuard store.",
+            detail="Repos with a stored onboarding record in the local Vipari store.",
         ),
         DashboardOverviewMetric(
             label="Tracked artifacts",
@@ -3143,7 +3143,7 @@ def _build_control_surface_dimension(artifact_type: str) -> AttributeProfileDime
         state="no_change",
         confidence_label=_confidence_band_label(confidence_score),
         confidence_score=confidence_score,
-        reason=f"DriftGuard classifies this artifact as {value.lower()} based on the detected artifact type `{artifact_type}`.",
+        reason=f"Vipari classifies this artifact as {value.lower()} based on the detected artifact type `{artifact_type}`.",
         evidence=[f"Artifact type: {artifact_type}"],
         remediation="No remediation needed unless this artifact was misclassified.",
     )
@@ -3243,14 +3243,14 @@ def _confidence_band_label(score: float) -> str:
 
 def _default_attribute_reason(attribute_key: str, state: str) -> str:
     if state == "unknown":
-        return "DriftGuard could not compare this dimension because no approved baseline was available for the changed artifact."
+        return "Vipari could not compare this dimension because no approved baseline was available for the changed artifact."
     return {
-        "guardrail_robustness": "DriftGuard did not detect a material guardrail shift relative to the approved baseline.",
-        "capability_risk": "DriftGuard did not detect a material capability or blast-radius shift relative to the approved baseline.",
-        "autonomy_level": "DriftGuard did not detect a material autonomy shift relative to the approved baseline.",
-        "governance_strength": "DriftGuard did not detect a material governance shift relative to the approved baseline.",
-        "model_config_posture": "DriftGuard did not detect a material model sampling posture shift relative to the approved baseline.",
-    }.get(attribute_key, "DriftGuard did not detect a material change for this dimension.")
+        "guardrail_robustness": "Vipari did not detect a material guardrail shift relative to the approved baseline.",
+        "capability_risk": "Vipari did not detect a material capability or blast-radius shift relative to the approved baseline.",
+        "autonomy_level": "Vipari did not detect a material autonomy shift relative to the approved baseline.",
+        "governance_strength": "Vipari did not detect a material governance shift relative to the approved baseline.",
+        "model_config_posture": "Vipari did not detect a material model sampling posture shift relative to the approved baseline.",
+    }.get(attribute_key, "Vipari did not detect a material change for this dimension.")
 
 
 def _default_attribute_remediation(attribute_key: str, state: str) -> str:
@@ -3364,8 +3364,8 @@ def _guardrail_reason(baseline: StaticSignals, current: StaticSignals) -> str:
     if current.ambiguity_count > baseline.ambiguity_count:
         reasons.append(f"ambiguous language rose from {baseline.ambiguity_count} to {current.ambiguity_count}")
     if reasons:
-        return f"DriftGuard detected weaker guardrail posture because {'; '.join(reasons[:2])}."
-    return "DriftGuard detected weaker guardrail posture because constraint and refusal signals no longer match the approved baseline."
+        return f"Vipari detected weaker guardrail posture because {'; '.join(reasons[:2])}."
+    return "Vipari detected weaker guardrail posture because constraint and refusal signals no longer match the approved baseline."
 
 
 def _capability_reason(baseline: StaticSignals, current: StaticSignals, delta: float) -> str:
@@ -3384,11 +3384,11 @@ def _capability_reason(baseline: StaticSignals, current: StaticSignals, delta: f
         reasons.append(f"human-review gates dropped from {baseline.human_review_count} to {current.human_review_count}")
     if reasons:
         prefix = "broader authority" if delta > 0 else "reduced authority"
-        return f"DriftGuard detected {prefix} because {'; '.join(reasons[:2])}."
+        return f"Vipari detected {prefix} because {'; '.join(reasons[:2])}."
     return (
-        "DriftGuard detected broader authority because the artifact now signals more sensitive or production-facing actions than the baseline."
+        "Vipari detected broader authority because the artifact now signals more sensitive or production-facing actions than the baseline."
         if delta > 0
-        else "DriftGuard detected reduced authority because the artifact now signals fewer sensitive or production-facing actions than the baseline."
+        else "Vipari detected reduced authority because the artifact now signals fewer sensitive or production-facing actions than the baseline."
     )
 
 
@@ -3406,11 +3406,11 @@ def _autonomy_reason(baseline: StaticSignals, current: StaticSignals, delta: flo
         reasons.append(f"action-oriented steps rose from {baseline.write_signal_count} to {current.write_signal_count}")
     if reasons:
         prefix = "more independent execution" if delta > 0 else "less independent execution"
-        return f"DriftGuard detected {prefix} because {'; '.join(reasons[:2])}."
+        return f"Vipari detected {prefix} because {'; '.join(reasons[:2])}."
     return (
-        "DriftGuard detected more independent execution because the workflow now allows deeper or less supervised action than the baseline."
+        "Vipari detected more independent execution because the workflow now allows deeper or less supervised action than the baseline."
         if delta > 0
-        else "DriftGuard detected less independent execution because the workflow now allows shallower or more supervised action than the baseline."
+        else "Vipari detected less independent execution because the workflow now allows shallower or more supervised action than the baseline."
     )
 
 
@@ -3424,11 +3424,11 @@ def _stability_reason(baseline: StaticSignals, current: StaticSignals, delta: fl
         reasons.append(f"top_p moved {direction} from {baseline.top_p:g} to {current.top_p:g}")
     if reasons:
         prefix = "more stable and deterministic" if delta > 0 else "more variable and creative"
-        return f"DriftGuard detected {prefix} behavior because {'; '.join(reasons[:2])}."
+        return f"Vipari detected {prefix} behavior because {'; '.join(reasons[:2])}."
     return (
-        "DriftGuard detected more stable and deterministic behavior because the current sampling settings are tighter than the baseline."
+        "Vipari detected more stable and deterministic behavior because the current sampling settings are tighter than the baseline."
         if delta > 0
-        else "DriftGuard detected more variable and creative behavior because the current sampling settings are looser than the baseline."
+        else "Vipari detected more variable and creative behavior because the current sampling settings are looser than the baseline."
     )
 
 

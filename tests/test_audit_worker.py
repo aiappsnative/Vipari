@@ -501,7 +501,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
-    assert "## ❌ DriftGuard: Escalate before merge" in posted[0][0]
+    assert "## ❌ Vipari: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
 
@@ -646,17 +646,17 @@ index 1..2
             pr_number=42,
         )
 
-        assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+        assert comment.startswith("## ❌ Vipari: Escalate before merge")
         assert "### What changed" in comment
         assert "<details>" in comment
-        assert "<summary>DriftGuard review details</summary>" in comment
+        assert "<summary>Vipari review details</summary>" in comment
         assert "### Key deltas" in comment
         assert "### Evidence" in comment
         assert "### Recommended next step" in comment
         assert "Add AI platform review before merge." in comment
         assert "RateLimitError" not in comment
         assert "head `abc1234`" in comment
-        assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+        assert f"[Open this review in Vipari dashboard]({expected_link})" in comment
     finally:
         settings.app_base_url = original_app_base_url
 
@@ -707,7 +707,7 @@ index 1..2
             pr_number=42,
         )
 
-        assert comment.startswith("## ❌ DriftGuard: Escalate before merge")
+        assert comment.startswith("## ❌ Vipari: Escalate before merge")
         assert "High risk · high confidence · unknown control surface · vs approved baseline `none-yet`" in comment
         assert "The prompt now allows disclosure of internal policy details" in comment
         assert "<details>" in comment
@@ -715,7 +715,7 @@ index 1..2
         assert "### Evidence" in comment
         assert "### Recommended next step" in comment
         assert "Add AI platform review before merge." in comment
-        assert f"[Open this review in DriftGuard dashboard]({expected_link})" in comment
+        assert f"[Open this review in Vipari dashboard]({expected_link})" in comment
     finally:
         settings.app_base_url = original_app_base_url
 
@@ -746,7 +746,7 @@ index 1..2
             pr_number=48,
         )
 
-        assert "Open this review in DriftGuard dashboard" not in comment
+        assert "Open this review in Vipari dashboard" not in comment
     finally:
         settings.app_base_url = original_app_base_url
 
@@ -788,7 +788,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="def987654", analyzed_at=1_700_000_100),
     )
 
-    assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
+    assert comment.startswith("## ✅ Vipari: Re-baseline follow-up after merge")
     assert "This change adds a clarifying-question instruction" in comment
     assert "Promote the updated artifact to approved baseline after merge." in comment
 
@@ -896,7 +896,7 @@ index 1..2
         ],
     )
 
-    assert comment.startswith("## ✅ DriftGuard: Keep in normal review lane")
+    assert comment.startswith("## ✅ Vipari: Keep in normal review lane")
     assert "Low risk · medium confidence · prompts and instructions · vs approved baseline `policy.md@2026-04-01`" in comment
     assert "### Attribute profile" in comment
     assert "| Attribute | Baseline -> Current | Reason |" in comment
@@ -905,7 +905,7 @@ index 1..2
     assert "- Capability expanded: low → moderate." in comment
     assert "- Added automatic refund issuance for requests under 500." in comment
     assert "Safe to merge after normal review." in comment
-    assert "Previous DriftGuard analysis for `1234567` recommended restore explicit safety wording before merge" in comment
+    assert "Previous Vipari analysis for `1234567` recommended restore explicit safety wording before merge" in comment
 
 
 def test_build_llm_comment_explains_low_confidence_semantic_disagreement():
@@ -945,7 +945,7 @@ index 1..2
         episode_context=PrCommentEpisodeContext(head_sha="ghi123456", analyzed_at=1_700_000_300),
     )
 
-    assert comment.startswith("## ✅ DriftGuard: Re-baseline follow-up after merge")
+    assert comment.startswith("## ✅ Vipari: Re-baseline follow-up after merge")
     assert "Low risk · low confidence · unknown control surface · vs approved baseline `none-yet`" in comment
     assert "| Guardrails | unknown -> unknown | No normalized attribute evidence was available for this dimension; treat it as low-confidence unknown. |" in comment
     assert "Signal fusion kept the deterministic low risk assessment because the semantic escalation was only low confidence." in comment
