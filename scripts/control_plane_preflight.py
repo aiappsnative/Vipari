@@ -7,6 +7,11 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 
+# DEV/OPS HELPER: This script checks control-plane provider configuration only.
+# It is not the canonical production topology validator; use scripts/railway_preflight.py
+# for split-service deployment readiness checks.
+
+
 def _mask(name: str, value: str | None) -> str:
     if value is None or value == "":
         return "MISSING"
@@ -44,6 +49,8 @@ def _same_origin(left: str | None, right: str | None) -> bool:
 
 def main() -> None:
     load_dotenv()
+
+    print("Control-plane provider preflight only. Use scripts/railway_preflight.py for production topology validation.")
 
     app_missing = _print_group(
         "Core app settings",

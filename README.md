@@ -247,21 +247,36 @@ Use it before the live-provider run to confirm the GitHub OAuth, GitHub App, bil
 
 ## Installation
 
-Install dependencies:
+Install dependencies for local development and test workflows:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the service locally:
+## Recommended production deployment
+
+Vipari has one blessed production run path: cloud deployment from this repository's committed service Dockerfiles.
+
+Production means:
+
+- Docker images built from `Dockerfile.api`, `Dockerfile.webhook`, and `Dockerfile.worker`
+- split `api`, `webhook`, and `worker` services
+- PostgreSQL via `DATABASE_URL`
+- Redis via `REDIS_URL` with `QUEUE_BACKEND=redis` for `webhook` and `worker`
+- `APP_ENV=production` with fail-closed runtime guardrails and readiness checks
+
+Recommended operator sequence:
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
+python scripts/railway_preflight.py --service-role api --app-env production
+python scripts/railway_preflight.py --service-role webhook --app-env production
+python scripts/railway_preflight.py --service-role worker --app-env production
+python scripts/db_migrate.py
 ```
 
-## Cloud deployment scaffolding
+Then deploy the three production services from GitHub using the repository Dockerfiles.
 
-`main` now includes a first-pass split deployment shape for cloud-oriented hosting:
+`main` includes the split production shape required for that path:
 
 - `run_webhook.py` for webhook ingress
 - `run_worker.py` for the async audit worker
@@ -291,27 +306,33 @@ Current production stance:
 
 Use the detailed plan in [docs/railway-launch-readiness-plan.md](docs/railway-launch-readiness-plan.md) and the operator guide in [docs/railway-deployment-guide.md](docs/railway-deployment-guide.md) before attempting a real launch
 
-Run the preflight helper before building Railway services:
-
-```bash
-python scripts/railway_preflight.py --service-role api --app-env production
-python scripts/railway_preflight.py --service-role webhook --app-env production
-python scripts/railway_preflight.py --service-role worker --app-env production
-```
-
 The preflight helper now validates the runtime contract plus live readiness for the selected role, including database connectivity and queue connectivity for `webhook` and `worker`.
-
-Run the database migration/bootstrap step before cutting traffic to a fresh or updated production database:
-
-```bash
-python scripts/db_migrate.py
-```
 
 The migration workflow and failure handling are documented in [docs/database-migration-runbook.md](docs/database-migration-runbook.md).
 
+## Environment matrix
+
+| Environment | Runtime path | DB | Queue | Services | Notes |
+| --- | --- | --- | --- | --- | --- |
+| local-dev | direct Python or local Docker helper | SQLite by default | in-proc or SQLite | monolith or limited split | development only |
+| staging | Docker deployment from service Dockerfiles | Postgres | Redis | split | production-like rehearsal |
+| production | Docker deployment from service Dockerfiles | Postgres | Redis | split | only blessed production path |
+
+## Local development only
+
+The workflows in this section are for local development, debugging, and rehearsal. They are not production deployment recipes.
+
+For the fastest local app loop, run the monolith directly:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Do not use the monolith path for production, internet-exposed, or multi-tenant deployment.
+
 You can start the split services locally with Docker Compose after providing the required environment variables in `.env`.
 
-For the simplest local Docker workflow, use the checked-in wrapper script:
+For the simplest local Docker workflow, use the checked-in wrapper script. This is a developer convenience wrapper, not a production deployment method:
 
 ```powershell
 ./scripts/docker-stack.ps1 up sqlite
@@ -346,6 +367,10 @@ docker compose --env-file docker-compose.local.env.example up --build
 ```
 
 This keeps `APP_ENV=local` for a safe local run while exercising the split `api`/`webhook`/`worker` services against Postgres and Redis instead of the default SQLite path.
+
+## Internal evaluation and smoke workflows
+
+The remaining runtime helpers below are for internal validation and engineering confidence. They are not part of the recommended production path.
 
 ## Local end-to-end testing
 

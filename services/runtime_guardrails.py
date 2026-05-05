@@ -105,6 +105,10 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append("LOCAL_DEBUG_DISABLE_LOGIN requires APP_BASE_URL to resolve to localhost.")
 
     if settings.is_production:
+        if settings.service_role == "monolith":
+            errors.append(
+                "Production does not support SERVICE_ROLE=monolith; use Docker-deployed split services with SERVICE_ROLE=api, webhook, or worker."
+            )
         try:
             validate_migration_configuration(settings)
         except RuntimeError as exc:

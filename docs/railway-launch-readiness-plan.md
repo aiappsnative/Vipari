@@ -6,6 +6,8 @@ Issue: `#36 [Launch Blocker] Production-hardening and Railway deployment readine
 
 ## Executive summary
 
+This plan now assumes a single blessed production execution path: cloud deployment from the repository Dockerfiles. Railway is the primary concrete example because it matches that GitHub -> Docker operating model.
+
 This issue is not a pure deployment/configuration task. At the time this plan was written, the codebase was still **SQLite-native** at the persistence layer and **SQLite/SQS-native** at the queue layer. The implementation on this branch has since added Redis queue support and a PostgreSQL-capable persistence adapter, but the engineering principle remains the same: production readiness must be earned with explicit contracts rather than deployment theater.
 
 1. immediate launch-hardening work that can and should land now
@@ -15,7 +17,7 @@ The critical engineering principle for this branch is:
 
 - do not fake production readiness with unsafe fallbacks
 - do not hide architectural blockers behind env-var indirection
-- do make the deployment shape, readiness behavior, queue choice, and secret handling production-grade and explicit
+- do make the Docker-based deployment shape, readiness behavior, queue choice, and secret handling production-grade and explicit
 - do fail closed when production-critical assumptions are missing or unsafe
 
 ## Current-state audit findings

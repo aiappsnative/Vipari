@@ -1,3 +1,6 @@
+# DEV-ONLY: This script is intended for local development and rehearsal.
+# Do not use it as a production deployment method.
+
 param(
     [Parameter(Position = 0)]
     [ValidateSet("up", "down", "restart", "logs")]

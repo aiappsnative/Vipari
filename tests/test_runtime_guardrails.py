@@ -53,6 +53,22 @@ def test_production_worker_requires_redis_queue(monkeypatch):
     assert "QUEUE_BACKEND=redis" in str(exc_info.value)
 
 
+def test_production_rejects_monolith_service_role(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "monolith")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "SERVICE_ROLE=monolith" in str(exc_info.value)
+
+
 def test_runtime_configuration_rejects_malformed_github_private_key(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setenv("SERVICE_ROLE", "api")

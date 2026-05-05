@@ -5,6 +5,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import scripts.railway_preflight as railway_preflight
@@ -91,3 +93,10 @@ def test_preflight_still_builds_sqlite_queue_for_local_worker(tmp_path):
 
     assert isinstance(backend, LocalSQLiteQueue)
     assert backend.db_path == str(tmp_path / "queue.db")
+
+
+def test_railway_preflight_rejects_monolith_service_role():
+    with pytest.raises(SystemExit) as exc_info:
+        railway_preflight.main(["--service-role", "monolith", "--app-env", "production"])
+
+    assert exc_info.value.code == 2

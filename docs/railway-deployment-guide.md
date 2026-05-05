@@ -1,5 +1,13 @@
 # Railway Deployment Guide
 
+Railway is the canonical production example because it matches the intended GitHub -> Docker deploy path. The important contract is not Railway itself; it is that production runs the images built from `Dockerfile.api`, `Dockerfile.webhook`, and `Dockerfile.worker` with split services, Postgres, and Redis.
+
+Direct `python` or `uvicorn` entrypoints are for local development and controlled rehearsal only.
+
+## Recommended production path
+
+Use a GitHub-connected deploy that builds and runs the repository Dockerfiles as separate `api`, `webhook`, and `worker` services.
+
 ## Target topology
 
 Railway project services:
@@ -39,6 +47,12 @@ Railway project services:
 - `redis` must remain private
 
 ## Service env matrix
+
+| Environment | Runtime path | DB | Queue | Services | Notes |
+| --- | --- | --- | --- | --- | --- |
+| local-dev | direct Python or local Docker helper | SQLite by default | in-proc or SQLite | monolith or limited split | development only |
+| staging | Docker deployment from service Dockerfiles | Postgres | Redis | split | production-like rehearsal |
+| production | Docker deployment from service Dockerfiles | Postgres | Redis | split | blessed production topology |
 
 ### Shared production settings
 
@@ -114,6 +128,17 @@ These are starting values only; increase them once real job volume and latency a
 - confirm GitHub App webhook URL matches the webhook domain exactly
 
 The Railway preflight helper checks both the production configuration contract and live readiness for the selected role. For `webhook` and `worker`, that includes queue reachability in addition to database connectivity. If production queue settings are invalid, preflight now fails the config contract before touching the local SQLite queue path.
+
+## Non-production paths
+
+Keep these paths out of operator-facing production runbooks:
+
+- direct `uvicorn main:app` monolith runs
+- SQLite compose variants
+- `scripts/docker-stack.ps1` local wrapper flows
+- eval harness and smoke database workflows
+
+They remain useful for engineering, but they are not the launch path.
 
 ## Rollback notes
 
