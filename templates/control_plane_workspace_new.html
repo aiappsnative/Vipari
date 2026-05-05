@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>New Workspace | DriftGuard</title>
+    <title>New Workspace | Vipari</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -14,12 +14,12 @@
     <main class="simple-shell">
         <section class="simple-panel">
             <p class="eyebrow">Workspace bootstrap</p>
-            <h1>Create your DriftGuard workspace</h1>
+            <h1>Create your Vipari workspace</h1>
             <p>{{WORKSPACE_CONTEXT}}</p>
             <form method="post" action="/app/workspaces/bootstrap">
                 {{CSRF_INPUT}}
                 <label class="field-label" for="workspace-name">Workspace name</label>
-                <input class="field-input" id="workspace-name" name="name" value="PromptDrift Team" />
+                <input class="field-input" id="workspace-name" name="name" value="Vipari Team" />
                 <button class="button" type="submit">Create workspace</button>
             </form>
         </section>

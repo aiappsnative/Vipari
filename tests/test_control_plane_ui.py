@@ -92,7 +92,7 @@ def test_marketing_page_renders():
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "DriftGuard Control Plane" in response.text
+    assert "Vipari Control Plane" in response.text
     assert "GitHub-native AI governance" in response.text
     assert "AI-assisted review output labels" in response.text
 
@@ -5004,6 +5004,9 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
 
     assert response.status_code == 200
     assert "Agent Integrations" in response.text
+    assert "Vipari MCP connector" in response.text
+    assert "hosted Vipari broker" in response.text
+    assert "internal Vipari bearer tokens" in response.text
     assert "promptdrift.list_repos" in response.text
     assert "/app/integrations/mcp/download" in response.text
     assert "API keys" in response.text

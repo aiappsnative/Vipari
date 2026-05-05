@@ -1,12 +1,12 @@
 # AI Act Capability Map
 
-This document is for internal product and delivery use. It maps current DriftGuard capabilities to recurring AI Act readiness themes without claiming legal compliance.
+This document is for internal product and delivery use. It maps current Vipari capabilities to recurring AI Act readiness themes without claiming legal compliance.
 
 ## Positioning
 
-DriftGuard supports evidence preparation, oversight, monitoring, and traceability for repository-level AI control surfaces.
+Vipari supports evidence preparation, oversight, monitoring, and traceability for repository-level AI control surfaces.
 
-DriftGuard does not perform legal classification, determine whether a system is high-risk, or guarantee regulatory compliance.
+Vipari does not perform legal classification, determine whether a system is high-risk, or guarantee regulatory compliance.
 
 ## Capability Matrix
 
@@ -22,7 +22,7 @@ DriftGuard does not perform legal classification, determine whether a system is 
 
 - Treat provenance labels as factual metadata about how an output was produced.
 - Keep human-reviewed baseline decisions separate from AI-assisted review narratives.
-- Avoid language that implies DriftGuard classifies systems under the law.
+- Avoid language that implies Vipari classifies systems under the law.
 - Prefer embedded evidence surfaces over a standalone compliance subsystem.
 
 ## Current acceptance bar

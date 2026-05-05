@@ -1,22 +1,22 @@
-# PromptDrift Customer MCP Connector
+# Vipari Customer MCP Connector
 
-This package is distributed to authenticated PromptDrift customers through the in-product MCP page.
+This package is distributed to authenticated Vipari customers through the in-product MCP page.
 
 Everything needed to evolve the connector as its own repo-local package lives in this directory so future work can happen against the package in isolation before the product zips it for download.
 
 It runs a thin local MCP server that:
 
-- exposes PromptDrift tools to your MCP-compatible agent host over stdio
-- authenticates to your PromptDrift workspace using your machine principal credentials
-- exchanges those credentials for a short-lived PromptDrift MCP broker token
-- forwards tool calls to the hosted PromptDrift MCP broker using that short-lived token
+- exposes Vipari tools to your MCP-compatible agent host over stdio
+- authenticates to your Vipari workspace using your machine principal credentials
+- exchanges those credentials for a short-lived Vipari MCP broker token
+- forwards tool calls to the hosted Vipari MCP broker using that short-lived token
 
-The connector does **not** contain PromptDrift internal control-plane bearer tokens.
+The connector does **not** contain Vipari internal control-plane bearer tokens.
 The connector also does not keep sending your long-lived client secret on every tool invocation; it uses the secret only to obtain a short-lived broker token.
 
 ## Setup
 
-1. Create or reuse a PromptDrift API key with `drift.read` scope.
+1. Create or reuse a Vipari API key with `drift.read` scope.
 2. Copy the files from this package into a local directory.
 3. Install the dependencies from `requirements.txt`.
 4. Copy `promptdrift.env.example` to `.env` or set the environment variables in your MCP host.
@@ -43,4 +43,4 @@ The connector also does not keep sending your long-lived client secret on every 
 - `promptdrift.get_repo_casefile`
 - `promptdrift.list_escalations`
 
-The connector is intentionally thin. PromptDrift owns workspace binding, output shaping, and broker-side authorization.
+The connector is intentionally thin. Vipari owns workspace binding, output shaping, and broker-side authorization.

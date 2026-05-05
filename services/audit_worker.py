@@ -266,7 +266,7 @@ def _build_pr_comment_review(
 
 def _render_pr_comment_review(review: PrCommentReview) -> str:
     lines = [
-        f"## {_risk_indicator_emoji(review.risk_level)} DriftGuard: {_decision_header(review.decision)}",
+        f"## {_risk_indicator_emoji(review.risk_level)} Vipari: {_decision_header(review.decision)}",
         "",
         review.context_line,
         "",
@@ -289,7 +289,7 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         [
             "",
             "<details>",
-            "<summary>DriftGuard review details</summary>",
+            "<summary>Vipari review details</summary>",
             "",
             "### Key deltas",
         ]
@@ -315,7 +315,7 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         lines.extend(
             [
                 "",
-                f"[Open this review in DriftGuard dashboard]({review.dashboard_deep_link})",
+                f"[Open this review in Vipari dashboard]({review.dashboard_deep_link})",
             ]
         )
     return "\n".join(lines)
@@ -621,14 +621,14 @@ def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttribute
 
 def _episode_metadata_line(context: PrCommentEpisodeContext) -> str:
     timestamp = datetime.fromtimestamp(context.analyzed_at, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-    base = f"_DriftGuard analysis for head `{_short_sha(context.head_sha)}` at {timestamp}._"
+    base = f"_Vipari analysis for head `{_short_sha(context.head_sha)}` at {timestamp}._"
     previous_episode = context.previous_episode
     if previous_episode is None:
         return base
 
     previous_recommendation = _extract_previous_episode_recommendation(previous_episode.audit_comment.comment_body)
     return (
-        f"{base[:-2]} Previous DriftGuard analysis for `{_short_sha(previous_episode.head_sha)}` "
+        f"{base[:-2]} Previous Vipari analysis for `{_short_sha(previous_episode.head_sha)}` "
         f"recommended {previous_recommendation.lower()}._"
     )
 

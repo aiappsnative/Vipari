@@ -17,7 +17,7 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("PROMPTDRIFT_REQUEST_TIMEOUT_SECONDS",
 _BROKER_TOKEN: str | None = None
 _BROKER_TOKEN_EXPIRES_AT: float = 0.0
 
-server = FastMCP("PromptDrift")
+server = FastMCP("Vipari")
 
 
 def _issue_broker_token() -> tuple[str, float]:
@@ -37,13 +37,13 @@ def _issue_broker_token() -> tuple[str, float]:
             body = json.load(response)
     except urllib.error.HTTPError as exc:  # pragma: no cover - customer runtime path
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"PromptDrift MCP broker token request failed: HTTP {exc.code}: {detail}") from exc
+        raise RuntimeError(f"Vipari MCP broker token request failed: HTTP {exc.code}: {detail}") from exc
     except OSError as exc:  # pragma: no cover - customer runtime path
-        raise RuntimeError(f"PromptDrift MCP broker token request failed: {exc}") from exc
+        raise RuntimeError(f"Vipari MCP broker token request failed: {exc}") from exc
 
     ttl_seconds = int(body.get("ttl_seconds", 0))
     if ttl_seconds <= 0 or not body.get("token"):
-        raise RuntimeError("PromptDrift MCP broker token response was malformed.")
+        raise RuntimeError("Vipari MCP broker token response was malformed.")
     return body["token"], time.time() + max(ttl_seconds - 30, 1)
 
 
@@ -85,33 +85,33 @@ def _invoke(tool_name: str, arguments: dict[str, object] | None = None) -> dict[
             if exc.code == 401 and attempt == 0:
                 _invalidate_broker_token()
                 continue
-            raise RuntimeError(f"PromptDrift MCP broker request failed: HTTP {exc.code}: {detail}") from exc
+            raise RuntimeError(f"Vipari MCP broker request failed: HTTP {exc.code}: {detail}") from exc
         except OSError as exc:  # pragma: no cover - customer runtime path
-            raise RuntimeError(f"PromptDrift MCP broker request failed: {exc}") from exc
-    raise RuntimeError("PromptDrift MCP broker request failed after token refresh.")
+            raise RuntimeError(f"Vipari MCP broker request failed: {exc}") from exc
+    raise RuntimeError("Vipari MCP broker request failed after token refresh.")
 
 
 @server.tool(name="promptdrift.list_repos")
 def list_repos(limit: int = 50) -> dict[str, object]:
-    """List repositories available to the bound PromptDrift workspace."""
+    """List repositories available to the bound Vipari workspace."""
     return _invoke("promptdrift.list_repos", {"limit": limit})
 
 
 @server.tool(name="promptdrift.get_repo_posture")
 def get_repo_posture(repo_full: str) -> dict[str, object]:
-    """Get the current PromptDrift posture for one repository."""
+    """Get the current Vipari posture for one repository."""
     return _invoke("promptdrift.get_repo_posture", {"repo_full": repo_full})
 
 
 @server.tool(name="promptdrift.get_repo_casefile")
 def get_repo_casefile(repo_full: str) -> dict[str, object]:
-    """Get a compact case file for one PromptDrift-tracked repository."""
+    """Get a compact case file for one Vipari-tracked repository."""
     return _invoke("promptdrift.get_repo_casefile", {"repo_full": repo_full})
 
 
 @server.tool(name="promptdrift.list_escalations")
 def list_escalations(include_watch: bool = False, limit: int = 20) -> dict[str, object]:
-    """List the current workspace escalation queue from PromptDrift."""
+    """List the current workspace escalation queue from Vipari."""
     return _invoke(
         "promptdrift.list_escalations",
         {"include_watch": include_watch, "limit": limit},
