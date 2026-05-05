@@ -81,7 +81,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_dashboard_page_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -223,12 +223,10 @@ def create_api_app() -> FastAPI:
     instrument_fastapi(app, enabled=settings.enable_metrics)
     app.include_router(create_health_router(settings))
 
-    @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_index_page(request: Request):
         _require_admin_token(request, settings)
         return HTMLResponse(render_dashboard_index_page())
 
-    @app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
     async def dashboard_repo_page(repo_full: str, request: Request):
         _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full))
@@ -272,6 +270,13 @@ def create_api_app() -> FastAPI:
     def persistence_status(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(persistence_status_payload(get_persistence_status(db_path)))
+
+    app.include_router(
+        create_dashboard_page_router(
+            dashboard_index_handler=dashboard_index_page,
+            dashboard_repo_handler=dashboard_repo_page,
+        )
+    )
 
     app.include_router(
         create_dashboard_read_router(

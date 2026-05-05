@@ -178,7 +178,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_page_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -3319,7 +3319,6 @@ async def base44_billing_handoff(request: Request):
     return JSONResponse({"status": "created", "claim_token": claim.claim_token, "claim_url": claim_url})
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3364,7 +3363,6 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
 async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3478,6 +3476,13 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     )
     return JSONResponse(result)
 
+
+app.include_router(
+    create_dashboard_page_router(
+        dashboard_index_handler=dashboard_index_page,
+        dashboard_repo_handler=dashboard_repo_page,
+    )
+)
 
 app.include_router(
     create_dashboard_read_router(
