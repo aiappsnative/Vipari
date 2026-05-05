@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+# DEV-ONLY: This helper is for local and internal smoke validation.
+# Do not use it as a production deployment or production readiness entrypoint.
+
 import argparse
 import asyncio
 import os
@@ -74,9 +77,9 @@ def _run_worker_smoke(settings, migration_result) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the local PromptDrift runtime smoke test.")
+    parser = argparse.ArgumentParser(description="Run the local/internal Vipari runtime smoke test.")
     parser.add_argument("--db", help="Optional database path or DATABASE_URL override.")
-    parser.add_argument("--app-env", default="local", choices=["local", "test", "production"], help="App environment to use for the smoke run.")
+    parser.add_argument("--app-env", default="local", choices=["local", "test"], help="Non-production app environment to use for the smoke run.")
     parser.add_argument("--service-role", default="monolith", choices=["monolith", "api", "webhook", "worker"], help="Service role to use for the smoke run.")
     args = parser.parse_args(argv)
 

@@ -4,6 +4,8 @@ import os
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import scripts.local_runtime_smoke as local_runtime_smoke
@@ -60,3 +62,10 @@ def test_local_runtime_smoke_supports_worker_service_role(tmp_path, monkeypatch)
 
     with patch("services.runtime_guardrails._validate_github_app_private_key"):
         assert local_runtime_smoke.main(["--service-role", "worker"]) == 0
+
+
+def test_local_runtime_smoke_rejects_production_app_env():
+    with pytest.raises(SystemExit) as exc_info:
+        local_runtime_smoke.main(["--app-env", "production"])
+
+    assert exc_info.value.code == 2

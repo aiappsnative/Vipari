@@ -1,3 +1,6 @@
+# DEV-ONLY: Ad hoc local repro script for onboarding/sync experimentation.
+# Do not treat this script as a production workflow or supported operator entrypoint.
+
 from services.audit_jobs import init_db
 from services.onboarding import onboard_repository, sync_on_pr_merge_artifact_changes
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding

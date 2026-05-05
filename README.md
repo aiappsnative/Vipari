@@ -433,9 +433,9 @@ Run it with:
 python -m pytest tests/test_control_plane_ui.py -q
 ```
 
-### Local runtime smoke test
+### Internal-only local runtime smoke test
 
-Run the smoke test helper from the repo root:
+Run the smoke test helper from the repo root when you want a local or internal confidence check. It is not a production preflight replacement:
 
 ```bash
 python scripts/local_runtime_smoke.py --db sqlite:///./promptdrift-smoke.db
@@ -531,6 +531,8 @@ python scripts/repo_ops.py eval-compare path/to/current-run-package.json path/to
 ```
 
 `local_runtime_smoke.py` now honors the requested service role instead of always loading the monolith app. Use it to smoke the split API and webhook services directly, or to run a worker readiness smoke against the currently configured database and queue settings.
+
+Keep this helper in the engineering-validation lane. Production deployment validation should continue to flow through `scripts/railway_preflight.py`, `scripts/db_migrate.py`, and the Docker-based split-service deploy path.
 
 The evaluation harness writes repeatable run packages under `artifacts/eval-runs/` by default. Each package includes onboarding and baseline summaries, optional backfill results, saved repo and overview dashboard payloads, ranked review targets, a fixed evaluator rubric, and an assertion summary so branch-to-branch comparison stays lightweight but reproducible. The built-in candidate registry currently starts with OSS repositories, but the harness itself also supports ad hoc owner/repo targets and seeded scenarios through the same contract.
 
