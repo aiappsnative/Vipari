@@ -266,7 +266,6 @@ def create_api_app() -> FastAPI:
             )
         )
 
-    @app.get("/api/persistence")
     def persistence_status(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(persistence_status_payload(get_persistence_status(db_path)))

@@ -3459,7 +3459,6 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/persistence")
 def persistence_status(request: Request):
     _require_dashboard_access(request)
     return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
@@ -3503,7 +3502,6 @@ app.include_router(
 )
 
 
-@app.get("/api/repos/{repo_full:path}/proposals/pending")
 def list_pending_proposals_for_repo(request: Request, repo_full: str):
     access_context = _require_repo_dashboard_read_access(request, repo_full)
     from services.internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
