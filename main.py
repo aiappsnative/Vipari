@@ -153,6 +153,7 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
+from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
@@ -169,6 +170,16 @@ from services.repo_journey import build_repo_journey, compare_repo_snapshots, ge
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
+from services.api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+from services.workspace_access import (
+    build_access_context as build_workspace_access_context,
+    current_authenticated_identity_context as current_workspace_authenticated_identity_context,
+    current_workspace_context as current_workspace_access_context,
+    get_session as get_workspace_session,
+    require_dashboard_access as require_workspace_dashboard_access,
+)
+from routers.dashboard import create_compliance_api_router, create_dashboard_page_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.health import create_health_router
 
 settings = get_settings()
 
@@ -249,36 +260,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
-
-
-@app.get("/health")
-async def health_live():
-    return {"status": "ok", "service_role": settings.service_role}
-
-
-@app.get("/health/ready")
-async def health_ready():
-    return readiness_json_response(await build_runtime_readiness(settings))
-
-
-class RepositoryOnboardingRequest(BaseModel):
-    installation_id: int
-    commit_limit_per_artifact: int = 10
-    plan_backfill: bool = True
-    execute_backfill: bool = False
-
-
-class RepositoryBackfillRequest(BaseModel):
-    installation_id: int
-
-
-class BaselineDecisionRequest(BaseModel):
-    note: str | None = None
-
-
-class RepoRebaselineRequest(BaseModel):
-    snapshot_id: int
-    rationale: str | None = None
+app.include_router(create_health_router(settings))
 
 
 class BillingHandoffActivationRequest(BaseModel):
@@ -328,56 +310,11 @@ def _control_plane_active() -> bool:
 
 
 def _get_session(request: Request):
-    session_id = request.cookies.get(settings.session_cookie_name)
-    if not session_id:
-        return None
-    return get_user_session(AUDIT_DB_PATH, session_id)
+    return get_workspace_session(settings, AUDIT_DB_PATH, request)
 
 
 def _build_access_context(session) -> dict[str, object]:
-    if session is None:
-        resolution = resolve_workspace_access_state(WorkspaceAccessSnapshot(is_authenticated=False))
-        return {"session": None, "user": None, "identity": None, "workspace": None, "resolution": resolution}
-
-    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
-    identity = get_github_identity_for_user(AUDIT_DB_PATH, session.user_id)
-    workspace = get_workspace_by_id(AUDIT_DB_PATH, session.workspace_id) if session.workspace_id else None
-    membership = get_workspace_membership(AUDIT_DB_PATH, workspace.id, session.user_id) if workspace else None
-    subscription = get_workspace_subscription(AUDIT_DB_PATH, workspace.id) if workspace else None
-    entitlement = get_workspace_entitlement(AUDIT_DB_PATH, workspace.id) if workspace else None
-    installation = get_workspace_installation(AUDIT_DB_PATH, workspace.id) if workspace else None
-    allocated_repo_count, onboarded_repo_count = count_workspace_repo_allocations(AUDIT_DB_PATH, workspace.id) if workspace else (0, 0)
-
-    subscription_status = (subscription.status if subscription else "").lower()
-    snapshot = WorkspaceAccessSnapshot(
-        is_authenticated=True,
-        has_workspace=workspace is not None,
-        invitation_pending=bool(membership and membership.invitation_state != "accepted"),
-        has_membership=membership is not None,
-        role=membership.role if membership else None,
-        has_subscription_record=subscription is not None,
-        billing_pending_confirmation=subscription_status in {"incomplete", "pending", "trialing_pending"},
-        payment_failed=subscription_status in {"past_due", "unpaid", "payment_failed"},
-        dashboard_enabled=bool(entitlement.dashboard_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
-        pr_comments_enabled=bool(entitlement.pr_comments_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
-        has_linked_installation=installation is not None,
-        allocated_repo_count=allocated_repo_count,
-        onboarded_repo_count=onboarded_repo_count,
-        cancel_at_period_end=bool(subscription.cancel_at_period_end) if subscription else False,
-        subscription_expired=subscription_status in {"incomplete_expired", "expired"},
-    )
-    resolution = resolve_workspace_access_state(snapshot)
-    return {
-        "session": session,
-        "user": user,
-        "identity": identity,
-        "workspace": workspace,
-        "membership": membership,
-        "subscription": subscription,
-        "entitlement": entitlement,
-        "installation": installation,
-        "resolution": resolution,
-    }
+    return build_workspace_access_context(AUDIT_DB_PATH, session)
 
 
 def _parse_optional_timestamp(value: object) -> float | None:
@@ -871,34 +808,26 @@ def _github_oauth_callback_url(request: Request) -> str:
 
 
 def _current_workspace_context(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
-    session = _get_session(request)
-    if session is None:
-        debug_context = _local_debug_workspace_context() if allow_local_debug else None
-        if debug_context is not None:
-            return debug_context
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    access_context = _build_access_context(session)
-    if access_context["workspace"] is None:
-        raise HTTPException(status_code=400, detail="Workspace context is required.")
-    return access_context
+    return current_workspace_access_context(
+        settings,
+        AUDIT_DB_PATH,
+        request,
+        allow_local_debug=allow_local_debug,
+        local_debug_context_factory=_local_debug_workspace_context,
+    )
 
 
 def _current_authenticated_identity_context(request: Request) -> dict[str, object]:
-    session = _get_session(request)
-    if session is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    user = get_user_by_id(AUDIT_DB_PATH, session.user_id)
-    identity = get_github_identity_for_user(AUDIT_DB_PATH, session.user_id)
-    if user is None or identity is None:
-        raise HTTPException(status_code=403, detail="Authenticated GitHub identity is required.")
-    return {"session": session, "user": user, "identity": identity}
+    return current_workspace_authenticated_identity_context(settings, AUDIT_DB_PATH, request)
 
 
 def _require_dashboard_access(request: Request) -> dict[str, object]:
-    access_context = _current_workspace_context(request, allow_local_debug=False)
-    if not access_context["resolution"].can_access_dashboard:
-        raise HTTPException(status_code=403, detail="Dashboard access is not available for this workspace.")
-    return access_context
+    return require_workspace_dashboard_access(
+        settings,
+        AUDIT_DB_PATH,
+        request,
+        local_debug_context_factory=_local_debug_workspace_context,
+    )
 
 
 def _require_dashboard_read_access(request: Request) -> dict[str, object]:
@@ -1114,6 +1043,27 @@ def _export_job_payload(job) -> dict[str, object]:
     }
     payload["download_url"] = _export_download_url(job) if job.status == "completed" and job.result_blob else None
     return payload
+
+
+def _build_export_download_response(_db_path: str, job, token: str | None):
+    if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Export job not completed")
+    if not job.result_size_bytes or not job.download_token or not job.result_blob:
+        raise HTTPException(status_code=400, detail="Export job missing download data")
+
+    filename = (
+        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
+        f"{job.repo_full.replace('/', '-')}-"
+        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
+        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+    )
+    return StreamingResponse(
+        io.BytesIO(job.result_blob),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 def _render_compliance_repo_rows(repo_rows: list[dict[str, object]]) -> str:
@@ -2222,7 +2172,6 @@ async def revoke_api_key(
     workspace = access_context["workspace"]
     session = access_context["session"]
 
-    # IDOR guard — verify the principal belongs to this workspace
     principal = get_machine_principal_by_client_id(AUDIT_DB_PATH, client_id)
     if principal is None or principal.workspace_id != workspace.id:
         raise HTTPException(status_code=403, detail="Not authorized.")
@@ -2348,6 +2297,7 @@ async def mcp_broker_invoke(request: Request, payload: McpBrokerInvokeRequest):
         settings=settings,
         db_path=AUDIT_DB_PATH,
     )
+
     result = invoke_mcp_broker_tool(
         payload.tool_name,
         payload.arguments,
@@ -3369,7 +3319,6 @@ async def base44_billing_handoff(request: Request):
     return JSONResponse({"status": "created", "claim_token": claim.claim_token, "claim_url": claim_url})
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_index_page(request: Request, range: str = "7d", filter: str = "all", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3414,7 +3363,6 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/dashboard/{repo_full:path}", response_class=HTMLResponse)
 async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3458,7 +3406,6 @@ async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drif
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/repos")
 async def list_repos(request: Request):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3470,24 +3417,19 @@ async def list_repos(request: Request):
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     list_started = time.perf_counter()
     response = JSONResponse(
-        {
-            "repos": [
-                asdict(item)
-                for item in list_repo_dashboard_index(
-                    AUDIT_DB_PATH,
-                    allowed_repo_fulls=visibility["allowed_repo_fulls"],
-                    repo_scope_by_full=visibility["repo_scope_by_full"],
-                    allocation_status_by_full=visibility["allocation_status_by_full"],
-                )
-            ]
-        }
+        build_repo_index_payload(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visibility["allowed_repo_fulls"],
+            repo_scope_by_full=visibility["repo_scope_by_full"],
+            allocation_status_by_full=visibility["allocation_status_by_full"],
+            list_repo_dashboard_index_fn=list_repo_dashboard_index,
+        )
     )
     _record_server_timing_metric(timing_metrics, "list", list_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/dashboard/overview")
 def dashboard_overview(request: Request, range: str = "7d", filter: str = "all"):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -3498,315 +3440,140 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     visibility = _dashboard_repo_visibility(access_context)
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     build_started = time.perf_counter()
-    overview_view = build_dashboard_overview_view(
-        AUDIT_DB_PATH,
-        allowed_repo_fulls=visibility["allowed_repo_fulls"],
-        repo_scope_by_full=visibility["repo_scope_by_full"],
-        allocation_status_by_full=visibility["allocation_status_by_full"],
-    )
-    active_filter = filter.strip().lower() if filter else "all"
-    if active_filter not in {"all", "critical", "mine"}:
-        active_filter = "all"
-    owned_repo_fulls: set[str] | None = None
-    if active_filter == "mine":
-        owned_repo_fulls = set()
-        if access_context:
-            workspace = access_context.get("workspace")
-            session = access_context.get("session")
-            if workspace is not None and session is not None:
-                owned_repo_fulls = {
-                    allocation.repo_full
-                    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
-                    if allocation.activated_by_user_id == session.user_id
-                }
-    active_range = range.strip().lower() if range else "7d"
-    if active_range not in {"24h", "7d", "30d"}:
-        active_range = "7d"
-    filtered_overview_view = filter_dashboard_overview_view(
-        overview_view,
-        active_filter,
-        overview_range=active_range,
-        allowed_repo_fulls=owned_repo_fulls,
-    )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    payload = asdict(filtered_overview_view)
-    nav_repos = filtered_overview_view.repos if active_filter == "mine" else overview_view.repos
-    payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
-    response = JSONResponse(payload)
+    response = JSONResponse(
+        build_dashboard_overview_payload(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visibility["allowed_repo_fulls"],
+            repo_scope_by_full=visibility["repo_scope_by_full"],
+            allocation_status_by_full=visibility["allocation_status_by_full"],
+            active_filter=filter,
+            active_range=range,
+            access_context=access_context,
+            build_dashboard_overview_view_fn=build_dashboard_overview_view,
+        )
+    )
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
     return _attach_server_timing(response, timing_metrics)
 
 
-@app.get("/api/persistence")
 def persistence_status(request: Request):
     _require_dashboard_access(request)
     return JSONResponse(persistence_status_payload(get_persistence_status(AUDIT_DB_PATH)))
 
 
-@app.get("/api/dashboard/escalation-queue")
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     access_context = _require_dashboard_read_access(request)
     visibility = _dashboard_repo_visibility(access_context)
-    result = build_workspace_escalation_queue(
+    result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
+        build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     return JSONResponse(result)
 
 
-@app.get("/api/compliance/readiness")
-def compliance_readiness_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    workspace = access_context.get("workspace") if access_context else None
-    payload = {
-        "workspace_id": workspace.id if workspace is not None else None,
-        "workspace_name": workspace.display_name if workspace is not None else None,
-        **asdict(view),
-    }
-    return JSONResponse(payload)
-
-
-@app.get("/api/compliance/frameworks")
-def compliance_frameworks_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    return JSONResponse(
-        {
-            "metrics": [asdict(metric) for metric in view.metrics],
-            "verdict": asdict(view.verdict),
-            "framework_cards": [asdict(card) for card in view.framework_cards],
-        }
+app.include_router(
+    create_dashboard_page_router(
+        dashboard_index_handler=dashboard_index_page,
+        dashboard_repo_handler=dashboard_repo_page,
     )
+)
 
-
-@app.get("/api/compliance/exports")
-def compliance_exports_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, export_jobs = _build_compliance_workspace_api_context(access_context)
-    return JSONResponse(
-        {
-            "summary": asdict(view.export_summary),
-            "jobs": [_export_job_payload(job) for job in export_jobs],
-        }
+app.include_router(
+    create_dashboard_read_router(
+        list_repos_handler=list_repos,
+        dashboard_overview_handler=dashboard_overview,
+        dashboard_escalation_queue_handler=dashboard_escalation_queue,
+        persistence_status_handler=persistence_status,
     )
+)
 
-
-@app.get("/api/compliance/evidence")
-def compliance_evidence_api(request: Request):
-    access_context = _current_workspace_context(request)
-    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
-    active_gap, active_repo, evidence_rows, repo_rows = filter_compliance_evidence_view(view, request.query_params.get("gap"), request.query_params.get("repo"))
-    return JSONResponse(
-        {
-            "active_gap": active_gap,
-            "active_repo": active_repo,
-            "top_gaps": [asdict(item) for item in view.top_gaps],
-            "evidence_rows": [asdict(item) for item in evidence_rows],
-            "repo_rows": [asdict(item) for item in repo_rows],
-        }
+app.include_router(
+    create_compliance_api_router(
+        current_workspace_context_fn=_current_workspace_context,
+        build_compliance_workspace_api_context_fn=_build_compliance_workspace_api_context,
+        filter_compliance_evidence_view_fn=filter_compliance_evidence_view,
+        export_job_payload_fn=_export_job_payload,
     )
+)
 
 
-@app.get("/api/repos/{repo_full:path}/proposals/pending")
 def list_pending_proposals_for_repo(request: Request, repo_full: str):
     access_context = _require_repo_dashboard_read_access(request, repo_full)
     from services.internal_auth import PRINCIPAL_KIND_SERVICE_ACCOUNT
     from services.proposals_records import list_pending_baseline_proposals_for_repo_in_workspace
     from services.onboarding_records import list_onboarded_artifacts_for_onboarding
     workspace = access_context.get("workspace")
-    if workspace is None:
-        return JSONResponse({"proposals": [], "pending_count": 0})
-    proposals = list_pending_baseline_proposals_for_repo_in_workspace(AUDIT_DB_PATH, repo_full, workspace.id)
-    if not proposals:
-        return JSONResponse({"proposals": [], "pending_count": 0})
-    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
-    artifact_path_by_id: dict[int, str] = {}
-    if onboarding:
-        for artifact in list_onboarded_artifacts_for_onboarding(AUDIT_DB_PATH, onboarding.id):
-            artifact_path_by_id[artifact.id] = artifact.artifact_path
-    principals_cache: dict[int, object | None] = {}
-    proposals_out: list[dict] = []
-    for proposal in proposals:
-        if proposal.proposer_principal_id not in principals_cache:
-            principals_cache[proposal.proposer_principal_id] = get_machine_principal_by_id(
-                AUDIT_DB_PATH,
-                proposal.proposer_principal_id,
-            )
-        proposer = principals_cache.get(proposal.proposer_principal_id)
-        is_agent = (
-            proposer is not None
-            and getattr(proposer, "principal_kind", None) == PRINCIPAL_KIND_SERVICE_ACCOUNT
-        )
-        proposals_out.append({
-            "proposal_id": proposal.id,
-            "artifact_id": proposal.artifact_id,
-            "artifact_path": artifact_path_by_id.get(proposal.artifact_id, ""),
-            "status": proposal.status,
-            "rationale": proposal.rationale,
-            "proposer_principal_id": proposal.proposer_principal_id,
-            "is_agent_proposal": is_agent,
-            "created_at": proposal.created_at,
-            "expires_at": proposal.expires_at,
-        })
-    proposals_out.sort(key=lambda p: p["created_at"])
-    return JSONResponse({"proposals": proposals_out, "pending_count": len(proposals_out)})
-
-
-@app.get("/api/repos/{repo_full:path}/dashboard")
-def repo_dashboard(request: Request, repo_full: str):
-    request_started = time.perf_counter()
-    timing_metrics: list[tuple[str, float]] = []
-    access_started = time.perf_counter()
-    access_context = _require_repo_dashboard_read_access(request, repo_full)
-    _record_server_timing_metric(timing_metrics, "access", access_started)
-    build_started = time.perf_counter()
-    repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings(AUDIT_DB_PATH, repo_full)
-    _record_server_timing_metric(timing_metrics, "build", build_started)
-    timing_metrics.extend(repo_stage_timings)
-    json_started = time.perf_counter()
-    payload = asdict(repo_view)
-    workspace = access_context.get("workspace")
-    session = access_context.get("session")
-    if workspace is not None and session is not None:
-        payload["export_jobs"] = [
-            _export_job_payload(job)
-            for job in list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
-        ]
-    else:
-        payload["export_jobs"] = []
-    response = JSONResponse(payload)
-    _record_server_timing_metric(timing_metrics, "json", json_started)
-    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
-    return _attach_server_timing(response, timing_metrics)
-
-
-@app.get("/api/repos/{repo_full:path}/export/history")
-def export_history(request: Request, repo_full: str):
-    access_context = _require_repo_dashboard_read_access(request, repo_full)
-    workspace = access_context.get("workspace")
-    session = access_context.get("session")
-    if workspace is None or session is None:
-        return JSONResponse({"repo_full": repo_full, "jobs": []})
-    jobs = list_export_jobs_for_requester(AUDIT_DB_PATH, repo_full, workspace.id, session.user_id)
-    return JSONResponse({"repo_full": repo_full, "jobs": [_export_job_payload(job) for job in jobs]})
-
-
-@app.get("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/episodes")
-def artifact_storyline(request: Request, repo_full: str, artifact_path: str):
-    _require_repo_dashboard_read_access(request, repo_full)
-    storyline = build_repo_artifact_storyline(AUDIT_DB_PATH, repo_full, artifact_path)
-    if storyline is None:
-        raise HTTPException(status_code=404, detail="No artifact storyline is available for this repo artifact.")
     return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "artifact_path": artifact_path,
-            "storyline": asdict(storyline),
-        }
-    )
-
-
-@app.get("/api/repos/{repo_full:path}/journey")
-def repo_journey(request: Request, repo_full: str):
-    _require_repo_dashboard_read_access(request, repo_full)
-    return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "snapshots": [snapshot_to_public_payload(item) for item in build_repo_journey(AUDIT_DB_PATH, repo_full)],
-        }
-    )
-
-
-@app.get("/api/repos/{repo_full:path}/snapshots/{snapshot_id}")
-def repo_snapshot_detail(request: Request, repo_full: str, snapshot_id: int):
-    _require_repo_dashboard_read_access(request, repo_full)
-    snapshot = get_repo_snapshot_detail(AUDIT_DB_PATH, repo_full, snapshot_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Repo posture snapshot was not found.")
-    return JSONResponse({"repo_full": repo_full, "snapshot": snapshot_to_public_payload(snapshot)})
-
-
-@app.get("/api/repos/{repo_full:path}/compare")
-def repo_snapshot_compare(request: Request, repo_full: str, left: int, right: int):
-    _require_repo_dashboard_read_access(request, repo_full)
-    try:
-        comparison = compare_repo_snapshots(AUDIT_DB_PATH, repo_full, left, right)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(asdict(comparison))
-
-
-@app.post("/api/repos/{repo_full:path}/onboard")
-async def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
-    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
-    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
-    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, installation_id)
-
-    onboarding_result = onboard_repository(
-        AUDIT_DB_PATH,
-        repo_full=repo_full,
-        installation_id=installation_id,
-        token=token,
-    )
-    planned_jobs = []
-    if payload.plan_backfill:
-        planned_jobs = plan_repository_history_backfill(
+        build_pending_proposals_payload(
             AUDIT_DB_PATH,
-            repo_full=repo_full,
-            token=token,
-            commit_limit_per_artifact=payload.commit_limit_per_artifact,
+            repo_full,
+            workspace_id=workspace.id if workspace is not None else None,
+            list_pending_proposals_fn=list_pending_baseline_proposals_for_repo_in_workspace,
+            get_latest_repository_onboarding_fn=get_latest_repository_onboarding,
+            list_onboarded_artifacts_for_onboarding_fn=list_onboarded_artifacts_for_onboarding,
+            get_machine_principal_by_id_fn=get_machine_principal_by_id,
+            service_account_principal_kind=PRINCIPAL_KIND_SERVICE_ACCOUNT,
         )
-    executed_jobs = []
-    if payload.execute_backfill:
-        executed_jobs = execute_repository_history_backfill(
-            AUDIT_DB_PATH,
-            repo_full=repo_full,
-            token=token,
-        )
-
-    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
-    return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "onboarding_id": onboarding_result.onboarding.id,
-            "discovered_artifact_count": len(onboarding_result.artifacts),
-            "baseline_version_count": len(onboarding_result.baseline_versions),
-            "planned_backfill_job_count": len(planned_jobs),
-            "executed_backfill_job_count": len(executed_jobs),
-            "dashboard": asdict(dashboard),
-        }
     )
 
 
-@app.post("/api/repos/{repo_full:path}/backfill")
-async def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
-    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
-    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
-    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, installation_id)
-    executed_jobs = execute_repository_history_backfill(
-        AUDIT_DB_PATH,
-        repo_full=repo_full,
-        token=token,
+app.include_router(
+    create_repo_read_router(
+        pending_proposals_handler=list_pending_proposals_for_repo,
     )
-    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
-    return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "executed_backfill_job_count": len(executed_jobs),
-            "completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
-            "failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
-            "dashboard": asdict(dashboard),
-        }
+)
+
+app.include_router(
+    create_repo_dashboard_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_repo_dashboard_view_with_timings_fn=build_repo_dashboard_view_with_timings,
+        list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
+        export_job_payload_fn=_export_job_payload,
+        record_server_timing_metric_fn=_record_server_timing_metric,
+        attach_server_timing_fn=_attach_server_timing,
     )
+)
+
+app.include_router(
+    create_repo_history_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_artifact_storyline_payload_fn=build_artifact_storyline_payload,
+        build_repo_journey_payload_fn=build_repo_journey_payload,
+        build_repo_snapshot_detail_payload_fn=build_repo_snapshot_detail_payload,
+        build_repo_snapshot_compare_payload_fn=build_repo_snapshot_compare_payload,
+        build_repo_artifact_storyline_fn=build_repo_artifact_storyline,
+        build_repo_journey_fn=build_repo_journey,
+        get_repo_snapshot_detail_fn=get_repo_snapshot_detail,
+        snapshot_to_public_payload_fn=snapshot_to_public_payload,
+        compare_repo_snapshots_fn=compare_repo_snapshots,
+    )
+)
 
 
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
+app.include_router(
+    create_repo_onboarding_router(
+        authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
+        resolve_installation_id_fn=lambda access_context, installation_id: _trusted_workspace_installation_id(access_context, installation_id),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        github_app_id=GITHUB_APP_ID,
+        github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path),
+        get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+        onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
+        plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
+        execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
+        build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
+    )
+)
+
+
 async def promote_artifact_baseline(request: Request, repo_full: str, artifact_path: str):
     _require_repo_dashboard_mutation_access(request, repo_full)
     baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
@@ -3824,7 +3591,6 @@ async def promote_artifact_baseline(request: Request, repo_full: str, artifact_p
     )
 
 
-@app.get("/api/repos/{repo_full:path}/baseline/pending")
 def pending_repo_baselines(request: Request, repo_full: str):
     _require_repo_dashboard_read_access(request, repo_full)
     panel = build_repo_baseline_review_panel(AUDIT_DB_PATH, repo_full)
@@ -3833,7 +3599,6 @@ def pending_repo_baselines(request: Request, repo_full: str):
     return JSONResponse(asdict(panel))
 
 
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
 async def approve_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3850,7 +3615,6 @@ async def approve_artifact_baseline(request: Request, repo_full: str, artifact_p
     return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
 
 
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
 async def reject_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3867,7 +3631,6 @@ async def reject_artifact_baseline(request: Request, repo_full: str, artifact_pa
     return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/approve")
 async def approve_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3889,7 +3652,6 @@ async def approve_repo_baseline_candidate(request: Request, repo_full: str, payl
     )
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/reject")
 async def reject_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3911,7 +3673,6 @@ async def reject_repo_baseline_candidate(request: Request, repo_full: str, paylo
     )
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
 async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3937,7 +3698,34 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
     return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
 
 
-@app.post("/api/repos/{repo_full:path}/export/compliance")
+app.include_router(
+    create_repo_baseline_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
+        build_repo_journey_fn=lambda active_db_path, repo_full: build_repo_journey(active_db_path, repo_full),
+        promote_latest_source_to_onboarding_baseline_fn=lambda active_db_path, repo_full, artifact_path: promote_latest_source_to_onboarding_baseline(active_db_path, repo_full, artifact_path),
+        build_repo_baseline_review_panel_fn=lambda active_db_path, repo_full: build_repo_baseline_review_panel(active_db_path, repo_full),
+        approve_repo_baseline_artifact_fn=lambda active_db_path, **kwargs: approve_repo_baseline_artifact(active_db_path, **kwargs),
+        reject_repo_baseline_artifact_fn=lambda active_db_path, **kwargs: reject_repo_baseline_artifact(active_db_path, **kwargs),
+        approve_repo_baseline_fn=lambda active_db_path, **kwargs: approve_repo_baseline(active_db_path, **kwargs),
+        reject_repo_baseline_fn=lambda active_db_path, **kwargs: reject_repo_baseline(active_db_path, **kwargs),
+        rebaseline_repo_from_snapshot_fn=lambda active_db_path, **kwargs: rebaseline_repo_from_snapshot(active_db_path, **kwargs),
+        resolve_actor_login_fn=lambda request, _payload: _dashboard_actor_login(request),
+        github_app_id=GITHUB_APP_ID,
+        github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(
+            app_id,
+            private_key_path,
+            settings.resolved_github_private_key,
+        ),
+        get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+        fetch_file_content_fn=lambda repo, path, token, ref: fetch_file_content(repo, path, token, ref),
+    )
+)
+
+
 async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
     access_context = _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3980,45 +3768,22 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
     })
 
 
-@app.get("/api/export/{job_id}/status")
-async def get_export_status(job_id: int, request: Request):
-    try:
-        job = get_export_job(AUDIT_DB_PATH, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        _require_export_job_owner_access(request, job)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(_export_job_payload(job))
-
-
-@app.get("/api/export/{job_id}/download")
-async def download_export(job_id: int, request: Request, token: str | None = None):
-    try:
-        job = get_export_job(AUDIT_DB_PATH, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        _require_export_job_owner_access(request, job)
-        if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
-            raise HTTPException(status_code=404, detail="Export job not found")
-        if job.status != "completed":
-            raise HTTPException(status_code=400, detail="Export job not completed")
-        if not job.result_size_bytes or not job.download_token or not job.result_blob:
-            raise HTTPException(status_code=400, detail="Export job missing download data")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    filename = (
-        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
-        f"{job.repo_full.replace('/', '-')}-"
-        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
-        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+app.include_router(
+    create_export_create_router(
+        create_export_handler=create_compliance_export,
     )
-    return StreamingResponse(
-        io.BytesIO(job.result_blob),
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+)
+
+
+app.include_router(
+    create_export_job_router(
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        get_export_job_fn=lambda active_db_path, job_id: get_export_job(active_db_path, job_id),
+        authorize_export_job_access_fn=lambda request, job: _require_export_job_owner_access(request, job),
+        export_job_payload_fn=_export_job_payload,
+        build_export_download_response_fn=_build_export_download_response,
     )
+)
 
 
 async def verify_signature(request: Request) -> bool:
