@@ -178,7 +178,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -1043,6 +1043,27 @@ def _export_job_payload(job) -> dict[str, object]:
     }
     payload["download_url"] = _export_download_url(job) if job.status == "completed" and job.result_blob else None
     return payload
+
+
+def _build_export_download_response(_db_path: str, job, token: str | None):
+    if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Export job not completed")
+    if not job.result_size_bytes or not job.download_token or not job.result_blob:
+        raise HTTPException(status_code=400, detail="Export job missing download data")
+
+    filename = (
+        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
+        f"{job.repo_full.replace('/', '-')}-"
+        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
+        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+    )
+    return StreamingResponse(
+        io.BytesIO(job.result_blob),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 def _render_compliance_repo_rows(repo_rows: list[dict[str, object]]) -> str:
@@ -3745,45 +3766,15 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
     })
 
 
-@app.get("/api/export/{job_id}/status")
-async def get_export_status(job_id: int, request: Request):
-    try:
-        job = get_export_job(AUDIT_DB_PATH, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        _require_export_job_owner_access(request, job)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(_export_job_payload(job))
-
-
-@app.get("/api/export/{job_id}/download")
-async def download_export(job_id: int, request: Request, token: str | None = None):
-    try:
-        job = get_export_job(AUDIT_DB_PATH, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        _require_export_job_owner_access(request, job)
-        if not token or not job.download_token or not hmac.compare_digest(token, job.download_token):
-            raise HTTPException(status_code=404, detail="Export job not found")
-        if job.status != "completed":
-            raise HTTPException(status_code=400, detail="Export job not completed")
-        if not job.result_size_bytes or not job.download_token or not job.result_blob:
-            raise HTTPException(status_code=400, detail="Export job missing download data")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    filename = (
-        f"promptdrift-{job.export_mode.replace('_', '-')}-export-"
-        f"{job.repo_full.replace('/', '-')}-"
-        f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')}-to-"
-        f"{datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}.zip"
+app.include_router(
+    create_export_job_router(
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        get_export_job_fn=lambda active_db_path, job_id: get_export_job(active_db_path, job_id),
+        authorize_export_job_access_fn=lambda request, job: _require_export_job_owner_access(request, job),
+        export_job_payload_fn=_export_job_payload,
+        build_export_download_response_fn=_build_export_download_response,
     )
-    return StreamingResponse(
-        io.BytesIO(job.result_blob),
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+)
 
 
 async def verify_signature(request: Request) -> bool:

@@ -81,7 +81,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
+from routers.dashboard import create_dashboard_read_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -375,13 +375,8 @@ def create_api_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"job_id": job.id})
 
-    @app.get("/api/export/{job_id}/status")
-    async def get_export_status(job_id: int, request: Request):
-        _require_admin_token(request, settings)
-        job = get_export_job(db_path, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Export job not found")
-        return JSONResponse({
+    def export_status_payload(job):
+        return {
             "job_id": job.id,
             "status": job.status,
             "export_mode": job.export_mode,
@@ -389,18 +384,14 @@ def create_api_app() -> FastAPI:
             "completed_at": job.completed_at,
             "result_size_bytes": job.result_size_bytes,
             "last_error": job.last_error,
-        })
+        }
 
-    @app.get("/api/export/{job_id}/download")
-    async def download_export(job_id: int, request: Request):
-        _require_admin_token(request, settings)
-        job = get_export_job(db_path, job_id)
-        if not job or job.status != "completed" or not job.download_token:
+    def build_export_download_response(active_db_path: str, job, _token: str | None):
+        if job.status != "completed" or not job.download_token:
             raise HTTPException(status_code=404, detail="Export not available")
-        # For now, generate on the fly. In production, store the ZIP.
         try:
             result = build_compliance_export(
-                db_path,
+                active_db_path,
                 ComplianceExportServiceRequest(
                     repo_full=job.repo_full,
                     from_ts=job.from_ts,
@@ -418,6 +409,16 @@ def create_api_app() -> FastAPI:
             media_type="application/zip",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
+
+    app.include_router(
+        create_export_job_router(
+            resolve_db_path_fn=lambda: db_path,
+            get_export_job_fn=lambda active_db_path, job_id: get_export_job(active_db_path, job_id),
+            authorize_export_job_access_fn=lambda request, _job: _require_admin_token(request, settings),
+            export_job_payload_fn=export_status_payload,
+            build_export_download_response_fn=build_export_download_response,
+        )
+    )
 
     # -----------------------------------------------------------------------
     # /cp/* — internal control-plane surface (machine-principal JWT auth)

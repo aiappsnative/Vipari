@@ -239,6 +239,41 @@ def create_repo_onboarding_router(
 	return router
 
 
+def create_export_job_router(
+	*,
+	resolve_db_path_fn: Callable[[], str],
+	get_export_job_fn: Callable,
+	authorize_export_job_access_fn: Callable,
+	export_job_payload_fn: Callable,
+	build_export_download_response_fn: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+
+	def get_export_status(request: Request, job_id: int):
+		try:
+			job = get_export_job_fn(resolve_db_path_fn(), job_id)
+			if not job:
+				raise HTTPException(status_code=404, detail="Export job not found")
+			authorize_export_job_access_fn(request, job)
+		except ValueError as exc:
+			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		return JSONResponse(export_job_payload_fn(job))
+
+	def download_export(request: Request, job_id: int, token: str | None = None):
+		try:
+			job = get_export_job_fn(resolve_db_path_fn(), job_id)
+			if not job:
+				raise HTTPException(status_code=404, detail="Export job not found")
+			authorize_export_job_access_fn(request, job)
+			return build_export_download_response_fn(resolve_db_path_fn(), job, token)
+		except ValueError as exc:
+			raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+	router.add_api_route("/api/export/{job_id}/status", get_export_status, methods=["GET"])
+	router.add_api_route("/api/export/{job_id}/download", download_export, methods=["GET"])
+	return router
+
+
 def create_repo_baseline_router(
 	*,
 	authorize_repo_read_fn: Callable,
