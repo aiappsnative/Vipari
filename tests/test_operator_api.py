@@ -509,7 +509,7 @@ def test_dashboard_html_pages_render(tmp_path):
         repo_js_response = client.get("/static/dashboard-repo.js")
 
     assert index_response.status_code == 200
-    assert "DriftGuard Dashboard" in index_response.text
+    assert "Vipari Dashboard" in index_response.text
     assert "/static/dashboard-index.js" in index_response.text
     index_text = index_response.text.lower()
     assert "ai change overview" in index_text

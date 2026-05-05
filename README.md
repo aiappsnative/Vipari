@@ -1,8 +1,8 @@
-# DriftGuard
+# Vipari
 
-DriftGuard is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
+Vipari is a GitHub App backend that audits pull requests for changes that can alter AI system behavior, especially prompts, guardrails, model-routing logic, tool access, and related policy artifacts.
 
-The product direction is now explicitly GitHub-native and static-first: DriftGuard treats risk and drift as properties of prompts, policies, model settings, tool definitions, and agent wiring visible in code review, rather than as a runtime observability problem.
+The product direction is now explicitly GitHub-native and static-first: Vipari treats risk and drift as properties of prompts, policies, model settings, tool definitions, and agent wiring visible in code review, rather than as a runtime observability problem.
 
 Its job is not just to say that “an AI file changed”, but to help reviewers answer the customer-critical question:
 
@@ -14,7 +14,7 @@ Near-term, the product is being shaped around one especially important follow-up
 
 ## Customer value
 
-DriftGuard provides value by reducing the gap between ordinary code review and safe AI change review.
+Vipari provides value by reducing the gap between ordinary code review and safe AI change review.
 
 For customers, that means:
 
@@ -24,7 +24,13 @@ For customers, that means:
 - making AI review operationally practical inside the existing GitHub PR workflow
 - providing a defensible review trail for security, compliance, and platform teams
 
-In product terms, DriftGuard is moving toward becoming a **change intelligence layer for AI behavior**.
+In product terms, Vipari is moving toward becoming a **change intelligence layer for AI behavior**.
+
+## Why The Name?
+
+Vipari is named from *viparinamadhamma* — the idea that systems we treat as fixed are in fact subject to change.
+
+That maps directly to the product thesis: prompts, tools, policies, and model routing all change, and Vipari exists to make those changes visible, reviewable, and governable.
 
 The product wedge is the PR review workflow. Dashboard and history views remain important, but they should reinforce PR-level decisions rather than replace them.
 
@@ -34,7 +40,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, customer control-plane, and dashboard control-tower slices.
 
-In practical terms, DriftGuard currently provides:
+In practical terms, Vipari currently provides:
 
 - queue-backed GitHub App PR auditing with deterministic analysis, semantic review, retry/fallback behavior, episode-aware managed PR comments, and exact dashboard deep links for the current PR review episode when a public app URL is configured
 - escalation-aware PR review with decision-first comments, risk-emoji headers, concrete evidence panels, and GitHub label sync for before-merge escalation cases
@@ -103,7 +109,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - mixed evidence now points reviewers to the PR first while preserving the latest merged commit as supporting context
 - landed posture remains history-backed, so proposal context improves reviewer actionability without being mistaken for merged drift
 
-## What DriftGuard does today
+## What Vipari does today
 
 - receives GitHub `pull_request` webhooks at `/webhook`
 - verifies webhook signatures
@@ -148,11 +154,11 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
-- **Customer agent integration path:** machine-principal credentials mint short-lived MCP broker tokens, the hosted broker exposes a curated workspace-bound read surface, and the downloadable connector stays thin so internal control-plane tokens never leave PromptDrift
+- **Customer agent integration path:** machine-principal credentials mint short-lived MCP broker tokens, the hosted broker exposes a curated workspace-bound read surface, and the downloadable connector stays thin so internal control-plane tokens never leave Vipari
 
 ## Compliance export package
 
-DriftGuard now supports a compliance export package built from persisted repository evidence rather than ad hoc rendering-time placeholders.
+Vipari now supports a compliance export package built from persisted repository evidence rather than ad hoc rendering-time placeholders.
 
 Current export behavior:
 
@@ -164,7 +170,7 @@ Current export behavior:
 
 This scope is deliberate. The export is meant to answer what baseline was approved, what changed in the requested period, and what evidence supported that conclusion, without becoming a noisy historical archive dump.
 
-For EU AI Act readiness positioning, treat these labels as transparency metadata, not legal conclusions. DriftGuard distinguishes deterministic records, AI-assisted review output, and human-reviewed baseline decisions so operators can explain where a package element came from.
+For EU AI Act readiness positioning, treat these labels as transparency metadata, not legal conclusions. Vipari distinguishes deterministic records, AI-assisted review output, and human-reviewed baseline decisions so operators can explain where a package element came from.
 
 ## Static drift profile model
 
@@ -189,7 +195,7 @@ These are computed from static signals such as:
 - model settings such as `temperature` and `top_p`
 - governance inputs such as CODEOWNERS requirements, review strength, and recent churn
 
-This gives DriftGuard a concrete foundation for future baseline comparison, trend analysis, and PR-facing drift summaries without relying on runtime telemetry.
+This gives Vipari a concrete foundation for future baseline comparison, trend analysis, and PR-facing drift summaries without relying on runtime telemetry.
 
 ## Requirements
 
@@ -347,7 +353,7 @@ This keeps `APP_ENV=local` for a safe local run while exercising the split `api`
 2. Start ngrok and expose port `8000`.
 3. Point the GitHub App webhook URL to `https://<your-ngrok-host>/webhook`.
 4. Open or update a pull request containing AI-relevant changes.
-5. Confirm DriftGuard posts a PR comment.
+5. Confirm Vipari posts a PR comment.
 
 The helper script [scripts/verify_credentials.py](scripts/verify_credentials.py) can be used to validate the local credential setup before testing.
 
@@ -362,7 +368,7 @@ Recent live validation covered:
 
 ## SBOM generation
 
-DriftGuard now includes a repeatable CycloneDX SBOM path for dependency tracking.
+Vipari now includes a repeatable CycloneDX SBOM path for dependency tracking.
 
 Install the SBOM tooling alongside the application dependencies:
 
@@ -380,7 +386,7 @@ The repository also includes [.github/workflows/sbom.yml](.github/workflows/sbom
 
 ## Control-plane end-to-end testing
 
-The Base44 -> DriftGuard handoff work adds a second end-to-end path on top of the existing PR-audit flow.
+The Base44 -> Vipari handoff work adds a second end-to-end path on top of the existing PR-audit flow.
 
 ### Automated local E2E
 
@@ -418,7 +424,7 @@ uvicorn main:app --host 127.0.0.1 --port 8010 --app-dir PromptDrift
 
 Then confirm:
 
-1. `/` renders the DriftGuard control-plane landing page
+1. `/` renders the Vipari control-plane landing page
 2. `/login` renders the GitHub auth entry
 3. `/pricing` renders Free, Starter, Team, and Enterprise plans
 4. `/app` redirects to `/login` when no session exists
@@ -429,7 +435,7 @@ For a true end-to-end pass with GitHub OAuth, GitHub App install, and Base44/Wix
 
 Recommended flow:
 
-1. Run DriftGuard locally.
+1. Run Vipari locally.
 2. Expose it with `ngrok http 8010` or an equivalent tunnel.
 3. Set `APP_BASE_URL=https://<tunnel-host>`.
 4. Set `GITHUB_OAUTH_CALLBACK_URL=https://<tunnel-host>/auth/github/callback`.
@@ -438,7 +444,7 @@ Recommended flow:
 7. Configure Base44/Wix to POST signed purchase activations to `https://<tunnel-host>/api/billing/handoff/base44` using `BILLING_HANDOFF_SECRET`.
 8. Start from the claim URL returned by that handoff or from `/claim/<token>` and walk through login, workspace creation, claim activation, install, repo allocation, and dashboard access.
 9. For the free tier, start from `/app/billing` or `POST /app/billing/checkout` with `plan=free`, then continue directly to install and repo allocation.
-10. If the GitHub App supports a setup URL, point it to `https://<tunnel-host>/app/setup/install/callback` so installation completion returns directly into DriftGuard.
+10. If the GitHub App supports a setup URL, point it to `https://<tunnel-host>/app/setup/install/callback` so installation completion returns directly into Vipari.
 
 Stripe remains available as a compatibility fallback for paid checkout on this branch, but it is no longer the primary launch path.
 

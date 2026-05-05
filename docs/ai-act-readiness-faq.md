@@ -1,14 +1,14 @@
 # AI Act Readiness FAQ
 
-## What does DriftGuard help with?
+## What does Vipari help with?
 
-DriftGuard helps teams track repository-level AI control surfaces, review baseline changes, preserve decision history, and assemble evidence packages for oversight and audit conversations.
+Vipari helps teams track repository-level AI control surfaces, review baseline changes, preserve decision history, and assemble evidence packages for oversight and audit conversations.
 
-## Does DriftGuard make us compliant with the EU AI Act?
+## Does Vipari make us compliant with the EU AI Act?
 
-No. DriftGuard supports readiness work such as logging, oversight, monitoring, traceability, and evidence preparation. It does not provide legal advice, legal classification, or a guarantee of compliance.
+No. Vipari supports readiness work such as logging, oversight, monitoring, traceability, and evidence preparation. It does not provide legal advice, legal classification, or a guarantee of compliance.
 
-## What are provenance labels in DriftGuard exports?
+## What are provenance labels in Vipari exports?
 
 Provenance labels explain what kind of output or artifact a reviewer is looking at.
 
@@ -34,6 +34,6 @@ The export can include:
 
 The export is not a full repository archive and is not a legal certification package. Historical backfill content is excluded from raw artifact-content export output.
 
-## How should teams use DriftGuard for AI governance?
+## How should teams use Vipari for AI governance?
 
 Use it to maintain a reviewed baseline, monitor repository change over time, preserve reviewer decisions, and prepare evidence for internal or external oversight discussions.

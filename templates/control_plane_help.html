@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PromptDrift Help Center | DriftGuard</title>
+    <title>Vipari Help Center</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,8 +13,8 @@
 <body class="control-page help-page" data-theme="{{THEME_PREFERENCE}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
-            <a href="/dashboard" class="sidebar-logo" aria-label="DriftGuard home">
-                <span class="sidebar-logo-mark">D</span>
+            <a href="/dashboard" class="sidebar-logo" aria-label="Vipari home">
+                <span class="sidebar-logo-mark">V</span>
             </a>
             <div class="sidebar-panel">
                 <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
@@ -47,7 +47,7 @@
                 </a>
             </div>
             <div class="sidebar-profile-wrap">
-                <a href="/app/profile" class="sidebar-profile-link" aria-label="Profile">D</a>
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="Profile">V</a>
             </div>
         </nav>
 
@@ -115,16 +115,23 @@
                             <a class="help-page-action-card" href="/app/integrations/mcp">
                                 <span class="help-page-action-step">5</span>
                                 <strong>Agent integrations</strong>
-                                <p>Use this when you want to hand PromptDrift tools to an external AI agent through the customer MCP connector.</p>
+                                <p>Use this when you want to hand Vipari tools to an external AI agent through the customer MCP connector.</p>
                             </a>
                         </div>
                     </article>
 
                     <article class="control-page-section help-page-rich-text">
+                        <p class="secondary-panel-title">Why the name</p>
+                        <h2 class="control-page-section-title">Why Vipari</h2>
+                        <p>Vipari is named from <em>viparinamadhamma</em>, the idea that systems we treat as fixed are in fact subject to change.</p>
+                        <p>That fits the product directly: prompts, tools, policies, and model routing all change, and Vipari exists to make those changes visible and reviewable.</p>
+                    </article>
+
+                    <article class="control-page-section help-page-rich-text">
                         <p class="secondary-panel-title">Mental model</p>
-                        <h2 class="control-page-section-title">What PromptDrift is actually doing</h2>
+                        <h2 class="control-page-section-title">What Vipari is actually doing</h2>
                         <pre class="help-page-flow">GitHub repo
-  -> PromptDrift discovers AI-relevant artifacts
+  -> Vipari discovers AI-relevant artifacts
   -> your team approves a baseline
   -> later changes are compared to that baseline
   -> reviewers decide whether the drift is acceptable</pre>
@@ -137,11 +144,11 @@
                         <div class="help-page-compare-grid">
                             <div class="help-page-compare-card">
                                 <strong>Connected repo</strong>
-                                <p>PromptDrift can see the repository in workspace inventory.</p>
+                                <p>Vipari can see the repository in workspace inventory.</p>
                             </div>
                             <div class="help-page-compare-card">
                                 <strong>Onboarded repo</strong>
-                                <p>PromptDrift has analyzed the repo and prepared it for baseline and drift workflows.</p>
+                                <p>Vipari has analyzed the repo and prepared it for baseline and drift workflows.</p>
                             </div>
                         </div>
                         <p>If a repo appears in inventory but not in review workflows, it is usually connected but not fully onboarded yet.</p>
@@ -164,12 +171,12 @@
                         <p class="secondary-panel-title">Glossary</p>
                         <h2 class="control-page-section-title">The concepts operators actually need</h2>
                         <div class="help-page-card-grid help-page-card-grid-tight">
-                            <article class="help-page-topic-card"><strong>Workspace</strong><p>Your organization container inside PromptDrift. It controls members, repo scope, plan access, and automation identities.</p></article>
+                            <article class="help-page-topic-card"><strong>Workspace</strong><p>Your organization container inside Vipari. It controls members, repo scope, plan access, and automation identities.</p></article>
                             <article class="help-page-topic-card"><strong>Baseline</strong><p>The approved reference state. Later repo changes are judged against this, not against a generic policy document.</p></article>
                             <article class="help-page-topic-card"><strong>Drift</strong><p>A meaningful difference between the approved baseline and the current repository state.</p></article>
-                            <article class="help-page-topic-card"><strong>Fresh / stale / missing</strong><p>These labels describe the confidence and recency of evidence. Missing means PromptDrift cannot confirm what it expected to find.</p></article>
-                            <article class="help-page-topic-card"><strong>Prompts / tools / models / governance</strong><p>These are the main artifact families PromptDrift monitors because they shape AI behavior and control coverage.</p></article>
-                            <article class="help-page-topic-card"><strong>Onboarding</strong><p>The setup phase where PromptDrift discovers artifacts, creates history, and prepares the repo for review workflows.</p></article>
+                            <article class="help-page-topic-card"><strong>Fresh / stale / missing</strong><p>These labels describe the confidence and recency of evidence. Missing means Vipari cannot confirm what it expected to find.</p></article>
+                            <article class="help-page-topic-card"><strong>Prompts / tools / models / governance</strong><p>These are the main artifact families Vipari monitors because they shape AI behavior and control coverage.</p></article>
+                            <article class="help-page-topic-card"><strong>Onboarding</strong><p>The setup phase where Vipari discovers artifacts, creates history, and prepares the repo for review workflows.</p></article>
                         </div>
                     </article>
 
