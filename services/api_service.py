@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from config import get_settings
+from .api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
 from .cp_auth import require_cp_principal, require_cp_principal_kind, require_cp_scope, require_cp_workspace_match
 from .control_plane_records import (
     create_control_plane_audit_log,
@@ -80,7 +81,7 @@ from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
-from routers.dashboard import create_dashboard_read_router, create_repo_dashboard_router, create_repo_history_router, create_repo_read_router
+from routers.dashboard import create_dashboard_read_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 from .audit_feedback_records import (
     VALID_FEEDBACK_KINDS,
@@ -92,28 +93,6 @@ from .audit_records import get_pull_request_audit_by_id
 
 # Module-level constant to avoid allocating a new frozenset on every approve request.
 _HUMAN_ONLY_KINDS: frozenset[str] = frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR})
-
-
-class RepositoryOnboardingRequest(BaseModel):
-    installation_id: int
-    commit_limit_per_artifact: int = 10
-    plan_backfill: bool = True
-    execute_backfill: bool = False
-
-
-class RepositoryBackfillRequest(BaseModel):
-    installation_id: int
-
-
-class BaselineDecisionRequest(BaseModel):
-    note: str | None = None
-    actor_login: str | None = None
-
-
-class RepoRebaselineRequest(BaseModel):
-    snapshot_id: int
-    rationale: str | None = None
-    actor_login: str | None = None
 
 
 class ComplianceExportRequest(BaseModel):
@@ -337,166 +316,44 @@ def create_api_app() -> FastAPI:
         )
     )
 
-    @app.post("/api/repos/{repo_full:path}/onboard")
-    async def run_repo_onboarding(repo_full: str, payload: RepositoryOnboardingRequest, request: Request):
-        _require_admin_token(request, settings)
-        jwt_token = generate_jwt(
-            settings.github_app_id,
-            settings.github_private_key_path,
-            settings.resolved_github_private_key,
+    app.include_router(
+        create_repo_onboarding_router(
+            authorize_repo_mutation_fn=lambda request, _repo_full: _require_admin_token(request, settings),
+            resolve_installation_id_fn=lambda _auth_context, installation_id: installation_id,
+            resolve_db_path_fn=lambda: db_path,
+            github_app_id=settings.github_app_id,
+            github_private_key_path=settings.github_private_key_path,
+            generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
+            get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+            onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
+            plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
+            execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
+            build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
         )
-        token = get_installation_token(jwt_token, payload.installation_id)
-        onboarding_result = onboard_repository(
-            db_path,
-            repo_full=repo_full,
-            installation_id=payload.installation_id,
-            token=token,
+    )
+
+    app.include_router(
+        create_repo_baseline_router(
+            authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings),
+            authorize_repo_mutation_fn=lambda request, _repo_full: _require_admin_token(request, settings),
+            resolve_db_path_fn=lambda: db_path,
+            build_repo_dashboard_view_fn=build_repo_dashboard_view,
+            build_repo_journey_fn=build_repo_journey,
+            promote_latest_source_to_onboarding_baseline_fn=promote_latest_source_to_onboarding_baseline,
+            build_repo_baseline_review_panel_fn=build_repo_baseline_review_panel,
+            approve_repo_baseline_artifact_fn=approve_repo_baseline_artifact,
+            reject_repo_baseline_artifact_fn=reject_repo_baseline_artifact,
+            approve_repo_baseline_fn=approve_repo_baseline,
+            reject_repo_baseline_fn=reject_repo_baseline,
+            rebaseline_repo_from_snapshot_fn=rebaseline_repo_from_snapshot,
+            resolve_actor_login_fn=lambda _request, payload: payload.actor_login,
+            github_app_id=settings.github_app_id,
+            github_private_key_path=settings.github_private_key_path,
+            generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
+            get_installation_token_fn=get_installation_token,
+            fetch_file_content_fn=fetch_file_content,
         )
-        planned_jobs = []
-        if payload.plan_backfill:
-            planned_jobs = plan_repository_history_backfill(
-                db_path,
-                repo_full=repo_full,
-                token=token,
-                commit_limit_per_artifact=payload.commit_limit_per_artifact,
-            )
-        executed_jobs = []
-        if payload.execute_backfill:
-            executed_jobs = execute_repository_history_backfill(db_path, repo_full=repo_full, token=token)
-        logger.info("Processed onboarding request", extra={"repo": repo_full})
-        return JSONResponse(
-            {
-                "repo_full": repo_full,
-                "onboarding_id": onboarding_result.onboarding.id,
-                "discovered_artifact_count": len(onboarding_result.artifacts),
-                "baseline_version_count": len(onboarding_result.baseline_versions),
-                "planned_backfill_job_count": len(planned_jobs),
-                "executed_backfill_job_count": len(executed_jobs),
-                "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
-            }
-        )
-
-    @app.post("/api/repos/{repo_full:path}/backfill")
-    async def run_repo_backfill(repo_full: str, payload: RepositoryBackfillRequest, request: Request):
-        _require_admin_token(request, settings)
-        jwt_token = generate_jwt(
-            settings.github_app_id,
-            settings.github_private_key_path,
-            settings.resolved_github_private_key,
-        )
-        token = get_installation_token(jwt_token, payload.installation_id)
-        executed_jobs = execute_repository_history_backfill(db_path, repo_full=repo_full, token=token)
-        return JSONResponse(
-            {
-                "repo_full": repo_full,
-                "executed_backfill_job_count": len(executed_jobs),
-                "completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
-                "failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
-                "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
-            }
-        )
-
-    @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
-    async def promote_artifact_baseline(repo_full: str, artifact_path: str, request: Request):
-        _require_admin_token(request, settings)
-        baseline = promote_latest_source_to_onboarding_baseline(db_path, repo_full, artifact_path)
-        if baseline is None:
-            raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
-        build_repo_journey(db_path, repo_full)
-        return JSONResponse(
-            {
-                "repo_full": repo_full,
-                "artifact_path": artifact_path,
-                "baseline": asdict(baseline),
-                "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full)),
-            }
-        )
-
-    @app.get("/api/repos/{repo_full:path}/baseline/pending")
-    def pending_repo_baselines(repo_full: str, request: Request):
-        _require_admin_token(request, settings)
-        panel = build_repo_baseline_review_panel(db_path, repo_full)
-        if panel is None:
-            raise HTTPException(status_code=404, detail="Repository onboarding was not found.")
-        return JSONResponse(asdict(panel))
-
-    @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
-    async def approve_artifact_baseline(repo_full: str, artifact_path: str, payload: BaselineDecisionRequest, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            baseline = approve_repo_baseline_artifact(
-                db_path,
-                repo_full=repo_full,
-                artifact_path=artifact_path,
-                actor_login=payload.actor_login,
-                approval_note=payload.note,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
-
-    @app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
-    async def reject_artifact_baseline(repo_full: str, artifact_path: str, payload: BaselineDecisionRequest, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            baseline = reject_repo_baseline_artifact(
-                db_path,
-                repo_full=repo_full,
-                artifact_path=artifact_path,
-                actor_login=payload.actor_login,
-                approval_note=payload.note,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
-
-    @app.post("/api/repos/{repo_full:path}/baseline/approve")
-    async def approve_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            baselines = approve_repo_baseline(
-                db_path,
-                repo_full=repo_full,
-                actor_login=payload.actor_login,
-                approval_note=payload.note,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"repo_full": repo_full, "approved_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
-
-    @app.post("/api/repos/{repo_full:path}/baseline/reject")
-    async def reject_repo_baseline_candidate(repo_full: str, payload: BaselineDecisionRequest, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            baselines = reject_repo_baseline(
-                db_path,
-                repo_full=repo_full,
-                actor_login=payload.actor_login,
-                approval_note=payload.note,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"repo_full": repo_full, "rejected_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
-
-    @app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
-    async def rebaseline_repo(repo_full: str, payload: RepoRebaselineRequest, request: Request):
-        _require_admin_token(request, settings)
-        try:
-            baselines = rebaseline_repo_from_snapshot(
-                db_path,
-                repo_full=repo_full,
-                snapshot_id=payload.snapshot_id,
-                rationale=payload.rationale,
-                actor_login=payload.actor_login,
-                github_app_id=settings.github_app_id,
-                github_private_key_path=settings.github_private_key_path,
-                generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
-                get_installation_token_fn=get_installation_token,
-                fetch_file_content_fn=fetch_file_content,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(build_repo_dashboard_view(db_path, repo_full))})
+    )
 
     @app.post("/api/repos/{repo_full:path}/export/compliance")
     async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):

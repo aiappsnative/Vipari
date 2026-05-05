@@ -170,6 +170,7 @@ from services.repo_journey import build_repo_journey, compare_repo_snapshots, ge
 from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
+from services.api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
 from services.workspace_access import (
     build_access_context as build_workspace_access_context,
     current_authenticated_identity_context as current_workspace_authenticated_identity_context,
@@ -177,7 +178,7 @@ from services.workspace_access import (
     get_session as get_workspace_session,
     require_dashboard_access as require_workspace_dashboard_access,
 )
-from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_dashboard_router, create_repo_history_router, create_repo_read_router
+from routers.dashboard import create_compliance_api_router, create_dashboard_read_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
 
 settings = get_settings()
@@ -260,26 +261,6 @@ async def lifespan(_: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
 app.include_router(create_health_router(settings))
-
-
-class RepositoryOnboardingRequest(BaseModel):
-    installation_id: int
-    commit_limit_per_artifact: int = 10
-    plan_backfill: bool = True
-    execute_backfill: bool = False
-
-
-class RepositoryBackfillRequest(BaseModel):
-    installation_id: int
-
-
-class BaselineDecisionRequest(BaseModel):
-    note: str | None = None
-
-
-class RepoRebaselineRequest(BaseModel):
-    snapshot_id: int
-    rationale: str | None = None
 
 
 class BillingHandoffActivationRequest(BaseModel):
@@ -2170,7 +2151,6 @@ async def revoke_api_key(
     workspace = access_context["workspace"]
     session = access_context["session"]
 
-    # IDOR guard — verify the principal belongs to this workspace
     principal = get_machine_principal_by_client_id(AUDIT_DB_PATH, client_id)
     if principal is None or principal.workspace_id != workspace.id:
         raise HTTPException(status_code=403, detail="Not authorized.")
@@ -2296,6 +2276,7 @@ async def mcp_broker_invoke(request: Request, payload: McpBrokerInvokeRequest):
         settings=settings,
         db_path=AUDIT_DB_PATH,
     )
+
     result = invoke_mcp_broker_tool(
         payload.tool_name,
         payload.arguments,
@@ -3552,73 +3533,23 @@ app.include_router(
 )
 
 
-@app.post("/api/repos/{repo_full:path}/onboard")
-async def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
-    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
-    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
-    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, installation_id)
-
-    onboarding_result = onboard_repository(
-        AUDIT_DB_PATH,
-        repo_full=repo_full,
-        installation_id=installation_id,
-        token=token,
+app.include_router(
+    create_repo_onboarding_router(
+        authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
+        resolve_installation_id_fn=lambda access_context, installation_id: _trusted_workspace_installation_id(access_context, installation_id),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        github_app_id=GITHUB_APP_ID,
+        github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path),
+        get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+        onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
+        plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
+        execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
+        build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
     )
-    planned_jobs = []
-    if payload.plan_backfill:
-        planned_jobs = plan_repository_history_backfill(
-            AUDIT_DB_PATH,
-            repo_full=repo_full,
-            token=token,
-            commit_limit_per_artifact=payload.commit_limit_per_artifact,
-        )
-    executed_jobs = []
-    if payload.execute_backfill:
-        executed_jobs = execute_repository_history_backfill(
-            AUDIT_DB_PATH,
-            repo_full=repo_full,
-            token=token,
-        )
-
-    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
-    return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "onboarding_id": onboarding_result.onboarding.id,
-            "discovered_artifact_count": len(onboarding_result.artifacts),
-            "baseline_version_count": len(onboarding_result.baseline_versions),
-            "planned_backfill_job_count": len(planned_jobs),
-            "executed_backfill_job_count": len(executed_jobs),
-            "dashboard": asdict(dashboard),
-        }
-    )
+)
 
 
-@app.post("/api/repos/{repo_full:path}/backfill")
-async def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
-    access_context = _require_repo_dashboard_mutation_access(request, repo_full)
-    installation_id = _trusted_workspace_installation_id(access_context, payload.installation_id)
-    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
-    token = get_installation_token(jwt_token, installation_id)
-    executed_jobs = execute_repository_history_backfill(
-        AUDIT_DB_PATH,
-        repo_full=repo_full,
-        token=token,
-    )
-    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
-    return JSONResponse(
-        {
-            "repo_full": repo_full,
-            "executed_backfill_job_count": len(executed_jobs),
-            "completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
-            "failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
-            "dashboard": asdict(dashboard),
-        }
-    )
-
-
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline")
 async def promote_artifact_baseline(request: Request, repo_full: str, artifact_path: str):
     _require_repo_dashboard_mutation_access(request, repo_full)
     baseline = promote_latest_source_to_onboarding_baseline(AUDIT_DB_PATH, repo_full, artifact_path)
@@ -3636,7 +3567,6 @@ async def promote_artifact_baseline(request: Request, repo_full: str, artifact_p
     )
 
 
-@app.get("/api/repos/{repo_full:path}/baseline/pending")
 def pending_repo_baselines(request: Request, repo_full: str):
     _require_repo_dashboard_read_access(request, repo_full)
     panel = build_repo_baseline_review_panel(AUDIT_DB_PATH, repo_full)
@@ -3645,7 +3575,6 @@ def pending_repo_baselines(request: Request, repo_full: str):
     return JSONResponse(asdict(panel))
 
 
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve")
 async def approve_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3662,7 +3591,6 @@ async def approve_artifact_baseline(request: Request, repo_full: str, artifact_p
     return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
 
 
-@app.post("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject")
 async def reject_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3679,7 +3607,6 @@ async def reject_artifact_baseline(request: Request, repo_full: str, artifact_pa
     return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/approve")
 async def approve_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3701,7 +3628,6 @@ async def approve_repo_baseline_candidate(request: Request, repo_full: str, payl
     )
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/reject")
 async def reject_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3723,7 +3649,6 @@ async def reject_repo_baseline_candidate(request: Request, repo_full: str, paylo
     )
 
 
-@app.post("/api/repos/{repo_full:path}/baseline/rebaseline")
 async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
     _require_repo_dashboard_mutation_access(request, repo_full)
     try:
@@ -3747,6 +3672,34 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+
+app.include_router(
+    create_repo_baseline_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
+        authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
+        resolve_db_path_fn=lambda: AUDIT_DB_PATH,
+        build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
+        build_repo_journey_fn=lambda active_db_path, repo_full: build_repo_journey(active_db_path, repo_full),
+        promote_latest_source_to_onboarding_baseline_fn=lambda active_db_path, repo_full, artifact_path: promote_latest_source_to_onboarding_baseline(active_db_path, repo_full, artifact_path),
+        build_repo_baseline_review_panel_fn=lambda active_db_path, repo_full: build_repo_baseline_review_panel(active_db_path, repo_full),
+        approve_repo_baseline_artifact_fn=lambda active_db_path, **kwargs: approve_repo_baseline_artifact(active_db_path, **kwargs),
+        reject_repo_baseline_artifact_fn=lambda active_db_path, **kwargs: reject_repo_baseline_artifact(active_db_path, **kwargs),
+        approve_repo_baseline_fn=lambda active_db_path, **kwargs: approve_repo_baseline(active_db_path, **kwargs),
+        reject_repo_baseline_fn=lambda active_db_path, **kwargs: reject_repo_baseline(active_db_path, **kwargs),
+        rebaseline_repo_from_snapshot_fn=lambda active_db_path, **kwargs: rebaseline_repo_from_snapshot(active_db_path, **kwargs),
+        resolve_actor_login_fn=lambda request, _payload: _dashboard_actor_login(request),
+        github_app_id=GITHUB_APP_ID,
+        github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
+        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(
+            app_id,
+            private_key_path,
+            settings.resolved_github_private_key,
+        ),
+        get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+        fetch_file_content_fn=lambda repo, path, token, ref: fetch_file_content(repo, path, token, ref),
+    )
+)
 
 
 @app.post("/api/repos/{repo_full:path}/export/compliance")

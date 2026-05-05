@@ -7,6 +7,8 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from services.api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+
 
 def create_dashboard_read_router(
 	*,
@@ -149,6 +151,243 @@ def create_repo_dashboard_router(
 
 	router.add_api_route("/api/repos/{repo_full:path}/dashboard", repo_dashboard, methods=["GET"])
 	router.add_api_route("/api/repos/{repo_full:path}/export/history", export_history, methods=["GET"])
+	return router
+
+
+def create_repo_onboarding_router(
+	*,
+	authorize_repo_mutation_fn: Callable,
+	resolve_installation_id_fn: Callable,
+	resolve_db_path_fn: Callable[[], str],
+	github_app_id: str,
+	github_private_key_path: str,
+	generate_jwt_fn: Callable,
+	get_installation_token_fn: Callable,
+	onboard_repository_fn: Callable,
+	plan_repository_history_backfill_fn: Callable,
+	execute_repository_history_backfill_fn: Callable,
+	build_repo_dashboard_view_fn: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+
+	def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
+		auth_context = authorize_repo_mutation_fn(request, repo_full)
+		installation_id = resolve_installation_id_fn(auth_context, payload.installation_id)
+		jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+		token = get_installation_token_fn(jwt_token, installation_id)
+		db_path = resolve_db_path_fn()
+
+		onboarding_result = onboard_repository_fn(
+			db_path,
+			repo_full=repo_full,
+			installation_id=installation_id,
+			token=token,
+		)
+		planned_jobs = []
+		if payload.plan_backfill:
+			planned_jobs = plan_repository_history_backfill_fn(
+				db_path,
+				repo_full=repo_full,
+				token=token,
+				commit_limit_per_artifact=payload.commit_limit_per_artifact,
+			)
+		executed_jobs = []
+		if payload.execute_backfill:
+			executed_jobs = execute_repository_history_backfill_fn(
+				db_path,
+				repo_full=repo_full,
+				token=token,
+			)
+
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse(
+			{
+				"repo_full": repo_full,
+				"onboarding_id": onboarding_result.onboarding.id,
+				"discovered_artifact_count": len(onboarding_result.artifacts),
+				"baseline_version_count": len(onboarding_result.baseline_versions),
+				"planned_backfill_job_count": len(planned_jobs),
+				"executed_backfill_job_count": len(executed_jobs),
+				"dashboard": asdict(dashboard),
+			}
+		)
+
+	def run_repo_backfill(request: Request, repo_full: str, payload: RepositoryBackfillRequest):
+		auth_context = authorize_repo_mutation_fn(request, repo_full)
+		installation_id = resolve_installation_id_fn(auth_context, payload.installation_id)
+		jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+		token = get_installation_token_fn(jwt_token, installation_id)
+		db_path = resolve_db_path_fn()
+		executed_jobs = execute_repository_history_backfill_fn(
+			db_path,
+			repo_full=repo_full,
+			token=token,
+		)
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse(
+			{
+				"repo_full": repo_full,
+				"executed_backfill_job_count": len(executed_jobs),
+				"completed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "completed"),
+				"failed_backfill_job_count": sum(1 for result in executed_jobs if result.job.status == "failed"),
+				"dashboard": asdict(dashboard),
+			}
+		)
+
+	router.add_api_route("/api/repos/{repo_full:path}/onboard", run_repo_onboarding, methods=["POST"])
+	router.add_api_route("/api/repos/{repo_full:path}/backfill", run_repo_backfill, methods=["POST"])
+	return router
+
+
+def create_repo_baseline_router(
+	*,
+	authorize_repo_read_fn: Callable,
+	authorize_repo_mutation_fn: Callable,
+	resolve_db_path_fn: Callable[[], str],
+	build_repo_dashboard_view_fn: Callable,
+	build_repo_journey_fn: Callable,
+	promote_latest_source_to_onboarding_baseline_fn: Callable,
+	build_repo_baseline_review_panel_fn: Callable,
+	approve_repo_baseline_artifact_fn: Callable,
+	reject_repo_baseline_artifact_fn: Callable,
+	approve_repo_baseline_fn: Callable,
+	reject_repo_baseline_fn: Callable,
+	rebaseline_repo_from_snapshot_fn: Callable,
+	resolve_actor_login_fn: Callable,
+	github_app_id: str,
+	github_private_key_path: str,
+	generate_jwt_fn: Callable,
+	get_installation_token_fn: Callable,
+	fetch_file_content_fn: Callable,
+) -> APIRouter:
+	router = APIRouter(tags=["dashboard"])
+
+	def promote_artifact_baseline(request: Request, repo_full: str, artifact_path: str):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		baseline = promote_latest_source_to_onboarding_baseline_fn(db_path, repo_full, artifact_path)
+		if baseline is None:
+			raise HTTPException(status_code=404, detail="No stored source version is available to promote as baseline.")
+		build_repo_journey_fn(db_path, repo_full)
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse(
+			{
+				"repo_full": repo_full,
+				"artifact_path": artifact_path,
+				"baseline": asdict(baseline),
+				"dashboard": asdict(dashboard),
+			}
+		)
+
+	def pending_repo_baselines(request: Request, repo_full: str):
+		authorize_repo_read_fn(request, repo_full)
+		panel = build_repo_baseline_review_panel_fn(resolve_db_path_fn(), repo_full)
+		if panel is None:
+			raise HTTPException(status_code=404, detail="Repository onboarding was not found.")
+		return JSONResponse(asdict(panel))
+
+	def approve_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			baseline = approve_repo_baseline_artifact_fn(
+				db_path,
+				repo_full=repo_full,
+				artifact_path=artifact_path,
+				actor_login=resolve_actor_login_fn(request, payload),
+				approval_note=payload.note,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+	def reject_artifact_baseline(request: Request, repo_full: str, artifact_path: str, payload: BaselineDecisionRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			baseline = reject_repo_baseline_artifact_fn(
+				db_path,
+				repo_full=repo_full,
+				artifact_path=artifact_path,
+				actor_login=resolve_actor_login_fn(request, payload),
+				approval_note=payload.note,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "baseline": asdict(baseline), "dashboard": asdict(dashboard)})
+
+	def approve_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			baselines = approve_repo_baseline_fn(
+				db_path,
+				repo_full=repo_full,
+				actor_login=resolve_actor_login_fn(request, payload),
+				approval_note=payload.note,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "approved_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+	def reject_repo_baseline_candidate(request: Request, repo_full: str, payload: BaselineDecisionRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			baselines = reject_repo_baseline_fn(
+				db_path,
+				repo_full=repo_full,
+				actor_login=resolve_actor_login_fn(request, payload),
+				approval_note=payload.note,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "rejected_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+	def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			baselines = rebaseline_repo_from_snapshot_fn(
+				db_path,
+				repo_full=repo_full,
+				snapshot_id=payload.snapshot_id,
+				rationale=payload.rationale,
+				actor_login=resolve_actor_login_fn(request, payload),
+				github_app_id=github_app_id,
+				github_private_key_path=github_private_key_path,
+				generate_jwt_fn=generate_jwt_fn,
+				get_installation_token_fn=get_installation_token_fn,
+				fetch_file_content_fn=fetch_file_content_fn,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+
+	router.add_api_route(
+		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline",
+		promote_artifact_baseline,
+		methods=["POST"],
+	)
+	router.add_api_route("/api/repos/{repo_full:path}/baseline/pending", pending_repo_baselines, methods=["GET"])
+	router.add_api_route(
+		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/approve",
+		approve_artifact_baseline,
+		methods=["POST"],
+	)
+	router.add_api_route(
+		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline/reject",
+		reject_artifact_baseline,
+		methods=["POST"],
+	)
+	router.add_api_route("/api/repos/{repo_full:path}/baseline/approve", approve_repo_baseline_candidate, methods=["POST"])
+	router.add_api_route("/api/repos/{repo_full:path}/baseline/reject", reject_repo_baseline_candidate, methods=["POST"])
+	router.add_api_route("/api/repos/{repo_full:path}/baseline/rebaseline", rebaseline_repo, methods=["POST"])
 	return router
 
 
