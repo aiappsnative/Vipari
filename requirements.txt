@@ -4,14 +4,14 @@ PyGithub==2.8.1
 openai==2.26.0
 python-dotenv==1.2.2
 PyJWT==2.12.0
-cryptography==46.0.5
+cryptography==46.0.7
 boto3==1.42.82
 prometheus-client==0.24.1
 prometheus-fastapi-instrumentator==7.1.0
 pydantic-settings==2.13.1
 redis==7.4.0
-python-multipart==0.0.24
+python-multipart==0.0.26
 psycopg[binary]==3.2.9
 
 # test dependencies
-pytest==9.0.2
+pytest==9.0.3
