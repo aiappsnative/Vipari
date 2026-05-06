@@ -114,13 +114,14 @@ def require_dashboard_access(
     db_path: str,
     request: Request,
     *,
+    allow_local_debug: bool = False,
     local_debug_context_factory: Callable[[], dict[str, object] | None] | None = None,
 ) -> dict[str, object]:
     access_context = current_workspace_context(
         settings,
         db_path,
         request,
-        allow_local_debug=False,
+        allow_local_debug=allow_local_debug,
         local_debug_context_factory=local_debug_context_factory,
     )
     if not access_context["resolution"].can_access_dashboard:
@@ -133,12 +134,14 @@ def require_dashboard_read_access(
     db_path: str,
     request: Request,
     *,
+    allow_local_debug: bool = False,
     local_debug_context_factory: Callable[[], dict[str, object] | None] | None = None,
 ) -> dict[str, object]:
     return require_dashboard_access(
         settings,
         db_path,
         request,
+        allow_local_debug=allow_local_debug,
         local_debug_context_factory=local_debug_context_factory,
     )
 
@@ -149,12 +152,14 @@ def require_repo_dashboard_read_access(
     request: Request,
     repo_full: str,
     *,
+    allow_local_debug: bool = False,
     local_debug_context_factory: Callable[[], dict[str, object] | None] | None = None,
 ) -> dict[str, object]:
     access_context = require_dashboard_read_access(
         settings,
         db_path,
         request,
+        allow_local_debug=allow_local_debug,
         local_debug_context_factory=local_debug_context_factory,
     )
     workspace = access_context["workspace"]
@@ -174,12 +179,14 @@ def require_repo_dashboard_mutation_access(
     request: Request,
     repo_full: str,
     *,
+    allow_local_debug: bool = False,
     local_debug_context_factory: Callable[[], dict[str, object] | None] | None = None,
 ) -> dict[str, object]:
     access_context = require_dashboard_access(
         settings,
         db_path,
         request,
+        allow_local_debug=allow_local_debug,
         local_debug_context_factory=local_debug_context_factory,
     )
     workspace = access_context["workspace"]

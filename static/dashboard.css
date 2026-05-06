@@ -2173,6 +2173,66 @@ strong {
     background: var(--color-surface-2);
 }
 
+.repo-audit-workflow {
+    gap: var(--space-3);
+}
+
+.repo-audit-workflow-intro {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 10%, var(--color-surface-glass-3)) 0%, var(--color-surface-glass-3) 100%);
+}
+
+.audit-workflow-step {
+    gap: var(--space-3);
+    padding: 14px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 88%, var(--color-primary-soft)) 0%, var(--color-surface-2) 100%);
+}
+
+.audit-workflow-step-clear {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 92%, var(--color-success-soft)) 0%, var(--color-surface-2) 100%);
+}
+
+.audit-workflow-step-head {
+    display: flex;
+    align-items: start;
+    gap: var(--space-3);
+}
+
+.audit-step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
+    background: color-mix(in srgb, var(--color-primary-soft) 72%, var(--color-surface-2));
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    flex: 0 0 auto;
+}
+
+.audit-step-eyebrow {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.audit-step-actions {
+    margin-top: var(--space-1);
+}
+
+.audit-workflow-footer {
+    padding-top: var(--space-1);
+}
+
+@media (max-width: 640px) {
+    .audit-workflow-step-head {
+        flex-direction: column;
+    }
+}
+
 .artifact-card-head {
     display: flex;
     justify-content: space-between;
@@ -4910,6 +4970,11 @@ body.repo-audit-page[data-theme="light"] {
 .repo-audit-page .repo-tab-panel[hidden],
 .repo-audit-page [data-repo-tab-child][hidden] {
     display: none !important;
+}
+
+.repo-audit-page .repo-tab-panel[hidden] .secondary-details-summary::after,
+.repo-audit-page [data-repo-tab-child][hidden] .secondary-details-summary::after {
+    content: none;
 }
 
 .repo-audit-page .main-columns,

@@ -147,6 +147,7 @@ def render_repo_dashboard_page(
         .replace("{{DASHBOARD_DEEP_LINK_HEAD_SHA}}", _shell_data_value(deep_link_head_sha))
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
+        .replace("{{REPO_TAB_AUDIT_URL}}", f"{base_url}/audit{query_suffix.replace('&', '?', 1)}" if query_suffix else f"{base_url}/audit")
         .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift{query_suffix}")
         .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control{query_suffix}")
         .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline{query_suffix}")

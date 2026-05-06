@@ -523,16 +523,19 @@ def test_dashboard_html_pages_render(tmp_path):
     assert repo_response.status_code == 200
     repo_text = repo_response.text.lower()
     assert "audit page" in repo_text
+    assert "audit brief" in repo_text
     assert "governance attention" in repo_text
     assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
     assert "attribute profile" in repo_text
     assert "control surface coverage" in repo_text
-    assert "drift storyline" in repo_text
+    assert "supporting history" in repo_text
+    assert "review plan" in repo_text
     assert "baseline-review-panel" in repo_response.text
     assert "Baseline Review" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
-    assert '?tab=drift#repo-triage-section' in repo_response.text
+    assert 'data-repo-tab-link="audit"' in repo_response.text
+    assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
     assert "available repositories" not in repo_text
     assert "/api/dashboard/overview" not in repo_response.text
 
@@ -546,8 +549,28 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "renderRepoAtlasCard" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "function repoTabUrl" in repo_js_response.text
-    assert 'repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })' in repo_js_response.text
+    assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
+    assert "audit-workflow-step-head" in repo_js_response.text
+    assert "Review the flagged change" in repo_js_response.text
+    assert "Compare repository context" in repo_js_response.text
+    assert "Prepare the handoff" in repo_js_response.text
+
+
+def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-audit.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI/audit")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="audit"' in response.text
+    assert 'data-repo-tab-link="audit"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI/audit"' in response.text
+    assert 'data-repo-tab-panel="audit drift"' in response.text
+    assert 'data-repo-tab-child="audit baseline"' in response.text
+    assert 'id="repo-baseline-review-section" data-repo-tab-child="audit baseline"' in response.text
 
 
 def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):

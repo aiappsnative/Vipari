@@ -90,6 +90,7 @@
             </section>
             <main class="page-scroll" id="top">
                 <section class="repo-audit-anchor-bar" aria-label="Repository tabs">
+                    <a class="repo-audit-anchor" data-repo-tab-link="audit" href="{{REPO_TAB_AUDIT_URL}}">Audit</a>
                     <a class="repo-audit-anchor" data-repo-tab-link="drift" href="{{REPO_TAB_DRIFT_URL}}">Drift</a>
                     <a class="repo-audit-anchor" data-repo-tab-link="version-control" href="{{REPO_TAB_VERSION_CONTROL_URL}}">Version control</a>
                     <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Baseline &amp; artifacts</a>
@@ -97,7 +98,40 @@
                     <a class="repo-audit-anchor" data-repo-tab-link="reports" href="{{REPO_TAB_REPORTS_URL}}">Reports</a>
                 </section>
 
-                <section class="repo-decision-section card-shell repo-tab-panel" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="drift">
+                <section class="card-shell repo-tab-panel" id="repo-audit-brief-section" aria-label="Audit brief" data-repo-tab-panel="audit">
+                    <div class="repo-decision-header">
+                        <div class="repo-decision-title-row">
+                            <span class="repo-decision-title">Audit brief</span>
+                            <span id="repo-audit-brief-posture" class="severity-badge severity-medium"><span class="skeleton-inline" aria-hidden="true"></span></span>
+                        </div>
+                        <div class="repo-decision-subtitle" id="repo-audit-brief-summary"><span class="skeleton-line skeleton-line-medium" aria-hidden="true"></span></div>
+                    </div>
+                    <div class="repo-decision-body">
+                        <div class="repo-decision-col">
+                            <div class="repo-decision-label">Why you are seeing this</div>
+                            <div id="repo-audit-brief-why" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading audit explanation...</span>
+                                <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-long"></span><span class="skeleton-line skeleton-line-medium"></span></div>
+                            </div>
+                        </div>
+                        <div class="repo-decision-col">
+                            <div class="repo-decision-label">Next actions</div>
+                            <div id="repo-audit-brief-actions" class="loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading audit actions...</span>
+                                <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-medium"></span><span class="skeleton-line skeleton-line-medium"></span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stack compact-stack" style="margin-top: 1rem;">
+                        <div class="repo-decision-label">Top evidence</div>
+                        <div id="repo-audit-brief-findings" class="loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading audit findings...</span>
+                            <div class="skeleton-stack" aria-hidden="true"><span class="skeleton-line skeleton-line-long"></span><span class="skeleton-line skeleton-line-long"></span><span class="skeleton-line skeleton-line-medium"></span></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="repo-decision-section card-shell repo-tab-panel" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="audit drift">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Decision</span>
@@ -201,11 +235,11 @@
                     </aside>
                 </section>
 
-                <section class="secondary-row repo-tab-panel" data-repo-tab-panel="drift">
+                <section class="secondary-row repo-tab-panel" data-repo-tab-panel="audit drift">
                     <div class="secondary-panel" id="repo-storyline-section">
-                        <div class="secondary-panel-title">Drift storyline</div>
+                        <div class="secondary-panel-title" id="repo-storyline-title">Supporting history</div>
                         <div id="featured-storyline" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading selected artifact storyline...</span>
+                            <span class="visually-hidden">Loading supporting history...</span>
                             <div class="skeleton-stack" aria-hidden="true">
                                 <div class="skeleton-block"></div>
                                 <span class="skeleton-line skeleton-line-medium"></span>
@@ -322,18 +356,18 @@
                     </div>
                 </section>
 
-                <section class="secondary-grid repo-actions-grid repo-tab-panel" id="repo-actions-section" data-repo-tab-panel="baseline reports">
-                    <div class="secondary-panel repo-actions-panel" data-repo-tab-child="baseline">
-                        <div class="secondary-panel-title">Review target</div>
+                <section class="secondary-grid repo-actions-grid repo-tab-panel" id="repo-actions-section" data-repo-tab-panel="audit baseline reports">
+                    <div class="secondary-panel repo-actions-panel" data-repo-tab-child="audit baseline">
+                        <div class="secondary-panel-title">Review plan</div>
                         <div id="repo-actions-review" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading recommended review target...</span>
+                            <span class="visually-hidden">Loading recommended review plan...</span>
                             <div class="skeleton-stack" aria-hidden="true">
                                 <span class="skeleton-line skeleton-line-medium"></span>
                                 <span class="skeleton-line skeleton-line-long"></span>
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel" id="repo-baseline-review-section" data-repo-tab-child="baseline">
+                    <div class="secondary-panel" id="repo-baseline-review-section" data-repo-tab-child="audit baseline">
                         <div class="secondary-panel-title">Baseline Review</div>
                         <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading baseline review state...</span>

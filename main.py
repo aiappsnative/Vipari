@@ -432,6 +432,21 @@ def _local_debug_workspace_context() -> dict[str, object] | None:
     workspace = get_workspace_by_id(AUDIT_DB_PATH, int(row["id"]))
     if workspace is None:
         return None
+    allocated_repo_count, onboarded_repo_count = count_workspace_repo_allocations(AUDIT_DB_PATH, workspace.id)
+    resolution = resolve_workspace_access_state(
+        WorkspaceAccessSnapshot(
+            is_authenticated=True,
+            has_workspace=True,
+            has_membership=True,
+            role="owner",
+            has_subscription_record=True,
+            dashboard_enabled=True,
+            pr_comments_enabled=True,
+            has_linked_installation=True,
+            allocated_repo_count=max(allocated_repo_count, 1),
+            onboarded_repo_count=max(onboarded_repo_count, 1),
+        )
+    )
     return {
         "session": None,
         "user": None,
@@ -441,7 +456,7 @@ def _local_debug_workspace_context() -> dict[str, object] | None:
         "entitlement": get_workspace_entitlement(AUDIT_DB_PATH, workspace.id),
         "installation": get_workspace_installation(AUDIT_DB_PATH, workspace.id),
         "workspace": workspace,
-        "resolution": None,
+        "resolution": resolution,
     }
 
 
@@ -821,17 +836,18 @@ def _current_authenticated_identity_context(request: Request) -> dict[str, objec
     return current_workspace_authenticated_identity_context(settings, AUDIT_DB_PATH, request)
 
 
-def _require_dashboard_access(request: Request) -> dict[str, object]:
+def _require_dashboard_access(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
     return require_workspace_dashboard_access(
         settings,
         AUDIT_DB_PATH,
         request,
+        allow_local_debug=allow_local_debug,
         local_debug_context_factory=_local_debug_workspace_context,
     )
 
 
-def _require_dashboard_read_access(request: Request) -> dict[str, object]:
-    return _require_dashboard_access(request)
+def _require_dashboard_read_access(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
+    return _require_dashboard_access(request, allow_local_debug=allow_local_debug)
 
 
 def _current_theme_preference(request: Request) -> str:
@@ -970,7 +986,7 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
-    access_context = _require_dashboard_read_access(request)
+    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
@@ -983,7 +999,7 @@ def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dic
 
 
 def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) -> dict[str, object]:
-    access_context = _require_dashboard_access(request)
+    access_context = _require_dashboard_access(request, allow_local_debug=_local_debug_dashboard_enabled())
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
@@ -3365,6 +3381,14 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
 
 
 async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
+    return await _render_dashboard_repo_page(request, repo_full, requested_tab=tab, artifact=artifact, pr=pr, head_sha=head_sha)
+
+
+async def dashboard_repo_audit_page(request: Request, repo_full: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
+    return await _render_dashboard_repo_page(request, repo_full, requested_tab="audit", artifact=artifact, pr=pr, head_sha=head_sha)
+
+
+async def _render_dashboard_repo_page(request: Request, repo_full: str, *, requested_tab: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
@@ -3376,8 +3400,8 @@ async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drif
     if shell_mode and not _repo_visible_for_dashboard_shell(access_context, repo_full):
         raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
     render_started = time.perf_counter()
-    active_tab = tab.strip().lower() if tab else "drift"
-    if active_tab not in {"drift", "version-control", "baseline", "compliance", "reports"}:
+    active_tab = requested_tab.strip().lower() if requested_tab else "drift"
+    if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
         active_tab = "drift"
     shell_state = "active"
     shell_title = ""
@@ -3411,7 +3435,7 @@ async def list_repos(request: Request):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_read_access(request)
+    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3435,7 +3459,7 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_read_access(request)
+    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3466,7 +3490,7 @@ def persistence_status(request: Request):
 
 
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
-    access_context = _require_dashboard_read_access(request)
+    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
     visibility = _dashboard_repo_visibility(access_context)
     result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
@@ -3481,6 +3505,7 @@ app.include_router(
     create_dashboard_page_router(
         dashboard_index_handler=dashboard_index_page,
         dashboard_repo_handler=dashboard_repo_page,
+        dashboard_repo_audit_handler=dashboard_repo_audit_page,
     )
 )
 

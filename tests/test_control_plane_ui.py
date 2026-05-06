@@ -2656,8 +2656,8 @@ def test_dashboard_local_debug_disable_login_uses_first_workspace_without_sessio
         overview_response = local_client.get("/api/dashboard/overview")
 
     assert dashboard_response.status_code == 200
-    assert overview_response.status_code == 401
-    assert overview_response.json()["detail"] == "Authentication required."
+    assert overview_response.status_code == 200
+    assert overview_response.json()["repos"] == []
 
     main.settings.service_role = original_service_role
     main.settings.local_debug_disable_login = original_local_debug_disable_login

@@ -287,9 +287,11 @@ def create_dashboard_page_router(
 	*,
 	dashboard_index_handler: Callable,
 	dashboard_repo_handler: Callable,
+	dashboard_repo_audit_handler: Callable,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	router.add_api_route("/dashboard", dashboard_index_handler, methods=["GET"], response_class=HTMLResponse)
+	router.add_api_route("/dashboard/{repo_full:path}/audit", dashboard_repo_audit_handler, methods=["GET"], response_class=HTMLResponse)
 	router.add_api_route("/dashboard/{repo_full:path}", dashboard_repo_handler, methods=["GET"], response_class=HTMLResponse)
 	return router
 

@@ -23,7 +23,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
-const VALID_REPO_TABS = new Set(["drift", "version-control", "baseline", "compliance", "reports"]);
+const VALID_REPO_TABS = new Set(["audit", "drift", "version-control", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -50,6 +50,33 @@ function resolveRepoTab() {
 
 const activeRepoTab = resolveRepoTab();
 window.__activeRepoTab = activeRepoTab;
+
+function storylinePanelCopy() {
+    if (activeRepoTab === "audit") {
+        return {
+            title: "Supporting history",
+            itemLabel: "History summary",
+            empty: "No supporting history is available for the selected artifact yet.",
+            loading: "Loading supporting history...",
+            error: "Unable to load supporting history",
+            cta: "Open history",
+            select: "Select an insight to load its supporting history.",
+        };
+    }
+    return {
+        title: "Drift storyline",
+        itemLabel: "Story",
+        empty: "No storyline is available for the selected artifact yet.",
+        loading: "Loading selected artifact storyline...",
+        error: "Unable to load storyline",
+        cta: "Open storyline",
+        select: "Select an insight to load its storyline.",
+    };
+}
+
+function syncStorylinePanelCopy() {
+    setText("repo-storyline-title", storylinePanelCopy().title);
+}
 
 const ATTRIBUTE_PROFILE_TAB_CONFIG = [
     { key: "guardrail_regressions", label: "Guardrail regressions", dimensionKeys: ["guardrail_robustness"] },
@@ -119,7 +146,10 @@ function applyRepoTabVisibility() {
     });
 
     document.querySelectorAll("[data-repo-tab-child]").forEach((element) => {
-        element.hidden = element.getAttribute("data-repo-tab-child") !== activeRepoTab;
+        const supportedTabs = String(element.getAttribute("data-repo-tab-child") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+        element.hidden = supportedTabs.length > 0 && !supportedTabs.includes(activeRepoTab);
     });
 
     document.querySelectorAll("[data-repo-tab-link]").forEach((element) => {
@@ -181,7 +211,7 @@ function deepLinkHeadSha() {
 }
 
 function repoDetailUrl(repo) {
-    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
+    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}/audit`, window.location.origin);
     const artifactPath = repo.highest_insight_artifact_path || "";
     if (artifactPath) {
         url.searchParams.set("artifact", artifactPath);
@@ -190,8 +220,10 @@ function repoDetailUrl(repo) {
 }
 
 function repoTabUrl(tab, options = {}) {
-    const url = new URL(`/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
-    if (tab) {
+    const normalizedTab = String(tab || "").trim().toLowerCase();
+    const isAuditTab = normalizedTab === "audit";
+    const url = new URL(isAuditTab ? `/dashboard/${encodeURIComponent(repoFull)}/audit` : `/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
+    if (normalizedTab && !isAuditTab) {
         url.searchParams.set("tab", tab);
     }
     const artifactPath = options.artifactPath || requestedArtifactPath();
@@ -210,6 +242,61 @@ function repoTabUrl(tab, options = {}) {
         url.hash = options.hash;
     }
     return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function renderAuditBrief(brief) {
+    const badgeEl = document.getElementById("repo-audit-brief-posture");
+    if (!brief) {
+        if (badgeEl) {
+            badgeEl.textContent = "Unavailable";
+            badgeEl.className = "severity-badge severity-medium";
+        }
+        setText("repo-audit-brief-summary", "Audit brief is not available for this repository yet.");
+        setSectionHtml("repo-audit-brief-why", '<div class="muted">No audit brief data is available.</div>');
+        setSectionHtml("repo-audit-brief-actions", '<div class="muted">—</div>');
+        setSectionHtml("repo-audit-brief-findings", '<div class="muted">No findings are currently available.</div>');
+        return;
+    }
+
+    if (badgeEl) {
+        const className = brief.severity_tone === "high"
+            ? "severity-high"
+            : brief.severity_tone === "medium"
+                ? "severity-medium"
+                : "severity-low";
+        badgeEl.textContent = brief.recommendation_label || brief.severity_label || "Review";
+        badgeEl.className = `severity-badge ${className}`;
+    }
+
+    setText(
+        "repo-audit-brief-summary",
+        `${brief.changed_artifact_count || 0} changed artifacts · ${brief.review_now_count || 0} review now · ${brief.watch_count || 0} watch · ${brief.lower_confidence_count || 0} lower-confidence`
+    );
+    setSectionHtml("repo-audit-brief-why", `
+        <div class="stack compact-stack">
+            <div>${escapeHtml(brief.why_now || "Review context is loading.")}</div>
+            <div class="detail-note">${escapeHtml(brief.summary || "")}</div>
+            <div class="tag-row">
+                <span class="drift-chip chip-baseline">${escapeHtml(brief.baseline_reference || "Baseline: none yet")}</span>
+                <span class="drift-chip chip-governance">${escapeHtml(`Baseline ${brief.baseline_status || "unknown"}`)}</span>
+                <span class="drift-chip chip-model">${escapeHtml(brief.confidence_label || "mixed")}</span>
+                ${asArray(brief.affected_dimensions).slice(0, 3).map((dimension) => `<span class="drift-chip chip-guardrails">${escapeHtml(dimension)}</span>`).join("")}
+            </div>
+        </div>
+    `);
+    setSectionHtml("repo-audit-brief-actions", `
+        <div class="export-actions repo-actions-row">
+            ${asArray(brief.actions).map((action) => `<a href="${escapeHtml(action.href || "#")}" class="${action.style === "primary" ? "export-submit-button" : "cue-action-button"}">${escapeHtml(action.label || "Open")}</a>`).join("")}
+        </div>
+    `);
+    setSectionHtml("repo-audit-brief-findings", asArray(brief.findings).length ? asArray(brief.findings).map((finding) => `
+        <div class="artifact-card">
+            <strong>${escapeHtml(finding.title || finding.artifact_path || "Finding")}</strong>
+            <div class="artifact-card-reason">${escapeHtml(finding.artifact_path || "")}${finding.evidence_label ? ` · ${escapeHtml(finding.evidence_label)}` : ""}${finding.review_target ? ` · ${escapeHtml(finding.review_target)}` : ""}</div>
+            <div class="detail-note">${escapeHtml(finding.summary || "")}</div>
+            ${asArray(finding.affected_dimensions).length ? `<div class="tag-row">${asArray(finding.affected_dimensions).slice(0, 3).map((dimension) => `<span class="drift-chip chip-governance">${escapeHtml(dimension)}</span>`).join("")}</div>` : ""}
+        </div>
+    `).join("") : '<div class="muted">No primary findings are currently available.</div>');
 }
 
 function profileMetricLabel(key) {
@@ -1216,14 +1303,15 @@ function renderStorylineEpisodeNode(episode, index) {
 }
 
 function renderStoryline(storyline) {
+    const copy = storylinePanelCopy();
     if (!storyline) {
-        return '<div class="muted">No storyline is available for the selected artifact yet.</div>';
+        return `<div class="muted">${escapeHtml(copy.empty)}</div>`;
     }
     return `
         <div class="stack compact-stack">
             <div class="brief-panel">
                 <div class="brief-row"><span class="brief-label">Artifact</span><span class="brief-copy"><strong>${escapeHtml(storyline.artifact_path)}</strong> <span class="muted">(${escapeHtml(storyline.artifact_type)})</span></span></div>
-                <div class="brief-row"><span class="brief-label">Story</span><span class="brief-copy">${escapeHtml(storyline.summary || "")}</span></div>
+                <div class="brief-row"><span class="brief-label">${escapeHtml(copy.itemLabel)}</span><span class="brief-copy">${escapeHtml(storyline.summary || "")}</span></div>
                 <div class="brief-row"><span class="brief-label">Posture</span><span class="brief-copy">${escapeHtml(storyline.current_posture_label || "")}</span></div>
             </div>
             ${storyline.limited_history_note ? `<div class="detail-note">${escapeHtml(storyline.limited_history_note)}</div>` : ""}
@@ -1248,13 +1336,14 @@ async function fetchArtifactStoryline(artifactPath) {
 }
 
 async function loadArtifactStoryline(artifactPath) {
-    setSectionHtml("featured-storyline", '<div class="muted">Loading selected artifact storyline...</div>');
+    const copy = storylinePanelCopy();
+    setSectionHtml("featured-storyline", `<div class="muted">${escapeHtml(copy.loading)}</div>`);
     try {
         const storyline = await fetchArtifactStoryline(artifactPath);
         setSectionHtml("featured-storyline", renderStoryline(storyline));
         bindOpenSourceChangeLinks(document.getElementById("featured-storyline") || document);
     } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to load storyline";
+        const message = error instanceof Error ? error.message : copy.error;
         setSectionHtml("featured-storyline", `<div class="muted">${escapeHtml(message)}</div>`);
     }
 }
@@ -1301,6 +1390,7 @@ function bindCueCards() {
 }
 
 function renderArtifactTable(items = []) {
+    const storylineCallToAction = storylinePanelCopy().cta;
     if (!items.length) {
         return '<tr><td colspan="5" class="muted">No onboarded artifacts were found for this repository yet.</td></tr>';
     }
@@ -1310,7 +1400,7 @@ function renderArtifactTable(items = []) {
             <td><div>${escapeHtml(item.artifact_type)}</div><div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div></td>
             <td>${Number(item.historical_profile_count || 0)}</td>
             <td>${Math.max(Number(item.latest_historical_drift_magnitude || 0), Number(item.leaderboard_drift_magnitude || 0)).toFixed(3)}</td>
-            <td><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(item.artifact_path)}">Open storyline</button></td>
+            <td><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(item.artifact_path)}">${escapeHtml(storylineCallToAction)}</button></td>
         </tr>
     `).join("");
 }
@@ -1670,32 +1760,111 @@ function renderRepoActionsSection(insights) {
     const reviewTitle = topInsight?.title || "Open the highest-priority change first";
     const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
     const reviewArtifactUrl = repoFull
-        ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
-        : "#repo-triage-section";
+        ? repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })
+        : "#repo-audit-brief-section";
     const relatedAuditsUrl = repoFull
-        ? repoTabUrl("drift", { hash: "repo-triage-section" })
-        : "#repo-triage-section";
+        ? repoTabUrl("audit", { hash: "repo-audit-brief-section" })
+        : "#repo-audit-brief-section";
     const exportUrl = repoFull
         ? repoTabUrl("reports", { hash: "repo-export-section" })
         : "#repo-export-section";
 
-    setSectionHtml("repo-actions-review", `
-        <div class="stack compact-stack">
-            <div class="detail-note">Inspect the flagged change first, then resolve baseline review and export actions from this same case file.</div>
-            <div class="artifact-card">
-                <strong>${escapeHtml(reviewTitle)}</strong>
-                <div class="artifact-card-reason">${escapeHtml(reviewTarget)}</div>
-                <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
+    if (!topInsight) {
+        setSectionHtml("repo-actions-review", `
+            <div class="stack compact-stack repo-audit-workflow">
+                <div class="detail-note repo-audit-workflow-intro">No urgent audit workflow is active for this repository right now.</div>
+                <div class="artifact-card audit-workflow-step audit-workflow-step-clear">
+                    <div class="audit-workflow-step-head">
+                        <span class="audit-step-number">0</span>
+                        <div class="stack compact-stack">
+                            <span class="audit-step-eyebrow">Audit queue</span>
+                            <strong>Review queue is clear</strong>
+                        </div>
+                    </div>
+                    <div class="artifact-card-reason">Use the baseline review and export panels when you need to confirm governance state or produce a handoff package.</div>
+                </div>
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Open audit brief</a>
+                    <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
+                </div>
             </div>
-            <div class="export-actions repo-actions-row">
-                <a href="${escapeHtml(reviewArtifactUrl)}" class="export-submit-button">Open flagged change</a>
-                <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Review related audits</a>
-                ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
-                ${reviewUrl && reviewUrl !== repoUrl ? `<a href="${escapeHtml(reviewUrl)}" class="cue-action-button">Open source review</a>` : ""}
-                <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
+        `);
+        return;
+    }
+
+    setSectionHtml("repo-actions-review", `
+        <div class="stack compact-stack repo-audit-workflow">
+            <div class="detail-note repo-audit-workflow-intro">Inspect the flagged change first, then resolve baseline review and export actions from this same audit workspace.</div>
+            <div class="artifact-card audit-workflow-step">
+                <div class="audit-workflow-step-head">
+                    <span class="audit-step-number">1</span>
+                    <div class="stack compact-stack">
+                        <span class="audit-step-eyebrow">Immediate review</span>
+                        <strong>Review the flagged change</strong>
+                    </div>
+                </div>
+                <div class="artifact-card-reason">${escapeHtml(reviewTitle)} · ${escapeHtml(reviewTarget)}</div>
+                <div class="detail-note">${escapeHtml(topInsight?.recommended_action || "Inspect the current review target and confirm the changed control surface is acceptable.")}</div>
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(reviewArtifactUrl)}" class="export-submit-button">Open flagged change</a>
+                    ${reviewUrl && reviewUrl !== reviewArtifactUrl ? `<a href="${escapeHtml(reviewUrl)}" class="cue-action-button">Open source review</a>` : ""}
+                </div>
+            </div>
+            <div class="artifact-card audit-workflow-step">
+                <div class="audit-workflow-step-head">
+                    <span class="audit-step-number">2</span>
+                    <div class="stack compact-stack">
+                        <span class="audit-step-eyebrow">Context check</span>
+                        <strong>Compare repository context</strong>
+                    </div>
+                </div>
+                <div class="artifact-card-reason">Use the audit brief and repository context before accepting or re-baselining the change.</div>
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Open audit brief</a>
+                    ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
+                </div>
+            </div>
+            <div class="artifact-card audit-workflow-step">
+                <div class="audit-workflow-step-head">
+                    <span class="audit-step-number">3</span>
+                    <div class="stack compact-stack">
+                        <span class="audit-step-eyebrow">Handoff</span>
+                        <strong>Prepare the handoff</strong>
+                    </div>
+                </div>
+                <div class="artifact-card-reason">Once the review is settled, capture the current evidence package for governance or customer handoff.</div>
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
+                </div>
+            </div>
+            <div class="export-actions repo-actions-row audit-workflow-footer">
+                <a href="${escapeHtml(reviewArtifactUrl)}" class="cue-action-button">Jump back to flagged artifact</a>
             </div>
         </div>
     `);
+}
+
+function renderRepoAuditFallback(message) {
+    const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
+    const auditBadge = document.getElementById("repo-audit-brief-posture");
+    if (auditBadge) {
+        auditBadge.textContent = "Unavailable";
+        auditBadge.className = "severity-badge severity-medium";
+    }
+    setText("repo-audit-brief-summary", "Audit brief unavailable");
+    setSectionHtml("repo-audit-brief-why", fallback);
+    setSectionHtml("repo-audit-brief-actions", '<div class="muted">Sign in or restore dashboard access to review this repository.</div>');
+    setSectionHtml("repo-audit-brief-findings", fallback);
+
+    const decisionBadge = document.getElementById("repo-decision-posture-badge");
+    if (decisionBadge) {
+        decisionBadge.textContent = "Unavailable";
+        decisionBadge.className = "severity-badge severity-medium";
+    }
+    setText("repo-decision-subtitle", message);
+    setSectionHtml("repo-decision-finding", fallback);
+    setSectionHtml("repo-decision-action", '<div class="muted">Review actions become available once the repository dashboard can be loaded.</div>');
+    setSectionHtml("repo-decision-proposals", '<div class="muted">Pending proposals unavailable.</div>');
 }
 
 async function loadPendingProposals() {
@@ -1769,6 +1938,7 @@ function applyDashboardPayload(payload) {
     window.__designProfiles = asArray(payload.design_profiles);
     window.__journeySnapshots = journeySnapshots;
     const comparison = payload.journey_comparison || null;
+    renderAuditBrief(payload.audit_brief || null);
 
     setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
     setText("repo-stat-review", String(insights.length));
@@ -1787,7 +1957,7 @@ function applyDashboardPayload(payload) {
         window.__storylineCache.set(featuredStoryline.artifact_path, featuredStoryline);
         setSectionHtml("featured-storyline", renderStoryline(featuredStoryline));
     } else {
-        setSectionHtml("featured-storyline", '<div class="muted">Select an insight to load its storyline.</div>');
+        setSectionHtml("featured-storyline", `<div class="muted">${escapeHtml(storylinePanelCopy().select)}</div>`);
     }
     setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
     setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
@@ -2001,6 +2171,7 @@ async function loadDashboard() {
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
+        renderRepoAuditFallback(message);
         setText("repo-stat-artifacts", "-");
         setText("repo-stat-review", "-");
         setText("repo-stat-baselines", "-");
@@ -2039,6 +2210,7 @@ async function loadDashboard() {
 
 bindSidebarNavigation();
 applyRepoTabVisibility();
+syncStorylinePanelCopy();
 bindRebaselineModal();
 bindExportForm();
 loadAvailableRepos();

@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
+from urllib.parse import quote
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from .baseline_provenance import (
@@ -507,6 +508,45 @@ class RepoArtifactDesignProfile:
 
 
 @dataclass(frozen=True)
+class RepoAuditBriefFinding:
+    title: str
+    artifact_path: str
+    summary: str
+    evidence_label: str
+    review_target: str | None = None
+    review_url: str | None = None
+    affected_dimensions: list[str] = None
+
+
+@dataclass(frozen=True)
+class RepoAuditBriefAction:
+    label: str
+    href: str
+    style: str = "secondary"
+
+
+@dataclass(frozen=True)
+class RepoAuditBrief:
+    trigger_source: str
+    recommendation_key: str
+    recommendation_label: str
+    severity_label: str
+    severity_tone: str
+    confidence_label: str
+    changed_artifact_count: int
+    review_now_count: int
+    watch_count: int
+    lower_confidence_count: int
+    baseline_status: str
+    baseline_reference: str
+    why_now: str
+    summary: str
+    affected_dimensions: list[str] = None
+    findings: list[RepoAuditBriefFinding] = None
+    actions: list[RepoAuditBriefAction] = None
+
+
+@dataclass(frozen=True)
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
@@ -523,6 +563,7 @@ class RepoDashboardView:
     featured_storyline: RepoArtifactStoryline | None = None
     history_cues: list[RepoHistoryCue] = None
     design_profiles: list[RepoArtifactDesignProfile] = None
+    audit_brief: RepoAuditBrief | None = None
     governance_posture: RepoGovernancePosture = field(default_factory=lambda: RepoGovernancePosture("low confidence", "mixed", 0, "current", ()))
     artifacts: list[RepoDashboardArtifactEntry] = None
     journey_snapshots: list[dict[str, Any]] = None
@@ -1203,6 +1244,7 @@ def _build_repo_dashboard_view_uncached(
             featured_storyline=None,
             history_cues=[],
             design_profiles=[],
+            audit_brief=None,
             governance_posture=RepoGovernancePosture("low confidence", "mixed", 0, "current", ()),
             artifacts=[],
             journey_snapshots=journey_snapshots,
@@ -1342,6 +1384,17 @@ def _build_repo_dashboard_view_uncached(
             insights=insights,
         ),
     )
+    audit_brief = timed_stage(
+        "repo-audit-brief",
+        lambda: _build_repo_audit_brief(
+            repo_full,
+            insights,
+            lower_confidence_insights,
+            baseline_review,
+            artifact_entries,
+            governance_posture,
+        ),
+    )
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -1367,12 +1420,180 @@ def _build_repo_dashboard_view_uncached(
         featured_storyline=featured_storyline,
         history_cues=history_cues,
         design_profiles=design_profiles,
+        audit_brief=audit_brief,
         governance_posture=governance_posture,
         artifacts=artifact_entries,
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         export_jobs=[],
+    )
+
+
+def _build_repo_audit_brief(
+    repo_full: str,
+    insights: list[RepoDashboardInsightEntry] | None,
+    lower_confidence_insights: list[RepoDashboardInsightEntry] | None,
+    baseline_review: RepoBaselineReviewPanel | None,
+    artifacts: list[RepoDashboardArtifactEntry] | None,
+    governance_posture: RepoGovernancePosture | None,
+) -> RepoAuditBrief:
+    primary_insight = (insights or [None])[0]
+    review_now_count = sum(1 for insight in (insights or []) if insight.priority == "review_now")
+    watch_count = sum(1 for insight in (insights or []) if insight.priority == "watch")
+    lower_confidence_count = len(lower_confidence_insights or [])
+    changed_artifact_count = len({insight.artifact_path for insight in (insights or []) if insight.artifact_path})
+    if changed_artifact_count == 0:
+        changed_artifact_count = sum(
+            1
+            for artifact in (artifacts or [])
+            if max(
+                float(artifact.latest_historical_drift_magnitude or 0.0),
+                float(artifact.latest_pr_capability_shift or 0.0),
+                float(artifact.latest_pr_guardrail_shift or 0.0),
+                float(artifact.latest_pr_governance_shift or 0.0),
+                float(artifact.latest_pr_autonomy_shift or 0.0),
+            )
+            > 0
+        )
+
+    if primary_insight is not None and primary_insight.priority == "review_now":
+        recommendation_key = "review_before_merge"
+        recommendation_label = "Review before merge"
+        severity_label = "High"
+        severity_tone = "high"
+    elif primary_insight is not None and primary_insight.priority == "watch":
+        recommendation_key = "review_before_merge"
+        recommendation_label = "Review before merge"
+        severity_label = "Medium"
+        severity_tone = "medium"
+    elif baseline_review is not None and baseline_review.is_pending_review:
+        recommendation_key = "needs_baseline_decision"
+        recommendation_label = "Needs baseline decision"
+        severity_label = "Medium"
+        severity_tone = "medium"
+    else:
+        recommendation_key = "safe_to_merge"
+        recommendation_label = "Safe to merge"
+        severity_label = "Low"
+        severity_tone = "low"
+
+    baseline_status = "pending review" if baseline_review is not None and baseline_review.is_pending_review else "approved"
+    baseline_reference = (
+        primary_insight.baseline_label
+        if primary_insight is not None and primary_insight.baseline_label
+        else (
+            f"Baseline: Approved #{baseline_review.approved_count}"
+            if baseline_review is not None and baseline_review.approved_count
+            else "Baseline: none yet"
+        )
+    )
+
+    trigger_source = "repo_posture"
+    if primary_insight is not None and primary_insight.review_target:
+        review_target = str(primary_insight.review_target).lower()
+        if review_target.startswith("pr #") or primary_insight.review_head_sha:
+            trigger_source = "pull_request"
+        elif "commit " in review_target:
+            trigger_source = "history_review"
+    elif baseline_review is not None and baseline_review.is_pending_review:
+        trigger_source = "baseline_review"
+
+    affected_dimensions = [
+        dimension.label or dimension.attribute_key.replace("_", " ")
+        for dimension in (primary_insight.attribute_profile or [])
+        if dimension.state not in {"no_change", "unknown"}
+    ] if primary_insight is not None else []
+
+    findings = [
+        RepoAuditBriefFinding(
+            title=insight.title,
+            artifact_path=insight.artifact_path,
+            summary=insight.rationale or insight.change_summary or insight.flag_summary or "Review this artifact change.",
+            evidence_label=insight.evidence_label,
+            review_target=insight.review_target,
+            review_url=insight.review_url,
+            affected_dimensions=[
+                dimension.label or dimension.attribute_key.replace("_", " ")
+                for dimension in (insight.attribute_profile or [])
+                if dimension.state not in {"no_change", "unknown"}
+            ],
+        )
+        for insight in (insights or [])[:5]
+    ]
+
+    encoded_repo_full = quote(repo_full, safe="")
+    actions = [
+        RepoAuditBriefAction(
+            label="Inspect audit evidence",
+            href=f"/dashboard/{encoded_repo_full}/audit#repo-audit-brief-section",
+            style="primary",
+        )
+    ]
+    if primary_insight is not None and primary_insight.review_url:
+        actions.append(
+            RepoAuditBriefAction(
+                label="Open source review",
+                href=primary_insight.review_url,
+            )
+        )
+    if baseline_review is not None and baseline_review.is_pending_review:
+        actions.append(
+            RepoAuditBriefAction(
+                label="Open baseline review",
+                href=f"/dashboard/{encoded_repo_full}?tab=baseline#baseline-review-panel",
+            )
+        )
+    else:
+        actions.append(
+            RepoAuditBriefAction(
+                label="Open repo posture",
+                href=f"/dashboard/{encoded_repo_full}?tab=drift#repo-triage-section",
+            )
+        )
+
+    why_now = (
+        primary_insight.rationale
+        if primary_insight is not None and primary_insight.rationale
+        else (
+            "Baseline review is still pending for repository evidence that should become the approved reference."
+            if baseline_review is not None and baseline_review.is_pending_review
+            else "No high-priority repo findings are currently demanding immediate action."
+        )
+    )
+    summary = (
+        primary_insight.change_summary
+        if primary_insight is not None and primary_insight.change_summary
+        else (
+            primary_insight.recommended_action
+            if primary_insight is not None and primary_insight.recommended_action
+            else "Use the audit view to confirm the trigger, evidence, and recommended next step before switching to broader repo posture context."
+        )
+    )
+    confidence_label = (
+        primary_insight.confidence_label
+        if primary_insight is not None and primary_insight.confidence_label
+        else str(getattr(governance_posture, "review_quality", "mixed") or "mixed")
+    )
+
+    return RepoAuditBrief(
+        trigger_source=trigger_source,
+        recommendation_key=recommendation_key,
+        recommendation_label=recommendation_label,
+        severity_label=severity_label,
+        severity_tone=severity_tone,
+        confidence_label=confidence_label,
+        changed_artifact_count=changed_artifact_count,
+        review_now_count=review_now_count,
+        watch_count=watch_count,
+        lower_confidence_count=lower_confidence_count,
+        baseline_status=baseline_status,
+        baseline_reference=baseline_reference,
+        why_now=why_now,
+        summary=summary,
+        affected_dimensions=affected_dimensions,
+        findings=findings,
+        actions=actions,
     )
 
 
