@@ -551,10 +551,13 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "function repoTabUrl" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
+    assert 'repoTabUrl("audit", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text
     assert "Compare repository context" in repo_js_response.text
     assert "Prepare the handoff" in repo_js_response.text
+    assert "Review queue is clear" in repo_js_response.text
+    assert "Open baseline review" in repo_js_response.text
 
 
 def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):

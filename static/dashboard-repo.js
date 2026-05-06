@@ -1759,6 +1759,9 @@ function renderRepoActionsSection(insights) {
     const reviewTarget = topInsight?.review_target || topInsight?.artifact_path || repoFull;
     const reviewTitle = topInsight?.title || "Open the highest-priority change first";
     const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
+    const baselineReviewUrl = repoFull
+        ? repoTabUrl("audit", { hash: "baseline-review-panel" })
+        : "#baseline-review-panel";
     const reviewArtifactUrl = repoFull
         ? repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })
         : "#repo-audit-brief-section";
@@ -1781,10 +1784,11 @@ function renderRepoActionsSection(insights) {
                             <strong>Review queue is clear</strong>
                         </div>
                     </div>
-                    <div class="artifact-card-reason">Use the baseline review and export panels when you need to confirm governance state or produce a handoff package.</div>
+                    <div class="artifact-card-reason">Baseline posture already covers the current repository state. Use the actions below if you want a final governance confirmation or a shareable handoff artifact.</div>
                 </div>
                 <div class="export-actions repo-actions-row audit-step-actions">
-                    <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Open audit brief</a>
+                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open baseline review</a>
+                    <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Recheck audit brief</a>
                     <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
                 </div>
             </div>

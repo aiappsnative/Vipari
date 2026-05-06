@@ -514,8 +514,8 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
         installation_id=123,
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
-        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+        list_repository_files_fn=lambda repo, token, ref: [],
+        fetch_file_content_fn=lambda repo, path, token, ref: "",
     )
     plan_repository_history_backfill(
         db_path,
@@ -785,8 +785,8 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
         installation_id=123,
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
-        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+        list_repository_files_fn=lambda repo, token, ref: [],
+        fetch_file_content_fn=lambda repo, path, token, ref: "",
     )
 
     branch_job = create_branch_scan_job(
@@ -1922,6 +1922,42 @@ def test_repo_dashboard_api_local_debug_disable_login_allows_repo_read_without_s
     payload = repo_response.json()
     assert payload["repo_full"] == "doria90/dummyAI"
     assert payload["insights"]
+
+
+def test_dashboard_api_returns_safe_to_merge_audit_brief_without_active_findings(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-safe-to-merge.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: [],
+        fetch_file_content_fn=lambda repo, path, token, ref: "",
+    )
+
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["audit_brief"]["recommendation_key"] == "safe_to_merge"
+    assert payload["audit_brief"]["recommendation_label"] == "Safe to merge"
+    assert payload["audit_brief"]["trigger_source"] == "repo_posture"
+    assert payload["audit_brief"]["review_now_count"] == 0
+    assert payload["audit_brief"]["watch_count"] == 0
+    assert payload["audit_brief"]["findings"] == []
+    assert payload["audit_brief"]["why_now"] == "No high-priority repo findings are currently demanding immediate action."
 
 
 def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):

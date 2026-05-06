@@ -2191,6 +2191,15 @@ strong {
     background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 92%, var(--color-success-soft)) 0%, var(--color-surface-2) 100%);
 }
 
+.audit-workflow-step-clear .audit-step-number {
+    border-color: color-mix(in srgb, var(--color-success) 24%, var(--color-border));
+    background: color-mix(in srgb, var(--color-success-soft) 78%, var(--color-surface-2));
+}
+
+.audit-workflow-step-clear .audit-step-eyebrow {
+    color: color-mix(in srgb, var(--color-success) 70%, var(--color-text-muted));
+}
+
 .audit-workflow-step-head {
     display: flex;
     align-items: start;
