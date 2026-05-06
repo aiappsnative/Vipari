@@ -322,7 +322,19 @@ The migration workflow and failure handling are documented in [docs/database-mig
 
 The workflows in this section are for local development, debugging, and rehearsal. They are not production deployment recipes.
 
-For the fastest local app loop, run the monolith directly:
+For the fastest local app loop, run the repo-owned launcher from the repo root:
+
+```powershell
+./scripts/run-local-app.ps1
+```
+
+That script always resolves the repo root and the checked-in `.venv` automatically, so it works even when your current shell started outside the repo. Use `-Restart` when you want it to reclaim `8011` before booting again:
+
+```powershell
+./scripts/run-local-app.ps1 -Restart
+```
+
+If you want the raw monolith command instead, run:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
