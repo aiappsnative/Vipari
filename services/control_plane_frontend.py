@@ -1038,6 +1038,33 @@ def render_control_plane_mcp_page(
             <h2 class="control-page-section-title">Host configuration</h2>
             <pre class="help-page-flow">{html_escape(config_snippet)}</pre>
             <p class="control-page-copy">The connector never receives internal Vipari bearer tokens. It uses the machine-principal credentials you create for this workspace only to obtain a short-lived broker token.</p>
+            <p class="control-page-copy">If your MCP host manages environment variables in its own UI, copy these same values there instead of relying on a local <code>.env</code> file.</p>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Rollout checklist</div>
+            <h2 class="control-page-section-title">First successful connection</h2>
+            <pre class="help-page-flow">1. Create or rotate a workspace API key with drift.read
+2. Copy the client secret immediately when it is shown
+3. Add the broker URL, client ID, and client secret to the customer host
+4. Restart the MCP host so the new environment values are loaded
+5. Confirm the host lists vipari.list_repos, vipari.get_repo_posture, vipari.get_repo_casefile, and vipari.list_escalations</pre>
+            <p class="control-page-copy">The client secret is shown once at creation time. If it is lost, create a new key and revoke the old one rather than trying to recover the original secret.</p>
+        </article>
+
+        <article class="control-page-section">
+            <div class="secondary-panel-title">Troubleshooting</div>
+            <h2 class="control-page-section-title">Fast unblock guidance</h2>
+            <pre class="help-page-flow">401 Invalid client credentials
+  - regenerate the API key and paste the new secret carefully
+
+Connection refused or timeout
+  - confirm the broker URL points at the reachable Vipari app base URL
+
+No tools appear in the host
+  - confirm the host restarted after config changes
+  - confirm the workspace key includes drift.read</pre>
+            <p class="control-page-copy">Keep the downloaded package, the created API key, and recent integration activity in sync during rollout so a customer host never ends up using an expired or partial configuration.</p>
         </article>
 
         <article class="control-page-section">

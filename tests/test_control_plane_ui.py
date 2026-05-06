@@ -5011,6 +5011,9 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
     assert "/app/integrations/mcp/download" in response.text
     assert "API keys" in response.text
     assert "Activity" in response.text
+    assert "First successful connection" in response.text
+    assert "The client secret is shown once at creation time." in response.text
+    assert "401 Invalid client credentials" in response.text
 
 
 def test_mcp_integrations_page_loads_for_viewer(tmp_path):
@@ -5121,6 +5124,10 @@ def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
     assert expected_broker_url in env_example
     claude_example = archive.read("claude-desktop-config.json.example").decode("utf-8")
     assert f'"VIPARI_MCP_BROKER_URL": "{main.settings.app_base_url}/api/agent-integrations/mcp"' in claude_example
+    readme = archive.read("README.md").decode("utf-8")
+    assert "Recommended rollout order" in readme
+    assert "Vipari shows the secret once at creation time." in readme
+    assert "No tools appear in the MCP host" in readme
 
 
 def test_mcp_activity_tab_shows_workspace_audit_events(tmp_path):
