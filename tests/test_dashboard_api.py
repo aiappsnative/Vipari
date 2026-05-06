@@ -514,8 +514,8 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
         installation_id=123,
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: [],
-        fetch_file_content_fn=lambda repo, path, token, ref: "",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
     )
     plan_repository_history_backfill(
         db_path,
@@ -785,8 +785,8 @@ def test_dashboard_api_rebaseline_to_branch_head_updates_selected_baseline_sourc
         installation_id=123,
         token="token",
         get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: [],
-        fetch_file_content_fn=lambda repo, path, token, ref: "",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
     )
 
     branch_job = create_branch_scan_job(

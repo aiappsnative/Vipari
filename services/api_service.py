@@ -231,6 +231,10 @@ def create_api_app() -> FastAPI:
         _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full))
 
+    async def dashboard_repo_audit_page(repo_full: str, request: Request):
+        _require_admin_token(request, settings)
+        return HTMLResponse(render_repo_dashboard_page(repo_full, active_tab="audit"))
+
     async def list_repos(request: Request):
         _require_admin_token(request, settings)
         return JSONResponse(build_repo_index_payload(db_path, list_repo_dashboard_index_fn=list_repo_dashboard_index))
@@ -274,6 +278,7 @@ def create_api_app() -> FastAPI:
         create_dashboard_page_router(
             dashboard_index_handler=dashboard_index_page,
             dashboard_repo_handler=dashboard_repo_page,
+            dashboard_repo_audit_handler=dashboard_repo_audit_page,
         )
     )
 
