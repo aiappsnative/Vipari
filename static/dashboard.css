@@ -6681,9 +6681,51 @@ body.control-page[data-theme="light"] {
     overflow: hidden;
 }
 
+.repo-audit-brief-shell,
+.repo-decision-shell {
+    position: relative;
+}
+
+.repo-audit-brief-shell {
+    border-color: color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
+    background-color: var(--color-surface-2);
+    background-image: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 90%, var(--color-primary-soft)) 0%, var(--color-surface) 100%);
+}
+
+.repo-decision-shell {
+    border-color: color-mix(in srgb, var(--color-medium) 18%, var(--color-border));
+    background-color: var(--color-surface-2);
+    background-image: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 92%, var(--color-medium-soft)) 0%, var(--color-surface) 100%);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-medium-soft) 45%, transparent);
+}
+
 .repo-decision-header {
     padding: 14px 18px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.repo-audit-brief-shell .repo-decision-header,
+.repo-decision-shell .repo-decision-header {
+    position: relative;
+}
+
+.repo-audit-brief-shell .repo-decision-header::before,
+.repo-decision-shell .repo-decision-header::before {
+    content: "";
+    position: absolute;
+    left: 18px;
+    top: 0;
+    width: 44px;
+    height: 3px;
+    border-radius: 999px;
+}
+
+.repo-audit-brief-shell .repo-decision-header::before {
+    background: color-mix(in srgb, var(--color-primary) 68%, white);
+}
+
+.repo-decision-shell .repo-decision-header::before {
+    background: color-mix(in srgb, var(--color-medium) 72%, white);
 }
 
 .repo-decision-title-row {
@@ -6696,11 +6738,20 @@ body.control-page[data-theme="light"] {
 .repo-decision-title {
     font-weight: 700;
     font-size: 0.92rem;
+    letter-spacing: 0.02em;
 }
 
 .repo-decision-subtitle {
     font-size: 0.78rem;
     color: var(--text-secondary);
+}
+
+.repo-audit-brief-shell .repo-decision-subtitle {
+    color: color-mix(in srgb, var(--color-primary) 30%, var(--text-secondary));
+}
+
+.repo-decision-shell .repo-decision-subtitle {
+    color: color-mix(in srgb, var(--color-medium) 34%, var(--text-secondary));
 }
 
 .repo-decision-body {
@@ -6712,6 +6763,11 @@ body.control-page[data-theme="light"] {
 .repo-decision-col {
     padding: 14px 18px;
     border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.repo-audit-brief-shell .repo-decision-col,
+.repo-decision-shell .repo-decision-col {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.015) 0%, rgba(255, 255, 255, 0) 100%);
 }
 
 .repo-decision-col:last-child {
