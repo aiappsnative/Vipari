@@ -6,28 +6,110 @@
     <title>Billing | Vipari</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/control-plane.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body data-theme="dark">
-    <main class="page-shell">
-        <section class="page-header">
-            <p class="eyebrow">Billing</p>
-            <h1>{{WORKSPACE_NAME}}</h1>
-            <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
-            <p class="page-note">{{CHECKOUT_STATUS_NOTE}}</p>
-        </section>
-        <section class="card-grid">
-            {{PLAN_CARDS}}
-            <article class="action-card">
-                <div class="eyebrow">Portal</div>
-                <h2>Manage billing</h2>
-                <p>Open the customer portal to update payment details or resume service.</p>
-                {{PORTAL_ACTION}}
-            </article>
-        </section>
-    </main>
+<body class="control-page billing-page" data-theme="{{THEME_PREFERENCE}}">
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary navigation">
+            <a href="/dashboard" class="sidebar-logo" aria-label="Vipari home">
+                <span class="sidebar-logo-mark">V</span>
+            </a>
+
+            <div class="sidebar-panel">
+                <a href="/dashboard" class="sidebar-nav-item" aria-label="Dashboard">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+                    <span>Repositories</span>
+                </a>
+                <a href="/app/compliance" class="sidebar-nav-item" aria-label="Compliance">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+                    <span>Compliance</span>
+                </a>
+                <a href="/app/policies" class="sidebar-nav-item" aria-label="Policies">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
+                    <span>Policies</span>
+                </a>
+                <a href="/app/settings" class="sidebar-nav-item" aria-label="Settings">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.8A3.2 3.2 0 1 0 12 15.2 3.2 3.2 0 1 0 12 8.8z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-1.2 1.2a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.2 1.2 0 0 1-1.2 1.2h-1.7A1.2 1.2 0 0 1 10.9 20v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-1.2-1.2a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a1.2 1.2 0 0 1-1.2-1.2v-1.7A1.2 1.2 0 0 1 4 10.9h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l1.2-1.2a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a1.2 1.2 0 0 1 1.2-1.2h1.7A1.2 1.2 0 0 1 13.1 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l1.2 1.2a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 20 10.9v1.7A1.2 1.2 0 0 1 18.8 14h-.2a1 1 0 0 0-.9.6z"/></svg>
+                    <span>Settings</span>
+                </a>
+                <a href="/app/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h8v8H8z"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
+                    <span>Agent Integrations</span>
+                </a>
+                <a href="/app/help" class="sidebar-nav-item" aria-label="Help">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18h.01"/><path d="M9.1 9a3 3 0 1 1 5 2.2c-.8.7-1.1 1.1-1.1 2.1"/><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></svg>
+                    <span>Help</span>
+                </a>
+            </div>
+
+            <div class="sidebar-profile-wrap">
+                <a href="/app/profile" class="sidebar-profile-link" aria-label="User profile">V</a>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            <main class="page-scroll control-page-shell" id="top">
+                <section class="control-page-hero">
+                    <div class="control-page-hero-copy">
+                        <p class="control-page-eyebrow">Billing</p>
+                        <h1>{{WORKSPACE_NAME}}</h1>
+                        <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
+                    </div>
+                    <div class="control-page-hero-note">
+                        <span class="control-page-note-label">Next step</span>
+                        <span class="control-page-note-copy">Billing establishes plan access first. After checkout or portal updates, the workspace returns to installation and repository setup inside the same product shell.</span>
+                    </div>
+                </section>
+
+                <section class="control-page-stat-grid">
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Current plan</span>
+                        <strong>{{CURRENT_PLAN_LABEL}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Subscription</span>
+                        <strong>{{SUBSCRIPTION_STATUS}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Selected plan</span>
+                        <strong>{{SELECTED_PLAN_LABEL}}</strong>
+                    </article>
+                    <article class="control-page-stat-card">
+                        <span class="control-page-stat-label">Checkout state</span>
+                        <strong>{{CHECKOUT_STATE_LABEL}}</strong>
+                    </article>
+                </section>
+
+                <section class="control-page-sections">
+                    <article class="control-page-section control-page-section-wide">
+                        <div class="secondary-panel-title">Plan selection</div>
+                        <h2 class="control-page-section-title">Choose or resume a plan</h2>
+                        <p class="control-page-copy">{{CHECKOUT_STATUS_NOTE}}</p>
+                        <div class="billing-plan-grid">
+                            {{PLAN_CARDS}}
+                        </div>
+                    </article>
+                    <article class="control-page-section">
+                        <div class="secondary-panel-title">Portal</div>
+                        <h2 class="control-page-section-title">Manage billing</h2>
+                        <p class="control-page-copy">Open the customer portal to update payment details, review invoices, or resume service without leaving the workspace shell.</p>
+                        <div class="billing-portal-action">{{PORTAL_ACTION}}</div>
+                    </article>
+                    <article class="control-page-section">
+                        <div class="secondary-panel-title">Sequence</div>
+                        <h2 class="control-page-section-title">What happens after billing</h2>
+                        <p class="control-page-copy">After billing is confirmed, Vipari unlocks GitHub installation and repository allocation. That keeps pricing, installation, onboarding, and review in one continuous flow instead of separate product surfaces.</p>
+                    </article>
+                </section>
+            </main>
+        </div>
+    </div>
     <div class="theme-toggle-shell">
         <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
             <span class="theme-toggle-icon" aria-hidden="true">☀</span>

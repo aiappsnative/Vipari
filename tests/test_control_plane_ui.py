@@ -944,7 +944,9 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'href="/app/repos"' in dashboard_html
     assert 'href="/app/compliance"' in dashboard_html
     assert 'href="/app/integrations/mcp"' in dashboard_html
-    assert 'id="audit-logs-toggle"' in dashboard_html
+    assert 'aria-label="Policies"' in dashboard_html
+    assert 'aria-label="Settings"' in dashboard_html
+    assert 'aria-label="Audit Logs"' not in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
     assert 'class="journey-stage loading-shell"' in dashboard_html
@@ -960,7 +962,9 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Loading EU AI Act, SOC 2, and ISO 27001 governance guidance..." in repo_dashboard_html
     assert 'id="repo-governance-attention-details"' in repo_dashboard_html
     assert "Static posture" not in repo_dashboard_html
-    assert 'id="audit-logs-toggle"' in repo_dashboard_html
+    assert 'aria-label="Policies"' in repo_dashboard_html
+    assert 'aria-label="Settings"' in repo_dashboard_html
+    assert 'aria-label="Audit Logs"' not in repo_dashboard_html
     assert 'href="/app/repos"' in repo_dashboard_html
     assert 'href="/app/compliance"' in repo_dashboard_html
     assert 'href="/app/integrations/mcp"' in repo_dashboard_html
@@ -2828,7 +2832,11 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
             cookies={main.settings.session_cookie_name: session.session_id},
         )
         assert billing_page_response.status_code == 200
+        assert "Billing" in billing_page_response.text
         assert "Continue with this plan" in billing_page_response.text
+        assert 'aria-label="Repositories"' in billing_page_response.text
+        assert 'aria-label="Agent Integrations"' in billing_page_response.text
+        assert "Manage billing" in billing_page_response.text
 
         checkout_response = client.post(
             "/app/billing/checkout?plan=team",
@@ -3619,7 +3627,8 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Download latest export" in response.text
     assert "compliance-org/repo-one" in response.text
     assert "compliance-org/repo-two" in response.text
-    assert 'aria-label="Audit Logs"' in response.text
+    assert 'aria-label="Repositories"' in response.text
+    assert 'aria-label="Audit Logs"' not in response.text
     assert "Framework mapping" in frameworks_response.text
     assert "EU AI Act" in frameworks_response.text
     assert "SOC 2" in frameworks_response.text

@@ -2847,13 +2847,13 @@ async def billing_page(request: Request):
     portal_url = "/app/billing/portal" if customer else None
     checkout_status_note = None
     if request.query_params.get("checkout_session_id"):
-        checkout_status_note = "Checkout returned to DriftGuard. Access remains pending until Stripe webhook confirmation arrives."
+        checkout_status_note = "Checkout returned to Vipari. Access remains pending until Stripe webhook confirmation arrives."
     elif request.query_params.get("claim_activated"):
         checkout_status_note = "Billing activation was accepted. GitHub installation is the next required step."
     elif request.query_params.get("free_activated"):
         checkout_status_note = "Free tier activated. Link the GitHub App and allocate one repository to start PR comments."
     elif request.query_params.get("external_checkout_required"):
-        checkout_status_note = "Paid plan checkout is handled by the external billing provider before DriftGuard grants access."
+        checkout_status_note = "Paid plan checkout is handled by the external billing provider before Vipari grants access."
     elif request.query_params.get("canceled"):
         checkout_status_note = "Checkout was canceled before payment confirmation."
     return HTMLResponse(
@@ -2866,6 +2866,7 @@ async def billing_page(request: Request):
             flow_context=flow_context,
             portal_url=portal_url,
             csrf_token=access_context["session"].csrf_secret,
+            theme_preference=access_context["user"].theme_preference if access_context.get("user") else "dark",
         )
     )
 

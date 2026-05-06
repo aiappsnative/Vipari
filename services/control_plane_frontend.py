@@ -447,10 +447,23 @@ def render_control_plane_billing_page(
     flow_context: dict[str, str],
     portal_url: str | None,
     csrf_token: str,
+    theme_preference: str = "dark",
 ) -> str:
     template = _load_template("control_plane_billing.html")
+    selected_plan = PLAN_DEFINITIONS.get(selected_plan_code)
+    selected_plan_label = selected_plan.label if selected_plan else current_plan_label
+    checkout_note = checkout_status_note or "Choose a plan to create or resume Stripe checkout."
+    normalized_subscription_status = (subscription_status or "not_started").replace("_", " ").strip() or "not started"
+    checkout_state_label = "Needs review"
+    lowered_note = checkout_note.lower()
+    if "accepted" in lowered_note or "activated" in lowered_note:
+        checkout_state_label = "Activated"
+    elif "returned" in lowered_note or "pending" in lowered_note:
+        checkout_state_label = "Pending"
+    elif "canceled" in lowered_note:
+        checkout_state_label = "Canceled"
     portal_block = (
-        f'<a class="subtle-link" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="subtle-link">Portal unavailable</span>'
+        f'<a class="control-page-button" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="billing-inline-note">Portal unavailable until a billing customer record exists.</span>'
     )
     flow_query = ""
     if flow_context:
@@ -461,13 +474,13 @@ def render_control_plane_billing_page(
         button_label = "Continue with this plan" if code == selected_plan_code else f"Choose {plan.label}"
         plan_cards.append(
             f'''
-            <article class="action-card{' action-card-strong' if code == selected_plan_code else ''}">
-                <div class="eyebrow">{html_escape(plan.label)}</div>
-                <h2>{html_escape(plan.label)}</h2>
-                <p>Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
+            <article class="billing-plan-card{' billing-plan-card-active' if code == selected_plan_code else ''}">
+                <div class="secondary-panel-title">{html_escape(plan.label)}</div>
+                <h3 class="billing-plan-title">{html_escape(plan.label)}</h3>
+                <p class="control-page-copy">Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
                 <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}">
                     {_csrf_input(csrf_token)}
-                    <button type="submit" class="button">{html_escape(button_label)}</button>
+                    <button type="submit" class="control-page-button">{html_escape(button_label)}</button>
                 </form>
             </article>
             '''
@@ -475,10 +488,13 @@ def render_control_plane_billing_page(
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{CURRENT_PLAN_LABEL}}", html_escape(current_plan_label))
-        .replace("{{SUBSCRIPTION_STATUS}}", html_escape(subscription_status))
-        .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_status_note or "Choose a plan to create or resume Stripe checkout."))
+        .replace("{{SUBSCRIPTION_STATUS}}", html_escape(normalized_subscription_status.title()))
+        .replace("{{SELECTED_PLAN_LABEL}}", html_escape(selected_plan_label))
+        .replace("{{CHECKOUT_STATE_LABEL}}", html_escape(checkout_state_label))
+        .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_note))
         .replace("{{PLAN_CARDS}}", "".join(plan_cards))
         .replace("{{PORTAL_ACTION}}", portal_block)
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
     )
 
 

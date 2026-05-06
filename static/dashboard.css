@@ -4831,8 +4831,8 @@ body.repo-audit-page[data-theme="light"] {
 }
 
 .repo-audit-page .repo-audit-anchor-bar {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 12px;
     padding: 14px 18px;
 }
@@ -4841,8 +4841,9 @@ body.repo-audit-page[data-theme="light"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 34px;
-    padding: 0 12px;
+    width: 100%;
+    min-height: 42px;
+    padding: 0 16px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.10);
     background: rgba(255, 255, 255, 0.03);
@@ -4850,6 +4851,7 @@ body.repo-audit-page[data-theme="light"] {
     text-decoration: none;
     font-size: 12px;
     font-weight: 700;
+    text-align: center;
 }
 
 .repo-audit-page[data-theme="light"] .repo-audit-anchor {
@@ -5617,9 +5619,51 @@ body.control-page[data-theme="light"] {
     cursor: not-allowed;
 }
 
-.control-page-tab-bar {
+.billing-plan-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+}
+
+.billing-plan-card {
+    display: grid;
+    gap: 14px;
+    padding: 20px;
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.billing-plan-card-active {
+    border-color: var(--color-primary-outline);
+    background: linear-gradient(180deg, var(--color-primary-soft-strong), var(--color-surface));
+    box-shadow: inset 0 0 0 1px rgba(79, 152, 163, 0.14);
+}
+
+.billing-plan-title {
+    margin: 0;
+    font-size: 24px;
+    letter-spacing: -0.02em;
+}
+
+.billing-plan-card form {
     display: flex;
-    flex-wrap: wrap;
+}
+
+.billing-portal-action {
+    display: flex;
+    align-items: center;
+    min-height: 48px;
+}
+
+.billing-inline-note {
+    color: var(--color-text-muted);
+    line-height: 1.7;
+}
+
+.control-page-tab-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 12px;
 }
 
@@ -5627,8 +5671,9 @@ body.control-page[data-theme="light"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 34px;
-    padding: 0 12px;
+    width: 100%;
+    min-height: 42px;
+    padding: 0 16px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.10);
     background: rgba(255, 255, 255, 0.03);
@@ -5636,6 +5681,7 @@ body.control-page[data-theme="light"] {
     text-decoration: none;
     font-size: 12px;
     font-weight: 700;
+    text-align: center;
 }
 
 .control-page[data-theme="light"] .control-page-tab-link {
