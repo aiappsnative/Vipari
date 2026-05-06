@@ -1868,7 +1868,7 @@ function renderRepoAuditFallback(message) {
     setText("repo-decision-subtitle", message);
     setSectionHtml("repo-decision-finding", fallback);
     setSectionHtml("repo-decision-action", '<div class="muted">Review actions become available once the repository dashboard can be loaded.</div>');
-    setSectionHtml("repo-decision-proposals", '<div class="muted">Pending proposals unavailable.</div>');
+    setSectionHtml("repo-decision-proposals", '<div class="detail-note">Pending proposals are unavailable until repository dashboard access is restored.</div>');
 }
 
 async function loadPendingProposals() {
@@ -1878,7 +1878,7 @@ async function loadPendingProposals() {
     try {
         const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/proposals/pending`);
         if (!response.ok) {
-            setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+            setSectionHtml("repo-decision-proposals", '<div class="detail-note">Unable to load pending proposals for this repository right now.</div>');
             return;
         }
         const payload = await response.json();
@@ -1886,7 +1886,7 @@ async function loadPendingProposals() {
         const pendingCount = Number(payload?.pending_count || proposals.length);
 
         if (!pendingCount) {
-            setSectionHtml("repo-decision-proposals", '<div class="muted">None pending</div>');
+            setSectionHtml("repo-decision-proposals", '<div class="detail-note">No baseline or disposition proposals are waiting on this repository right now.</div>');
             return;
         }
 
@@ -1908,7 +1908,7 @@ async function loadPendingProposals() {
             </div>
         `);
     } catch {
-        setSectionHtml("repo-decision-proposals", '<div class="muted">Unavailable</div>');
+        setSectionHtml("repo-decision-proposals", '<div class="detail-note">Unable to load pending proposals for this repository right now.</div>');
     }
 }
 

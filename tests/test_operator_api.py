@@ -558,6 +558,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Prepare the handoff" in repo_js_response.text
     assert "Review queue is clear" in repo_js_response.text
     assert "Open baseline review" in repo_js_response.text
+    assert "No baseline or disposition proposals are waiting on this repository right now." in repo_js_response.text
 
 
 def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):
