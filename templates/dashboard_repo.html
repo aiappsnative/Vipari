@@ -27,6 +27,10 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
                     <span>Dashboard</span>
                 </a>
+                <a href="/dashboard" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Audit Logs">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
+                </a>
                 <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
@@ -235,7 +239,7 @@
                     </aside>
                 </section>
 
-                <section class="secondary-row repo-tab-panel" data-repo-tab-panel="audit drift">
+                <section class="secondary-row repo-tab-panel" data-repo-tab-panel="baseline">
                     <div class="secondary-panel" id="repo-storyline-section">
                         <div class="secondary-panel-title" id="repo-storyline-title">Supporting history</div>
                         <div id="featured-storyline" class="loading-shell" aria-busy="true">
@@ -357,7 +361,7 @@
                 </section>
 
                 <section class="secondary-grid repo-actions-grid repo-tab-panel" id="repo-actions-section" data-repo-tab-panel="audit baseline reports">
-                    <div class="secondary-panel repo-actions-panel" data-repo-tab-child="audit baseline">
+                    <div class="secondary-panel repo-actions-panel" data-repo-tab-child="audit">
                         <div class="secondary-panel-title">Review plan</div>
                         <div id="repo-actions-review" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading recommended review plan...</span>
@@ -367,7 +371,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel" id="repo-baseline-review-section" data-repo-tab-child="audit baseline">
+                    <div class="secondary-panel" id="repo-baseline-review-section" data-repo-tab-child="baseline">
                         <div class="secondary-panel-title">Baseline Review</div>
                         <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading baseline review state...</span>

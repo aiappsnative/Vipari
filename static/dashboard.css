@@ -5736,8 +5736,8 @@ body.control-page[data-theme="light"] {
 }
 
 .control-page-tab-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
 }
 
@@ -5745,9 +5745,8 @@ body.control-page[data-theme="light"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    min-height: 42px;
-    padding: 0 16px;
+    min-height: 34px;
+    padding: 0 12px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.10);
     background: rgba(255, 255, 255, 0.03);
@@ -5755,7 +5754,6 @@ body.control-page[data-theme="light"] {
     text-decoration: none;
     font-size: 12px;
     font-weight: 700;
-    text-align: center;
 }
 
 .control-page[data-theme="light"] .control-page-tab-link {
@@ -5997,13 +5995,36 @@ body.control-page[data-theme="light"] {
     align-items: start;
 }
 
-.compliance-hero-note {
-    max-width: 360px;
-}
-
 .compliance-shell-section,
 .compliance-content-shell {
     width: 100%;
+}
+
+.compliance-content-shell {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+}
+
+.compliance-content-shell > .control-page-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+}
+
+.compliance-metric-card {
+    padding: 12px 14px;
+    min-height: 0;
+    gap: 4px;
+}
+
+.compliance-metric-card strong {
+    font-size: 14px;
+    line-height: 1.1;
+}
+
+.compliance-metric-card .control-page-stat-label,
+.compliance-metric-card .control-page-microcopy {
+    font-size: 11px;
+    line-height: 1.35;
 }
 
 .compliance-header-bar {
@@ -6014,14 +6035,41 @@ body.control-page[data-theme="light"] {
     flex-wrap: wrap;
 }
 
-.compliance-plan-chip {
-    min-width: 140px;
+.compliance-overview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.95fr);
+    gap: 18px;
+    align-items: start;
 }
 
-.compliance-readiness-grid {
+.compliance-side-rail {
     display: grid;
-    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr);
     gap: 16px;
+    min-width: 0;
+}
+
+.compliance-repo-view-shell {
+    min-width: 0;
+}
+
+.compliance-repo-view-shell .table-shell {
+    overflow-x: hidden;
+}
+
+.compliance-repo-view-shell .data-table {
+    min-width: 0;
+    width: 100%;
+}
+
+.compliance-repo-view-shell .data-table th,
+.compliance-repo-view-shell .data-table td {
+    padding: 12px 14px;
+    vertical-align: top;
+}
+
+.compliance-repo-view-shell .data-table td,
+.compliance-repo-view-shell .data-table th {
+    overflow-wrap: anywhere;
 }
 
 .compliance-gap-grid {
@@ -6086,7 +6134,7 @@ body.control-page[data-theme="light"] {
 
 .compliance-export-summary-grid {
     display: grid;
-    grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 16px;
     align-items: start;
 }
@@ -6115,9 +6163,20 @@ body.control-page[data-theme="light"] {
     align-items: start;
 }
 
+@media (max-width: 1200px) {
+    .compliance-overview-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 @media (max-width: 960px) {
-    .compliance-readiness-grid,
     .compliance-export-summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 720px) {
+    .compliance-content-shell > .control-page-stat-grid {
         grid-template-columns: 1fr;
     }
 }

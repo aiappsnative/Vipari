@@ -291,7 +291,12 @@ def create_dashboard_page_router(
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	router.add_api_route("/dashboard", dashboard_index_handler, methods=["GET"], response_class=HTMLResponse)
-	router.add_api_route("/dashboard/{repo_full:path}/audit", dashboard_repo_audit_handler, methods=["GET"], response_class=HTMLResponse)
+
+	async def dashboard_repo_audit_owner_route(request: Request, repo_owner: str, repo_name: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
+		repo_full = f"{repo_owner}/{repo_name}"
+		return await dashboard_repo_audit_handler(request, repo_full, artifact=artifact, pr=pr, head_sha=head_sha)
+
+	router.add_api_route("/dashboard/{repo_owner}/{repo_name}/audit", dashboard_repo_audit_owner_route, methods=["GET"], response_class=HTMLResponse)
 	router.add_api_route("/dashboard/{repo_full:path}", dashboard_repo_handler, methods=["GET"], response_class=HTMLResponse)
 	return router
 

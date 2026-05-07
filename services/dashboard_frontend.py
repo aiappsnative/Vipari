@@ -99,7 +99,7 @@ def render_dashboard_index_page(
 def render_repo_dashboard_page(
     repo_full: str,
     theme_preference: str = "dark",
-    active_tab: str = "drift",
+    active_tab: str = "audit",
     *,
     shell_state: str = "active",
     shell_title: str = "",

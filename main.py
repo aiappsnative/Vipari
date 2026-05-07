@@ -3380,7 +3380,7 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
     return _attach_server_timing(response, timing_metrics)
 
 
-async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "drift", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
+async def dashboard_repo_page(request: Request, repo_full: str, tab: str = "audit", artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     return await _render_dashboard_repo_page(request, repo_full, requested_tab=tab, artifact=artifact, pr=pr, head_sha=head_sha)
 
 
@@ -3400,9 +3400,9 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
     if shell_mode and not _repo_visible_for_dashboard_shell(access_context, repo_full):
         raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
     render_started = time.perf_counter()
-    active_tab = requested_tab.strip().lower() if requested_tab else "drift"
+    active_tab = requested_tab.strip().lower() if requested_tab else "audit"
     if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
-        active_tab = "drift"
+        active_tab = "audit"
     shell_state = "active"
     shell_title = ""
     shell_body = ""

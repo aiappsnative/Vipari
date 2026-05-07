@@ -10,7 +10,10 @@ function resolveRepoFull() {
         return "";
     }
 
-    const encodedRepoFull = pathname.slice(prefix.length).replace(/^\/+|\/+$/g, "");
+    const encodedRepoFull = pathname
+        .slice(prefix.length)
+        .replace(/^\/+|\/+$/g, "")
+        .replace(/\/audit$/i, "");
     if (!encodedRepoFull) {
         return "";
     }
@@ -45,7 +48,7 @@ function resolveRepoTab() {
 
     const params = new URLSearchParams(window.location.search);
     const requestedTab = (params.get("tab") || "").trim().toLowerCase();
-    return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "drift";
+    return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "audit";
 }
 
 const activeRepoTab = resolveRepoTab();
