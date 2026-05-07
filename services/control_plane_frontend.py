@@ -924,9 +924,12 @@ def render_control_plane_mcp_page(
     active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active") if can_manage else 0
     active_key_bullet = ""
     if can_manage:
+        key_label = "key" if active_principal_count == 1 else "keys"
+        verb_label = "is" if active_principal_count == 1 else "are"
         active_key_bullet = (
-            f'<span class="control-page-info-bullet" title="{html_escape(str(active_principal_count))} active workspace API key(s)" '
-            f'aria-label="{html_escape(str(active_principal_count))} active workspace API keys">{html_escape(str(active_principal_count))}</span>'
+            f'<a class="control-page-header-meta-link" href="{html_escape(tab_urls["api-keys"])}" '
+            f'aria-label="Open API keys for {html_escape(str(active_principal_count))} active workspace API keys">'
+            f'{html_escape(str(active_principal_count))} active workspace API {key_label} {verb_label} available.</a>'
         )
     api_keys_section = _render_api_keys_section(
         principals=principals,
@@ -1613,7 +1616,8 @@ def render_control_plane_compliance_page(
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
-    status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if status_note else ""
+    show_status_note = bool(status_note and active_tab == "readiness")
+    status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if show_status_note else ""
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))

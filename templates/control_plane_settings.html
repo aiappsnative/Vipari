@@ -59,43 +59,24 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell" id="top">
-                <section class="control-page-hero">
-                    <div class="control-page-hero-copy">
-                        <p class="control-page-eyebrow">Workspace settings</p>
-                        <h1>{{WORKSPACE_NAME}}</h1>
-                        <p>{{STATUS_NOTE}}</p>
-                        {{ADMIN_CONTROL}}
-                    </div>
-                    <div class="control-page-hero-note">
-                        <span class="control-page-note-label">Workspace permission</span>
-                        <span class="control-page-note-copy">{{WORKSPACE_PERMISSION}} access. Settings cover workspace-wide controls, access, billing posture, and repository footprint.</span>
-                    </div>
-                </section>
-
-                <section class="control-page-stat-grid">
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Plan</span>
-                        <strong>{{PLAN_LABEL}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">PR comments</span>
-                        <strong>{{EFFECTIVE_PR_COMMENTS_STATUS}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Next payment</span>
-                        <strong>{{NEXT_PAYMENT_AT}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Setup state</span>
-                        <strong>{{SETUP_STATE}}</strong>
-                    </article>
+                <section class="control-page-sticky-header" aria-label="Settings sections">
+                    <nav class="control-page-sticky-tab-bar" aria-label="Settings sections">
+                        <a class="control-page-sticky-tab-link" href="#settings-workspace">Workspace</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-status">Status</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-members">Members</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-repositories">Repositories</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-billing">Billing</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-integrations">Integrations</a>
+                        <a class="control-page-sticky-tab-link" href="#settings-readiness">Readiness</a>
+                    </nav>
                 </section>
 
                 <section class="control-page-sections">
-                    <article class="control-page-section">
+                    <article class="control-page-section control-page-anchor-section" id="settings-workspace">
                         <div class="secondary-panel-title">Workspace identity</div>
                         <h2 class="control-page-section-title">Workspace settings</h2>
-                        <p class="control-page-copy">Owners and edit users can rename the workspace and manage repository comment behavior from one place.</p>
+                        <p class="control-page-copy">{{STATUS_NOTE}}</p>
+                        <p class="control-page-copy">{{WORKSPACE_PERMISSION}} access. Current plan: {{PLAN_LABEL}}. Owners and edit users can rename the workspace and manage repository comment behavior from one place.</p>
                         <form method="post" action="/app/settings" class="control-page-form">
                             {{CSRF_INPUT}}
                             <label class="control-page-label" for="workspace-name">Workspace name</label>
@@ -128,7 +109,7 @@
                         </form>
                     </article>
 
-                    <article class="control-page-section">
+                    <article class="control-page-section control-page-anchor-section" id="settings-status">
                         <div class="secondary-panel-title">Current status</div>
                         <h2 class="control-page-section-title">Control status</h2>
                         <p class="control-page-copy">Plan support, workspace toggles, and the linked installation determine how the workspace behaves right now.</p>
@@ -152,7 +133,7 @@
                         </div>
                     </article>
 
-                    <article class="control-page-section control-page-section-wide">
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section" id="settings-members">
                         <div class="secondary-panel-title">Workspace members</div>
                         <h2 class="control-page-section-title">Allowed users and permissions</h2>
                         <p class="control-page-copy">Workspace membership is shown in the product language users actually feel: owner, edit, and read access.</p>
@@ -160,14 +141,14 @@
                         {{WORKSPACE_MEMBERS}}
                     </article>
 
-                    <article class="control-page-section control-page-section-wide">
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section" id="settings-repositories">
                         <div class="secondary-panel-title">Repository footprint</div>
                         <h2 class="control-page-section-title">Onboarded and allocated repositories</h2>
                         <p class="control-page-copy">This is the live repository surface currently attached to the workspace.</p>
                         {{WORKSPACE_REPOS}}
                     </article>
 
-                    <article class="control-page-section">
+                    <article class="control-page-section control-page-anchor-section" id="settings-billing">
                         <div class="secondary-panel-title">Billing snapshot</div>
                         <div class="control-page-meta-grid">
                             <div class="control-page-meta-card">
@@ -185,14 +166,14 @@
                         </div>
                     </article>
 
-                    <article class="control-page-section">
+                    <article class="control-page-section control-page-anchor-section" id="settings-integrations">
                         <div class="secondary-panel-title">Agent integrations</div>
                         <h2 class="control-page-section-title">Vipari MCP connector</h2>
                         <p class="control-page-copy">Open the dedicated integrations page to download the customer MCP package, review the trust boundary, and see the exact agent setup steps for this workspace.</p>
                         <a class="control-page-button" href="/app/integrations/mcp">Open Agent Integrations</a>
                     </article>
 
-                    <article class="control-page-section">
+                    <article class="control-page-section control-page-anchor-section" id="settings-readiness">
                         <div class="secondary-panel-title">Workspace readiness</div>
                         <h2 class="control-page-section-title">Setup checklist</h2>
                         <p class="control-page-copy">Current access, billing, install, and onboarding milestones for this workspace.</p>

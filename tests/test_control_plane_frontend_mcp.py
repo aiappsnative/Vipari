@@ -100,8 +100,9 @@ def test_render_control_plane_mcp_overview_uses_header_badge_and_moves_tools_to_
         new_client_id=None,
     )
 
-    assert 'class="control-page-info-bullet"' in overview_html
-    assert '>1</span>' in overview_html
+    assert 'class="control-page-header-meta-link"' in overview_html
+    assert 'href="/app/integrations/mcp?tab=api-keys"' in overview_html
+    assert '1 active workspace API key is available.' in overview_html
     assert "Workspace machine principals" not in overview_html
     assert "Operational visibility" not in overview_html
     assert "Read-first MCP surface" in tools_html
