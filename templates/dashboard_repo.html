@@ -71,7 +71,7 @@
                         <a class="repo-audit-anchor" data-repo-tab-link="audit" href="{{REPO_TAB_AUDIT_URL}}">Audit</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="drift" href="{{REPO_TAB_DRIFT_URL}}">Drift</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="version-control" href="{{REPO_TAB_VERSION_CONTROL_URL}}">Version control</a>
-                        <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Baseline &amp; artifacts</a>
+                        <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Artifacts</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="compliance" href="{{REPO_TAB_COMPLIANCE_URL}}">Compliance</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="reports" href="{{REPO_TAB_REPORTS_URL}}">Reports</a>
                     </section>
@@ -244,7 +244,7 @@
                         </div>
                     </div>
                     <div class="secondary-panel" id="repo-baseline-review-section">
-                        <div class="secondary-panel-title">Baseline Review</div>
+                        <div class="secondary-panel-title panel-title-with-help">Artifact Sign-off <button type="button" class="inline-help-trigger" aria-label="Explain Artifact Sign-off"><span aria-hidden="true">?</span><span class="inline-help-bubble">Artifact Sign-off works at the artifact level. It asks whether each individual file has been explicitly approved by a human as trusted evidence, with pending, approved, or rejected status and rationale per artifact.</span></button></div>
                         <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
                             <span class="visually-hidden">Loading baseline review state...</span>
                             <div class="skeleton-stack" aria-hidden="true">
@@ -263,27 +263,27 @@
                         <div class="radar-header">
                             <div>
                                 <div class="secondary-panel-title">Posture radar</div>
-                                <div class="radar-title" id="repo-radar-title">Baseline vs current posture</div>
+                                <div class="radar-title" id="repo-radar-title">Reference baseline vs current posture</div>
                             </div>
-                            <div class="radar-meta" id="repo-radar-meta">Approved baseline and current repository posture across the tracked control dimensions.</div>
+                            <div class="radar-meta" id="repo-radar-meta">Reference baseline and current repository posture across the tracked control dimensions.</div>
                         </div>
                         <div class="radar-wrap">
                             <div class="radar-visual-shell">
                                 <canvas id="repo-posture-radar" width="420" height="320" aria-label="Repository posture radar"></canvas>
                             </div>
                             <div class="radar-legend" aria-hidden="true">
-                                <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(78, 103, 255, 0.9); border: 1px solid rgba(79, 106, 255, 0.9);"></span><span>Approved baseline</span></div>
+                                <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(78, 103, 255, 0.9); border: 1px solid rgba(79, 106, 255, 0.9);"></span><span>Reference baseline</span></div>
                                 <div class="radar-legend-item"><span class="radar-swatch" style="background: rgba(85, 230, 222, 0.92); border: 1px solid rgba(73, 223, 217, 0.92);"></span><span>Current posture</span></div>
                             </div>
                         </div>
-                        <div class="radar-axis-caption" id="repo-radar-caption">Version-control posture appears once Vipari has both an approved baseline snapshot and a current repository snapshot to compare.</div>
+                        <div class="radar-axis-caption" id="repo-radar-caption">Version-control posture appears once Vipari has both a reference baseline snapshot and a current repository snapshot to compare.</div>
                     </div>
                     <div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">
                         <div class="secondary-details secondary-details-static">
-                            <div class="secondary-details-summary secondary-details-summary-static">Version journey and baseline comparison</div>
+                            <div class="secondary-details-summary secondary-details-summary-static">Version journey and reference baseline</div>
                             <div class="secondary-disclosure-grid">
                                 <div class="secondary-panel secondary-panel-flat">
-                                    <div class="secondary-panel-title">Version journey</div>
+                                    <div class="secondary-panel-title panel-title-with-help">Version journey <button type="button" class="inline-help-trigger" aria-label="Explain Version journey"><span aria-hidden="true">?</span><span class="inline-help-bubble">Version Journey works at the snapshot level. It decides which point in history becomes the reference baseline for future comparisons, updating the comparison origin rather than approving individual artifacts.</span></button></div>
                                     <div id="repo-journey-summary" class="loading-shell" aria-busy="true">
                                         <span class="visually-hidden">Loading repository checkpoints...</span>
                                         <div class="skeleton-stack" aria-hidden="true">
@@ -302,7 +302,7 @@
                                     </div>
                                 </div>
                                 <div class="secondary-panel secondary-panel-flat" id="repo-compare-section">
-                                    <div class="secondary-panel-title">Baseline vs current</div>
+                                    <div class="secondary-panel-title">Reference baseline vs current</div>
                                     <div id="repo-journey-compare" class="loading-shell" aria-busy="true">
                                         <span class="visually-hidden">Loading baseline comparison...</span>
                                         <div class="skeleton-stack" aria-hidden="true">
@@ -512,7 +512,7 @@
         <div class="modal-backdrop" data-close-rebaseline="true"></div>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rebaseline-modal-title">
             <div class="modal-head">
-                <strong id="rebaseline-modal-title">Re-baseline from snapshot</strong>
+                <strong id="rebaseline-modal-title">Set as reference baseline</strong>
                 <button type="button" class="modal-close" data-close-rebaseline="true" aria-label="Close">×</button>
             </div>
             <div id="rebaseline-modal-summary" class="modal-body muted">Select a snapshot to review its delta.</div>

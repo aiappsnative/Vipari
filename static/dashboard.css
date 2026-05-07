@@ -4990,6 +4990,78 @@ body.repo-audit-page[data-theme="light"] {
     letter-spacing: -0.03em;
 }
 
+.repo-audit-page .panel-title-with-help {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.repo-audit-page .inline-help-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(239, 242, 245, 0.82);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: help;
+    padding: 0;
+}
+
+.repo-audit-page .inline-help-bubble {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 10px);
+    transform: translateX(-50%);
+    width: min(320px, 70vw);
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(20, 22, 28, 0.97);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+    color: rgba(239, 242, 245, 0.9);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.55;
+    letter-spacing: normal;
+    text-transform: none;
+    white-space: normal;
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transition: opacity var(--transition), visibility var(--transition);
+    z-index: 30;
+}
+
+.repo-audit-page .inline-help-trigger:hover .inline-help-bubble,
+.repo-audit-page .inline-help-trigger:focus-visible .inline-help-bubble {
+    opacity: 1;
+    visibility: visible;
+}
+
+.repo-audit-page .inline-help-trigger:focus-visible {
+    outline: 2px solid rgba(86, 239, 227, 0.55);
+    outline-offset: 2px;
+}
+
+.repo-audit-page[data-theme="light"] .inline-help-trigger {
+    border-color: rgba(112, 98, 84, 0.16);
+    background: rgba(112, 98, 84, 0.08);
+    color: rgba(47, 41, 37, 0.84);
+}
+
+.repo-audit-page[data-theme="light"] .inline-help-bubble {
+    border-color: rgba(112, 98, 84, 0.16);
+    background: rgba(255, 252, 247, 0.98);
+    color: var(--color-text);
+    box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12);
+}
+
 .repo-audit-page[data-theme="light"] .repo-setup-card-link {
     color: var(--color-text);
 }
