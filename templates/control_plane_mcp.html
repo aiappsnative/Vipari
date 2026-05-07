@@ -21,6 +21,10 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4zm9 7h7v-9h-7zM4 20h7v-5H4zm9-9h7V4h-7z"/></svg>
                     <span>Dashboard</span>
                 </a>
+                <a href="{{AUDIT_HREF}}" class="sidebar-nav-item" aria-label="Audit Logs">
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10"/><path d="M4 12h14"/><path d="M4 18h8"/><circle cx="19" cy="18" r="1.5"/></svg>
+                    <span>Audit Logs</span>
+                </a>
                 <a href="/app/repos" class="sidebar-nav-item" aria-label="Repositories">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
                     <span>Repositories</span>
@@ -53,22 +57,9 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell">
-                <section class="control-page-platform-header control-page-platform-header-mcp">
-                    <div class="control-page-platform-header-copy">
-                        <div class="control-page-platform-header-bar">
-                            <div>
-                                <p class="control-page-eyebrow">Agent Integrations</p>
-                                <h1>{{WORKSPACE_NAME}}</h1>
-                                <p>Download the Vipari MCP connector for your agent host and keep all workspace binding, tool shaping, and control-plane credentials on the Vipari side of the boundary.</p>
-                            </div>
-                            <div class="control-page-platform-meta">
-                                <span class="control-page-platform-chip">Plan: {{PLAN_LABEL}}</span>
-                                {{ADMIN_CONTROL}}
-                            </div>
-                        </div>
-                        <div class="control-page-tab-bar" role="tablist" aria-label="Agent integration sections">
-                            {{MCP_TAB_BAR}}
-                        </div>
+                <section class="control-page-sticky-header" aria-label="Agent integration tabs">
+                    <div class="control-page-sticky-tab-bar" role="tablist" aria-label="Agent integration sections">
+                        {{MCP_TAB_BAR}}
                     </div>
                 </section>
 
@@ -87,5 +78,48 @@
             </main>
         </div>
     </div>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const scope = "activity";
+            const rows = Array.from(document.querySelectorAll(`[data-filter-row="${scope}"]`));
+            const inputs = Array.from(document.querySelectorAll(`[data-filter-scope="${scope}"] [data-filter-target]`));
+            const status = document.querySelector(`[data-filter-status="${scope}"]`);
+            const reset = document.querySelector(`[data-filter-reset="${scope}"]`);
+            if (!rows.length || !inputs.length || !status || !reset) {
+                return;
+            }
+
+            const applyFilters = () => {
+                const filters = Object.fromEntries(
+                    inputs.map((input) => [input.dataset.filterTarget, (input.value || "").trim().toLowerCase()])
+                );
+                let visible = 0;
+                rows.forEach((row) => {
+                    const matches = Object.entries(filters).every(([key, value]) => {
+                        if (!value) {
+                            return true;
+                        }
+                        return (row.dataset[`filter${key.charAt(0).toUpperCase()}${key.slice(1)}`] || "").includes(value);
+                    });
+                    row.hidden = !matches;
+                    if (matches) {
+                        visible += 1;
+                    }
+                });
+                const activeCount = Object.values(filters).filter(Boolean).length;
+                status.textContent = activeCount
+                    ? `Showing ${visible} matching event${visible === 1 ? "" : "s"}.`
+                    : "Showing all events.";
+            };
+
+            inputs.forEach((input) => input.addEventListener("input", applyFilters));
+            reset.addEventListener("click", () => {
+                inputs.forEach((input) => {
+                    input.value = "";
+                });
+                applyFilters();
+            });
+        });
+    </script>
 </body>
 </html>

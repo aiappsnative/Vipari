@@ -2245,6 +2245,7 @@ async def mcp_integrations_page(request: Request):
     return HTMLResponse(
         render_control_plane_mcp_page(
             workspace_name=workspace.display_name,
+            audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,

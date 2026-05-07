@@ -447,23 +447,10 @@ def render_control_plane_billing_page(
     flow_context: dict[str, str],
     portal_url: str | None,
     csrf_token: str,
-    theme_preference: str = "dark",
 ) -> str:
     template = _load_template("control_plane_billing.html")
-    selected_plan = PLAN_DEFINITIONS.get(selected_plan_code)
-    selected_plan_label = selected_plan.label if selected_plan else current_plan_label
-    checkout_note = checkout_status_note or "Choose a plan to create or resume Stripe checkout."
-    normalized_subscription_status = (subscription_status or "not_started").replace("_", " ").strip() or "not started"
-    checkout_state_label = "Needs review"
-    lowered_note = checkout_note.lower()
-    if "accepted" in lowered_note or "activated" in lowered_note:
-        checkout_state_label = "Activated"
-    elif "returned" in lowered_note or "pending" in lowered_note:
-        checkout_state_label = "Pending"
-    elif "canceled" in lowered_note:
-        checkout_state_label = "Canceled"
     portal_block = (
-        f'<a class="control-page-button" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="billing-inline-note">Portal unavailable until a billing customer record exists.</span>'
+        f'<a class="subtle-link" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="subtle-link">Portal unavailable</span>'
     )
     flow_query = ""
     if flow_context:
@@ -474,13 +461,13 @@ def render_control_plane_billing_page(
         button_label = "Continue with this plan" if code == selected_plan_code else f"Choose {plan.label}"
         plan_cards.append(
             f'''
-            <article class="billing-plan-card{' billing-plan-card-active' if code == selected_plan_code else ''}">
-                <div class="secondary-panel-title">{html_escape(plan.label)}</div>
-                <h3 class="billing-plan-title">{html_escape(plan.label)}</h3>
-                <p class="control-page-copy">Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
+            <article class="action-card{' action-card-strong' if code == selected_plan_code else ''}">
+                <div class="eyebrow">{html_escape(plan.label)}</div>
+                <h2>{html_escape(plan.label)}</h2>
+                <p>Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
                 <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}">
                     {_csrf_input(csrf_token)}
-                    <button type="submit" class="control-page-button">{html_escape(button_label)}</button>
+                    <button type="submit" class="button">{html_escape(button_label)}</button>
                 </form>
             </article>
             '''
@@ -488,13 +475,10 @@ def render_control_plane_billing_page(
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{CURRENT_PLAN_LABEL}}", html_escape(current_plan_label))
-        .replace("{{SUBSCRIPTION_STATUS}}", html_escape(normalized_subscription_status.title()))
-        .replace("{{SELECTED_PLAN_LABEL}}", html_escape(selected_plan_label))
-        .replace("{{CHECKOUT_STATE_LABEL}}", html_escape(checkout_state_label))
-        .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_note))
+        .replace("{{SUBSCRIPTION_STATUS}}", html_escape(subscription_status))
+        .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_status_note or "Choose a plan to create or resume Stripe checkout."))
         .replace("{{PLAN_CARDS}}", "".join(plan_cards))
         .replace("{{PORTAL_ACTION}}", portal_block)
-        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
     )
 
 
@@ -879,6 +863,7 @@ def render_control_plane_help_page(
 def render_control_plane_mcp_page(
     *,
     workspace_name: str,
+    audit_href: str,
     plan_label: str,
     theme_preference: str,
     admin_url: str | None,
@@ -954,6 +939,10 @@ def render_control_plane_mcp_page(
             payload = json.loads(getattr(entry, "payload_json", "") or "{}")
         except (ValueError, TypeError):
             payload = {}
+        event_type = str(getattr(entry, "event_type", "unknown") or "unknown")
+        subject_type = str(getattr(entry, "subject_type", "workspace") or "workspace")
+        subject_id = str(getattr(entry, "subject_id", "n/a") or "n/a")
+        created_at = _format_timestamp(getattr(entry, "created_at", None))
         details: list[str] = []
         if isinstance(payload, dict):
             if payload.get("source"):
@@ -963,23 +952,48 @@ def render_control_plane_mcp_page(
                 details.append("scopes=" + ", ".join(str(scope) for scope in scopes))
             if payload.get("tool_name"):
                 details.append(f"tool={payload['tool_name']}")
+        subject_label = f"{subject_type}:{subject_id}"
         detail_text = " | ".join(details) if details else "Workspace automation activity"
         activity_rows += f"""
-        <tr>
-            <td>{html_escape(_format_timestamp(getattr(entry, 'created_at', None)))}</td>
-            <td><code>{html_escape(getattr(entry, 'event_type', 'unknown'))}</code></td>
-            <td>{html_escape(f"{getattr(entry, 'subject_type', 'workspace')}:{getattr(entry, 'subject_id', 'n/a')}")}</td>
+        <tr data-filter-row="activity"
+            data-filter-date="{html_escape(created_at.lower())}"
+            data-filter-event="{html_escape(event_type.lower())}"
+            data-filter-client="{html_escape(subject_id.lower())}"
+            data-filter-details="{html_escape((subject_label + ' ' + detail_text).lower())}">
+            <td>{html_escape(created_at)}</td>
+            <td><code>{html_escape(event_type)}</code></td>
+            <td><code class="control-page-monospace control-page-monospace-break">{html_escape(subject_label)}</code></td>
             <td>{html_escape(detail_text)}</td>
         </tr>"""
 
     if activity_rows:
         activity_section = f"""
-        <article class="control-page-section control-page-section-wide">
+        <article class="control-page-section control-page-section-wide control-page-section-table-wide">
             <div class="secondary-panel-title">Workspace activity</div>
             <h2 class="control-page-section-title">Recent integration and API-key events</h2>
             <p class="control-page-copy">This feed keeps connector setup, key rotation, and broker actions together on one page.</p>
-            <div class="control-page-table-wrap">
-                <table class="control-page-table">
+            <div class="control-page-filter-bar" data-filter-scope="activity">
+                <label class="control-page-filter-field">
+                    <span class="control-page-filter-label">Date</span>
+                    <input class="control-page-input" type="search" placeholder="YYYY-MM-DD" data-filter-target="date" />
+                </label>
+                <label class="control-page-filter-field">
+                    <span class="control-page-filter-label">Event</span>
+                    <input class="control-page-input" type="search" placeholder="principal.created" data-filter-target="event" />
+                </label>
+                <label class="control-page-filter-field">
+                    <span class="control-page-filter-label">Client ID</span>
+                    <input class="control-page-input" type="search" placeholder="client id" data-filter-target="client" />
+                </label>
+                <label class="control-page-filter-field control-page-filter-field-wide">
+                    <span class="control-page-filter-label">Details</span>
+                    <input class="control-page-input" type="search" placeholder="subject, scope, source, or tool" data-filter-target="details" />
+                </label>
+                <button type="button" class="control-page-filter-reset" data-filter-reset="activity">Clear filters</button>
+            </div>
+            <div class="control-page-filter-summary" data-filter-status="activity" aria-live="polite">Showing all events.</div>
+            <div class="control-page-table-wrap control-page-table-wrap-wide">
+                <table class="control-page-table control-page-table-wide">
                     <thead>
                         <tr><th>When</th><th>Event</th><th>Subject</th><th>Details</th></tr>
                     </thead>
@@ -1054,33 +1068,6 @@ def render_control_plane_mcp_page(
             <h2 class="control-page-section-title">Host configuration</h2>
             <pre class="help-page-flow">{html_escape(config_snippet)}</pre>
             <p class="control-page-copy">The connector never receives internal Vipari bearer tokens. It uses the machine-principal credentials you create for this workspace only to obtain a short-lived broker token.</p>
-            <p class="control-page-copy">If your MCP host manages environment variables in its own UI, copy these same values there instead of relying on a local <code>.env</code> file.</p>
-        </article>
-
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Rollout checklist</div>
-            <h2 class="control-page-section-title">First successful connection</h2>
-            <pre class="help-page-flow">1. Create or rotate a workspace API key with drift.read
-2. Copy the client secret immediately when it is shown
-3. Add the broker URL, client ID, and client secret to the customer host
-4. Restart the MCP host so the new environment values are loaded
-5. Confirm the host lists vipari.list_repos, vipari.get_repo_posture, vipari.get_repo_casefile, and vipari.list_escalations</pre>
-            <p class="control-page-copy">The client secret is shown once at creation time. If it is lost, create a new key and revoke the old one rather than trying to recover the original secret.</p>
-        </article>
-
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Troubleshooting</div>
-            <h2 class="control-page-section-title">Fast unblock guidance</h2>
-            <pre class="help-page-flow">401 Invalid client credentials
-  - regenerate the API key and paste the new secret carefully
-
-Connection refused or timeout
-  - confirm the broker URL points at the reachable Vipari app base URL
-
-No tools appear in the host
-  - confirm the host restarted after config changes
-  - confirm the workspace key includes drift.read</pre>
-            <p class="control-page-copy">Keep the downloaded package, the created API key, and recent integration activity in sync during rollout so a customer host never ends up using an expired or partial configuration.</p>
         </article>
 
         <article class="control-page-section">
@@ -1105,6 +1092,7 @@ No tools appear in the host
 
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{AUDIT_HREF}}", html_escape(audit_href))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{ADMIN_CONTROL}}", admin_control)
@@ -1935,13 +1923,12 @@ def _render_api_keys_section(
         status_class = "control-page-badge-active" if p.status == "active" else "control-page-badge-revoked"
         # Highlight the newly-created row
         row_class = ' class="control-page-table-row-new"' if (new_client_id and p.client_id == new_client_id) else ""
-        # Show first 16 chars of client_id; not secret, but enough to match CI config.
-        client_id_display = html_escape(p.client_id[:16]) + "&#8230;"
+        client_id_display = html_escape(p.client_id)
         created_label = _fmt_date(getattr(p, "created_at", None))
         rows_html += f"""
         <tr{row_class}>
             <td><code>{html_escape(p.display_name)}</code></td>
-            <td><code class="control-page-monospace" title="{html_escape(p.client_id)}">{client_id_display}</code></td>
+            <td><code class="control-page-monospace control-page-monospace-break">{client_id_display}</code></td>
             <td>{scope_badges}</td>
             <td><span class="control-page-badge {status_class}">{html_escape(p.status)}</span></td>
             <td>{created_label}</td>
@@ -1951,8 +1938,8 @@ def _render_api_keys_section(
     table_html = ""
     if principals:
         table_html = f"""
-        <div class="control-page-table-wrap">
-            <table class="control-page-table">
+        <div class="control-page-table-wrap control-page-table-wrap-wide">
+            <table class="control-page-table control-page-table-wide">
                 <thead>
                     <tr>
                         <th>Name</th><th>Client ID</th><th>Scopes</th><th>Status</th><th>Created</th><th>Actions</th>
@@ -2007,7 +1994,7 @@ def _render_api_keys_section(
         create_form = '<p class="control-page-copy">Only workspace owners and admins can create API keys.</p>'
 
     return f"""
-    <article class="control-page-section">
+    <article class="control-page-section control-page-section-wide control-page-section-table-wide">
         <div class="secondary-panel-title">Workspace API keys</div>
         <h2 class="control-page-section-title">Machine principal credentials</h2>
         <p class="control-page-copy">

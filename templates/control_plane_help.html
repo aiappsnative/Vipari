@@ -38,7 +38,7 @@
                     <span>Settings</span>
                 </a>
                 <a href="/app/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations">
-                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h8v8H8z"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7v4H4z"/><path d="M13 6h7v6h-7z"/><path d="M4 13h7v5H4z"/><path d="M13 14h7v4h-7z"/></svg>
                     <span>Agent Integrations</span>
                 </a>
                 <a href="/app/help" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Help">
@@ -53,20 +53,16 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell">
-                <section class="control-page-hero">
-                    <div class="control-page-hero-copy">
-                        <p class="control-page-eyebrow">Operator assistance</p>
-                        <h1>Help that gets operators unstuck</h1>
-                        <p>{{HELP_CONTEXT_SUMMARY}}</p>
-                        {{ADMIN_CONTROL}}
-                    </div>
-                    <div class="control-page-hero-note">
-                        <span class="control-page-note-label">Start here</span>
-                        <span class="control-page-note-copy">{{HELP_START_HERE_COPY}}</span>
-                    </div>
+                <section class="control-page-sticky-header" aria-label="Help sections">
+                    <nav class="control-page-sticky-tab-bar" aria-label="Help sections">
+                        <a class="control-page-sticky-tab-link" href="#help-next-move">Recommended next move</a>
+                        <a class="control-page-sticky-tab-link" href="#help-quick-start">Quick start</a>
+                        <a class="control-page-sticky-tab-link" href="#help-operating-model">Operating model</a>
+                        <a class="control-page-sticky-tab-link" href="#help-support">Support</a>
+                    </nav>
                 </section>
 
-                <section class="control-page-stat-grid">
+                <section class="control-page-stat-grid control-page-anchor-section" id="help-next-move">
                     <article class="control-page-stat-card">
                         <span class="control-page-stat-label">Workspace</span>
                         <strong>{{WORKSPACE_NAME}}</strong>
@@ -85,9 +81,11 @@
                     {{HELP_STATUS_CARDS}}
                 </section>
 
-                {{HELP_NEXT_STEP_PANEL}}
+                <section class="control-page-sections control-page-anchor-section">
+                    {{HELP_NEXT_STEP_PANEL}}
+                </section>
 
-                <section class="control-page-sections">
+                <section class="control-page-sections control-page-anchor-section" id="help-quick-start">
                     <article class="control-page-section control-page-section-wide help-page-rich-text">
                         <p class="secondary-panel-title">Quick start</p>
                         <h2 class="control-page-section-title">Use the platform in this order</h2>
@@ -120,6 +118,19 @@
                         </div>
                     </article>
 
+                    <article class="control-page-section help-page-rich-text">
+                        <p class="secondary-panel-title">Page guide</p>
+                        <h2 class="control-page-section-title">Which page should I open?</h2>
+                        <ol class="help-page-list help-page-list-numbered">
+                            <li><strong>Repositories</strong> when you need to confirm visibility, onboarding, or whether a repo is in scope.</li>
+                            <li><strong>Dashboard</strong> when you need to inspect drift and understand what changed.</li>
+                            <li><strong>Compliance</strong> when you need evidence status, freshness, or export workflows.</li>
+                            <li><strong>Settings</strong> when access, plan limits, or workspace controls may be affecting behavior.</li>
+                        </ol>
+                    </article>
+                </section>
+
+                <section class="control-page-sections control-page-anchor-section" id="help-operating-model">
                     <article class="control-page-section help-page-rich-text">
                         <p class="secondary-panel-title">Why the name</p>
                         <h2 class="control-page-section-title">Why Vipari</h2>
@@ -180,17 +191,9 @@
                         </div>
                     </article>
 
-                    <article class="control-page-section help-page-rich-text">
-                        <p class="secondary-panel-title">Page guide</p>
-                        <h2 class="control-page-section-title">Which page should I open?</h2>
-                        <ol class="help-page-list help-page-list-numbered">
-                            <li><strong>Repositories</strong> when you need to confirm visibility, onboarding, or whether a repo is in scope.</li>
-                            <li><strong>Dashboard</strong> when you need to inspect drift and understand what changed.</li>
-                            <li><strong>Compliance</strong> when you need evidence status, freshness, or export workflows.</li>
-                            <li><strong>Settings</strong> when access, plan limits, or workspace controls may be affecting behavior.</li>
-                        </ol>
-                    </article>
+                </section>
 
+                <section class="control-page-sections control-page-anchor-section" id="help-support">
                     <article class="control-page-section help-page-rich-text">
                         <p class="secondary-panel-title">Support expectations</p>
                         <h2 class="control-page-section-title">What good help requests include</h2>
