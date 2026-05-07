@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Repo Setup | Vipari</title>
+    <title>Repositories | Vipari</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/theme-toggle.js"></script>
 </head>
-<body class="repo-setup-page" data-theme="{{THEME_PREFERENCE}}">
+<body class="control-page repo-setup-page" data-theme="{{THEME_PREFERENCE}}">
     <div class="app-shell">
         <nav class="sidebar" aria-label="Primary navigation">
             <a href="/dashboard" class="sidebar-logo" aria-label="Vipari home">
@@ -56,35 +56,20 @@
         </nav>
 
         <div class="main-content">
-            <main class="page-scroll repo-setup-scroll">
-                <section class="repo-setup-hero">
-                    <div class="repo-setup-hero-copy">
-                        <p class="repo-setup-eyebrow">Repository setup</p>
-                        <h1>{{WORKSPACE_NAME}}</h1>
-                        <p>Allocate repositories from the synced installation, then complete the first onboarding pass so the dashboard can track repo posture and drift history.</p>
-                    </div>
-                    <div class="repo-setup-hero-note">
-                        <span class="repo-setup-note-label">Control plane</span>
-                        <span class="repo-setup-note-copy">Repository setup now follows the same shell as the dashboard so navigation and scanning feel like one product surface.</span>
-                    </div>
+            <main class="page-scroll control-page-shell repo-setup-scroll" id="top">
+                <section class="control-page-sticky-header" aria-label="Repository sections">
+                    <nav class="control-page-sticky-tab-bar" aria-label="Repository sections">
+                        <a class="control-page-sticky-tab-link" href="#repo-onboarded">Onboarded snapshot</a>
+                        <a class="control-page-sticky-tab-link" href="#repo-inventory">Available repositories</a>
+                    </nav>
                 </section>
 
-                <section class="repo-setup-section">
+                <section class="repo-setup-section control-page-anchor-section" id="repo-onboarded">
                     <div class="repo-setup-section-head">
                         <div>
-                            <h2>Repository Inventory</h2>
-                            <p>Every repository visible to the signed-in GitHub account. Use onboard to open the GitHub App installation page for that repository, or confirm that it is already there.</p>
-                            <p class="repo-setup-inventory-summary">{{INVENTORY_SUMMARY}}</p>
-                        </div>
-                    </div>
-                    <section class="repo-setup-inventory-list">{{INVENTORY_CARDS}}</section>
-                </section>
-
-                <section class="repo-setup-section">
-                    <div class="repo-setup-section-head">
-                        <div>
-                            <h2>Onboarded Repository Snapshot</h2>
-                            <p>Workspace-level rollout metrics plus a compact summary of coverage, baseline status, and history depth for each onboarded repository.</p>
+                            <div class="secondary-panel-title">Workspace rollout</div>
+                            <h2 class="control-page-section-title">Onboarded Repository Snapshot</h2>
+                            <p class="control-page-copy">Workspace-level rollout metrics plus a compact summary of coverage, baseline status, and history depth for each onboarded repository.</p>
                         </div>
                         <label class="repo-setup-sort-control">
                             <span class="repo-setup-meta-label">Sort by</span>
@@ -99,6 +84,18 @@
                     </div>
                     <section class="repo-setup-metrics">{{ONBOARDING_METRICS}}</section>
                     <section class="repo-setup-grid repo-setup-grid-strong repo-setup-summary-grid">{{ONBOARDING_SUMMARY_CARDS}}</section>
+                </section>
+
+                <section class="repo-setup-section control-page-anchor-section" id="repo-inventory">
+                    <div class="repo-setup-section-head">
+                        <div>
+                            <div class="secondary-panel-title">Repository inventory</div>
+                            <h2 class="control-page-section-title">Available Repositories</h2>
+                            <p class="control-page-copy">Every repository visible to the signed-in GitHub account. Use onboard to open the GitHub App installation page for that repository, or confirm that it is already there.</p>
+                            <p class="repo-setup-inventory-summary">{{INVENTORY_SUMMARY}}</p>
+                        </div>
+                    </div>
+                    <section class="repo-setup-inventory-list">{{INVENTORY_CARDS}}</section>
                 </section>
             </main>
         </div>

@@ -3985,196 +3985,23 @@ body.dashboard-index-page[data-theme="light"] {
     }
 }
 
-body.repo-setup-page {
-    --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.10), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.12), transparent 26%), linear-gradient(180deg, #17181b 0%, #1d1e21 100%);
-    font-family: var(--font-body);
-    background: var(--dashboard-bg);
-    color: #eef1f4;
-}
-
-body.repo-setup-page[data-theme="light"] {
-    --dashboard-bg: radial-gradient(circle at 18% 12%, rgba(90, 234, 227, 0.16), transparent 22%), radial-gradient(circle at 78% 18%, rgba(75, 92, 219, 0.14), transparent 26%), linear-gradient(180deg, #eef1ea 0%, #f6f0e7 100%);
-    color: var(--color-text);
-}
-
-.repo-setup-page .app-shell {
-    grid-template-columns: 192px minmax(0, 1fr);
-    min-height: 100vh;
-    padding: 30px;
-    gap: 22px;
-}
-
-.repo-setup-page .sidebar {
-    position: static;
-    width: auto;
-    min-height: auto;
-    align-items: stretch;
-    padding: 20px 0 0;
-    border-right: 0;
-    border: 1px solid rgba(255, 255, 255, 0.11);
-    border-radius: 18px;
-    background: linear-gradient(180deg, rgba(25, 26, 31, 0.88), rgba(28, 29, 34, 0.8));
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 24px 50px rgba(0, 0, 0, 0.32);
-    overflow: hidden;
-}
-
-.repo-setup-page[data-theme="light"] .sidebar {
-    border-color: rgba(112, 98, 84, 0.18);
-    background: linear-gradient(180deg, rgba(255, 250, 244, 0.96), rgba(244, 236, 225, 0.92));
-    box-shadow: inset 0 0 0 1px rgba(112, 98, 84, 0.04), 0 24px 50px rgba(91, 76, 59, 0.14);
-}
-
-.repo-setup-page .sidebar-logo {
-    width: 100%;
-    height: auto;
-    margin: 0;
-    padding: 0 22px 18px;
-    justify-content: flex-start;
-}
-
-.repo-setup-page .sidebar-logo-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(86, 241, 230, 0.18), rgba(86, 241, 230, 0.04));
-    color: #56f1e6;
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.08em;
-}
-
-.repo-setup-page[data-theme="light"] .sidebar-logo-mark {
-    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
-    color: var(--color-primary);
-}
-
-.repo-setup-page .sidebar-panel {
-    display: grid;
-    gap: 6px;
-    padding: 12px 0 20px;
-}
-
-.repo-setup-page .sidebar-nav-item {
-    width: auto;
-    height: auto;
-    margin: 0 0 0 14px;
-    padding: 12px 18px 12px 14px;
-    border-left: 2px solid transparent;
-    border-radius: 0;
-    justify-content: flex-start;
-    gap: 12px;
-    background: transparent;
-    color: rgba(239, 242, 245, 0.82);
-    font-size: 14px;
-    font-weight: 600;
-}
-
-.repo-setup-page[data-theme="light"] .sidebar-nav-item {
-    color: rgba(47, 41, 37, 0.84);
-}
-
-.repo-setup-page .sidebar-nav-item:hover,
-.repo-setup-page .sidebar-nav-item-active {
-    background: linear-gradient(90deg, rgba(86, 241, 230, 0.10), rgba(86, 241, 230, 0.02));
-    border-left-color: #45ddd2;
-    color: #f3ffff;
-}
-
-.repo-setup-page[data-theme="light"] .sidebar-nav-item:hover,
-.repo-setup-page[data-theme="light"] .sidebar-nav-item-active {
-    background: linear-gradient(90deg, rgba(59, 125, 134, 0.12), rgba(59, 125, 134, 0.03));
-    border-left-color: var(--color-primary);
-    color: var(--color-text);
-}
-
-.repo-setup-page .sidebar-nav-item::after {
-    display: none;
-}
-
-.repo-setup-page .sidebar-nav-icon {
-    width: 18px;
-    height: 18px;
-    stroke: currentColor;
-    fill: none;
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-.repo-setup-page .sidebar-profile-wrap {
-    margin-top: auto;
-    display: flex;
-    justify-content: center;
-    padding: 16px 0 20px;
-}
-
-.repo-setup-page .sidebar-profile-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.05);
-    color: rgba(239, 242, 245, 0.82);
-    text-decoration: none;
-    font-size: 14px;
-    font-weight: 800;
-}
-
-.repo-setup-page[data-theme="light"] .sidebar-profile-link {
-    border-color: rgba(112, 98, 84, 0.14);
-    background: rgba(112, 98, 84, 0.06);
-    color: rgba(47, 41, 37, 0.84);
-}
-
-.repo-setup-page .page-scroll {
-    overflow: visible;
-    padding: 0;
-}
-
 .repo-setup-page .repo-setup-scroll {
     display: grid;
     gap: 24px;
 }
 
-.repo-setup-page .repo-setup-hero,
 .repo-setup-page .repo-setup-section {
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.11);
-    background: linear-gradient(180deg, rgba(28, 29, 34, 0.92), rgba(22, 23, 28, 0.88));
-    box-shadow: 0 26px 60px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    border-radius: 18px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+    padding: 24px;
 }
 
-.repo-setup-page[data-theme="light"] .repo-setup-hero,
 .repo-setup-page[data-theme="light"] .repo-setup-section {
-    border-color: rgba(112, 98, 84, 0.16);
-    background: linear-gradient(180deg, rgba(255, 252, 247, 0.95), rgba(247, 241, 233, 0.94));
-    box-shadow: 0 24px 44px rgba(91, 76, 59, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    box-shadow: 0 18px 44px rgba(91, 76, 59, 0.12);
 }
 
-.repo-setup-page .repo-setup-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-    gap: 24px;
-    padding: 28px 30px;
-    align-items: end;
-}
-
-.repo-setup-page .repo-setup-eyebrow {
-    margin: 0 0 10px;
-    color: rgba(89, 235, 228, 0.72);
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    font-size: 0.75rem;
-    font-weight: 700;
-}
-
-.repo-setup-page .repo-setup-hero h1,
 .repo-setup-page .repo-setup-section-head h2,
 .repo-setup-page .repo-setup-card h3 {
     margin: 0;
@@ -4182,12 +4009,6 @@ body.repo-setup-page[data-theme="light"] {
     letter-spacing: -0.04em;
 }
 
-.repo-setup-page .repo-setup-hero h1 {
-    font-size: clamp(2.2rem, 4vw, 3.6rem);
-    color: #f4f8fb;
-}
-
-.repo-setup-page[data-theme="light"] .repo-setup-hero h1,
 .repo-setup-page[data-theme="light"] .repo-setup-section-head h2,
 .repo-setup-page[data-theme="light"] .repo-setup-inventory-name,
 .repo-setup-page[data-theme="light"] .repo-setup-card h3,
@@ -4195,15 +4016,13 @@ body.repo-setup-page[data-theme="light"] {
     color: var(--color-text);
 }
 
-.repo-setup-page .repo-setup-hero p,
 .repo-setup-page .repo-setup-section-head p,
 .repo-setup-page .repo-setup-card p {
-    color: rgba(196, 203, 210, 0.68);
-    font-size: 0.98rem;
-    line-height: 1.65;
+    color: var(--color-text-muted);
+    font-size: 14px;
+    line-height: 1.7;
 }
 
-.repo-setup-page[data-theme="light"] .repo-setup-hero p,
 .repo-setup-page[data-theme="light"] .repo-setup-section-head p,
 .repo-setup-page[data-theme="light"] .repo-setup-card p,
 .repo-setup-page[data-theme="light"] .repo-setup-metric-foot,
@@ -4211,17 +4030,6 @@ body.repo-setup-page[data-theme="light"] {
     color: var(--color-text-muted);
 }
 
-.repo-setup-page .repo-setup-hero-note {
-    display: grid;
-    gap: 8px;
-    align-self: stretch;
-    padding: 18px 20px;
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.repo-setup-page[data-theme="light"] .repo-setup-hero-note,
 .repo-setup-page[data-theme="light"] .repo-setup-inventory-row,
 .repo-setup-page[data-theme="light"] .repo-setup-metric-card,
 .repo-setup-page[data-theme="light"] .repo-setup-card {
@@ -4229,30 +4037,18 @@ body.repo-setup-page[data-theme="light"] {
     background: rgba(255, 255, 255, 0.64);
 }
 
-.repo-setup-page .repo-setup-note-label,
 .repo-setup-page .repo-setup-card-label,
 .repo-setup-page .repo-setup-meta-label {
-    color: rgba(188, 195, 202, 0.54);
-    font-size: 11px;
+    color: var(--color-text-faint);
+    font-size: var(--text-sm);
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
 }
 
-.repo-setup-page[data-theme="light"] .repo-setup-note-label,
 .repo-setup-page[data-theme="light"] .repo-setup-card-label,
 .repo-setup-page[data-theme="light"] .repo-setup-meta-label {
     color: var(--color-text-faint);
-}
-
-.repo-setup-page .repo-setup-note-copy {
-    color: rgba(236, 241, 245, 0.88);
-    font-size: 13px;
-    line-height: 1.6;
-}
-
-.repo-setup-page .repo-setup-section {
-    padding: 24px 26px 28px;
 }
 
 .repo-setup-page .repo-setup-section-head {
@@ -4265,13 +4061,12 @@ body.repo-setup-page[data-theme="light"] {
 }
 
 .repo-setup-page .repo-setup-section-head h2 {
-    color: #f0f4f7;
-    font-size: 22px;
+    color: var(--color-text);
 }
 
 .repo-setup-page .repo-setup-inventory-summary {
     margin: 10px 0 0;
-    color: rgba(196, 203, 210, 0.68);
+    color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.02em;
@@ -4281,18 +4076,16 @@ body.repo-setup-page[data-theme="light"] {
     min-height: 40px;
     padding: 0 14px;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: rgba(255, 255, 255, 0.04);
-    color: rgba(239, 242, 245, 0.84);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface-2);
+    color: var(--color-text);
     font: inherit;
     font-size: 13px;
     font-weight: 700;
 }
 
 .repo-setup-page .repo-setup-sort-select:focus {
-    border-color: rgba(86, 239, 227, 0.34);
-    background: rgba(86, 239, 227, 0.10);
-    color: #f3ffff;
+    border-color: var(--color-primary-outline);
     outline: none;
 }
 
@@ -4324,12 +4117,12 @@ body.repo-setup-page[data-theme="light"] {
     gap: 12px;
     padding: 10px 12px;
     border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
 }
 
 .repo-setup-page .repo-setup-inventory-name {
-    color: #f4f8fb;
+    color: var(--color-text);
     font-size: 13px;
     font-weight: 700;
     line-height: 1.3;
@@ -4357,19 +4150,19 @@ body.repo-setup-page[data-theme="light"] {
     gap: 10px;
     padding: 18px 20px;
     border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: linear-gradient(180deg, rgba(34, 40, 44, 0.92), rgba(25, 29, 32, 0.9));
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
 }
 
 .repo-setup-page .repo-setup-metric-card strong {
-    color: #f4f8fb;
+    color: var(--color-text);
     font-size: 2rem;
     font-weight: 800;
     letter-spacing: -0.05em;
 }
 
 .repo-setup-page .repo-setup-metric-foot {
-    color: rgba(196, 203, 210, 0.68);
+    color: var(--color-text-muted);
     font-size: 13px;
     line-height: 1.5;
 }
@@ -4379,13 +4172,17 @@ body.repo-setup-page[data-theme="light"] {
     gap: 14px;
     padding: 22px;
     border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
     min-height: 220px;
 }
 
 .repo-setup-page .repo-setup-card-strong {
-    background: linear-gradient(180deg, rgba(38, 48, 54, 0.9), rgba(27, 33, 37, 0.92));
+    background: linear-gradient(180deg, rgba(23, 31, 36, 0.96), rgba(18, 23, 28, 0.98));
+}
+
+.repo-setup-page[data-theme="light"] .repo-setup-card-strong {
+    background: linear-gradient(180deg, rgba(246, 249, 249, 0.96), rgba(239, 244, 243, 0.98));
 }
 
 .repo-setup-page .repo-setup-card-compact {
@@ -4410,7 +4207,7 @@ body.repo-setup-page[data-theme="light"] {
 }
 
 .repo-setup-page .repo-setup-card h3 {
-    color: #f4f8fb;
+    color: var(--color-text);
     font-size: 22px;
     line-height: 1.15;
     overflow-wrap: anywhere;
@@ -4422,9 +4219,9 @@ body.repo-setup-page[data-theme="light"] {
     justify-content: center;
     padding: 7px 10px;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    background: rgba(255, 255, 255, 0.05);
-    color: rgba(237, 242, 246, 0.82);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface-3);
+    color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 700;
 }
@@ -4437,7 +4234,7 @@ body.repo-setup-page[data-theme="light"] {
 
 .repo-setup-page .repo-setup-chip-strong {
     background: rgba(86, 239, 227, 0.12);
-    color: #61eee4;
+    color: var(--color-primary);
 }
 
 .repo-setup-page[data-theme="light"] .repo-setup-chip-strong {
@@ -4487,7 +4284,7 @@ body.repo-setup-page[data-theme="light"] {
     gap: 6px;
     padding: 10px 12px;
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-surface-3);
 }
 
 .repo-setup-page .repo-setup-card-actions {
@@ -4499,13 +4296,13 @@ body.repo-setup-page[data-theme="light"] {
 }
 
 .repo-setup-page .repo-setup-card-note {
-    color: rgba(196, 203, 210, 0.68);
+    color: var(--color-text-muted);
     font-size: 13px;
     font-weight: 600;
 }
 
 .repo-setup-page .repo-setup-meta-value {
-    color: rgba(240, 244, 248, 0.9);
+    color: var(--color-text);
     font-size: 13px;
     font-weight: 700;
 }
@@ -4531,15 +4328,6 @@ body.repo-setup-page[data-theme="light"] {
 }
 
 @media (max-width: 1120px) {
-    .repo-setup-page .app-shell {
-        grid-template-columns: 1fr;
-        padding: 18px;
-    }
-
-    .repo-setup-page .repo-setup-hero {
-        grid-template-columns: 1fr;
-    }
-
     .repo-setup-page .repo-setup-metrics {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
