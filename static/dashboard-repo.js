@@ -681,9 +681,9 @@ function drawRepoRadar(repoPayload) {
     const radius = 118;
     const angleStep = (Math.PI * 2) / vectors.labels.length;
     const darkTheme = document.body?.dataset?.theme !== "light";
-    const ringColor = darkTheme ? "rgba(255,255,255,0.10)" : "rgba(112, 98, 84, 0.14)";
-    const axisColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.12)";
-    const labelColor = darkTheme ? "rgba(221, 222, 225, 0.55)" : "rgba(77, 68, 60, 0.72)";
+    const ringColor = darkTheme ? "rgba(255,255,255,0.10)" : "rgba(112, 98, 84, 0.22)";
+    const axisColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.18)";
+    const labelColor = darkTheme ? "rgba(221, 222, 225, 0.55)" : "rgba(77, 68, 60, 0.84)";
 
     for (let level = 1; level <= 4; level += 1) {
         const scale = level / 4;
@@ -717,7 +717,7 @@ function drawRepoRadar(repoPayload) {
         const labelX = centerX + Math.cos(angle) * (radius + 22);
         const labelY = centerY + Math.sin(angle) * (radius + 22);
         context.fillStyle = labelColor;
-        context.font = "500 13px Inter";
+        context.font = "500 13px Manrope";
         context.textAlign = labelX > centerX + 10 ? "left" : labelX < centerX - 10 ? "right" : "center";
         context.textBaseline = labelY > centerY + 10 ? "top" : labelY < centerY - 10 ? "bottom" : "middle";
         context.fillText(label, labelX, labelY);

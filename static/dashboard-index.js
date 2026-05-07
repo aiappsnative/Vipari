@@ -565,16 +565,19 @@ function drawDriftRing(percent) {
     const lineWidth = 10;
     const start = -Math.PI / 2;
     const end = start + ((Math.PI * 2) * clamp(percent, 0, 100)) / 100;
+    const darkTheme = document.body?.dataset?.theme !== "light";
+    const trackColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.20)";
+    const activeColor = darkTheme ? "#52e0d5" : "#1f7d88";
 
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.beginPath();
-    context.strokeStyle = "rgba(255,255,255,0.08)";
+    context.strokeStyle = trackColor;
     context.lineWidth = lineWidth;
     context.arc(center, center, radius, 0, Math.PI * 2);
     context.stroke();
 
     context.beginPath();
-    context.strokeStyle = "#52e0d5";
+    context.strokeStyle = activeColor;
     context.lineWidth = lineWidth;
     context.lineCap = "round";
     context.arc(center, center, radius, start, end);
@@ -682,6 +685,10 @@ function drawRadar(repo, repoPayload = null) {
     const centerY = canvas.height / 2 + 10;
     const radius = 118;
     const angleStep = (Math.PI * 2) / vectors.labels.length;
+    const darkTheme = document.body?.dataset?.theme !== "light";
+    const ringColor = darkTheme ? "rgba(255,255,255,0.10)" : "rgba(112, 98, 84, 0.22)";
+    const axisColor = darkTheme ? "rgba(255,255,255,0.08)" : "rgba(112, 98, 84, 0.18)";
+    const labelColor = darkTheme ? "rgba(221, 222, 225, 0.55)" : "rgba(77, 68, 60, 0.84)";
 
     for (let level = 1; level <= 4; level += 1) {
         const scale = level / 4;
@@ -697,7 +704,7 @@ function drawRadar(repo, repoPayload = null) {
             }
         });
         context.closePath();
-        context.strokeStyle = "rgba(255,255,255,0.10)";
+        context.strokeStyle = ringColor;
         context.lineWidth = 1;
         context.stroke();
     }
@@ -709,12 +716,12 @@ function drawRadar(repo, repoPayload = null) {
         context.beginPath();
         context.moveTo(centerX, centerY);
         context.lineTo(axisX, axisY);
-        context.strokeStyle = "rgba(255,255,255,0.08)";
+        context.strokeStyle = axisColor;
         context.stroke();
 
         const labelX = centerX + Math.cos(angle) * (radius + 22);
         const labelY = centerY + Math.sin(angle) * (radius + 22);
-        context.fillStyle = "rgba(221, 222, 225, 0.55)";
+        context.fillStyle = labelColor;
         context.font = "500 13px Manrope";
         context.textAlign = labelX > centerX + 10 ? "left" : labelX < centerX - 10 ? "right" : "center";
         context.textBaseline = labelY > centerY + 10 ? "top" : labelY < centerY - 10 ? "bottom" : "middle";
