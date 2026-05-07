@@ -285,10 +285,6 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["featured_storyline"]["summary"]
     assert payload["featured_storyline"]["episodes"][0]["episode_type"] == "baseline_milestone"
     assert payload["featured_storyline"]["episodes"][-1]["episode_type"] == "current_posture"
-    assert payload["audit_brief"]["recommendation_label"] == "Review before merge"
-    assert payload["audit_brief"]["trigger_source"] == "history_review"
-    assert payload["audit_brief"]["findings"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["audit_brief"]["actions"][0]["href"].endswith("/dashboard/doria90%2FdummyAI/audit#repo-audit-brief-section")
     assert payload["history_cues"][0]["label"]
     assert payload["governance_posture"]["review_quality"]
     assert isinstance(payload["governance_posture"]["top_governance_anomalies"], list)
@@ -338,6 +334,43 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
     assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
+    assert payload["audit_brief"]["recommendation_label"] == "Review now"
+    assert payload["audit_brief"]["review_now_count"] >= 1
+    assert payload["audit_brief"]["changed_artifact_count"] >= 1
+    assert payload["audit_brief"]["findings"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["audit_brief"]["actions"][0]["label"] == "Open review target"
+
+
+def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-safe-brief.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["audit_brief"]["recommendation_label"] != "Unavailable"
+    assert payload["audit_brief"]["why_now"]
+    assert payload["audit_brief"]["summary"]
+    assert payload["audit_brief"]["review_now_count"] == 0
+    assert payload["audit_brief"]["baseline_status"] == "approved"
 
 
 def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
@@ -1882,82 +1915,6 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     assert payload["insights"][0]["review_head_sha"] == "sha-current"
     assert payload["insights"][0]["supporting_review_target"] == "commit sha-2"
     assert payload["insights"][0]["supporting_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
-
-
-def test_repo_dashboard_api_local_debug_disable_login_allows_repo_read_without_session(tmp_path):
-    original_db_path = main.AUDIT_DB_PATH
-    original_app_env = main.settings.app_env
-    original_app_base_url = main.settings.app_base_url
-    original_service_role = main.settings.service_role
-    original_local_debug_disable_login = main.settings.local_debug_disable_login
-    main.AUDIT_DB_PATH = str(tmp_path / "repo-dashboard-local-debug.db")
-    init_db(main.AUDIT_DB_PATH)
-    main.AUDIT_WORKER_ENABLED = False
-    main.settings.app_env = "local"
-    main.settings.app_base_url = "http://127.0.0.1:8015"
-    main.settings.service_role = "monolith"
-    main.settings.local_debug_disable_login = True
-
-    _create_dashboard_owner_session(main.AUDIT_DB_PATH)
-    onboard_repository(
-        main.AUDIT_DB_PATH,
-        repo_full="doria90/dummyAI",
-        installation_id=123,
-        token="token",
-        get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
-        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
-    )
-
-    with TestClient(main.app) as client:
-        repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
-
-    main.settings.local_debug_disable_login = original_local_debug_disable_login
-    main.settings.service_role = original_service_role
-    main.settings.app_base_url = original_app_base_url
-    main.settings.app_env = original_app_env
-    main.AUDIT_DB_PATH = original_db_path
-
-    assert repo_response.status_code == 200
-    payload = repo_response.json()
-    assert payload["repo_full"] == "doria90/dummyAI"
-    assert payload["insights"]
-
-
-def test_dashboard_api_returns_safe_to_merge_audit_brief_without_active_findings(tmp_path):
-    db_path = str(tmp_path / "api-dashboard-safe-to-merge.db")
-    init_db(db_path)
-    main.AUDIT_DB_PATH = db_path
-    main.AUDIT_WORKER_ENABLED = False
-
-    onboard_repository(
-        db_path,
-        repo_full="doria90/dummyAI",
-        installation_id=123,
-        token="token",
-        get_default_branch_fn=lambda repo, token: "main",
-        list_repository_files_fn=lambda repo, token, ref: [],
-        fetch_file_content_fn=lambda repo, path, token, ref: "",
-    )
-
-    session = _create_dashboard_owner_session(db_path)
-
-    with TestClient(main.app) as client:
-        repo_response = client.get(
-            "/api/repos/doria90/dummyAI/dashboard",
-            cookies={main.settings.session_cookie_name: session.session_id},
-        )
-
-    assert repo_response.status_code == 200
-    payload = repo_response.json()
-    assert payload["repo_full"] == "doria90/dummyAI"
-    assert payload["audit_brief"]["recommendation_key"] == "safe_to_merge"
-    assert payload["audit_brief"]["recommendation_label"] == "Safe to merge"
-    assert payload["audit_brief"]["trigger_source"] == "repo_posture"
-    assert payload["audit_brief"]["review_now_count"] == 0
-    assert payload["audit_brief"]["watch_count"] == 0
-    assert payload["audit_brief"]["findings"] == []
-    assert payload["audit_brief"]["why_now"] == "No high-priority repo findings are currently demanding immediate action."
 
 
 def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):

@@ -1574,6 +1574,13 @@ def _render_compliance_page_content(
         '''
     return f'''
         <div class="control-page-stat-grid compliance-stat-grid">{_render_compliance_metrics(view)}</div>
+        <section class="control-page-section stack compact-stack">
+            <div>
+                <p class="secondary-panel-title">Priority gaps</p>
+                <h2 class="control-page-section-title">What needs attention next</h2>
+            </div>
+            <div class="compliance-gap-grid">{_render_compliance_gaps(view.top_gaps)}</div>
+        </section>
         <div class="compliance-overview-grid">
             <section class="control-page-section stack compact-stack compliance-repo-view-shell">
                 <div>
@@ -1585,13 +1592,6 @@ def _render_compliance_page_content(
             <div class="compliance-side-rail">
                 {_render_compliance_export_summary(view.export_summary)}
                 {_render_compliance_verdict(view)}
-                <section class="control-page-section stack compact-stack">
-                    <div>
-                        <p class="secondary-panel-title">Priority gaps</p>
-                        <h2 class="control-page-section-title">What needs attention next</h2>
-                    </div>
-                    <div class="compliance-gap-grid">{_render_compliance_gaps(view.top_gaps)}</div>
-                </section>
             </div>
         </div>
     '''
