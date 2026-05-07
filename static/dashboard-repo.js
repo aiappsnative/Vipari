@@ -544,17 +544,6 @@ function renderGovernanceAttentionNote(onboarding, artifacts = [], baselineRevie
                     <span class="drift-chip chip-governance">${escapeHtml(`Ownership: ${ownershipConfidence}`)}</span>
                     <span class="drift-chip chip-governance">${escapeHtml(`Baseline: ${baselineFreshness}`)}</span>
                 </div>
-                <div class="repo-governance-anomaly-list">
-                    ${anomalies.map((finding) => `
-                        <div class="repo-governance-anomaly-row">
-                            <span class="severity-badge ${String(finding?.severity || "") === "high" ? "severity-high" : String(finding?.severity || "") === "warning" ? "severity-medium" : "severity-low"}">${escapeHtml(String(finding?.severity || "info").toUpperCase())}</span>
-                            <div class="repo-governance-anomaly-copy">
-                                <strong>${escapeHtml(String(finding?.artifact_id || "unknown artifact"))}</strong>
-                                <span>${escapeHtml(String(finding?.evidence_summary || "Governance evidence requires review."))}</span>
-                            </div>
-                        </div>
-                    `).join("")}
-                </div>
             </div>
         `
         : '<div class="muted">No backend governance anomalies are ranked for this repo right now.</div>';
@@ -1351,6 +1340,21 @@ async function loadArtifactStoryline(artifactPath) {
     }
 }
 
+function focusStorylineSection() {
+    const section = document.getElementById("repo-storyline-section");
+    if (!section) {
+        return;
+    }
+    const top = Math.max(0, window.scrollY + section.getBoundingClientRect().top - 24);
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    scrollingElement.scrollTop = top;
+    try {
+        section.focus({ preventScroll: true });
+    } catch {
+        section.focus();
+    }
+}
+
 function renderControlSurfaces(items = []) {
     if (!items.length) {
         return '<div class="muted">No grouped control surfaces yet.</div>';
@@ -1386,6 +1390,9 @@ function bindCueCards() {
         button.addEventListener("click", () => {
             const artifactPath = button.getAttribute("data-storyline-artifact");
             if (artifactPath) {
+                if (button.closest("#repo-artifacts-section")) {
+                    focusStorylineSection();
+                }
                 loadArtifactStoryline(decodeURIComponent(artifactPath));
             }
         });

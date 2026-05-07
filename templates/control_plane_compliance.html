@@ -57,25 +57,19 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell" id="top">
-                <section class="control-page-hero compliance-hero">
-                    <div class="control-page-hero-copy">
-                        <p class="control-page-eyebrow">Compliance workspace</p>
-                        <h1>{{WORKSPACE_NAME}}</h1>
-                        <p>{{PAGE_DESCRIPTION}}</p>
+                <section class="control-page-hero compliance-hero compliance-page-header">
+                    <div class="control-page-hero-copy compliance-page-header-copy">
+                        <div class="compliance-page-header-bar">
+                            <div>
+                                <h1>{{WORKSPACE_NAME}}</h1>
+                                <p>{{PAGE_DESCRIPTION}}</p>
+                            </div>
+                        </div>
+                        <div class="control-page-tab-bar compliance-page-tab-bar">{{COMPLIANCE_TAB_BAR}}</div>
                     </div>
                 </section>
 
                 {{STATUS_NOTE}}
-
-                <section class="control-page-section stack compact-stack compliance-shell-section">
-                    <div class="compliance-header-bar">
-                        <div>
-                            <p class="secondary-panel-title">Compliance</p>
-                            <h2 class="control-page-section-title">{{PAGE_TITLE}}</h2>
-                        </div>
-                    </div>
-                    <div class="control-page-tab-bar">{{COMPLIANCE_TAB_BAR}}</div>
-                </section>
 
                 <div class="control-page-sections compliance-content-shell">
                     {{COMPLIANCE_CONTENT}}

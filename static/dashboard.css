@@ -2173,75 +2173,6 @@ strong {
     background: var(--color-surface-2);
 }
 
-.repo-audit-workflow {
-    gap: var(--space-3);
-}
-
-.repo-audit-workflow-intro {
-    background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 10%, var(--color-surface-glass-3)) 0%, var(--color-surface-glass-3) 100%);
-}
-
-.audit-workflow-step {
-    gap: var(--space-3);
-    padding: 14px;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 88%, var(--color-primary-soft)) 0%, var(--color-surface-2) 100%);
-}
-
-.audit-workflow-step-clear {
-    background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 92%, var(--color-success-soft)) 0%, var(--color-surface-2) 100%);
-}
-
-.audit-workflow-step-clear .audit-step-number {
-    border-color: color-mix(in srgb, var(--color-success) 24%, var(--color-border));
-    background: color-mix(in srgb, var(--color-success-soft) 78%, var(--color-surface-2));
-}
-
-.audit-workflow-step-clear .audit-step-eyebrow {
-    color: color-mix(in srgb, var(--color-success) 70%, var(--color-text-muted));
-}
-
-.audit-workflow-step-head {
-    display: flex;
-    align-items: start;
-    gap: var(--space-3);
-}
-
-.audit-step-number {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
-    background: color-mix(in srgb, var(--color-primary-soft) 72%, var(--color-surface-2));
-    color: var(--color-text);
-    font-size: var(--text-sm);
-    font-weight: 700;
-    flex: 0 0 auto;
-}
-
-.audit-step-eyebrow {
-    color: var(--color-text-muted);
-    font-size: var(--text-xs);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.audit-step-actions {
-    margin-top: var(--space-1);
-}
-
-.audit-workflow-footer {
-    padding-top: var(--space-1);
-}
-
-@media (max-width: 640px) {
-    .audit-workflow-step-head {
-        flex-direction: column;
-    }
-}
-
 .artifact-card-head {
     display: flex;
     justify-content: space-between;
@@ -4820,6 +4751,7 @@ body.repo-audit-page[data-theme="light"] {
     border-bottom-color: rgba(255, 255, 255, 0.08);
     background: rgba(18, 19, 23, 0.9);
     backdrop-filter: blur(14px);
+    align-items: flex-start;
 }
 
 .repo-audit-page[data-theme="light"] .posture-strip {
@@ -4830,6 +4762,21 @@ body.repo-audit-page[data-theme="light"] {
 .repo-audit-page .posture-strip .filter-pill strong,
 .repo-audit-page .posture-strip .posture-title {
     color: #f0f4f7;
+}
+
+.repo-audit-page .posture-strip-left {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding-block: 12px;
+}
+
+.repo-audit-page .posture-strip-center {
+    padding-block: 12px;
+}
+
+.repo-audit-page .posture-strip-right {
+    padding-block: 12px;
 }
 
 .repo-audit-page[data-theme="light"] .posture-strip .filter-pill strong,
@@ -4900,19 +4847,21 @@ body.repo-audit-page[data-theme="light"] {
 }
 
 .repo-audit-page .repo-audit-anchor-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
-    padding: 14px 18px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
 }
 
 .repo-audit-page .repo-audit-anchor {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    min-height: 42px;
-    padding: 0 16px;
+    min-height: 34px;
+    padding: 0 12px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.10);
     background: rgba(255, 255, 255, 0.03);
@@ -4920,13 +4869,17 @@ body.repo-audit-page[data-theme="light"] {
     text-decoration: none;
     font-size: 12px;
     font-weight: 700;
-    text-align: center;
 }
 
 .repo-audit-page[data-theme="light"] .repo-audit-anchor {
     border-color: rgba(112, 98, 84, 0.14);
     background: rgba(112, 98, 84, 0.06);
     color: rgba(47, 41, 37, 0.84);
+}
+
+.repo-audit-page[data-theme="light"] .repo-audit-anchor-bar {
+    background: transparent;
+    box-shadow: none;
 }
 
 .repo-audit-page .repo-audit-anchor:hover {
@@ -4950,6 +4903,14 @@ body.repo-audit-page[data-theme="light"] {
 .repo-audit-page #repo-radar-section,
 .repo-audit-page #repo-journey-section {
     grid-column: 1;
+}
+
+.repo-audit-page #repo-baseline-overview-row {
+    align-items: stretch;
+}
+
+.repo-audit-page #repo-baseline-overview-row > .secondary-panel {
+    height: 100%;
 }
 
 .repo-audit-page .secondary-details-static {
@@ -4979,11 +4940,6 @@ body.repo-audit-page[data-theme="light"] {
 .repo-audit-page .repo-tab-panel[hidden],
 .repo-audit-page [data-repo-tab-child][hidden] {
     display: none !important;
-}
-
-.repo-audit-page .repo-tab-panel[hidden] .secondary-details-summary::after,
-.repo-audit-page [data-repo-tab-child][hidden] .secondary-details-summary::after {
-    content: none;
 }
 
 .repo-audit-page .main-columns,
@@ -5693,48 +5649,6 @@ body.control-page[data-theme="light"] {
     cursor: not-allowed;
 }
 
-.billing-plan-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 18px;
-}
-
-.billing-plan-card {
-    display: grid;
-    gap: 14px;
-    padding: 20px;
-    border: 1px solid var(--color-border);
-    border-radius: 18px;
-    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
-}
-
-.billing-plan-card-active {
-    border-color: var(--color-primary-outline);
-    background: linear-gradient(180deg, var(--color-primary-soft-strong), var(--color-surface));
-    box-shadow: inset 0 0 0 1px rgba(79, 152, 163, 0.14);
-}
-
-.billing-plan-title {
-    margin: 0;
-    font-size: 24px;
-    letter-spacing: -0.02em;
-}
-
-.billing-plan-card form {
-    display: flex;
-}
-
-.billing-portal-action {
-    display: flex;
-    align-items: center;
-    min-height: 48px;
-}
-
-.billing-inline-note {
-    color: var(--color-text-muted);
-    line-height: 1.7;
-}
-
 .control-page-tab-bar {
     display: flex;
     flex-wrap: wrap;
@@ -6010,6 +5924,31 @@ body.control-page[data-theme="light"] {
     gap: 12px;
 }
 
+.compliance-page-header {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.compliance-page-header-copy {
+    display: grid;
+    gap: 18px;
+}
+
+.compliance-page-header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.compliance-page-header-copy h1 {
+    margin-bottom: 10px;
+}
+
+.compliance-page-tab-bar {
+    padding-top: 4px;
+}
+
 .compliance-metric-card {
     padding: 12px 14px;
     min-height: 0;
@@ -6173,10 +6112,21 @@ body.control-page[data-theme="light"] {
     .compliance-export-summary-grid {
         grid-template-columns: 1fr;
     }
+
+    .repo-audit-page #repo-baseline-overview-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 720px) {
     .compliance-content-shell > .control-page-stat-grid {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+@media (max-width: 520px) {
+    .repo-audit-page #repo-baseline-overview-row {
         grid-template-columns: 1fr;
     }
 }
@@ -6740,51 +6690,9 @@ body.control-page[data-theme="light"] {
     overflow: hidden;
 }
 
-.repo-audit-brief-shell,
-.repo-decision-shell {
-    position: relative;
-}
-
-.repo-audit-brief-shell {
-    border-color: color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
-    background-color: var(--color-surface-2);
-    background-image: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 90%, var(--color-primary-soft)) 0%, var(--color-surface) 100%);
-}
-
-.repo-decision-shell {
-    border-color: color-mix(in srgb, var(--color-medium) 18%, var(--color-border));
-    background-color: var(--color-surface-2);
-    background-image: linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2) 92%, var(--color-medium-soft)) 0%, var(--color-surface) 100%);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-medium-soft) 45%, transparent);
-}
-
 .repo-decision-header {
     padding: 14px 18px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.repo-audit-brief-shell .repo-decision-header,
-.repo-decision-shell .repo-decision-header {
-    position: relative;
-}
-
-.repo-audit-brief-shell .repo-decision-header::before,
-.repo-decision-shell .repo-decision-header::before {
-    content: "";
-    position: absolute;
-    left: 18px;
-    top: 0;
-    width: 44px;
-    height: 3px;
-    border-radius: 999px;
-}
-
-.repo-audit-brief-shell .repo-decision-header::before {
-    background: color-mix(in srgb, var(--color-primary) 68%, white);
-}
-
-.repo-decision-shell .repo-decision-header::before {
-    background: color-mix(in srgb, var(--color-medium) 72%, white);
 }
 
 .repo-decision-title-row {
@@ -6797,20 +6705,11 @@ body.control-page[data-theme="light"] {
 .repo-decision-title {
     font-weight: 700;
     font-size: 0.92rem;
-    letter-spacing: 0.02em;
 }
 
 .repo-decision-subtitle {
     font-size: 0.78rem;
     color: var(--text-secondary);
-}
-
-.repo-audit-brief-shell .repo-decision-subtitle {
-    color: color-mix(in srgb, var(--color-primary) 30%, var(--text-secondary));
-}
-
-.repo-decision-shell .repo-decision-subtitle {
-    color: color-mix(in srgb, var(--color-medium) 34%, var(--text-secondary));
 }
 
 .repo-decision-body {
@@ -6822,11 +6721,6 @@ body.control-page[data-theme="light"] {
 .repo-decision-col {
     padding: 14px 18px;
     border-right: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.repo-audit-brief-shell .repo-decision-col,
-.repo-decision-shell .repo-decision-col {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.015) 0%, rgba(255, 255, 255, 0) 100%);
 }
 
 .repo-decision-col:last-child {
@@ -6888,5 +6782,13 @@ body.control-page[data-theme="light"] {
     }
     .repo-decision-col:last-child {
         border-bottom: none;
+    }
+
+    .repo-audit-page .posture-strip {
+        align-items: stretch;
+    }
+
+    .repo-audit-page .posture-strip-center {
+        text-align: left;
     }
 }
