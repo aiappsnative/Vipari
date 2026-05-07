@@ -2363,7 +2363,7 @@ async def compliance_page(request: Request):
         request,
         active_tab="readiness",
         page_title="Workspace readiness",
-        page_description="See whether the workspace is export-ready, which gaps are blocking it, and which repositories need action next.",
+        page_description="Track workspace readiness, the blockers holding exports back, and which repositories need action next.",
         page_note="The main page stays focused on the immediate readiness answer. Framework detail, export execution, and evidence inspection live in their own tabs.",
     )
 

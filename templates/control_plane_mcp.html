@@ -53,16 +53,22 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell">
-                <section class="control-page-hero">
-                    <div class="control-page-hero-copy">
-                        <p class="control-page-eyebrow">Agent Integrations</p>
-                        <h1>{{WORKSPACE_NAME}}</h1>
-                        <p>Download the Vipari MCP connector for your agent host and keep all workspace binding, tool shaping, and control-plane credentials on the Vipari side of the boundary.</p>
-                        {{ADMIN_CONTROL}}
-                    </div>
-                    <div class="control-page-hero-note">
-                        <span class="control-page-note-label">Plan</span>
-                        <span class="control-page-note-copy">{{PLAN_LABEL}}</span>
+                <section class="control-page-platform-header control-page-platform-header-mcp">
+                    <div class="control-page-platform-header-copy">
+                        <div class="control-page-platform-header-bar">
+                            <div>
+                                <p class="control-page-eyebrow">Agent Integrations</p>
+                                <h1>{{WORKSPACE_NAME}}</h1>
+                                <p>Download the Vipari MCP connector for your agent host and keep all workspace binding, tool shaping, and control-plane credentials on the Vipari side of the boundary.</p>
+                            </div>
+                            <div class="control-page-platform-meta">
+                                <span class="control-page-platform-chip">Plan: {{PLAN_LABEL}}</span>
+                                {{ADMIN_CONTROL}}
+                            </div>
+                        </div>
+                        <div class="control-page-tab-bar" role="tablist" aria-label="Agent integration sections">
+                            {{MCP_TAB_BAR}}
+                        </div>
                     </div>
                 </section>
 
@@ -76,12 +82,6 @@
                 {{ONE_TIME_SECRET_BLOCK}}
 
                 <section class="control-page-sections">
-                    <article class="control-page-section control-page-section-wide">
-                        <div class="control-page-tab-bar" role="tablist" aria-label="Agent integration sections">
-                            {{MCP_TAB_BAR}}
-                        </div>
-                    </article>
-
                     {{MCP_ACTIVE_PANEL}}
                 </section>
             </main>
