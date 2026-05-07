@@ -902,6 +902,32 @@ def render_control_plane_mcp_page(
         f'''<a class="control-page-tab-link" href="{html_escape(tab_urls[tab_key])}"{' aria-current="page"' if tab_key == active_tab else ''}>{html_escape(tab_labels[tab_key])}</a>'''
         for tab_key in tab_urls
     )
+    tab_intro_content = {
+        "overview": (
+            "Customer MCP connector",
+            "Download the broker-backed connector, verify the trust boundary, and prepare the workspace rollout path.",
+            "Keep package handoff, host setup, and rollout guardrails together before issuing or rotating keys.",
+        ),
+        "tools": (
+            "Hosted broker tools",
+            "Review the current read-first tool surface exposed to customer agents through the hosted broker.",
+            "Use this tab to confirm the allowed surface before distributing credentials or connector config.",
+        ),
+        "api-keys": (
+            "Workspace API keys",
+            "Manage machine principals, scope selection, and one-time secret handoff for this workspace.",
+            "Prefer the narrowest scope set that still supports the automation path you are enabling.",
+        ),
+        "activity": (
+            "Integration activity",
+            "Inspect recent API-key and broker events for rollout verification, troubleshooting, and audit follow-up.",
+            "This feed is meant to answer who changed access, when they changed it, and what the broker was asked to do.",
+        ),
+    }
+    tab_intro_title, tab_intro_description, tab_intro_note = tab_intro_content.get(
+        active_tab,
+        tab_intro_content["overview"],
+    )
 
     if one_time_secret:
         secret_block = f"""
@@ -924,12 +950,10 @@ def render_control_plane_mcp_page(
     active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active") if can_manage else 0
     active_key_bullet = ""
     if can_manage:
-        key_label = "key" if active_principal_count == 1 else "keys"
-        verb_label = "is" if active_principal_count == 1 else "are"
         active_key_bullet = (
             f'<a class="control-page-header-meta-link" href="{html_escape(tab_urls["api-keys"])}" '
             f'aria-label="Open API keys for {html_escape(str(active_principal_count))} active workspace API keys">'
-            f'{html_escape(str(active_principal_count))} active workspace API {key_label} {verb_label} available.</a>'
+            f'{html_escape(str(active_principal_count))} active API {"key" if active_principal_count == 1 else "keys"}</a>'
         )
     api_keys_section = _render_api_keys_section(
         principals=principals,
@@ -1077,6 +1101,9 @@ def render_control_plane_mcp_page(
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{MCP_TAB_TITLE}}", html_escape(tab_intro_title))
+        .replace("{{MCP_TAB_DESCRIPTION}}", html_escape(tab_intro_description))
+        .replace("{{MCP_TAB_NOTE}}", html_escape(tab_intro_note))
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{BROKER_HOST}}", html_escape(broker_host))
         .replace("{{TOOL_COUNT}}", html_escape(str(len(MCP_BROKER_TOOLS))))
@@ -1591,8 +1618,6 @@ def _render_compliance_page_content(
     if active_tab == "frameworks":
         return f'''
             <section class="control-page-section stack compact-stack">
-                <h2 class="control-page-section-title">Framework coverage</h2>
-                <p>Use this view when you need the framework-oriented narrative rather than the day-to-day readiness summary.</p>
                 <div class="compliance-framework-grid">{_render_compliance_framework_cards(view.framework_cards)}</div>
             </section>
         '''
@@ -1612,11 +1637,6 @@ def _render_compliance_page_content(
         active_filter, active_repo, evidence_rows, repo_rows = filter_compliance_evidence_view(view, evidence_filter, evidence_repo)
         return f'''
             <section class="control-page-section stack compact-stack">
-                <div>
-                    <p class="secondary-panel-title">Evidence detail</p>
-                    <h2 class="control-page-section-title">Repository evidence posture</h2>
-                    <p>Inspect missing governance artifacts, stale evidence, and pending approvals without the export form competing for attention.</p>
-                </div>
                 {_render_compliance_evidence_filter_note(active_filter, active_repo, len(evidence_rows), len(view.evidence_rows))}
                 {_render_compliance_evidence_rows(repo_rows)}
             </section>

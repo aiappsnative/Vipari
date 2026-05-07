@@ -38,7 +38,7 @@
                     <span>Settings</span>
                 </a>
                 <a href="/app/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations">
-                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h8v8H8z"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
+                    <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7v4H4z"/><path d="M13 6h7v6h-7z"/><path d="M4 13h7v5H4z"/><path d="M13 14h7v4h-7z"/></svg>
                     <span>Agent Integrations</span>
                 </a>
                 <a href="/app/help" class="sidebar-nav-item{{HELP_ACTIVE}}" aria-label="Help">
@@ -53,40 +53,13 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell">
-                <section class="control-page-hero">
-                    <div class="control-page-hero-copy">
-                        <p class="control-page-eyebrow">{{PAGE_KICKER}}</p>
-                        <h1>{{PAGE_TITLE}}</h1>
-                        <p>{{PAGE_COPY}}</p>
-                        {{ADMIN_CONTROL}}
-                    </div>
-                    <div class="control-page-hero-note">
-                        <span class="control-page-note-label">Status</span>
-                        <span class="control-page-note-copy">TBD. The shell is live so navigation remains consistent while the full page is still under construction.</span>
-                    </div>
-                </section>
-
-                <section class="control-page-stat-grid">
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Workspace</span>
-                        <strong>{{WORKSPACE_NAME}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Plan</span>
-                        <strong>{{PLAN_LABEL}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Availability</span>
-                        <strong>Work in progress</strong>
-                    </article>
-                </section>
-
                 <section class="control-page-sections">
                     <article class="control-page-section control-page-section-wide">
                         <div class="secondary-panel-title">Coming soon</div>
                         <div class="control-page-empty">
-                            <h2>We are working on this</h2>
-                            <p>This page has been reserved inside the workspace shell and will be filled out in a follow-up pass without changing the navigation flow again.</p>
+                            <h1>{{PAGE_TITLE}}</h1>
+                            <p>{{PAGE_COPY}}</p>
+                            <p>{{WORKSPACE_NAME}} is on the {{PLAN_LABEL}} plan. This surface stays intentionally minimal until the policy library is ready.</p>
                         </div>
                     </article>
                 </section>
