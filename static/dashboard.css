@@ -6019,6 +6019,10 @@ body.control-page[data-theme="light"] {
     align-items: start;
 }
 
+body.control-page.compliance-page .control-page-shell {
+    gap: 14px;
+}
+
 .compliance-content-shell > .control-page-stat-grid {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 12px;
@@ -6026,6 +6030,48 @@ body.control-page[data-theme="light"] {
 
 .compliance-page-tab-bar {
     padding: 0;
+}
+
+.compliance-export-form {
+    gap: 18px;
+}
+
+.compliance-export-field {
+    display: grid;
+    gap: 8px;
+}
+
+.compliance-export-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compliance-export-choice-card {
+    min-height: 0;
+    padding: 16px;
+}
+
+.compliance-export-date-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.compliance-export-checkbox {
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.compliance-export-submit-row {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.compliance-export-form .control-page-button {
+    min-height: 46px;
+    padding: 0 22px;
+}
+
+.compliance-export-form .control-page-copy {
+    margin: 0;
 }
 
 .compliance-metric-card {
@@ -6212,6 +6258,11 @@ body.control-page[data-theme="light"] {
 
 @media (max-width: 720px) {
     .compliance-content-shell > .control-page-stat-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .compliance-export-choice-grid,
+    .compliance-export-date-grid {
         grid-template-columns: 1fr;
     }
 

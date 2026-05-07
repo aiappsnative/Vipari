@@ -1499,33 +1499,82 @@ def _render_compliance_export_form(view: ComplianceWorkspaceView, csrf_token: st
                 <h2 class="control-page-section-title">Run compliance exports</h2>
                 <p>Generate a focused export for selected repositories or let the server-side presets choose the repos that are already ready.</p>
             </div>
-            <form method="post" action="/app/compliance/export" class="stack compact-stack">
+            <form method="post" action="/app/compliance/export" class="control-page-form compliance-export-form">
                 {_csrf_input(csrf_token)}
-                <label class="settings-field">
-                    <span>Server-side repo preset</span>
-                    <select name="export_preset">
+                <label class="compliance-export-field">
+                    <span class="control-page-label">Server-side repo preset</span>
+                    <select class="control-page-select" name="export_preset">
                         <option value="none">No preset</option>
                         <option value="review_ready">Review-ready repos</option>
                         <option value="fresh_review_ready">Fresh review-ready repos</option>
                     </select>
                 </label>
-                <fieldset class="settings-field">
-                    <legend>Scope</legend>
-                    <label><input type="radio" name="export_scope" value="all_visible" checked /> All visible repos</label>
-                    <label><input type="radio" name="export_scope" value="selected" /> Selected repos only</label>
+                <fieldset class="control-page-choice-group">
+                    <legend class="control-page-label">Scope</legend>
+                    <div class="control-page-choice-grid compliance-export-choice-grid">
+                        <label class="control-page-choice">
+                            <input type="radio" name="export_scope" value="all_visible" checked />
+                            <span class="control-page-choice-card compliance-export-choice-card">
+                                <span class="control-page-choice-title">All visible repos</span>
+                                <span class="control-page-choice-copy">Run the export across every repository currently visible in this workspace.</span>
+                            </span>
+                        </label>
+                        <label class="control-page-choice">
+                            <input type="radio" name="export_scope" value="selected" />
+                            <span class="control-page-choice-card compliance-export-choice-card">
+                                <span class="control-page-choice-title">Selected repos only</span>
+                                <span class="control-page-choice-copy">Override the preset and include only the repositories checked below.</span>
+                            </span>
+                        </label>
+                    </div>
                 </fieldset>
-                <fieldset class="settings-field">
-                    <legend>Export mode</legend>
-                    <label><input type="radio" name="export_mode" value="compliance" checked /> Compliance evidence bundle</label>
-                    <label><input type="radio" name="export_mode" value="compliance_plus_drift" /> Compliance plus drift context</label>
+                <fieldset class="control-page-choice-group">
+                    <legend class="control-page-label">Export mode</legend>
+                    <div class="control-page-choice-grid compliance-export-choice-grid">
+                        <label class="control-page-choice">
+                            <input type="radio" name="export_mode" value="compliance" checked />
+                            <span class="control-page-choice-card compliance-export-choice-card">
+                                <span class="control-page-choice-title">Compliance evidence bundle</span>
+                                <span class="control-page-choice-copy">Generate the governance and readiness evidence package without extra drift review context.</span>
+                            </span>
+                        </label>
+                        <label class="control-page-choice">
+                            <input type="radio" name="export_mode" value="compliance_plus_drift" />
+                            <span class="control-page-choice-card compliance-export-choice-card">
+                                <span class="control-page-choice-title">Compliance plus drift context</span>
+                                <span class="control-page-choice-copy">Attach the readiness evidence package plus the current drift narrative for follow-up review.</span>
+                            </span>
+                        </label>
+                    </div>
                 </fieldset>
-                <div class="control-page-meta-grid">
-                    <label class="settings-field"><span>From</span><input type="date" name="from_date" required /></label>
-                    <label class="settings-field"><span>To</span><input type="date" name="to_date" required /></label>
+                <div class="compliance-export-date-grid">
+                    <label class="compliance-export-field">
+                        <span class="control-page-label">From</span>
+                        <input class="control-page-input" type="date" name="from_date" required />
+                    </label>
+                    <label class="compliance-export-field">
+                        <span class="control-page-label">To</span>
+                        <input class="control-page-input" type="date" name="to_date" required />
+                    </label>
                 </div>
-                <label><input type="checkbox" name="include_artifact_content" value="true" checked /> Include artifact content when available</label>
-                <div class="compliance-repo-list">{_render_compliance_export_scope_rows(view.repo_rows)}</div>
-                <button class="control-page-button" type="submit">Generate export</button>
+                <label class="control-page-checkbox-option compliance-export-checkbox">
+                    <input type="checkbox" name="include_artifact_content" value="true" checked />
+                    <span class="control-page-checkbox-copy">
+                        <strong>Include artifact content</strong>
+                        <span>Attach stored artifact content whenever it is available so the export bundle is ready for governance review.</span>
+                    </span>
+                </label>
+                <div class="control-page-form-divider"></div>
+                <div class="stack compact-stack">
+                    <div>
+                        <span class="control-page-label">Repository selection</span>
+                        <p class="control-page-copy">Use the checklist below only when you want to override the preset and target a smaller export set.</p>
+                    </div>
+                    <div class="compliance-repo-list">{_render_compliance_export_scope_rows(view.repo_rows)}</div>
+                </div>
+                <div class="compliance-export-submit-row">
+                    <button class="control-page-button" type="submit">Generate export</button>
+                </div>
             </form>
         </article>
     '''
