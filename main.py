@@ -2221,7 +2221,7 @@ async def mcp_integrations_page(request: Request):
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     can_manage = bool(membership and membership.role in {"owner", "admin"})
     active_tab = (request.query_params.get("tab") or "overview").strip().lower()
-    if active_tab not in {"overview", "api-keys", "activity"}:
+    if active_tab not in {"overview", "tools", "api-keys", "activity"}:
         active_tab = "overview"
     if not can_manage and active_tab in {"api-keys", "activity"}:
         active_tab = "overview"

@@ -885,8 +885,11 @@ def render_control_plane_mcp_page(
     if admin_url:
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
 
-    tab_urls = {"overview": "/app/integrations/mcp?tab=overview"}
-    tab_labels = {"overview": "Overview"}
+    tab_urls = {
+        "overview": "/app/integrations/mcp?tab=overview",
+        "tools": "/app/integrations/mcp?tab=tools",
+    }
+    tab_labels = {"overview": "Overview", "tools": "Tools"}
     if can_manage:
         tab_urls.update(
             {
@@ -918,7 +921,13 @@ def render_control_plane_mcp_page(
     else:
         secret_block = ""
 
-    active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active") if can_manage else None
+    active_principal_count = sum(1 for principal in principals if getattr(principal, "status", "") == "active") if can_manage else 0
+    active_key_bullet = ""
+    if can_manage:
+        active_key_bullet = (
+            f'<span class="control-page-info-bullet" title="{html_escape(str(active_principal_count))} active workspace API key(s)" '
+            f'aria-label="{html_escape(str(active_principal_count))} active workspace API keys">{html_escape(str(active_principal_count))}</span>'
+        )
     api_keys_section = _render_api_keys_section(
         principals=principals,
         can_manage=can_manage,
@@ -932,6 +941,13 @@ def render_control_plane_mcp_page(
         f'''<article class="help-page-topic-card"><strong>{html_escape(tool["name"])}</strong><p>{html_escape(tool["description"])}</p><p><span class="control-page-badge">{html_escape(tool["required_scope"])}</span></p></article>'''
         for tool in MCP_BROKER_TOOLS
     )
+    tools_section = f"""
+        <article class="control-page-section control-page-section-wide">
+            <div class="secondary-panel-title">Available tools</div>
+            <h2 class="control-page-section-title">Read-first MCP surface</h2>
+            <p class="control-page-copy">This is the full tool surface exposed by the hosted broker for customer agents.</p>
+            <div class="help-page-card-grid">{tool_cards}</div>
+        </article>"""
 
     activity_rows = ""
     for entry in audit_logs:
@@ -1013,37 +1029,9 @@ def render_control_plane_mcp_page(
         active_panel = api_keys_section
     elif active_tab == "activity" and can_manage:
         active_panel = activity_section
+    elif active_tab == "tools":
+        active_panel = tools_section
     else:
-        workspace_principal_card = """
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Workspace machine principals</div>
-            <h2 class="control-page-section-title">API-key posture</h2>
-            <p class="control-page-copy">Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins.</p>
-        </article>"""
-        if can_manage:
-            workspace_principal_card = f"""
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Workspace machine principals</div>
-            <h2 class="control-page-section-title">API-key posture</h2>
-            <p class="control-page-copy">{html_escape(str(active_principal_count or 0))} active workspace API key(s) are currently available for connector setup. Use the API keys tab to review scopes, create a new key, or revoke an old one.</p>
-            <a class="control-page-button" href="{html_escape(tab_urls['api-keys'])}">Open API keys</a>
-        </article>"""
-
-        activity_card = """
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Operational visibility</div>
-            <h2 class="control-page-section-title">Recent integration activity</h2>
-            <p class="control-page-copy">Recent integration and API-key activity stays visible only to workspace owners and admins.</p>
-        </article>"""
-        if can_manage:
-            activity_card = f"""
-        <article class="control-page-section">
-            <div class="secondary-panel-title">Operational visibility</div>
-            <h2 class="control-page-section-title">Recent integration activity</h2>
-            <p class="control-page-copy">Keep connector rollout, key changes, and broker actions together by reviewing the Activity tab before handing the package to a customer host.</p>
-            <a class="control-page-button" href="{html_escape(tab_urls['activity'])}">Open Activity</a>
-        </article>"""
-
         workflow_card_two = """
                 <div class="help-page-action-card"><span class="help-page-action-step">2</span><strong>Request API-key access</strong><p>Workspace owners and admins manage machine principals, scope selection, and one-time secret handoff for connector setup.</p></div>
                 <div class="help-page-action-card"><span class="help-page-action-step">3</span><strong>Coordinate rollout</strong><p>Ask an owner or admin to verify recent integration activity before the connector is handed to a customer host.</p></div>"""
@@ -1079,16 +1067,7 @@ def render_control_plane_mcp_page(
     -&gt; curated Vipari control-plane reads</pre>
                         <p class="control-page-copy">One connector session maps to one workspace. The connector package is thin on purpose so Vipari can keep product semantics, output shaping, and credential handling server-side.</p>
         </article>
-
-        <article class="control-page-section control-page-section-wide">
-            <div class="secondary-panel-title">Available tools</div>
-            <h2 class="control-page-section-title">Read-first MCP surface</h2>
-            <div class="help-page-card-grid">{tool_cards}</div>
-        </article>
-
-        {workspace_principal_card}
-
-        {activity_card}"""
+"""
 
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -1099,7 +1078,8 @@ def render_control_plane_mcp_page(
         .replace("{{BROKER_HOST}}", html_escape(broker_host))
         .replace("{{TOOL_COUNT}}", html_escape(str(len(MCP_BROKER_TOOLS))))
         .replace("{{ACTIVE_API_KEY_LABEL}}", html_escape("Active API keys" if can_manage else "API-key access"))
-        .replace("{{ACTIVE_API_KEY_COUNT}}", html_escape(str(active_principal_count or "Restricted")))
+        .replace("{{ACTIVE_API_KEY_COUNT}}", html_escape(str(active_principal_count if can_manage else "Restricted")))
+        .replace("{{MCP_ACTIVE_KEY_BULLET}}", active_key_bullet)
         .replace("{{ONE_TIME_SECRET_BLOCK}}", secret_block)
         .replace("{{MCP_TAB_BAR}}", tab_bar)
         .replace("{{MCP_ACTIVE_PANEL}}", active_panel)
@@ -1633,7 +1613,7 @@ def render_control_plane_compliance_page(
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
-    status_markup = f'<div class="control-page-inline-note">{html_escape(status_note)}</div>' if status_note else ""
+    status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if status_note else ""
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
