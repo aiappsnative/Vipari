@@ -860,6 +860,17 @@ def _current_theme_preference(request: Request) -> str:
     return user.theme_preference if user else "dark"
 
 
+def _sidebar_profile_initial(*, display_name: str | None = None, github_login: str | None = None) -> str:
+    for candidate in (display_name, github_login):
+        value = (candidate or "").strip()
+        if not value:
+            continue
+        for character in value:
+            if character.isalnum():
+                return character.upper()
+    return "V"
+
+
 def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
     connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace_id)
     allocations = {
@@ -1977,6 +1988,10 @@ async def settings_page(request: Request):
             repo_limit=entitlement.repo_limit if entitlement else None,
             seat_limit=entitlement.seat_limit if entitlement else None,
             invite_enabled=bool(membership and membership.role in {"owner", "admin"}),
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -2261,6 +2276,10 @@ async def mcp_integrations_page(request: Request):
             one_time_secret=one_time_secret,
             max_principals=settings.cp_max_principals_per_workspace,
             new_client_id=new_client_id,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -2354,6 +2373,10 @@ async def policies_page(request: Request):
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_nav="policies",
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -2416,6 +2439,7 @@ def _render_compliance_tab_page(
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
     user = access_context["user"]
+    identity = access_context["identity"]
     session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     status_note = request.query_params.get("status") or ""
@@ -2437,6 +2461,10 @@ def _render_compliance_tab_page(
             csrf_token=session.csrf_secret if session is not None else "",
             evidence_filter=evidence_filter,
             evidence_repo=evidence_repo,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -2507,6 +2535,10 @@ async def help_page(request: Request):
             repo_summaries=repo_summaries,
             export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
             export_pending_count=sum(1 for job in export_jobs if job.status != "completed"),
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -3182,6 +3214,7 @@ async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
     workspace = access_context["workspace"]
     user = access_context["user"]
+    identity = access_context["identity"]
     entitlement = access_context["entitlement"]
     subscription = access_context["subscription"]
     repo_inventory = _github_account_repo_inventory(access_context)
@@ -3222,6 +3255,10 @@ async def repo_setup_page(request: Request):
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
             theme_preference=user.theme_preference if user else "dark",
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
         )
     )
 
@@ -3361,11 +3398,17 @@ async def dashboard_index_page(request: Request, range: str = "7d", filter: str 
     if shell_mode:
         shell_state = str(access_context["resolution"].state)
         shell_title, shell_body, shell_cta_href, shell_cta_label = _dashboard_shell_copy(access_context)
+    user = access_context.get("user") if access_context else None
+    identity = access_context.get("identity") if access_context else None
     response = HTMLResponse(
         render_dashboard_index_page(
             _current_theme_preference(request),
             active_range=active_range,
             active_filter=active_filter,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
             shell_state=shell_state,
             shell_title=shell_title,
             shell_body=shell_body,
@@ -3412,11 +3455,17 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
     if shell_mode:
         shell_state = str(access_context["resolution"].state)
         shell_title, shell_body, shell_cta_href, shell_cta_label = _dashboard_shell_copy(access_context, repo_full=repo_full)
+    user = access_context.get("user") if access_context else None
+    identity = access_context.get("identity") if access_context else None
     response = HTMLResponse(
         render_repo_dashboard_page(
             repo_full,
             theme_preference=_current_theme_preference(request),
             active_tab=active_tab,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
             shell_state=shell_state,
             shell_title=shell_title,
             shell_body=shell_body,

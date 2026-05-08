@@ -525,7 +525,7 @@ def _repo_github_installation_href(repo_full: str) -> str:
     return f'https://github.com/{quote(repo_full, safe="/")}/settings/installations'
 
 
-def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark") -> str:
+def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark", sidebar_profile_initial: str = "V") -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -535,6 +535,7 @@ def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summa
         .replace("{{ONBOARDING_SUMMARY_CARDS}}", onboarding_summary_cards)
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
     )
 
 
@@ -726,6 +727,7 @@ def render_control_plane_profile_page(
     return (
         template.replace("{{DISPLAY_NAME}}", html_escape(display_name))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape((display_name or github_login or "V")[:1].upper()))
         .replace("{{THEME_DARK_CHECKED}}", "checked" if theme_preference == "dark" else "")
         .replace("{{THEME_LIGHT_CHECKED}}", "checked" if theme_preference == "light" else "")
         .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
@@ -763,6 +765,7 @@ def render_control_plane_settings_page(
     repo_limit: int | None,
     seat_limit: int | None,
     invite_enabled: bool,
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_settings.html")
     effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
@@ -775,6 +778,7 @@ def render_control_plane_settings_page(
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
@@ -812,6 +816,7 @@ def render_control_plane_placeholder_page(
     theme_preference: str,
     admin_url: str | None,
     active_nav: str,
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_placeholder.html")
     admin_control = ""
@@ -824,6 +829,7 @@ def render_control_plane_placeholder_page(
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{COMPLIANCE_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "compliance" else "")
         .replace("{{POLICIES_ACTIVE}}", " sidebar-nav-item-active" if active_nav == "policies" else "")
@@ -841,6 +847,7 @@ def render_control_plane_help_page(
     repo_summaries: list[object],
     export_ready_count: int,
     export_pending_count: int,
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_help.html")
     admin_control = ""
@@ -851,6 +858,7 @@ def render_control_plane_help_page(
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{HELP_CONTEXT_SUMMARY}}", html_escape(help_context["summary"]))
         .replace("{{HELP_START_HERE_COPY}}", html_escape(help_context["start_here_copy"]))
@@ -879,6 +887,7 @@ def render_control_plane_mcp_page(
     one_time_secret: str | None,
     max_principals: int,
     new_client_id: str | None = None,
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_mcp.html")
     admin_control = ""
@@ -1682,6 +1691,7 @@ def render_control_plane_compliance_page(
     csrf_token: str = "",
     evidence_filter: str = "",
     evidence_repo: str = "",
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
@@ -1692,6 +1702,7 @@ def render_control_plane_compliance_page(
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{STATUS_NOTE}}", status_markup)
         .replace("{{PAGE_TITLE}}", html_escape(page_title))
         .replace("{{PAGE_DESCRIPTION}}", html_escape(page_description))
@@ -2072,6 +2083,7 @@ def render_api_keys_settings_page(
     one_time_secret: str | None,
     max_principals: int,
     new_client_id: str | None = None,
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_api_keys.html")
     admin_control = ""
@@ -2107,6 +2119,7 @@ def render_api_keys_settings_page(
 
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{ADMIN_CONTROL}}", admin_control)

@@ -163,6 +163,20 @@ strong {
     margin-bottom: var(--space-4);
 }
 
+.sidebar-logo-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+}
+
+.sidebar-logo-glyph {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
 .sidebar-nav-group {
     display: grid;
     gap: var(--space-1);
@@ -2645,9 +2659,13 @@ body.dashboard-index-page[data-theme="light"] {
 }
 
 .dashboard-index-page .sidebar {
-    position: static;
+    position: sticky;
+    top: 30px;
+    align-self: start;
     width: auto;
-    min-height: auto;
+    min-height: calc(100dvh - 60px);
+    height: calc(100dvh - 60px);
+    max-height: calc(100dvh - 60px);
     align-items: stretch;
     padding: 20px 0 0;
     border-right: 0;
@@ -2666,39 +2684,36 @@ body.dashboard-index-page[data-theme="light"] {
 
 .dashboard-index-page .sidebar-logo {
     width: 100%;
-    height: auto;
+    height: 68px;
+    min-height: 68px;
+    flex: 0 0 auto;
     margin: 0;
-    padding: 0 22px 18px;
-    justify-content: flex-start;
+    padding: 4px 0 14px;
+    justify-content: center;
 }
 
 .dashboard-index-page .sidebar-logo-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(86, 241, 230, 0.18), rgba(86, 241, 230, 0.04));
-    color: #56f1e6;
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.08em;
+    width: 55px;
+    height: 55px;
 }
 
 .dashboard-index-page[data-theme="light"] .sidebar-logo-mark {
-    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
-    color: var(--color-primary);
+    opacity: 0.94;
 }
 
 .dashboard-index-page .sidebar-panel {
     display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
     gap: 6px;
     padding: 12px 0 20px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .dashboard-index-page .sidebar-profile-wrap {
-    margin-top: auto;
+    margin-top: 0;
+    flex: 0 0 auto;
     display: flex;
     justify-content: center;
     padding: 16px 0 20px;
@@ -4380,9 +4395,13 @@ body.repo-audit-page[data-theme="light"] {
 }
 
 .repo-audit-page .sidebar {
-    position: static;
+    position: sticky;
+    top: 30px;
+    align-self: start;
     width: auto;
-    min-height: auto;
+    min-height: calc(100dvh - 60px);
+    height: calc(100dvh - 60px);
+    max-height: calc(100dvh - 60px);
     align-items: stretch;
     padding: 20px 0 0;
     border-right: 0;
@@ -4401,35 +4420,31 @@ body.repo-audit-page[data-theme="light"] {
 
 .repo-audit-page .sidebar-logo {
     width: 100%;
-    height: auto;
+    height: 68px;
+    min-height: 68px;
+    flex: 0 0 auto;
     margin: 0;
-    padding: 0 22px 18px;
-    justify-content: flex-start;
+    padding: 4px 0 14px;
+    justify-content: center;
 }
 
 .repo-audit-page .sidebar-logo-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(86, 241, 230, 0.18), rgba(86, 241, 230, 0.04));
-    color: #56f1e6;
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.08em;
+    width: 55px;
+    height: 55px;
 }
 
 .repo-audit-page[data-theme="light"] .sidebar-logo-mark {
-    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
-    color: var(--color-primary);
+    opacity: 0.94;
 }
 
 .repo-audit-page .sidebar-panel {
     display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
     gap: 6px;
     padding: 12px 0 20px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .repo-audit-page .sidebar-nav-item {
@@ -4502,7 +4517,8 @@ body.repo-audit-page[data-theme="light"] {
 }
 
 .repo-audit-page .sidebar-profile-wrap {
-    margin-top: auto;
+    margin-top: 0;
+    flex: 0 0 auto;
     display: flex;
     justify-content: center;
     padding: 16px 0 20px;
@@ -5012,9 +5028,13 @@ body.control-page[data-theme="light"] {
 }
 
 .control-page .sidebar {
-    position: static;
+    position: sticky;
+    top: 30px;
+    align-self: start;
     width: auto;
-    min-height: auto;
+    min-height: calc(100dvh - 60px);
+    height: calc(100dvh - 60px);
+    max-height: calc(100dvh - 60px);
     align-items: stretch;
     padding: 20px 0 0;
     border-right: 0;
@@ -5033,35 +5053,31 @@ body.control-page[data-theme="light"] {
 
 .control-page .sidebar-logo {
     width: 100%;
-    height: auto;
+    height: 68px;
+    min-height: 68px;
+    flex: 0 0 auto;
     margin: 0;
-    padding: 0 22px 18px;
-    justify-content: flex-start;
+    padding: 4px 0 14px;
+    justify-content: center;
 }
 
 .control-page .sidebar-logo-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(86, 241, 230, 0.18), rgba(86, 241, 230, 0.04));
-    color: #56f1e6;
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.08em;
+    width: 55px;
+    height: 55px;
 }
 
 .control-page[data-theme="light"] .sidebar-logo-mark {
-    background: linear-gradient(180deg, rgba(59, 125, 134, 0.14), rgba(59, 125, 134, 0.04));
-    color: var(--color-primary);
+    opacity: 0.94;
 }
 
 .control-page .sidebar-panel {
     display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
     gap: 6px;
     padding: 12px 0 20px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .control-page .sidebar-nav-item {
@@ -5112,7 +5128,8 @@ body.control-page[data-theme="light"] {
 }
 
 .control-page .sidebar-profile-wrap {
-    margin-top: auto;
+    margin-top: 0;
+    flex: 0 0 auto;
     display: flex;
     justify-content: center;
     padding: 16px 0 20px;
@@ -6617,6 +6634,22 @@ body.control-page.compliance-page .compliance-shell-section {
 }
 
 @media (max-width: 640px) {
+    .dashboard-index-page .sidebar,
+    .repo-audit-page .sidebar,
+    .control-page .sidebar {
+        position: static;
+        top: auto;
+        min-height: auto;
+        height: auto;
+        max-height: none;
+    }
+
+    .dashboard-index-page .sidebar-panel,
+    .repo-audit-page .sidebar-panel,
+    .control-page .sidebar-panel {
+        overflow: visible;
+    }
+
     .control-page .app-shell {
         grid-template-columns: 1fr;
         padding: 18px;

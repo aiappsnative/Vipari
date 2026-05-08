@@ -53,6 +53,7 @@ def render_dashboard_index_page(
     active_range: str = "7d",
     active_filter: str = "all",
     *,
+    sidebar_profile_initial: str = "V",
     shell_state: str = "active",
     shell_title: str = "",
     shell_body: str = "",
@@ -75,6 +76,7 @@ def render_dashboard_index_page(
     return (
         _load_template("dashboard_index.html")
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{ACTIVE_OVERVIEW_RANGE}}", html_escape(active_range))
         .replace("{{ACTIVE_OVERVIEW_FILTER}}", html_escape(active_filter))
         .replace("{{DASHBOARD_SHELL_STATE}}", _shell_data_value(shell_state))
@@ -101,6 +103,7 @@ def render_repo_dashboard_page(
     theme_preference: str = "dark",
     active_tab: str = "audit",
     *,
+    sidebar_profile_initial: str = "V",
     shell_state: str = "active",
     shell_title: str = "",
     shell_body: str = "",
@@ -136,6 +139,7 @@ def render_repo_dashboard_page(
         _load_template("dashboard_repo.html")
         .replace("{{REPO_FULL}}", html_escape(repo_full))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{ACTIVE_REPO_TAB}}", html_escape(active_tab))
         .replace("{{DASHBOARD_SHELL_STATE}}", _shell_data_value(shell_state))
         .replace("{{DASHBOARD_SHELL_TITLE}}", _shell_data_value(shell_title))
