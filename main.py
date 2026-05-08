@@ -345,10 +345,23 @@ def _dashboard_redirect_for_request(request: Request):
     if session is None:
         return RedirectResponse("/login", status_code=303), None, None, False
     access_context = _build_access_context(session)
-    if not access_context["resolution"].can_access_dashboard:
-        if _is_dashboard_deep_link_request(request):
+    is_deep_link = _is_dashboard_deep_link_request(request)
+    resolution = access_context["resolution"]
+    
+    # If no dashboard access, deny unless it's a deep link
+    if not resolution.can_access_dashboard:
+        if is_deep_link:
             return None, session, access_context, True
         return RedirectResponse("/app", status_code=303), session, access_context, False
+    
+    # For free tier (active_comments_only), show shell only with deep links
+    if resolution.state == "active_comments_only" and is_deep_link:
+        return None, session, access_context, True
+    
+    # For free tier without deep links, redirect to /app
+    if resolution.state == "active_comments_only":
+        return RedirectResponse("/app", status_code=303), session, access_context, False
+    
     return None, session, access_context, False
 
 
@@ -958,18 +971,40 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
         except (HTTPError, OSError, RuntimeError, ValueError, InvalidKeyError):
             pass
 
-    existing_repo_fulls = {connection.repo_full for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)}
-    existing_repo_fulls.update(allocation.repo_full for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id))
+    connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)
+    allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+    connected_repo_fulls = {connection.repo_full for connection in connections}
+    allocated_repo_fulls = {allocation.repo_full for allocation in allocations}
+    repo_scope_by_full = {repo_full: "connected_history" for repo_full in connected_repo_fulls}
+    repo_scope_by_full.update({repo_full: "allocated" for repo_full in allocated_repo_fulls})
+    allocation_status_by_full = {
+        allocation.repo_full: allocation.allocation_status
+        for allocation in allocations
+    }
+    visible_repo_fulls = connected_repo_fulls | allocated_repo_fulls
+    onboarding_summary_by_full = {
+        item.repo_full: asdict(item)
+        for item in list_repo_dashboard_index(
+            AUDIT_DB_PATH,
+            allowed_repo_fulls=visible_repo_fulls,
+            repo_scope_by_full=repo_scope_by_full,
+            allocation_status_by_full=allocation_status_by_full,
+        )
+    }
 
     inventory_by_full: dict[str, dict[str, object]] = {}
-    for connection in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id):
+    for connection in connections:
         repo_full = connection.repo_full.strip()
         if not repo_full:
             continue
+        summary = onboarding_summary_by_full.get(repo_full)
+        workspace_summary = summary if summary is not None and str(summary.get("dashboard_scope") or "allocated") == "allocated" else None
         inventory_by_full[repo_full.lower()] = {
             "repo_full": repo_full,
-            "is_onboarded": repo_full in existing_repo_fulls,
-            "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+            "is_connected": repo_full in connected_repo_fulls,
+            "is_allocated": repo_full in allocated_repo_fulls,
+            "is_onboarded": workspace_summary is not None,
+            "onboarding_status": workspace_summary.get("onboarding_status") if workspace_summary is not None else None,
         }
 
     if user is not None:
@@ -982,12 +1017,16 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
                     repo_full = repository.full_name.strip()
                     if not repo_full:
                         continue
+                    summary = onboarding_summary_by_full.get(repo_full)
+                    workspace_summary = summary if summary is not None and str(summary.get("dashboard_scope") or "allocated") == "allocated" else None
                     inventory_by_full.setdefault(
                         repo_full.lower(),
                         {
                             "repo_full": repo_full,
-                            "is_onboarded": repo_full in existing_repo_fulls,
-                            "install_href": f"https://github.com/{quote(repo_full, safe='/')}/settings/installations",
+                            "is_connected": repo_full in connected_repo_fulls,
+                            "is_allocated": repo_full in allocated_repo_fulls,
+                            "is_onboarded": workspace_summary is not None,
+                            "onboarding_status": workspace_summary.get("onboarding_status") if workspace_summary is not None else None,
                         },
                     )
             except (HTTPError, OSError, RuntimeError, ValueError):
@@ -3078,20 +3117,7 @@ async def install_page(request: Request):
     flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     installation = access_context["installation"]
-    install_url = None
-    install_state_nonce = None
-    if settings.has_github_app_credentials:
-        try:
-            install_state_nonce = secrets.token_urlsafe(24)
-            install_url = get_live_github_install_url(
-                settings.github_app_id,
-                settings.github_private_key_path,
-                settings.resolved_github_private_key,
-                state=install_state_nonce,
-            )
-        except Exception:
-            install_url = None
-            install_state_nonce = None
+    install_url = _path_with_flow_context("/app/setup/install/start", flow_context) if settings.has_github_app_credentials else None
     installation_summary = (
         f"Connected installation {installation.account_login} ({installation.account_type})." if installation else "No GitHub App installation is linked yet."
     )
@@ -3100,7 +3126,7 @@ async def install_page(request: Request):
         install_hint = "GitHub installation linked successfully. Review the synced repositories below."
     elif request.query_params.get("install_error"):
         install_hint = "GitHub installation completed, but DriftGuard could not finish linking it automatically. Use the manual fallback form below."
-    response = HTMLResponse(
+    return HTMLResponse(
         render_control_plane_install_page(
             workspace_name=workspace.display_name,
             install_hint=install_hint,
@@ -3110,14 +3136,33 @@ async def install_page(request: Request):
             csrf_token=access_context["session"].csrf_secret,
         )
     )
-    if install_state_nonce is not None:
-        _set_context_cookie(
-            response,
-            CONTROL_PLANE_INSTALL_STATE_COOKIE,
-            {"nonce": install_state_nonce, "workspace_id": workspace.id},
-            binding=_context_cookie_binding_for_session_id(access_context["session"].session_id),
-            max_age=1800,
+
+
+@app.get("/app/setup/install/start")
+async def install_start(request: Request):
+    access_context = _current_workspace_context(request)
+    flow_context = _flow_context_from_request(request)
+    if not settings.has_github_app_credentials:
+        return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
+    try:
+        install_state_nonce = secrets.token_urlsafe(24)
+        install_url = get_live_github_install_url(
+            settings.github_app_id,
+            settings.github_private_key_path,
+            settings.resolved_github_private_key,
+            state=install_state_nonce,
         )
+    except Exception:
+        return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
+
+    response = RedirectResponse(install_url, status_code=303)
+    _set_context_cookie(
+        response,
+        CONTROL_PLANE_INSTALL_STATE_COOKIE,
+        {"nonce": install_state_nonce, "workspace_id": access_context["workspace"].id},
+        binding=_context_cookie_binding_for_session_id(access_context["session"].session_id),
+        max_age=1800,
+    )
     return response
 
 
@@ -3212,6 +3257,7 @@ async def install_link(
 @app.get("/app/repos", response_class=HTMLResponse)
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
+    flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     user = access_context["user"]
     identity = access_context["identity"]
@@ -3226,14 +3272,18 @@ async def repo_setup_page(request: Request):
         str(item["repo_full"]): str(item["allocation_status"])
         for item in allocations
     }
+    repo_scope_by_full = {str(item["repo_full"]): "connected_history" for item in connections}
+    repo_scope_by_full.update({str(item["repo_full"]): "allocated" for item in allocations})
     visible_repo_fulls = {str(item["repo_full"]) for item in connections} | {str(item["repo_full"]) for item in allocations}
     onboarded_summaries = [
         asdict(item)
         for item in list_repo_dashboard_index(
             AUDIT_DB_PATH,
             allowed_repo_fulls=visible_repo_fulls,
+            repo_scope_by_full=repo_scope_by_full,
             allocation_status_by_full=allocation_status_by_full,
         )
+        if str(item.dashboard_scope or "allocated") == "allocated"
     ]
     consumed_repo_slots = len(
         {str(item["repo_full"]) for item in allocations if str(item.get("allocation_status") or "") in {"active", "onboarded"}}
@@ -3250,7 +3300,11 @@ async def repo_setup_page(request: Request):
         render_control_plane_repo_setup_page(
             workspace_name=workspace.display_name,
             inventory_summary=inventory_summary,
-            inventory_cards=render_repo_inventory_cards(repo_inventory),
+            inventory_cards=render_repo_inventory_cards(
+                repo_inventory,
+                csrf_token=access_context["session"].csrf_secret,
+                install_start_href=_path_with_flow_context("/app/setup/install/start", flow_context),
+            ),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,

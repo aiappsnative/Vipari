@@ -78,6 +78,6 @@ def test_resolve_workspace_access_state_active_comments_only():
     )
 
     assert resolution.state == "active_comments_only"
-    assert resolution.can_access_dashboard is False
-    assert resolution.is_read_only is False
+    assert resolution.can_access_dashboard is True
+    assert resolution.is_read_only is True
     assert resolution.primary_cta == "Upgrade to Starter"

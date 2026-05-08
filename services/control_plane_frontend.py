@@ -447,6 +447,7 @@ def render_control_plane_billing_page(
     flow_context: dict[str, str],
     portal_url: str | None,
     csrf_token: str,
+    theme_preference: str = "dark",
 ) -> str:
     template = _load_template("control_plane_billing.html")
     portal_block = (
@@ -479,6 +480,7 @@ def render_control_plane_billing_page(
         .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_status_note or "Choose a plan to create or resume Stripe checkout."))
         .replace("{{PLAN_CARDS}}", "".join(plan_cards))
         .replace("{{PORTAL_ACTION}}", portal_block)
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
     )
 
 
@@ -521,8 +523,8 @@ def _repo_dashboard_href(repo_full: str) -> str:
     return f'/dashboard/{quote(repo_full, safe="")}'
 
 
-def _repo_github_installation_href(repo_full: str) -> str:
-    return f'https://github.com/{quote(repo_full, safe="/")}/settings/installations'
+def _repo_allocate_href(repo_full: str) -> str:
+    return f'/app/repos/allocate?repo_full={quote(repo_full, safe="/")}'
 
 
 def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark", sidebar_profile_initial: str = "V") -> str:
@@ -591,7 +593,7 @@ def _repo_setup_state_key(connection: dict[str, object] | None, allocation: dict
     return "unknown"
 
 
-def render_repo_inventory_cards(repositories: list[dict[str, object]]) -> str:
+def render_repo_inventory_cards(repositories: list[dict[str, object]], *, csrf_token: str, install_start_href: str) -> str:
     if not repositories:
         return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>No repositories available yet</h3><p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p></article>'
 
@@ -600,15 +602,34 @@ def render_repo_inventory_cards(repositories: list[dict[str, object]]) -> str:
         repo_full = str(repository.get("repo_full") or "")
         if not repo_full:
             continue
+        is_connected = bool(repository.get("is_connected"))
+        is_allocated = bool(repository.get("is_allocated"))
         is_onboarded = bool(repository.get("is_onboarded"))
-        action = (
-            '<span class="repo-setup-chip repo-setup-chip-strong">Already there</span>'
-            if is_onboarded
-            else f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(str(repository.get("install_href") or _repo_github_installation_href(repo_full)))}" target="_blank" rel="noreferrer">Onboard</a>'
-        )
+        onboarding_status = str(repository.get("onboarding_status") or "").lower()
+        if is_onboarded:
+            if onboarding_status == "baseline_approved":
+                action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(_repo_dashboard_href(repo_full))}">Open audit</a>'
+                status = "onboarded"
+            else:
+                action = '<span class="repo-setup-chip repo-setup-chip-cool">Onboarding active</span>'
+                status = "onboarding"
+        elif is_allocated:
+            action = '<span class="repo-setup-chip repo-setup-chip-cool">Allocation saved</span>'
+            status = "allocated"
+        elif is_connected:
+            action = f'''
+            <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form">
+                {_csrf_input(csrf_token)}
+                <button type="submit" class="repo-setup-button">Allocate and onboard</button>
+            </form>
+            '''
+            status = "connected"
+        else:
+            action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">Install app</a>'
+            status = "available"
         rendered.append(
             f'''
-            <article class="repo-setup-inventory-row" data-repo-inventory-card="true" data-status="{'onboarded' if is_onboarded else 'available'}" data-repo-full="{html_escape(repo_full.lower())}">
+            <article class="repo-setup-inventory-row" data-repo-inventory-card="true" data-status="{html_escape(status)}" data-repo-full="{html_escape(repo_full.lower())}">
                 <span class="repo-setup-inventory-name">{html_escape(repo_full)}</span>
                 <span class="repo-setup-inventory-action">{action}</span>
             </article>
@@ -672,7 +693,7 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
-    return render_repo_inventory_cards(connections)
+    return render_repo_inventory_cards(connections, csrf_token=csrf_token, install_start_href="/app/setup/install/start")
 
 
 def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:

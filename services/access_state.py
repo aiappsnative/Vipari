@@ -245,11 +245,11 @@ def resolve_workspace_access_state(snapshot: WorkspaceAccessSnapshot) -> Workspa
     if snapshot.pr_comments_enabled and not snapshot.dashboard_enabled:
         return WorkspaceAccessResolution(
             state="active_comments_only",
-            can_access_dashboard=False,
-            is_read_only=False,
+            can_access_dashboard=True,
+            is_read_only=True,
             required_next_action="Upgrade to Starter",
             ui_title="Free tier active",
-            ui_body="GitHub install, repository allocation, and onboarding are complete. This workspace can receive PR comments for one repository, but dashboards require a paid plan.",
+            ui_body="GitHub install, repository allocation, and onboarding are complete. This workspace can receive PR comments for one repository and view dashboards in read-only mode. Paid plans unlock full editing and unlimited repositories.",
             primary_cta="Upgrade to Starter",
             secondary_cta="Manage repository setup",
             checklist=checklist,

@@ -498,8 +498,10 @@ def test_dashboard_api_rejects_free_tier_workspace(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Dashboard access is not available for this workspace."
+    # Free tier now has read-only access to the dashboard
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload is not None
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -619,11 +621,13 @@ def test_dashboard_deep_link_renders_shell_for_free_tier_workspace(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
+    # Free tier without deep links redirects to /app
     assert redirect_response.status_code == 303
     assert redirect_response.headers["location"] == "/app"
+    
+    # Free tier with deep links shows the dashboard shell in read-only mode
     assert deep_link_response.status_code == 200
     assert 'data-dashboard-shell-state="active_comments_only"' in deep_link_response.text
-    assert "dashboard views require a paid plan" in deep_link_response.text
     assert 'data-dashboard-deep-link-pr="42"' in deep_link_response.text
     assert 'data-dashboard-deep-link-head-sha="abc123456"' in client.get(
         "/dashboard?pr=42&head_sha=abc123456",
@@ -3195,15 +3199,185 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
 
     assert repo_setup_response.status_code == 200
     assert "doria90/dummyAI" in repo_setup_response.text
-    assert 'class="repo-setup-page"' in repo_setup_response.text
-    assert "Repository Inventory" in repo_setup_response.text
+    assert 'repo-setup-page' in repo_setup_response.text
+    assert "Repository inventory" in repo_setup_response.text
     assert "5 of 5 repository slots available on this plan." in repo_setup_response.text
     assert "Onboarded Repository Snapshot" in repo_setup_response.text
     assert 'class="repo-setup-inventory-list"' in repo_setup_response.text
     assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
     assert 'href="/app/repos"' in repo_setup_response.text
-    assert "Already there" in repo_setup_response.text
+    assert "Allocate and onboard" in repo_setup_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-connected-history.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, replace_repo_connections, upsert_github_identity, upsert_github_installation
+    from services.dashboard_views import RepoDashboardIndexEntry
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="840",
+        github_login="repo-owner",
+        display_name="Repo Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-connected-history-workspace",
+        display_name="Repo Connected History Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-connected-history-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+
+    with patch(
+        "main.list_repo_dashboard_index",
+        return_value=[
+            RepoDashboardIndexEntry(
+                "doria90/dummyAI",
+                "main",
+                "baseline_approved",
+                5,
+                time.time(),
+                dashboard_scope="connected_history",
+                allocation_status=None,
+            )
+        ],
+    ):
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "Allocate and onboard" in response.text
+    assert "Open audit" not in response.text
+    assert "Onboarding active" not in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_install_action_uses_install_start_route(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-install-route.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="841",
+        github_login="install-route-owner",
+        display_name="Install Route Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-install-route-workspace",
+        display_name="Repo Install Route Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-install-route-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch("main._github_account_repo_inventory", return_value=[{"repo_full": "doria90/another-repo", "is_connected": False, "is_allocated": False, "is_onboarded": False}]):
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert 'href="/app/setup/install/start"' in response.text
+    assert "settings/installations" not in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_install_start_redirects_to_live_github_install_and_sets_state_cookie(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "install-start.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="842",
+        github_login="install-start-owner",
+        display_name="Install Start Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="install-start-workspace",
+        display_name="Install Start Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="install-start-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch.object(main.settings, "github_app_id", "app-id"), patch.object(
+        main.settings, "github_app_private_key", "dummy-private-key"
+    ), patch("main.get_live_github_install_url", return_value="https://github.com/apps/vipari/installations/new?state=test-state"):
+        response = client.get(
+            "/app/setup/install/start",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://github.com/apps/vipari/installations/new?state=test-state"
+    assert "promptdrift_install_state=" in response.headers.get("set-cookie", "")
 
     main.AUDIT_DB_PATH = original_db_path
 
