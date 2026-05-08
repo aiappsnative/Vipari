@@ -186,8 +186,6 @@ def require_repo_dashboard_mutation_access(
         settings,
         db_path,
         request,
-        allow_local_debug=allow_local_debug,
-        local_debug_context_factory=local_debug_context_factory,
     )
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(db_path, workspace.id, repo_full)

@@ -1508,6 +1508,28 @@ def test_api_read_routes_require_admin_token(tmp_path, monkeypatch):
     assert authorized_html.status_code == 200
 
 
+def test_api_dashboard_audit_route_preserves_deep_link_context(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "secured-audit-route.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "read-secret-token")
+    monkeypatch.delenv("ENABLE_METRICS", raising=False)
+    _reset_settings_cache()
+
+    app = create_api_app()
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/dashboard/doria90/dummyAI/audit?artifact=system_prompt.md&pr=43&head_sha=abc123",
+            headers={"Authorization": "Bearer read-secret-token"},
+        )
+
+    assert response.status_code == 200
+    assert 'content="system_prompt.md"' in response.text
+    assert 'content="43"' in response.text
+    assert 'content="abc123"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI/audit?artifact=system_prompt.md&pr=43&head_sha=abc123"' in response.text
+
+
 def test_metrics_can_be_enabled_explicitly(tmp_path, monkeypatch):
     db_path = str(tmp_path / "metrics-api.db")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)

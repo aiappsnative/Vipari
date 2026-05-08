@@ -1193,13 +1193,21 @@ def _extract_audit_brief_dimensions(insight: RepoDashboardInsightEntry | None) -
     return dimensions[:3]
 
 
-def _baseline_reference_for_audit_brief(insight: RepoDashboardInsightEntry | None) -> str:
+def _baseline_reference_for_audit_brief(insight: RepoDashboardInsightEntry | None, fallback: str | None = None) -> str:
     if insight is None:
-        return "none-yet"
+        return fallback or "none-yet"
     label = str(insight.baseline_label or "").strip()
     if label.lower().startswith("baseline:"):
         return label.split(":", 1)[1].strip() or "none-yet"
     return label or "none-yet"
+
+
+def _baseline_reference_from_versions(baseline_versions: list[object]) -> str | None:
+    for baseline_version in baseline_versions:
+        source_ref = str(getattr(baseline_version, "source_ref", "") or "").strip()
+        if source_ref:
+            return source_ref
+    return None
 
 
 def _baseline_status_for_audit_brief(
@@ -1226,6 +1234,7 @@ def _build_repo_audit_brief(
     baseline_review: RepoBaselineReviewPanel | None,
     insights: list[RepoDashboardInsightEntry],
     lower_confidence_insights: list[RepoDashboardInsightEntry],
+    fallback_baseline_reference: str | None = None,
 ) -> RepoAuditBrief:
     sorted_insights = sorted(
         insights,
@@ -1237,7 +1246,7 @@ def _build_repo_audit_brief(
     watch_count = sum(1 for insight in insights if insight.priority == "watch")
     lower_confidence_count = len(lower_confidence_insights)
     baseline_status = _baseline_status_for_audit_brief(onboarding, baseline_review)
-    baseline_reference = _baseline_reference_for_audit_brief(top_insight)
+    baseline_reference = _baseline_reference_for_audit_brief(top_insight, fallback_baseline_reference)
     affected_dimensions = _extract_audit_brief_dimensions(top_insight)
 
     actions: list[RepoAuditBriefAction] = [
@@ -1572,6 +1581,7 @@ def _build_repo_dashboard_view_uncached(
             baseline_review=baseline_review,
             insights=insights,
             lower_confidence_insights=lower_confidence_insights,
+            fallback_baseline_reference=_baseline_reference_from_versions(latest_approved_baseline_versions or latest_baseline_versions),
         ),
     )
 

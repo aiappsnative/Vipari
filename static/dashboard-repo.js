@@ -1772,7 +1772,7 @@ function renderRepoActionsSection(insights) {
     const reviewTitle = topInsight?.title || "Open the highest-priority change first";
     const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
     const baselineReviewUrl = repoFull
-        ? repoTabUrl("audit", { hash: "baseline-review-panel" })
+        ? repoTabUrl("baseline", { hash: "baseline-review-panel" })
         : "#baseline-review-panel";
     const driftQueueUrl = repoFull
         ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
@@ -1802,7 +1802,7 @@ function renderRepoActionsSection(insights) {
                     <div class="artifact-card-reason">Baseline posture already covers the current repository state. Use the actions below if you want a final governance confirmation or a shareable handoff artifact.</div>
                 </div>
                 <div class="export-actions repo-actions-row audit-step-actions">
-                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open artifact sign-off</a>
+                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open baseline review</a>
                     <a href="${escapeHtml(driftQueueUrl)}" class="cue-action-button">Open drift queue</a>
                     <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Recheck audit brief</a>
                     <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>

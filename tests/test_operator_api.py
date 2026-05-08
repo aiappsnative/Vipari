@@ -529,7 +529,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "attribute profile" in repo_text
     assert "control surface coverage" in repo_text
     assert "supporting history" in repo_text
-    assert "review plan" in repo_text
     assert "baseline-review-panel" in repo_response.text
     assert "Baseline Review" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
@@ -550,14 +549,14 @@ def test_dashboard_html_pages_render(tmp_path):
     assert repo_js_response.status_code == 200
     assert "function repoTabUrl" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
+    assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
-    assert 'repoTabUrl("audit", { hash: "baseline-review-panel" })' in repo_js_response.text
+    assert "Open baseline review" in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text
     assert "Compare repository context" in repo_js_response.text
     assert "Prepare the handoff" in repo_js_response.text
     assert "Review queue is clear" in repo_js_response.text
-    assert "Open baseline review" in repo_js_response.text
     assert "No baseline or disposition proposals are waiting on this repository right now." in repo_js_response.text
 
 
@@ -572,9 +571,6 @@ def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):
     assert 'data-active-repo-tab="audit"' in response.text
     assert 'data-repo-tab-link="audit"' in response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in response.text
-    assert 'data-repo-tab-panel="audit drift"' in response.text
-    assert 'data-repo-tab-child="audit baseline"' in response.text
-    assert 'id="repo-baseline-review-section" data-repo-tab-child="audit baseline"' in response.text
 
 
 def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):

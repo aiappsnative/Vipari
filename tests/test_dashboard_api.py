@@ -371,6 +371,7 @@ def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path)
     assert payload["audit_brief"]["summary"]
     assert payload["audit_brief"]["review_now_count"] == 0
     assert payload["audit_brief"]["baseline_status"] == "approved"
+    assert payload["audit_brief"]["baseline_reference"] != "none-yet"
 
 
 def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
@@ -626,6 +627,40 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert approved_rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
     assert approved_rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is False
     assert approved_rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
+
+
+def test_dashboard_api_local_debug_still_requires_session_for_mutations(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-local-debug-mutations.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.local_debug_disable_login = True
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _create_dashboard_owner_session(db_path)
+
+    try:
+        with TestClient(main.app) as client:
+            approve_response = client.post(
+                "/api/repos/doria90/dummyAI/baseline/approve",
+                json={"note": "Attempted without a session."},
+            )
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+        main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert approve_response.status_code == 401
+    assert approve_response.json()["detail"] == "Authentication required."
 
 
 def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(tmp_path):
