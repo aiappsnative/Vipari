@@ -1010,7 +1010,7 @@ def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dic
 
 
 def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) -> dict[str, object]:
-    access_context = _require_dashboard_access(request, allow_local_debug=_local_debug_dashboard_enabled())
+    access_context = _require_dashboard_access(request)
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:

@@ -651,16 +651,15 @@ def test_dashboard_api_local_debug_still_requires_session_for_mutations(tmp_path
 
     try:
         with TestClient(main.app) as client:
-            approve_response = client.post(
-                "/api/repos/doria90/dummyAI/baseline/approve",
-                json={"note": "Attempted without a session."},
+            promote_response = client.post(
+                "/api/repos/doria90/dummyAI/artifacts/prompts/refund.txt/baseline",
             )
     finally:
         main.AUDIT_DB_PATH = original_db_path
         main.settings.local_debug_disable_login = original_local_debug_disable_login
 
-    assert approve_response.status_code == 401
-    assert approve_response.json()["detail"] == "Authentication required."
+    assert promote_response.status_code == 401
+    assert promote_response.json()["detail"] == "Authentication required."
 
 
 def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(tmp_path):
