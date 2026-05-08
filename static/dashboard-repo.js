@@ -1774,6 +1774,9 @@ function renderRepoActionsSection(insights) {
     const baselineReviewUrl = repoFull
         ? repoTabUrl("audit", { hash: "baseline-review-panel" })
         : "#baseline-review-panel";
+    const driftQueueUrl = repoFull
+        ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
+        : "#repo-triage-section";
     const reviewArtifactUrl = repoFull
         ? repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })
         : "#repo-audit-brief-section";
@@ -1800,6 +1803,7 @@ function renderRepoActionsSection(insights) {
                 </div>
                 <div class="export-actions repo-actions-row audit-step-actions">
                     <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open artifact sign-off</a>
+                    <a href="${escapeHtml(driftQueueUrl)}" class="cue-action-button">Open drift queue</a>
                     <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Recheck audit brief</a>
                     <a href="${escapeHtml(exportUrl)}" class="cue-action-button">Create export</a>
                 </div>
@@ -1836,6 +1840,7 @@ function renderRepoActionsSection(insights) {
                 </div>
                 <div class="artifact-card-reason">Use the audit brief and repository context before accepting or re-baselining the change.</div>
                 <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(driftQueueUrl)}" class="cue-action-button">Open drift queue</a>
                     <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Open audit brief</a>
                     ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
                 </div>

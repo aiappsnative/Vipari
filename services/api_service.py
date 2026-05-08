@@ -231,7 +231,7 @@ def create_api_app() -> FastAPI:
         _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full))
 
-    async def dashboard_repo_audit_page(repo_full: str, request: Request):
+    async def dashboard_repo_audit_page(request: Request, repo_full: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
         _require_admin_token(request, settings)
         return HTMLResponse(render_repo_dashboard_page(repo_full, active_tab="audit"))
 

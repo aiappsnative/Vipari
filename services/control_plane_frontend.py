@@ -962,7 +962,7 @@ def render_control_plane_mcp_page(
         active_key_bullet = (
             f'<a class="control-page-header-meta-link" href="{html_escape(tab_urls["api-keys"])}" '
             f'aria-label="Open API keys for {html_escape(str(active_principal_count))} active workspace API keys">'
-            f'{html_escape(str(active_principal_count))} active API {"key" if active_principal_count == 1 else "keys"}</a>'
+            f'{html_escape(str(active_principal_count))} active workspace API {"key is" if active_principal_count == 1 else "keys are"} available.</a>'
         )
     api_keys_section = _render_api_keys_section(
         principals=principals,
