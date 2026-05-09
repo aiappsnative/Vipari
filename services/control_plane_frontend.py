@@ -1386,7 +1386,7 @@ def _render_compliance_tab_bar(active_tab: str) -> str:
         ("evidence", "Evidence", "/app/compliance/evidence"),
     )
     return "".join(
-        f'<a class="control-page-tab-link" href="{html_escape(href)}"{(" aria-current=\"page\"" if key == active_tab else "")}>{html_escape(label)}</a>'
+        f'''<a class="control-page-tab-link" href="{html_escape(href)}"{' aria-current="page"' if key == active_tab else ''}>{html_escape(label)}</a>'''
         for key, label, href in items
     )
 
