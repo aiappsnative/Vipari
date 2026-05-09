@@ -32,7 +32,7 @@ from services.control_plane_records import (
 from services.entitlements import derive_entitlement_payload
 from services.queue import LocalSQLiteQueue, QueueMessage, close_queue_backend
 from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
-from services.webhook_deliveries import claim_webhook_delivery, init_webhook_delivery_db
+from services.webhook_deliveries import claim_webhook_delivery, cleanup_webhook_deliveries, init_webhook_delivery_db
 from services.webhook_service import create_webhook_app
 from services.api_service import create_api_app
 
@@ -812,6 +812,19 @@ def test_stale_processing_delivery_can_be_reclaimed(tmp_path):
         )
 
     assert claim_webhook_delivery(db_path, "delivery-stale", "pull_request") is True
+
+
+def test_cleanup_webhook_deliveries_initializes_missing_table(tmp_path):
+    db_path = str(tmp_path / "webhook-cleanup.db")
+
+    cleanup_webhook_deliveries(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'webhook_deliveries'"
+        ).fetchone()
+
+    assert row is not None
 
 
 def test_worker_skips_completed_idempotent_message(tmp_path, monkeypatch):

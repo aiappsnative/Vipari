@@ -85,6 +85,7 @@ def mark_webhook_delivery_pending(db_path: str, delivery_id: str) -> None:
 
 
 def cleanup_webhook_deliveries(db_path: str, *, now: float | None = None) -> None:
+    init_webhook_delivery_db(db_path)
     cutoff = (now or time.time()) - DELIVERY_TTL_SECONDS
     with connect_sqlite(db_path) as conn:
         conn.execute("DELETE FROM webhook_deliveries WHERE received_at < ?", (cutoff,))
