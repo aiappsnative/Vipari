@@ -621,22 +621,154 @@ def test_dashboard_deep_link_renders_shell_for_free_tier_workspace(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
-    # Free tier without deep links redirects to /app
-    assert redirect_response.status_code == 303
-    assert redirect_response.headers["location"] == "/app"
-    
-    # Free tier with deep links shows the dashboard shell in read-only mode
+    # Free tier can read the main dashboard surface.
+    assert redirect_response.status_code == 200
+    assert 'class="dashboard-index-page"' in redirect_response.text
+    assert 'data-dashboard-shell-state="active"' in redirect_response.text
+
+    # Free tier with deep links also keeps dashboard read access.
     assert deep_link_response.status_code == 200
-    assert 'data-dashboard-shell-state="active_comments_only"' in deep_link_response.text
+    assert 'data-dashboard-shell-state="active"' in deep_link_response.text
     assert 'data-dashboard-deep-link-pr="42"' in deep_link_response.text
     assert 'data-dashboard-deep-link-head-sha="abc123456"' in client.get(
         "/dashboard?pr=42&head_sha=abc123456",
         cookies={main.settings.session_cookie_name: session.session_id},
     ).text
-    assert 'class="main-content dashboard-shell-blocked"' in client.get(
-        "/dashboard?pr=42&head_sha=abc123456",
-        cookies={main.settings.session_cookie_name: session.session_id},
-    ).text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_free_tier_blocks_compliance_page_and_repo_reports_tab(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "free-tier-compliance-block.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="9300",
+        github_login="free-tier-locked-user",
+        display_name="Free Tier Locked User",
+        primary_email="free-tier-locked@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="free-tier-locked-workspace",
+        display_name="Free Tier Locked Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="free-tier-locked-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-free-locked",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:locked",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "basic",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9301,
+        account_id="9301",
+        account_login="free-tier-locked-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9301,
+        repositories=[
+            {
+                "repo_github_id": "free-tier-locked-org/repo-one",
+                "repo_full": "free-tier-locked-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9301,
+        repo_github_id="free-tier-locked-org/repo-one",
+        repo_full="free-tier-locked-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    cookie = {main.settings.session_cookie_name: session.session_id}
+    compliance_response = client.get("/app/compliance", cookies=cookie)
+    repo_reports_response = client.get("/dashboard/free-tier-locked-org/repo-one?tab=reports", cookies=cookie)
+    export_submit_response = client.post(
+        "/app/compliance/export",
+        cookies=cookie,
+        data={
+            "export_scope": "all_visible",
+            "export_preset": "none",
+            "from_date": "2026-01-01",
+            "to_date": "2026-01-02",
+            "export_mode": "compliance",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert compliance_response.status_code == 200
+    assert 'class="main-content dashboard-shell-blocked"' in compliance_response.text
+    assert "the Compliance workspace requires Starter or above" in compliance_response.text
+    assert repo_reports_response.status_code == 200
+    assert 'data-active-repo-tab="reports"' in repo_reports_response.text
+    assert 'class="main-content dashboard-shell-blocked"' in repo_reports_response.text
+    assert "the reports tab requires Starter or above" in repo_reports_response.text
+    assert export_submit_response.status_code == 303
+    assert export_submit_response.headers["location"].startswith("/app/compliance/exports?status=")
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -1067,6 +1199,8 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert "Onboarded and allocated repositories" in get_response.text
     assert 'data-theme-toggle' in get_response.text
     assert 'value="on" checked' in get_response.text
+    assert 'href="/app/billing"' in get_response.text
+    assert "Open billing" in get_response.text
     assert "{{WORKSPACE_NAME_INPUT}}" not in get_response.text
     assert "{{WORKSPACE_MEMBER_ACTIONS}}" not in get_response.text
 
@@ -1849,9 +1983,13 @@ def test_github_auth_start_reauths_when_existing_session_scopes_are_stale(tmp_pa
 def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-data.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import (
         create_billing_handoff_claim,
@@ -2013,6 +2151,7 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     assert "Add user" in response.text
     assert "Free Installed User" in response.text
     assert "Free Installed Workspace" in response.text
+    assert "Free" in response.text
     assert "Installs 1" in response.text
     assert "Connected 2" in response.text
     assert "Onboarded 0" in response.text
@@ -2020,15 +2159,21 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
     assert "purchase-admin-1" in response.text
 
     main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
 def test_admin_page_renders_github_profile_details(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-profile-data.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import create_user_session, upsert_github_identity
 
@@ -2079,21 +2224,29 @@ def test_admin_page_renders_github_profile_details(tmp_path):
     assert "Recent admin activity" in response.text
 
     main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
 def test_admin_page_can_create_update_and_delete_users_workspaces_and_memberships(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-crud.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import (
         create_user_session,
         get_user_by_id,
         get_workspace_by_id,
+        get_workspace_entitlement,
         get_workspace_membership,
+        get_workspace_subscription,
         list_recent_control_plane_audit_logs,
         list_admin_workspace_users,
         upsert_github_identity,
@@ -2185,6 +2338,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
         data={
             "display_name": "Managed Workspace Updated",
             "slug": "managed-workspace-updated",
+            "plan_code": "team",
             "csrf_token": session.csrf_secret,
         },
         cookies=cookie,
@@ -2192,9 +2346,16 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     )
     assert update_workspace_response.status_code == 303
     updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id)
+    updated_subscription = get_workspace_subscription(main.AUDIT_DB_PATH, workspace_id)
+    updated_entitlement = get_workspace_entitlement(main.AUDIT_DB_PATH, workspace_id)
     assert updated_workspace is not None
     assert updated_workspace.display_name == "Managed Workspace Updated"
     assert updated_workspace.slug == "managed-workspace-updated"
+    assert updated_subscription is not None
+    assert updated_subscription.plan_code == "team"
+    assert updated_entitlement is not None
+    assert updated_entitlement.plan_code == "team"
+    assert updated_entitlement.dashboard_enabled is True
 
     delete_membership_response = client.post(
         f"/app/admin/memberships/{workspace_id}/{admin_user.id}/delete",
@@ -2230,15 +2391,21 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert "admin_user_deleted" in audit_events
 
     main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
 def test_admin_page_delete_forms_include_confirmation_prompts(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
     main.AUDIT_DB_PATH = str(tmp_path / "admin-confirm.db")
     main.init_db(main.AUDIT_DB_PATH)
     main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
 
     from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
 
@@ -2285,6 +2452,8 @@ def test_admin_page_delete_forms_include_confirmation_prompts(tmp_path):
     assert "Remove this user from the workspace?" in response.text
 
     main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -2841,6 +3010,11 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         assert 'aria-label="Repositories"' in billing_page_response.text
         assert 'aria-label="Agent Integrations"' in billing_page_response.text
         assert "Manage billing" in billing_page_response.text
+        assert "Selected plan" in billing_page_response.text
+        assert "Team" in billing_page_response.text
+        assert "Ready to start" in billing_page_response.text
+        assert "{{SELECTED_PLAN_LABEL}}" not in billing_page_response.text
+        assert "{{CHECKOUT_STATE_LABEL}}" not in billing_page_response.text
 
         checkout_response = client.post(
             "/app/billing/checkout?plan=team",
@@ -3332,6 +3506,394 @@ def test_repo_setup_install_action_uses_install_start_route(tmp_path):
     assert "settings/installations" not in response.text
 
     main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_disables_new_install_when_repo_limit_is_reached(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-install-limit.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="843",
+        github_login="install-limit-owner",
+        display_name="Install Limit Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-install-limit-workspace",
+        display_name="Repo Install Limit Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-install-limit-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:limit",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-free-limit",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "standard",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/current-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="1",
+        repo_full="doria90/current-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+
+    with patch(
+        "main._github_account_repo_inventory",
+        return_value=[
+            {"repo_full": "doria90/current-repo", "is_connected": True, "is_allocated": True, "is_onboarded": False},
+            {"repo_full": "doria90/another-repo", "is_connected": False, "is_allocated": False, "is_onboarded": False},
+        ],
+    ):
+        response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "0 of 1 repository slots available on this plan." in response.text
+    assert "Upgrade to add repo" in response.text
+    assert 'href="/app/billing?plan=starter"' in response.text
+    assert 'data-upgrade-required="repo-limit"' in response.text
+    assert "Install app" not in response.text
+
+
+def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-disconnect.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        get_repo_allocation_for_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.dashboard_views import RepoDashboardIndexEntry
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="844",
+        github_login="disconnect-owner",
+        display_name="Disconnect Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-disconnect-workspace",
+        display_name="Repo Disconnect Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-disconnect-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:free:disconnect",
+        stripe_price_id="local:free",
+        plan_code="free",
+        status="free_active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-disconnect",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "free",
+            "subscription_status": "free_active",
+            "dashboard_enabled": False,
+            "pr_comments_enabled": True,
+            "repo_limit": 1,
+            "org_limit": 1,
+            "seat_limit": 1,
+            "retention_policy": "standard",
+            "support_tier": "community",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/current-repo", "default_branch": "main", "is_private": True, "status": "available"},
+            {"repo_github_id": "2", "repo_full": "doria90/next-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="1",
+        repo_full="doria90/current-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    summary_entry = RepoDashboardIndexEntry(
+        "doria90/current-repo",
+        "main",
+        "baseline_approved",
+        5,
+        time.time(),
+        dashboard_scope="allocated",
+        allocation_status="onboarded",
+    )
+
+    with patch("main.list_repo_dashboard_index", side_effect=[[summary_entry], []]):
+        disconnect_response = client.post(
+            "/app/repos/disconnect?repo_full=doria90/current-repo",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
+            follow_redirects=False,
+        )
+        repo_setup_response = client.get(
+            "/app/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    restored_allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/current-repo")
+    with patch("main.generate_jwt", return_value="jwt"), patch("main.get_installation_token", return_value="installation-token"), patch(
+        "main.onboard_repository", return_value=None
+    ):
+        next_repo_response = client.post(
+            "/app/repos/allocate?repo_full=doria90/next-repo",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
+            follow_redirects=False,
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert disconnect_response.status_code == 303
+    assert disconnect_response.headers["location"] == "/app/repos?repo_removed=1"
+    assert restored_allocation is not None
+    assert restored_allocation.allocation_status == "inactive"
+    assert repo_setup_response.status_code == 200
+    assert "1 of 1 repository slots available on this plan." in repo_setup_response.text
+    assert "Restore repo" in repo_setup_response.text
+    assert "doria90/current-repo" in repo_setup_response.text
+    assert "No onboarded repositories yet" in repo_setup_response.text
+    assert next_repo_response.status_code == 303
+    assert next_repo_response.headers["location"] == "/app"
+
+
+def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-restore.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        list_repo_allocations_for_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="845",
+        github_login="restore-owner",
+        display_name="Restore Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-restore-workspace",
+        display_name="Repo Restore Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-restore-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:restore",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-restore",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/current-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="1",
+        repo_full="doria90/current-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "inactive")
+
+    with patch("main.generate_jwt", return_value="jwt"), patch("main.get_installation_token", return_value="installation-token"), patch(
+        "main.onboard_repository", return_value=None
+    ):
+        restore_response = client.post(
+            "/app/repos/allocate?repo_full=doria90/current-repo",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            data={"csrf_token": session.csrf_secret},
+            follow_redirects=False,
+        )
+    allocations = list_repo_allocations_for_workspace(main.AUDIT_DB_PATH, workspace.id)
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert restore_response.status_code == 303
+    assert restore_response.headers["location"] == "/app"
+    assert len(allocations) == 1
+    assert allocations[0].id == allocation.id
+    assert allocations[0].allocation_status == "onboarded"
 
 
 def test_install_start_redirects_to_live_github_install_and_sets_state_cookie(tmp_path):

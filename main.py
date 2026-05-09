@@ -347,21 +347,13 @@ def _dashboard_redirect_for_request(request: Request):
     access_context = _build_access_context(session)
     is_deep_link = _is_dashboard_deep_link_request(request)
     resolution = access_context["resolution"]
-    
+
     # If no dashboard access, deny unless it's a deep link
     if not resolution.can_access_dashboard:
         if is_deep_link:
             return None, session, access_context, True
         return RedirectResponse("/app", status_code=303), session, access_context, False
-    
-    # For free tier (active_comments_only), show shell only with deep links
-    if resolution.state == "active_comments_only" and is_deep_link:
-        return None, session, access_context, True
-    
-    # For free tier without deep links, redirect to /app
-    if resolution.state == "active_comments_only":
-        return RedirectResponse("/app", status_code=303), session, access_context, False
-    
+
     return None, session, access_context, False
 
 
@@ -424,6 +416,51 @@ def _dashboard_shell_copy(access_context: dict[str, object] | None, *, repo_full
     elif resolution.state == "active_comments_only":
         shell_body = "This workspace can receive PR comments, but dashboard views require a paid plan. Upgrade to open linked dashboard context."
     return (shell_title, shell_body, _dashboard_shell_cta_href(resolution), resolution.primary_cta)
+
+
+def _free_tier_upgrade_shell_copy(scope_label: str) -> tuple[str, str, str, str]:
+    return (
+        "Upgrade to Starter",
+        f"This workspace can review dashboard and audit surfaces, but {scope_label} requires Starter or above.",
+        "/app/billing?plan=starter",
+        "Upgrade to Starter",
+    )
+
+
+def _is_active_comments_only_workspace(access_context: dict[str, object] | None) -> bool:
+    resolution = access_context.get("resolution") if access_context else None
+    return bool(resolution is not None and getattr(resolution, "state", "") == "active_comments_only")
+
+
+def _admin_subscription_status_for_plan(plan_code: str) -> str:
+    return "free_active" if plan_code == "free" else "active"
+
+
+def _admin_apply_workspace_plan(workspace_id: int, plan_code: str):
+    normalized_plan = get_plan_definition(plan_code).code
+    existing_subscription = get_workspace_subscription(AUDIT_DB_PATH, workspace_id)
+    subscription_status = _admin_subscription_status_for_plan(normalized_plan)
+    now = time.time()
+    subscription = upsert_subscription(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        stripe_subscription_id=(existing_subscription.stripe_subscription_id if existing_subscription else f"admin:workspace:{workspace_id}"),
+        stripe_price_id=f"admin:plan:{normalized_plan}",
+        plan_code=normalized_plan,
+        status=subscription_status,
+        cancel_at_period_end=False,
+        current_period_start_at=(existing_subscription.current_period_start_at if existing_subscription else now),
+        current_period_end_at=(existing_subscription.current_period_end_at if existing_subscription else None),
+        next_payment_at=(existing_subscription.next_payment_at if existing_subscription else None),
+        trial_ends_at=(existing_subscription.trial_ends_at if existing_subscription else None),
+        last_webhook_event_id=(existing_subscription.last_webhook_event_id if existing_subscription else "admin_plan_override"),
+    )
+    entitlement = upsert_entitlement(
+        AUDIT_DB_PATH,
+        workspace_id=workspace_id,
+        payload=derive_entitlement_payload(normalized_plan, subscription_status),
+    )
+    return subscription, entitlement
 
 
 def _local_debug_dashboard_enabled() -> bool:
@@ -974,14 +1011,24 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
     connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)
     allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
     connected_repo_fulls = {connection.repo_full for connection in connections}
-    allocated_repo_fulls = {allocation.repo_full for allocation in allocations}
+    active_allocated_repo_fulls = {
+        allocation.repo_full
+        for allocation in allocations
+        if allocation.allocation_status in {"active", "onboarded"}
+    }
+    inactive_allocated_repo_fulls = {
+        allocation.repo_full
+        for allocation in allocations
+        if allocation.allocation_status == "inactive"
+    }
     repo_scope_by_full = {repo_full: "connected_history" for repo_full in connected_repo_fulls}
-    repo_scope_by_full.update({repo_full: "allocated" for repo_full in allocated_repo_fulls})
+    repo_scope_by_full.update({repo_full: "allocated" for repo_full in active_allocated_repo_fulls})
     allocation_status_by_full = {
         allocation.repo_full: allocation.allocation_status
         for allocation in allocations
+        if allocation.allocation_status in {"active", "onboarded"}
     }
-    visible_repo_fulls = connected_repo_fulls | allocated_repo_fulls
+    visible_repo_fulls = connected_repo_fulls | active_allocated_repo_fulls
     onboarding_summary_by_full = {
         item.repo_full: asdict(item)
         for item in list_repo_dashboard_index(
@@ -998,13 +1045,18 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
         if not repo_full:
             continue
         summary = onboarding_summary_by_full.get(repo_full)
-        workspace_summary = summary if summary is not None and str(summary.get("dashboard_scope") or "allocated") == "allocated" else None
+        workspace_summary = (
+            summary
+            if summary is not None and repo_full in active_allocated_repo_fulls and str(summary.get("dashboard_scope") or "allocated") == "allocated"
+            else None
+        )
         inventory_by_full[repo_full.lower()] = {
             "repo_full": repo_full,
             "is_connected": repo_full in connected_repo_fulls,
-            "is_allocated": repo_full in allocated_repo_fulls,
+            "is_allocated": repo_full in active_allocated_repo_fulls,
             "is_onboarded": workspace_summary is not None,
             "onboarding_status": workspace_summary.get("onboarding_status") if workspace_summary is not None else None,
+            "can_restore": repo_full in inactive_allocated_repo_fulls and repo_full in connected_repo_fulls,
         }
 
     if user is not None:
@@ -1018,15 +1070,20 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
                     if not repo_full:
                         continue
                     summary = onboarding_summary_by_full.get(repo_full)
-                    workspace_summary = summary if summary is not None and str(summary.get("dashboard_scope") or "allocated") == "allocated" else None
+                    workspace_summary = (
+                        summary
+                        if summary is not None and repo_full in active_allocated_repo_fulls and str(summary.get("dashboard_scope") or "allocated") == "allocated"
+                        else None
+                    )
                     inventory_by_full.setdefault(
                         repo_full.lower(),
                         {
                             "repo_full": repo_full,
                             "is_connected": repo_full in connected_repo_fulls,
-                            "is_allocated": repo_full in allocated_repo_fulls,
+                            "is_allocated": repo_full in active_allocated_repo_fulls,
                             "is_onboarded": workspace_summary is not None,
                             "onboarding_status": workspace_summary.get("onboarding_status") if workspace_summary is not None else None,
+                            "can_restore": repo_full in inactive_allocated_repo_fulls and repo_full in connected_repo_fulls,
                         },
                     )
             except (HTTPError, OSError, RuntimeError, ValueError):
@@ -2481,6 +2538,14 @@ def _render_compliance_tab_page(
     identity = access_context["identity"]
     session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    blocked_free_tier = _is_active_comments_only_workspace(access_context)
+    shell_state = "active_comments_only" if blocked_free_tier else "active"
+    shell_title = ""
+    shell_body = ""
+    shell_cta_href = None
+    shell_cta_label = None
+    if blocked_free_tier:
+        shell_title, shell_body, shell_cta_href, shell_cta_label = _free_tier_upgrade_shell_copy("the Compliance workspace")
     status_note = request.query_params.get("status") or ""
     evidence_filter = request.query_params.get("gap") or ""
     evidence_repo = request.query_params.get("repo") or ""
@@ -2500,6 +2565,11 @@ def _render_compliance_tab_page(
             csrf_token=session.csrf_secret if session is not None else "",
             evidence_filter=evidence_filter,
             evidence_repo=evidence_repo,
+            shell_state=shell_state,
+            shell_title=shell_title,
+            shell_body=shell_body,
+            shell_cta_href=shell_cta_href,
+            shell_cta_label=shell_cta_label,
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
                 github_login=identity.github_login if identity else None,
@@ -2595,6 +2665,8 @@ async def compliance_export_page_submit(
     csrf_token: str | None = Form(default=None),
 ):
     access_context = _current_workspace_context(request)
+    if _is_active_comments_only_workspace(access_context):
+        return RedirectResponse("/app/compliance/exports?status=Upgrade+to+Starter+to+generate+compliance+exports.", status_code=303)
     _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     workspace = access_context["workspace"]
     session = access_context["session"]
@@ -2763,16 +2835,19 @@ async def admin_update_workspace(
     workspace_id: int,
     display_name: str = Form(...),
     slug: str | None = Form(default=None),
+    plan_code: str | None = Form(default=None),
     csrf_token: str | None = Form(None),
 ):
     admin_context = _require_owner_access(request)
     _validate_csrf_secret(admin_context["session"].csrf_secret, csrf_token)
     normalized_name = _normalize_nonempty_text(display_name, field_name="Workspace name", max_length=120)
     normalized_slug = _normalize_workspace_slug(slug, normalized_name)
+    normalized_plan = get_plan_definition(plan_code or "starter").code
     try:
         workspace = update_workspace_admin_fields(AUDIT_DB_PATH, workspace_id, slug=normalized_slug, display_name=normalized_name)
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Workspace slug must be unique.") from exc
+    _subscription, entitlement = _admin_apply_workspace_plan(workspace_id, normalized_plan)
     create_control_plane_audit_log(
         AUDIT_DB_PATH,
         workspace_id=workspace.id,
@@ -2780,7 +2855,7 @@ async def admin_update_workspace(
         event_type="admin_workspace_updated",
         subject_type="workspace",
         subject_id=str(workspace.id),
-        payload={"slug": workspace.slug, "display_name": workspace.display_name},
+        payload={"slug": workspace.slug, "display_name": workspace.display_name, "plan_code": entitlement.plan_code},
     )
     return _admin_redirect("workspace_updated")
 
@@ -2955,6 +3030,10 @@ async def billing_page(request: Request):
             portal_url=portal_url,
             csrf_token=access_context["session"].csrf_secret,
             theme_preference=access_context["user"].theme_preference if access_context.get("user") else "dark",
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=access_context["user"].display_name if access_context.get("user") else None,
+                github_login=access_context["identity"].github_login if access_context.get("identity") else None,
+            ),
         )
     )
 
@@ -3266,15 +3345,16 @@ async def repo_setup_page(request: Request):
     repo_inventory = _github_account_repo_inventory(access_context)
     connections = [asdict(item) for item in list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)]
     allocations = [asdict(item) for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)]
+    active_allocations = [item for item in allocations if str(item.get("allocation_status") or "") in {"active", "onboarded"}]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     repo_limit = entitlement.repo_limit if entitlement else get_plan_definition(plan_code).repo_limit
     allocation_status_by_full = {
         str(item["repo_full"]): str(item["allocation_status"])
-        for item in allocations
+        for item in active_allocations
     }
     repo_scope_by_full = {str(item["repo_full"]): "connected_history" for item in connections}
-    repo_scope_by_full.update({str(item["repo_full"]): "allocated" for item in allocations})
-    visible_repo_fulls = {str(item["repo_full"]) for item in connections} | {str(item["repo_full"]) for item in allocations}
+    repo_scope_by_full.update({str(item["repo_full"]): "allocated" for item in active_allocations})
+    visible_repo_fulls = {str(item["repo_full"]) for item in connections} | {str(item["repo_full"]) for item in active_allocations}
     onboarded_summaries = [
         asdict(item)
         for item in list_repo_dashboard_index(
@@ -3286,13 +3366,14 @@ async def repo_setup_page(request: Request):
         if str(item.dashboard_scope or "allocated") == "allocated"
     ]
     consumed_repo_slots = len(
-        {str(item["repo_full"]) for item in allocations if str(item.get("allocation_status") or "") in {"active", "onboarded"}}
+        {str(item["repo_full"]) for item in active_allocations}
         | {str(item["repo_full"]) for item in onboarded_summaries}
     )
     remaining_repo_slots = max(repo_limit - consumed_repo_slots, 0)
+    install_disabled = remaining_repo_slots <= 0
     inventory_summary = f"{remaining_repo_slots} of {repo_limit} repository slots available on this plan."
     audit_repo_full = (
-        (allocations[0]["repo_full"] if allocations else None)
+        (active_allocations[0]["repo_full"] if active_allocations else None)
         or (connections[0]["repo_full"] if connections else None)
     )
     audit_href = f"/dashboard/{quote(audit_repo_full, safe='')}" if audit_repo_full else "/dashboard"
@@ -3304,6 +3385,8 @@ async def repo_setup_page(request: Request):
                 repo_inventory,
                 csrf_token=access_context["session"].csrf_secret,
                 install_start_href=_path_with_flow_context("/app/setup/install/start", flow_context),
+                install_disabled=install_disabled,
+                install_disabled_href="/app/billing?plan=starter",
             ),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
@@ -3315,6 +3398,19 @@ async def repo_setup_page(request: Request):
             ),
         )
     )
+
+
+@app.post("/app/repos/disconnect")
+async def repo_disconnect(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
+    access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    workspace = access_context["workspace"]
+    allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
+    if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
+        raise HTTPException(status_code=404, detail="Repository is not currently attached to this workspace.")
+    update_repo_allocation_status(AUDIT_DB_PATH, allocation.id, "inactive")
+    return RedirectResponse("/app/repos?repo_removed=1", status_code=303)
 
 
 @app.post("/app/repos/allocate")
@@ -3334,7 +3430,8 @@ async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None
 
     allocated_count, _onboarded_count = count_workspace_repo_allocations(AUDIT_DB_PATH, workspace.id)
     existing_allocation = next((item for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id) if item.repo_full == repo_full), None)
-    if entitlement is not None and allocated_count >= entitlement.repo_limit and existing_allocation is None:
+    existing_allocation_consumes_slot = bool(existing_allocation and existing_allocation.allocation_status in {"active", "onboarded"})
+    if entitlement is not None and allocated_count >= entitlement.repo_limit and not existing_allocation_consumes_slot:
         raise HTTPException(status_code=400, detail="Workspace entitlement repo limit has been reached.")
 
     allocation = allocate_repo_to_workspace(
@@ -3501,12 +3598,16 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
     active_tab = requested_tab.strip().lower() if requested_tab else "audit"
     if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
         active_tab = "audit"
+    blocked_free_tier_tab = _is_active_comments_only_workspace(access_context) and active_tab in {"compliance", "reports"}
     shell_state = "active"
     shell_title = ""
     shell_body = ""
     shell_cta_href = None
     shell_cta_label = None
-    if shell_mode:
+    if blocked_free_tier_tab:
+        shell_state = "active_comments_only"
+        shell_title, shell_body, shell_cta_href, shell_cta_label = _free_tier_upgrade_shell_copy(f"the {active_tab} tab")
+    elif shell_mode:
         shell_state = str(access_context["resolution"].state)
         shell_title, shell_body, shell_cta_href, shell_cta_label = _dashboard_shell_copy(access_context, repo_full=repo_full)
     user = access_context.get("user") if access_context else None
@@ -3858,6 +3959,8 @@ app.include_router(
 
 async def create_compliance_export(repo_full: str, payload: ComplianceExportRequest, request: Request):
     access_context = _require_repo_dashboard_mutation_access(request, repo_full)
+    if _is_active_comments_only_workspace(access_context):
+        raise HTTPException(status_code=403, detail="Upgrade to Starter to generate compliance exports.")
     try:
         if payload.from_ts is not None and payload.to_ts is not None:
             from_ts = payload.from_ts

@@ -230,6 +230,19 @@ def _render_action_chip(label: str | None, href: str | None, *, fallback: str) -
     return f'<span>{html_escape(text)}</span>'
 
 
+def _control_page_shell_notice_html(*, shell_title: str, shell_body: str, shell_cta_href: str | None, shell_cta_label: str | None) -> str:
+    cta_markup = ""
+    if shell_cta_href and shell_cta_label:
+        cta_markup = f'<a class="filter-add" href="{html_escape(shell_cta_href, quote=True)}">{html_escape(shell_cta_label)}</a>'
+    return (
+        '<section class="card-shell dashboard-shell-notice" id="dashboard-shell-notice" aria-label="Upgrade notice">'
+        f'<div class="secondary-panel-title">{html_escape(shell_title)}</div>'
+        f'<div class="muted">{html_escape(shell_body)}</div>'
+        f'{cta_markup}'
+        '</section>'
+    )
+
+
 def _csrf_input(csrf_token: str) -> str:
     return f'<input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />'
 
@@ -448,8 +461,16 @@ def render_control_plane_billing_page(
     portal_url: str | None,
     csrf_token: str,
     theme_preference: str = "dark",
+    sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_billing.html")
+    selected_plan = PLAN_DEFINITIONS.get(selected_plan_code)
+    selected_plan_label = selected_plan.label if selected_plan is not None else selected_plan_code.replace("_", " ").title()
+    checkout_state_label = "Ready to start"
+    if flow_context.get("checkout_session_id"):
+        checkout_state_label = "Checkout in progress"
+    elif flow_context.get("canceled"):
+        checkout_state_label = "Checkout canceled"
     portal_block = (
         f'<a class="subtle-link" href="{html_escape(portal_url)}">Open billing portal</a>' if portal_url else '<span class="subtle-link">Portal unavailable</span>'
     )
@@ -477,10 +498,13 @@ def render_control_plane_billing_page(
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{CURRENT_PLAN_LABEL}}", html_escape(current_plan_label))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape(subscription_status))
+        .replace("{{SELECTED_PLAN_LABEL}}", html_escape(selected_plan_label))
+        .replace("{{CHECKOUT_STATE_LABEL}}", html_escape(checkout_state_label))
         .replace("{{CHECKOUT_STATUS_NOTE}}", html_escape(checkout_status_note or "Choose a plan to create or resume Stripe checkout."))
         .replace("{{PLAN_CARDS}}", "".join(plan_cards))
         .replace("{{PORTAL_ACTION}}", portal_block)
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
     )
 
 
@@ -525,6 +549,10 @@ def _repo_dashboard_href(repo_full: str) -> str:
 
 def _repo_allocate_href(repo_full: str) -> str:
     return f'/app/repos/allocate?repo_full={quote(repo_full, safe="/")}'
+
+
+def _repo_disconnect_href(repo_full: str) -> str:
+    return f'/app/repos/disconnect?repo_full={quote(repo_full, safe="/")}'
 
 
 def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark", sidebar_profile_initial: str = "V") -> str:
@@ -593,7 +621,14 @@ def _repo_setup_state_key(connection: dict[str, object] | None, allocation: dict
     return "unknown"
 
 
-def render_repo_inventory_cards(repositories: list[dict[str, object]], *, csrf_token: str, install_start_href: str) -> str:
+def render_repo_inventory_cards(
+    repositories: list[dict[str, object]],
+    *,
+    csrf_token: str,
+    install_start_href: str,
+    install_disabled: bool = False,
+    install_disabled_href: str = "/app/billing?plan=starter",
+) -> str:
     if not repositories:
         return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>No repositories available yet</h3><p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p></article>'
 
@@ -605,28 +640,82 @@ def render_repo_inventory_cards(repositories: list[dict[str, object]], *, csrf_t
         is_connected = bool(repository.get("is_connected"))
         is_allocated = bool(repository.get("is_allocated"))
         is_onboarded = bool(repository.get("is_onboarded"))
+        can_restore = bool(repository.get("can_restore"))
         onboarding_status = str(repository.get("onboarding_status") or "").lower()
         if is_onboarded:
             if onboarding_status == "baseline_approved":
-                action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(_repo_dashboard_href(repo_full))}">Open audit</a>'
+                action = f'''
+                <div class="repo-setup-inventory-action-group">
+                    <a class="repo-setup-button repo-setup-button-link" href="{html_escape(_repo_dashboard_href(repo_full))}">Open audit</a>
+                    <form method="post" action="{html_escape(_repo_disconnect_href(repo_full))}" class="repo-setup-inline-form">
+                        {_csrf_input(csrf_token)}
+                        <button type="submit" class="repo-setup-button repo-setup-button-link">Disconnect repo</button>
+                    </form>
+                </div>
+                '''
                 status = "onboarded"
             else:
-                action = '<span class="repo-setup-chip repo-setup-chip-cool">Onboarding active</span>'
+                action = f'''
+                <div class="repo-setup-inventory-action-group">
+                    <span class="repo-setup-chip repo-setup-chip-cool">Onboarding active</span>
+                    <form method="post" action="{html_escape(_repo_disconnect_href(repo_full))}" class="repo-setup-inline-form">
+                        {_csrf_input(csrf_token)}
+                        <button type="submit" class="repo-setup-button repo-setup-button-link">Disconnect repo</button>
+                    </form>
+                </div>
+                '''
                 status = "onboarding"
         elif is_allocated:
-            action = '<span class="repo-setup-chip repo-setup-chip-cool">Allocation saved</span>'
-            status = "allocated"
-        elif is_connected:
             action = f'''
-            <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form">
-                {_csrf_input(csrf_token)}
-                <button type="submit" class="repo-setup-button">Allocate and onboard</button>
-            </form>
+            <div class="repo-setup-inventory-action-group">
+                <span class="repo-setup-chip repo-setup-chip-cool">Allocation saved</span>
+                <form method="post" action="{html_escape(_repo_disconnect_href(repo_full))}" class="repo-setup-inline-form">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="repo-setup-button repo-setup-button-link">Disconnect repo</button>
+                </form>
+            </div>
             '''
-            status = "connected"
+            status = "allocated"
+        elif can_restore:
+            if install_disabled:
+                action = (
+                    f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_disabled_href)}" '
+                    'aria-disabled="true" data-upgrade-required="repo-limit">Upgrade to restore repo</a>'
+                )
+                status = "upgrade_required"
+            else:
+                action = f'''
+                <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="repo-setup-button">Restore repo</button>
+                </form>
+                '''
+                status = "restorable"
+        elif is_connected:
+            if install_disabled:
+                action = (
+                    f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_disabled_href)}" '
+                    'aria-disabled="true" data-upgrade-required="repo-limit">Upgrade to add repo</a>'
+                )
+                status = "upgrade_required"
+            else:
+                action = f'''
+                <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form">
+                    {_csrf_input(csrf_token)}
+                    <button type="submit" class="repo-setup-button">Allocate and onboard</button>
+                </form>
+                '''
+                status = "connected"
         else:
-            action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">Install app</a>'
-            status = "available"
+            if install_disabled:
+                action = (
+                    f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_disabled_href)}" '
+                    'aria-disabled="true" data-upgrade-required="repo-limit">Upgrade to add repo</a>'
+                )
+                status = "upgrade_required"
+            else:
+                action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">Install app</a>'
+                status = "available"
         rendered.append(
             f'''
             <article class="repo-setup-inventory-row" data-repo-inventory-card="true" data-status="{html_escape(status)}" data-repo-full="{html_escape(repo_full.lower())}">
@@ -797,6 +886,7 @@ def render_control_plane_settings_page(
     admin_control = ""
     if admin_url:
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
+    billing_link = '<a class="control-page-button" href="/app/billing">Open billing</a>'
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
@@ -824,6 +914,7 @@ def render_control_plane_settings_page(
         .replace("{{INSTALLATION_ACCOUNT_LOGIN}}", html_escape(installation_account_login or "Not linked"))
         .replace("{{REPO_LIMIT}}", html_escape(str(repo_limit or 0)))
         .replace("{{SEAT_LIMIT}}", html_escape(str(seat_limit or 0)))
+        .replace("{{BILLING_LINK}}", billing_link)
     )
 
 
@@ -1712,12 +1803,26 @@ def render_control_plane_compliance_page(
     csrf_token: str = "",
     evidence_filter: str = "",
     evidence_repo: str = "",
+    shell_state: str = "active",
+    shell_title: str = "",
+    shell_body: str = "",
+    shell_cta_href: str | None = None,
+    shell_cta_label: str | None = None,
     sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
     show_status_note = bool(status_note and active_tab == "readiness")
     status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if show_status_note else ""
+    blocked_class = " dashboard-shell-blocked" if shell_state != "active" else ""
+    shell_notice = ""
+    if shell_state != "active":
+        shell_notice = _control_page_shell_notice_html(
+            shell_title=shell_title,
+            shell_body=shell_body,
+            shell_cta_href=shell_cta_href,
+            shell_cta_label=shell_cta_label,
+        )
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
@@ -1728,6 +1833,8 @@ def render_control_plane_compliance_page(
         .replace("{{PAGE_TITLE}}", html_escape(page_title))
         .replace("{{PAGE_DESCRIPTION}}", html_escape(page_description))
         .replace("{{PAGE_NOTE}}", html_escape(page_note))
+        .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
+        .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
         .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter, evidence_repo))
     )
@@ -1807,6 +1914,11 @@ def render_control_plane_admin_page(
         </div>
     '''
 
+    def _tier_label(plan_code: object) -> str:
+        normalized = str(plan_code or "").strip().lower()
+        plan = PLAN_DEFINITIONS.get(normalized)
+        return plan.label if plan is not None else "No plan"
+
     admin_table_rows = []
     for row in admin_rows:
         user_id = int(row.get("user_id") or 0)
@@ -1854,6 +1966,11 @@ def render_control_plane_admin_page(
         membership_delete = ""
         workspace_delete = ""
         if workspace_id:
+            selected_plan_code = str(row.get("plan_code") or "starter").strip().lower() or "starter"
+            workspace_plan_options = "".join(
+                f'<option value="{html_escape(plan.code)}" {"selected" if plan.code == selected_plan_code else ""}>{html_escape(plan.label)}</option>'
+                for plan in PLAN_DEFINITIONS.values()
+            )
             workspace_edit = f'''
                 <details class="admin-row-disclosure">
                     <summary>Edit workspace</summary>
@@ -1861,6 +1978,7 @@ def render_control_plane_admin_page(
                         {_csrf_input(csrf_token)}
                         <input class="field-input" name="display_name" maxlength="120" value="{html_escape(workspace_name)}" />
                         <input class="field-input" name="slug" maxlength="120" value="{html_escape(workspace_slug)}" />
+                        <select class="field-input" name="plan_code">{workspace_plan_options}</select>
                         <button type="submit" class="button">Save workspace</button>
                     </form>
                 </details>
@@ -1891,6 +2009,7 @@ def render_control_plane_admin_page(
                 github_markup,
                 "<br />".join(profile_bits) if profile_bits else "<span class=\"page-note\">No extra profile data</span>",
                 html_escape(str(row.get("membership_role") or "none")),
+                html_escape(_tier_label(row.get("plan_code"))),
                 html_escape(counts_markup),
                 html_escape(_setup_state_label(str(row.get("setup_state") or "none"))),
                 html_escape(_format_timestamp(row.get("last_login_at") if isinstance(row.get("last_login_at"), (int, float)) else None)),
@@ -1921,7 +2040,7 @@ def render_control_plane_admin_page(
         return installation_login
 
     user_rows = _render_table(
-        ["Workspace", "User", "GitHub", "Profile", "Role", "Counts", "Setup", "Last login", "Actions"],
+        ["Workspace", "User", "GitHub", "Profile", "Role", "Tier", "Counts", "Setup", "Last login", "Actions"],
         admin_table_rows,
     )
     install_rows = _render_table(

@@ -4151,8 +4151,17 @@ body.dashboard-index-page[data-theme="light"] {
     align-items: center;
 }
 
+.repo-setup-page .repo-setup-inventory-action-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .repo-setup-page .repo-setup-inline-form {
     margin: 0;
+    display: inline-flex;
 }
 
 .repo-setup-page .repo-setup-summary-grid {
