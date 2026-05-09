@@ -13,6 +13,7 @@ COPY config.py /app/config.py
 COPY main.py /app/main.py
 COPY run_api.py /app/run_api.py
 COPY engine /app/engine
+COPY routers /app/routers
 COPY services /app/services
 COPY static /app/static
 COPY templates /app/templates
