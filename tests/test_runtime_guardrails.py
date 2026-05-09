@@ -184,6 +184,28 @@ def test_staging_rejects_dev_auth_fallbacks(monkeypatch):
     assert "local_owner_fallback" in message
 
 
+def test_production_worker_allows_missing_owner_access_config(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "line1\nline2")
+    monkeypatch.setenv("OWNER_GITHUB_USER_ID", "")
+    monkeypatch.setenv("OWNER_GITHUB_LOGIN", "")
+    monkeypatch.setenv("OWNER_EMAIL", "")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with patch("services.runtime_guardrails._validate_github_app_private_key"):
+        validate_runtime_configuration(settings)
+
+
 def test_local_debug_disable_login_requires_local_env_and_localhost(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("SERVICE_ROLE", "api")

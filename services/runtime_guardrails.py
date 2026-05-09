@@ -96,7 +96,7 @@ def validate_runtime_configuration(settings: Settings) -> None:
             "Use a cryptographically random value, e.g.: openssl rand -hex 32"
         )
 
-    if settings.is_internet_reachable_env:
+    if settings.is_internet_reachable_env and settings.service_role in {"api", "monolith"}:
         active_fallbacks = _dev_auth_fallbacks_enabled(settings)
         if active_fallbacks:
             errors.append(
