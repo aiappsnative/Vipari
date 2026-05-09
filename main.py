@@ -189,8 +189,10 @@ GITHUB_WEBHOOK_SECRET = settings.github_webhook_secret
 OPENAI_API_KEY = settings.openai_api_key
 FOUNDRY_API_KEY = settings.foundry_api_key
 AZURE_OPENAI_ENDPOINT = settings.azure_openai_endpoint
+AI_PROVIDER = settings.resolved_ai_provider.value
 AI_MODEL = settings.ai_model
 AI_API_KEY = settings.ai_api_key
+AI_BASE_URL = settings.ai_base_url
 AUDIT_DB_PATH = settings.resolved_db_path
 AUDIT_WORKER_ENABLED = settings.audit_worker_enabled and bool(
     settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET and AI_API_KEY
@@ -207,7 +209,7 @@ CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
 CONTROL_PLANE_INSTALL_STATE_COOKIE = "promptdrift_install_state"
 SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
 
-client = OpenAI(api_key=AI_API_KEY, base_url=AZURE_OPENAI_ENDPOINT or None) if AI_API_KEY else None
+client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL) if AI_API_KEY else None
 worker: AuditWorker | None = None
 branch_scan_worker: BranchScanWorker | None = None
 
@@ -3795,7 +3797,7 @@ app.include_router(
         resolve_db_path_fn=lambda: AUDIT_DB_PATH,
         github_app_id=GITHUB_APP_ID,
         github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
-        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path),
+        generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
         get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
         onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
         plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
@@ -4294,7 +4296,7 @@ async def webhook(request: Request):
     if not head_sha:
         raise HTTPException(status_code=400, detail="Missing payload data")
 
-    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH)
+    jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, settings.resolved_github_private_key)
     token = get_installation_token(jwt_token, installation_id)
     diff_text = await fetch_diff_with_retry(
         repo_full,

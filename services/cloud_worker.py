@@ -234,10 +234,10 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     settings = get_settings()
     validate_runtime_configuration(settings)
     if not settings.ai_api_key:
-        raise RuntimeError("OPENAI_API_KEY or FOUNDRY_API_KEY must be configured for the worker service.")
+        raise RuntimeError("Configured AI provider credentials are missing for the worker service.")
     logger = configure_logging("worker")
     queue = queue_backend or build_queue_backend(settings)
-    llm_client = OpenAI(api_key=settings.ai_api_key, base_url=settings.azure_openai_endpoint or None)
+    llm_client = OpenAI(api_key=settings.ai_api_key, base_url=settings.ai_base_url)
 
     init_db(settings.resolved_db_path)
     cleanup_webhook_deliveries(settings.resolved_db_path)

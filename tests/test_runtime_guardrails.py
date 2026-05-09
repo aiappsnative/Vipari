@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import pytest
 
-from config import AppEnv, get_settings
+from config import AiProvider, AppEnv, get_settings
 from services.audit_jobs import init_db
 from services.cloud_worker import build_queue_backend as build_worker_queue_backend
 from services.queue import RedisQueue
@@ -33,6 +33,69 @@ def test_production_api_rejects_sqlite_and_insecure_cookie(monkeypatch):
     assert "HTTPS" in message
     assert "SESSION_COOKIE_SECURE=true" in message
     assert "SQLite persistence" in message
+
+
+def test_settings_resolve_foundry_provider_in_auto_mode(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "auto")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "foundry-key")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/openai/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.resolved_ai_provider == AiProvider.FOUNDRY
+    assert settings.ai_api_key == "foundry-key"
+    assert settings.ai_base_url == "https://example.openai.azure.com/openai/v1"
+
+
+def test_settings_resolve_openai_provider_explicitly(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "foundry-key")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/openai/v1")
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.resolved_ai_provider == AiProvider.OPENAI
+    assert settings.ai_api_key == "openai-key"
+    assert settings.ai_base_url is None
+
+
+def test_worker_validation_requires_foundry_endpoint_when_provider_is_foundry(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("AI_PROVIDER", "foundry")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "foundry-key")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "line1\nline2")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "AZURE_OPENAI_ENDPOINT" in str(exc_info.value)
+
+
+def test_worker_validation_requires_openai_key_when_provider_is_openai(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("FOUNDRY_API_KEY", "foundry-key")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/openai/v1")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "line1\nline2")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "OPENAI_API_KEY" in str(exc_info.value)
 
 
 def test_production_worker_requires_redis_queue(monkeypatch):

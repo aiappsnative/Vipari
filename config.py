@@ -22,6 +22,12 @@ class AppEnv(str, Enum):
     PRODUCTION = "production"
 
 
+class AiProvider(str, Enum):
+    AUTO = "auto"
+    FOUNDRY = "foundry"
+    OPENAI = "openai"
+
+
 class Settings(BaseSettings):
     app_env: AppEnv = AppEnv.LOCAL
     service_role: Literal["monolith", "api", "webhook", "worker"] = "monolith"
@@ -92,6 +98,7 @@ class Settings(BaseSettings):
     foundry_api_key: str = ""
     azure_openai_endpoint: str = ""
     ai_model: str = "gpt-4o"
+    ai_provider: AiProvider = AiProvider.AUTO
 
     worker_metrics_port: int = 8003
 
@@ -99,7 +106,21 @@ class Settings(BaseSettings):
 
     @property
     def ai_api_key(self) -> str:
-        return self.foundry_api_key or self.openai_api_key
+        return self.foundry_api_key if self.resolved_ai_provider == AiProvider.FOUNDRY else self.openai_api_key
+
+    @property
+    def resolved_ai_provider(self) -> AiProvider:
+        if self.ai_provider != AiProvider.AUTO:
+            return self.ai_provider
+        if self.foundry_api_key or self.azure_openai_endpoint:
+            return AiProvider.FOUNDRY
+        return AiProvider.OPENAI
+
+    @property
+    def ai_base_url(self) -> str | None:
+        if self.resolved_ai_provider == AiProvider.FOUNDRY:
+            return self.azure_openai_endpoint or None
+        return None
 
     @property
     def resolved_github_private_key(self) -> str:

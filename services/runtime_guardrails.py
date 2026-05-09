@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from fastapi.responses import JSONResponse
 from jwt.exceptions import InvalidKeyError
 
-from config import AppEnv, Settings
+from config import AiProvider, AppEnv, Settings
 from .github_integration import generate_jwt
 from .persistence import is_sqlite_locator
 from .persistence import connect_sqlite
@@ -72,8 +72,13 @@ def validate_runtime_configuration(settings: Settings) -> None:
     if settings.service_role == "webhook" and not settings.github_webhook_secret:
         errors.append("Webhook service requires GITHUB_WEBHOOK_SECRET.")
     if settings.service_role == "worker":
-        if not settings.ai_api_key:
-            errors.append("Worker service requires OPENAI_API_KEY or FOUNDRY_API_KEY.")
+        if settings.resolved_ai_provider == AiProvider.FOUNDRY:
+            if not settings.foundry_api_key:
+                errors.append("Worker service requires FOUNDRY_API_KEY when AI_PROVIDER=foundry.")
+            if not settings.azure_openai_endpoint:
+                errors.append("Worker service requires AZURE_OPENAI_ENDPOINT when AI_PROVIDER=foundry.")
+        elif not settings.openai_api_key:
+            errors.append("Worker service requires OPENAI_API_KEY when AI_PROVIDER=openai.")
         if not settings.has_github_app_credentials:
             errors.append("Worker service requires GitHub App credentials.")
 
