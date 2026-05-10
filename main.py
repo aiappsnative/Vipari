@@ -354,7 +354,7 @@ def _dashboard_redirect_for_request(request: Request):
     if not resolution.can_access_dashboard:
         if is_deep_link:
             return None, session, access_context, True
-        return RedirectResponse("/app", status_code=303), session, access_context, False
+        return RedirectResponse("/workspace", status_code=303), session, access_context, False
 
     return None, session, access_context, False
 
@@ -377,14 +377,14 @@ def _is_dashboard_deep_link_request(request: Request) -> bool:
 def _dashboard_shell_cta_href(resolution) -> str:
     state = getattr(resolution, "state", "")
     if state in {"workspace_no_subscription", "billing_pending_confirmation", "payment_failed", "active_comments_only", "expired_read_only", "canceled_active_until_period_end"}:
-        return "/app/billing"
+        return "/billing"
     if state == "authenticated_no_workspace":
-        return "/app/workspaces/new"
+        return "/workspaces/new"
     if state == "awaiting_github_install":
-        return "/app/setup/install"
+        return "/setup/install"
     if state == "awaiting_repo_onboarding":
-        return "/app/repos"
-    return "/app"
+        return "/repos"
+    return "/workspace"
 
 
 def _repo_visible_for_dashboard_shell(access_context: dict[str, object] | None, repo_full: str) -> bool:
@@ -732,15 +732,15 @@ def _auth_start_url(flow_context: dict[str, str]) -> str:
 
 
 def _workspace_new_url(flow_context: dict[str, str]) -> str:
-    return _path_with_flow_context("/app/workspaces/new", flow_context)
+    return _path_with_flow_context("/workspaces/new", flow_context)
 
 
 def _billing_url(flow_context: dict[str, str]) -> str:
-    return _path_with_flow_context("/app/billing", flow_context)
+    return _path_with_flow_context("/billing", flow_context)
 
 
 def _install_url(flow_context: dict[str, str]) -> str:
-    return _path_with_flow_context("/app/setup/install", flow_context)
+    return _path_with_flow_context("/setup/install", flow_context)
 
 
 def _resume_destination_for_session(session, flow_context: dict[str, str]) -> str:
@@ -748,12 +748,12 @@ def _resume_destination_for_session(session, flow_context: dict[str, str]) -> st
         return _workspace_new_url(flow_context)
     access_context = _build_access_context(session)
     if flow_context.get("claim") and access_context.get("subscription") is None:
-        return _path_with_flow_context("/app/billing/claim", flow_context)
+        return _path_with_flow_context("/billing/claim", flow_context)
     if flow_context.get("plan") and access_context.get("subscription") is None:
         return _billing_url(flow_context)
     if access_context.get("installation") is None and access_context["resolution"].state == "awaiting_github_install":
         return _install_url(flow_context)
-    return _path_with_flow_context("/app", flow_context)
+    return _path_with_flow_context("/workspace", flow_context)
 
 
 def _coerce_workspace_hint(value: str | None) -> int | None:
@@ -2217,6 +2217,7 @@ async def logout(request: Request):
     return response
 
 
+@app.get("/workspace", response_class=HTMLResponse)
 @app.get("/app", response_class=HTMLResponse)
 async def control_plane_app_page_route(request: Request, state: str | None = None):
     session = _get_session(request)
@@ -2225,23 +2226,24 @@ async def control_plane_app_page_route(request: Request, state: str | None = Non
     access_context = _build_access_context(session)
     resolution = access_context["resolution"]
     if _has_profile_access(access_context):
-        return RedirectResponse("/app/profile", status_code=303)
+        return RedirectResponse("/profile", status_code=303)
 
     destination_by_state = {
-        "authenticated_no_workspace": "/app/workspaces/new",
-        "workspace_no_subscription": "/app/billing",
-        "billing_pending_confirmation": "/app/billing",
-        "payment_failed": "/app/billing",
-        "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/repos",
-        "active_comments_only": "/app/repos",
-        "canceled_active_until_period_end": "/app/billing",
-        "expired_read_only": "/app/billing",
+        "authenticated_no_workspace": "/workspaces/new",
+        "workspace_no_subscription": "/billing",
+        "billing_pending_confirmation": "/billing",
+        "payment_failed": "/billing",
+        "awaiting_github_install": "/setup/install",
+        "awaiting_repo_onboarding": "/repos",
+        "active_comments_only": "/repos",
+        "canceled_active_until_period_end": "/billing",
+        "expired_read_only": "/billing",
         "forbidden": "/dashboard",
     }
     return RedirectResponse(destination_by_state.get(resolution.state, "/login"), status_code=303)
 
 
+@app.get("/profile", response_class=HTMLResponse)
 @app.get("/app/profile", response_class=HTMLResponse)
 async def profile_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -2268,12 +2270,13 @@ async def profile_page(request: Request):
             next_payment_at=subscription.next_payment_at if subscription else None,
             status_note="Profile updated." if request.query_params.get("updated") else None,
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
         )
     )
 
 
+@app.post("/profile")
 @app.post("/app/profile")
 async def profile_update(request: Request, display_name: str = Form(...), theme_preference: str | None = Form(None), csrf_token: str | None = Form(None)):
     access_context = _current_workspace_context(request)
@@ -2295,9 +2298,10 @@ async def profile_update(request: Request, display_name: str = Form(...), theme_
         display_name=normalized_name,
         theme_preference=normalized_theme or current_user.theme_preference,
     )
-    return RedirectResponse("/app/profile?updated=1", status_code=303)
+    return RedirectResponse("/profile?updated=1", status_code=303)
 
 
+@app.get("/settings", response_class=HTMLResponse)
 @app.get("/app/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -2321,7 +2325,7 @@ async def settings_page(request: Request):
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
             resolution=access_context["resolution"],
-            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
@@ -2344,6 +2348,7 @@ async def settings_page(request: Request):
     )
 
 
+@app.post("/settings")
 @app.post("/app/settings")
 async def settings_update(
     request: Request,
@@ -2377,9 +2382,10 @@ async def settings_update(
         access_context["workspace"].id,
         display_name=normalized_workspace_name,
     )
-    return RedirectResponse("/app/settings?updated=1", status_code=303)
+    return RedirectResponse("/settings?updated=1", status_code=303)
 
 
+@app.post("/settings/invite")
 @app.post("/app/settings/invite")
 async def settings_invite_user(
     request: Request,
@@ -2413,7 +2419,7 @@ async def settings_invite_user(
         role=normalized_role,
         invited_by_user_id=access_context["session"].user_id,
     )
-    return RedirectResponse("/app/settings?invite_added=1", status_code=303)
+    return RedirectResponse("/settings?invite_added=1", status_code=303)
 
 
 def _has_cp_api_access(access_context: dict[str, object]) -> bool:
@@ -2440,14 +2446,16 @@ _ADMIN_SCOPES = {"admin.read", "admin.write"}
 _CUSTOMER_ALLOWED_SCOPES = {"drift.read", "drift.write.low", "drift.write.high"}
 
 
+@app.get("/settings/api-keys", response_class=HTMLResponse)
 @app.get("/app/settings/api-keys", response_class=HTMLResponse)
 async def api_keys_page(request: Request):
     access_context = _current_workspace_context(request)
     if not _has_settings_access(access_context):
         raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
-    return RedirectResponse("/app/integrations/mcp?tab=api-keys", status_code=303)
+    return RedirectResponse("/integrations/mcp?tab=api-keys", status_code=303)
 
 
+@app.post("/settings/api-keys")
 @app.post("/app/settings/api-keys")
 async def create_api_key(
     request: Request,
@@ -2533,9 +2541,10 @@ async def create_api_key(
         payload={"scopes": requested_scopes, "source": "self_service"},
     )
 
-    return RedirectResponse("/app/integrations/mcp?tab=api-keys", status_code=303)
+    return RedirectResponse("/integrations/mcp?tab=api-keys", status_code=303)
 
 
+@app.post("/settings/api-keys/{client_id}/revoke")
 @app.post("/app/settings/api-keys/{client_id}/revoke")
 async def revoke_api_key(
     client_id: str,
@@ -2565,9 +2574,10 @@ async def revoke_api_key(
         subject_id=client_id,
         payload={"source": "self_service"},
     )
-    return RedirectResponse("/app/integrations/mcp?tab=api-keys", status_code=303)
+    return RedirectResponse("/integrations/mcp?tab=api-keys", status_code=303)
 
 
+@app.get("/integrations/mcp", response_class=HTMLResponse)
 @app.get("/app/integrations/mcp", response_class=HTMLResponse)
 async def mcp_integrations_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -2611,9 +2621,9 @@ async def mcp_integrations_page(request: Request):
             audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_tab=active_tab,
-            download_url="/app/integrations/mcp/download",
+            download_url="/integrations/mcp/download",
             broker_host=broker_url,
             config_snippet=config_snippet,
             principals=principals,
@@ -2632,6 +2642,7 @@ async def mcp_integrations_page(request: Request):
     )
 
 
+@app.get("/integrations/mcp/download")
 @app.get("/app/integrations/mcp/download")
 async def mcp_integrations_download(request: Request):
     access_context = _current_workspace_context(request)
@@ -2702,6 +2713,7 @@ async def mcp_broker_invoke(request: Request, payload: McpBrokerInvokeRequest):
     )
 
 
+@app.get("/policies", response_class=HTMLResponse)
 @app.get("/app/policies", response_class=HTMLResponse)
 async def policies_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -2719,7 +2731,7 @@ async def policies_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_nav="policies",
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
@@ -2729,6 +2741,7 @@ async def policies_page(request: Request):
     )
 
 
+@app.get("/compliance", response_class=HTMLResponse)
 @app.get("/app/compliance", response_class=HTMLResponse)
 async def compliance_page(request: Request):
     return _render_compliance_tab_page(
@@ -2740,6 +2753,7 @@ async def compliance_page(request: Request):
     )
 
 
+@app.get("/compliance/frameworks", response_class=HTMLResponse)
 @app.get("/app/compliance/frameworks", response_class=HTMLResponse)
 async def compliance_frameworks_page(request: Request):
     return _render_compliance_tab_page(
@@ -2751,6 +2765,7 @@ async def compliance_frameworks_page(request: Request):
     )
 
 
+@app.get("/compliance/exports", response_class=HTMLResponse)
 @app.get("/app/compliance/exports", response_class=HTMLResponse)
 async def compliance_exports_page(request: Request):
     return _render_compliance_tab_page(
@@ -2762,6 +2777,7 @@ async def compliance_exports_page(request: Request):
     )
 
 
+@app.get("/compliance/evidence", response_class=HTMLResponse)
 @app.get("/app/compliance/evidence", response_class=HTMLResponse)
 async def compliance_evidence_page(request: Request):
     return _render_compliance_tab_page(
@@ -2861,6 +2877,7 @@ def _filtered_compliance_evidence_payload(view, gap_filter: str | None):
     return filter_compliance_evidence_view(view, gap_filter)
 
 
+@app.get("/help", response_class=HTMLResponse)
 @app.get("/app/help", response_class=HTMLResponse)
 async def help_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -2891,7 +2908,7 @@ async def help_page(request: Request):
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
-            admin_url="/app/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             repo_rows=repo_rows,
             repo_summaries=repo_summaries,
             export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
@@ -2904,6 +2921,7 @@ async def help_page(request: Request):
     )
 
 
+@app.post("/compliance/export")
 @app.post("/app/compliance/export")
 async def compliance_export_page_submit(
     request: Request,
@@ -2918,20 +2936,20 @@ async def compliance_export_page_submit(
 ):
     access_context = _current_workspace_context(request)
     if _is_active_comments_only_workspace(access_context):
-        return RedirectResponse("/app/compliance/exports?status=Upgrade+to+Starter+to+generate+compliance+exports.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=Upgrade+to+Starter+to+generate+compliance+exports.", status_code=303)
     _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     workspace = access_context["workspace"]
     session = access_context["session"]
     if not from_date or not to_date:
-        return RedirectResponse("/app/compliance/exports?status=Choose+an+export+date+range+before+running+Compliance+exports.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=Choose+an+export+date+range+before+running+Compliance+exports.", status_code=303)
     from_ts = datetime.fromisoformat(from_date).timestamp()
     to_ts = datetime.fromisoformat(to_date).timestamp()
     if from_ts > to_ts:
-        return RedirectResponse("/app/compliance/exports?status=The+export+start+date+must+be+earlier+than+the+end+date.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=The+export+start+date+must+be+earlier+than+the+end+date.", status_code=303)
     if export_mode not in {"compliance", "compliance_plus_drift"}:
-        return RedirectResponse("/app/compliance/exports?status=Choose+a+valid+export+mode.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=Choose+a+valid+export+mode.", status_code=303)
     if export_preset not in {"none", "review_ready", "fresh_review_ready"}:
-        return RedirectResponse("/app/compliance/exports?status=Choose+a+valid+export+preset.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=Choose+a+valid+export+preset.", status_code=303)
 
     visible_repo_rows = _workspace_repo_rows(workspace.id)
     visible_repo_fulls = {str(item["repo_full"]) for item in visible_repo_rows}
@@ -2940,7 +2958,7 @@ async def compliance_export_page_submit(
     else:
         selected_repo_fulls = sorted(visible_repo_fulls) if export_scope == "all_visible" else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
     if not selected_repo_fulls:
-        return RedirectResponse("/app/compliance/exports?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
+        return RedirectResponse("/compliance/exports?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
 
     completed = 0
     failed = 0
@@ -2965,6 +2983,7 @@ async def compliance_export_page_submit(
     return RedirectResponse(f"/app/compliance/exports?status={quote(status_message)}", status_code=303)
 
 
+@app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_page(request: Request):
     admin_context = _require_owner_access(request)
@@ -2987,6 +3006,7 @@ async def admin_page(request: Request):
     )
 
 
+@app.post("/admin/users/create", include_in_schema=False)
 @app.post("/app/admin/users/create", include_in_schema=False)
 async def admin_create_user(request: Request, display_name: str = Form(...), primary_email: str | None = Form(default=None), csrf_token: str | None = Form(None)):
     admin_context = _require_owner_access(request)
@@ -3005,6 +3025,7 @@ async def admin_create_user(request: Request, display_name: str = Form(...), pri
     return _admin_redirect("user_created")
 
 
+@app.post("/admin/users/{user_id}/update", include_in_schema=False)
 @app.post("/app/admin/users/{user_id}/update", include_in_schema=False)
 async def admin_update_user(
     request: Request,
@@ -3036,6 +3057,7 @@ async def admin_update_user(
     return _admin_redirect("user_updated")
 
 
+@app.post("/admin/users/{user_id}/delete", include_in_schema=False)
 @app.post("/app/admin/users/{user_id}/delete", include_in_schema=False)
 async def admin_delete_user(request: Request, user_id: int, csrf_token: str | None = Form(None)):
     admin_context = _require_owner_access(request)
@@ -3054,6 +3076,7 @@ async def admin_delete_user(request: Request, user_id: int, csrf_token: str | No
     return _admin_redirect("user_deleted")
 
 
+@app.post("/admin/workspaces/create", include_in_schema=False)
 @app.post("/app/admin/workspaces/create", include_in_schema=False)
 async def admin_create_workspace(
     request: Request,
@@ -3087,6 +3110,7 @@ async def admin_create_workspace(
     return _admin_redirect("workspace_created")
 
 
+@app.post("/admin/workspaces/{workspace_id}/update", include_in_schema=False)
 @app.post("/app/admin/workspaces/{workspace_id}/update", include_in_schema=False)
 async def admin_update_workspace(
     request: Request,
@@ -3118,6 +3142,7 @@ async def admin_update_workspace(
     return _admin_redirect("workspace_updated")
 
 
+@app.post("/admin/workspaces/{workspace_id}/delete", include_in_schema=False)
 @app.post("/app/admin/workspaces/{workspace_id}/delete", include_in_schema=False)
 async def admin_delete_workspace(request: Request, workspace_id: int, csrf_token: str | None = Form(None)):
     admin_context = _require_owner_access(request)
@@ -3136,6 +3161,7 @@ async def admin_delete_workspace(request: Request, workspace_id: int, csrf_token
     return _admin_redirect("workspace_deleted")
 
 
+@app.post("/admin/memberships/upsert", include_in_schema=False)
 @app.post("/app/admin/memberships/upsert", include_in_schema=False)
 async def admin_upsert_membership(
     request: Request,
@@ -3169,6 +3195,7 @@ async def admin_upsert_membership(
     return _admin_redirect("membership_saved")
 
 
+@app.post("/admin/memberships/{workspace_id}/{user_id}/delete", include_in_schema=False)
 @app.post("/app/admin/memberships/{workspace_id}/{user_id}/delete", include_in_schema=False)
 async def admin_delete_membership(request: Request, workspace_id: int, user_id: int, csrf_token: str | None = Form(None)):
     admin_context = _require_owner_access(request)
@@ -3187,6 +3214,7 @@ async def admin_delete_membership(request: Request, workspace_id: int, user_id: 
     return _admin_redirect("membership_deleted")
 
 
+@app.get("/workspaces/new", response_class=HTMLResponse)
 @app.get("/app/workspaces/new", response_class=HTMLResponse)
 async def workspace_new_page(request: Request):
     session = _get_session(request)
@@ -3206,6 +3234,7 @@ async def workspace_new_page(request: Request):
     )
 
 
+@app.post("/workspaces/bootstrap")
 @app.post("/app/workspaces/bootstrap")
 async def workspace_bootstrap(request: Request, name: str | None = Form(default=None), csrf_token: str | None = Form(default=None)):
     session = _get_session(request)
@@ -3246,14 +3275,15 @@ async def workspace_bootstrap(request: Request, name: str | None = Form(default=
                 workspace_id=workspace.id,
                 installation_id=int(pending_install["installation_id"]),
             )
-            response = RedirectResponse(_path_with_flow_context("/app/repos?installation_linked=1", flow_context), status_code=303)
+            response = RedirectResponse(_path_with_flow_context("/repos?installation_linked=1", flow_context), status_code=303)
             response.delete_cookie(CONTROL_PLANE_PENDING_INSTALL_COOKIE)
             return response
         except Exception:
-            return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=callback_link_failed", flow_context), status_code=303)
+            return RedirectResponse(_path_with_flow_context("/setup/install?install_error=callback_link_failed", flow_context), status_code=303)
     return RedirectResponse(_resume_destination_for_session(get_user_session(AUDIT_DB_PATH, session.session_id), flow_context), status_code=303)
 
 
+@app.get("/billing", response_class=HTMLResponse)
 @app.get("/app/billing", response_class=HTMLResponse)
 async def billing_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -3265,7 +3295,7 @@ async def billing_page(request: Request):
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     current_plan_label = get_plan_definition(plan_code).label if plan_code else "No plan"
     selected_plan_code = _normalize_plan_hint(request.query_params.get("plan")) or plan_code
-    portal_url = "/app/billing/portal" if customer else None
+    portal_url = "/billing/portal" if customer else None
     checkout_status_note = None
     if request.query_params.get("checkout_session_id"):
         checkout_status_note = "Checkout returned to Vipari. Access remains pending until Stripe webhook confirmation arrives."
@@ -3296,6 +3326,7 @@ async def billing_page(request: Request):
     )
 
 
+@app.post("/billing/checkout")
 @app.post("/app/billing/checkout")
 async def billing_checkout(request: Request, plan: str | None = Form(default=None), csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
@@ -3328,7 +3359,7 @@ async def billing_checkout(request: Request, plan: str | None = Form(default=Non
             workspace_id=workspace.id,
             payload=derive_entitlement_payload(normalized_plan, "free_active"),
         )
-        return RedirectResponse(_path_with_flow_context("/app/setup/install?free_activated=1", flow_context), status_code=303)
+        return RedirectResponse(_path_with_flow_context("/setup/install?free_activated=1", flow_context), status_code=303)
 
     if settings.base44_checkout_url:
         checkout_params = {
@@ -3397,7 +3428,7 @@ async def claim_entry(request: Request, claim_token: str | None = None):
     elif session.workspace_id is None:
         destination = _workspace_new_url(flow_context)
     else:
-        destination = _path_with_flow_context("/app/billing/claim", flow_context)
+        destination = _path_with_flow_context("/billing/claim", flow_context)
     response = RedirectResponse(destination, status_code=303)
     _set_context_cookie(
         response,
@@ -3409,6 +3440,7 @@ async def claim_entry(request: Request, claim_token: str | None = None):
     return response
 
 
+@app.get("/billing/claim")
 @app.get("/app/billing/claim")
 async def billing_claim(request: Request):
     access_context = _current_workspace_context(request)
@@ -3429,9 +3461,10 @@ async def billing_claim(request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     next_flow_context = {key: value for key, value in flow_context.items() if key != "claim"}
-    return RedirectResponse(_path_with_flow_context("/app/setup/install?claim_activated=1", next_flow_context), status_code=303)
+    return RedirectResponse(_path_with_flow_context("/setup/install?claim_activated=1", next_flow_context), status_code=303)
 
 
+@app.get("/billing/portal")
 @app.get("/app/billing/portal")
 async def billing_portal(request: Request):
     access_context = _current_workspace_context(request)
@@ -3439,22 +3472,23 @@ async def billing_portal(request: Request):
     workspace = access_context["workspace"]
     customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
     if customer is None:
-        return RedirectResponse("/app/billing", status_code=303)
+        return RedirectResponse("/billing", status_code=303)
     portal_url = create_billing_portal_session(
         settings=settings,
         stripe_customer_id=customer.stripe_customer_id,
-        return_url=f"{settings.app_base_url}/app/billing",
+        return_url=f"{settings.app_base_url}/billing",
     )
     return RedirectResponse(portal_url, status_code=303)
 
 
+@app.get("/setup/install", response_class=HTMLResponse)
 @app.get("/app/setup/install", response_class=HTMLResponse)
 async def install_page(request: Request):
     access_context = _current_workspace_context(request)
     flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     installation = access_context["installation"]
-    install_url = _path_with_flow_context("/app/setup/install/start", flow_context) if settings.has_github_app_credentials else None
+    install_url = _path_with_flow_context("/setup/install/start", flow_context) if settings.has_github_app_credentials else None
     installation_summary = (
         f"Connected installation {installation.account_login} ({installation.account_type})." if installation else "No GitHub App installation is linked yet."
     )
@@ -3469,18 +3503,19 @@ async def install_page(request: Request):
             install_hint=install_hint,
             installation_summary=installation_summary,
             install_url=install_url,
-            install_callback_url=_path_with_flow_context("/app/setup/install/callback", flow_context),
+            install_callback_url=_path_with_flow_context("/setup/install/callback", flow_context),
             csrf_token=access_context["session"].csrf_secret,
         )
     )
 
 
+@app.get("/setup/install/start")
 @app.get("/app/setup/install/start")
 async def install_start(request: Request):
     access_context = _current_workspace_context(request)
     flow_context = _flow_context_from_request(request)
     if not settings.has_github_app_credentials:
-        return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
+        return RedirectResponse(_path_with_flow_context("/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
     try:
         install_state_nonce = secrets.token_urlsafe(24)
         install_url = get_live_github_install_url(
@@ -3490,7 +3525,7 @@ async def install_start(request: Request):
             state=install_state_nonce,
         )
     except Exception:
-        return RedirectResponse(_path_with_flow_context("/app/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
+        return RedirectResponse(_path_with_flow_context("/setup/install?install_error=install_url_unavailable", flow_context), status_code=303)
 
     response = RedirectResponse(install_url, status_code=303)
     _set_context_cookie(
@@ -3503,6 +3538,7 @@ async def install_start(request: Request):
     return response
 
 
+@app.get("/setup/install/callback")
 @app.get("/app/setup/install/callback")
 async def install_callback(
     request: Request,
@@ -3555,7 +3591,7 @@ async def install_callback(
     _link_installation_to_workspace(workspace_id=access_context["workspace"].id, installation_id=installation_id_int)
     response = RedirectResponse(
         _path_with_flow_context(
-            f"/app/repos?installation_linked=1&setup_action={setup_action or 'install'}",
+            f"/repos?installation_linked=1&setup_action={setup_action or 'install'}",
             _flow_context_from_request(request),
         ),
         status_code=303,
@@ -3565,6 +3601,7 @@ async def install_callback(
     return response
 
 
+@app.post("/setup/install/link")
 @app.post("/app/setup/install/link")
 async def install_link(
     request: Request,
@@ -3588,9 +3625,10 @@ async def install_link(
         account_type=account_type,
         repo_fulls=repo_fulls,
     )
-    return RedirectResponse("/app/repos", status_code=303)
+    return RedirectResponse("/repos", status_code=303)
 
 
+@app.get("/repos", response_class=HTMLResponse)
 @app.get("/app/repos", response_class=HTMLResponse)
 async def repo_setup_page(request: Request):
     access_context = _current_workspace_context(request)
@@ -3642,9 +3680,9 @@ async def repo_setup_page(request: Request):
             inventory_cards=render_repo_inventory_cards(
                 repo_inventory,
                 csrf_token=access_context["session"].csrf_secret,
-                install_start_href=_path_with_flow_context("/app/setup/install/start", flow_context),
+                install_start_href=_path_with_flow_context("/setup/install/start", flow_context),
                 install_disabled=install_disabled,
-                install_disabled_href="/app/billing?plan=starter",
+                install_disabled_href="/billing?plan=starter",
             ),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
@@ -3658,6 +3696,7 @@ async def repo_setup_page(request: Request):
     )
 
 
+@app.post("/repos/disconnect")
 @app.post("/app/repos/disconnect")
 async def repo_disconnect(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
@@ -3668,9 +3707,10 @@ async def repo_disconnect(request: Request, repo_full: str, csrf_token: str | No
     if allocation is None or allocation.allocation_status not in {"active", "onboarded"}:
         raise HTTPException(status_code=404, detail="Repository is not currently attached to this workspace.")
     update_repo_allocation_status(AUDIT_DB_PATH, allocation.id, "inactive")
-    return RedirectResponse("/app/repos?repo_removed=1", status_code=303)
+    return RedirectResponse("/repos?repo_removed=1", status_code=303)
 
 
+@app.post("/repos/allocate")
 @app.post("/app/repos/allocate")
 async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None = Form(default=None)):
     access_context = _current_workspace_context(request)
@@ -3717,7 +3757,7 @@ async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None
         )
 
     update_repo_allocation_status(AUDIT_DB_PATH, allocation.id, "onboarded")
-    return RedirectResponse("/app", status_code=303)
+    return RedirectResponse("/workspace", status_code=303)
 
 
 @app.get("/api/auth/session")

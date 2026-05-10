@@ -131,14 +131,14 @@ def test_login_page_explains_missing_oauth_configuration():
 
 
 def test_app_page_redirects_to_login_when_unauthenticated():
-    response = client.get("/app", follow_redirects=False)
+    response = client.get("/workspace", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
 
 
 def test_app_page_ignores_preview_state_and_redirects_to_login_when_unauthenticated():
-    response = client.get("/app?state=payment_failed", follow_redirects=False)
+    response = client.get("/workspace?state=payment_failed", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
@@ -191,7 +191,7 @@ def test_github_auth_start_short_circuits_when_session_already_exists(tmp_path):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/workspaces/new?source=base44&plan=team"
+    assert response.headers["location"] == "/workspaces/new?source=base44&plan=team"
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -249,7 +249,7 @@ def test_github_auth_callback_creates_session_and_redirects_to_workspace_bootstr
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/workspaces/new?source=base44&plan=team"
+    assert response.headers["location"] == "/workspaces/new?source=base44&plan=team"
     session_cookie = response.cookies.get(main.settings.session_cookie_name)
     assert session_cookie
 
@@ -301,7 +301,7 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
     )
 
     response = client.post(
-        "/app/workspaces/bootstrap?name=PromptDrift%20Team",
+        "/workspaces/bootstrap?name=PromptDrift%20Team",
         data={"csrf_token": session.csrf_secret},
         cookies={
             main.settings.session_cookie_name: session.session_id,
@@ -314,7 +314,7 @@ def test_workspace_bootstrap_creates_workspace_and_promotes_session(tmp_path):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/billing?source=base44&plan=team"
+    assert response.headers["location"] == "/billing?source=base44&plan=team"
 
     auth_payload = client.get(
         "/api/auth/session",
@@ -366,14 +366,14 @@ def test_free_checkout_activates_local_entitlement_and_redirects_to_install(tmp_
     )
 
     response = client.post(
-        "/app/billing/checkout",
+        "/billing/checkout",
         data={"plan": "free", "csrf_token": session.csrf_secret},
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/setup/install?free_activated=1"
+    assert response.headers["location"] == "/setup/install?free_activated=1"
 
     subscription = get_workspace_subscription(main.AUDIT_DB_PATH, workspace.id)
     entitlement = get_workspace_entitlement(main.AUDIT_DB_PATH, workspace.id)
@@ -743,10 +743,10 @@ def test_free_tier_blocks_compliance_page_and_repo_reports_tab(tmp_path):
     update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
 
     cookie = {main.settings.session_cookie_name: session.session_id}
-    compliance_response = client.get("/app/compliance", cookies=cookie)
+    compliance_response = client.get("/compliance", cookies=cookie)
     repo_reports_response = client.get("/dashboard/free-tier-locked-org/repo-one?tab=reports", cookies=cookie)
     export_submit_response = client.post(
-        "/app/compliance/export",
+        "/compliance/export",
         cookies=cookie,
         data={
             "export_scope": "all_visible",
@@ -767,7 +767,7 @@ def test_free_tier_blocks_compliance_page_and_repo_reports_tab(tmp_path):
     assert 'class="main-content dashboard-shell-blocked"' in repo_reports_response.text
     assert "the reports tab requires Starter or above" in repo_reports_response.text
     assert export_submit_response.status_code == 303
-    assert export_submit_response.headers["location"].startswith("/app/compliance/exports?status=")
+    assert export_submit_response.headers["location"].startswith("/compliance/exports?status=")
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -956,7 +956,7 @@ def test_profile_page_requires_dashboard_access(tmp_path):
         },
     )
 
-    response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/profile", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Profile page is available only for Starter tier and above."
@@ -1027,7 +1027,7 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
         },
     )
 
-    get_response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    get_response = client.get("/profile", cookies={main.settings.session_cookie_name: session.session_id})
     assert get_response.status_code == 200
     assert "Starter User" in get_response.text
     assert "starter-user" in get_response.text
@@ -1036,29 +1036,29 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "<span class=\"control-page-stat-label\">Plan</span>" in get_response.text
     assert "Permission level" in get_response.text
     assert 'href="/dashboard"' in get_response.text
-    assert 'href="/app/admin"' not in get_response.text
+    assert 'href="/admin"' not in get_response.text
     assert "sidebar" in get_response.text
     assert 'data-theme="dark"' in get_response.text
     assert 'data-theme-toggle' in get_response.text
     assert 'value="dark" checked' in get_response.text
 
-    workspace_response = client.get("/app", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
+    workspace_response = client.get("/workspace", cookies={main.settings.session_cookie_name: session.session_id}, follow_redirects=False)
     assert workspace_response.status_code == 303
-    assert workspace_response.headers["location"] == "/app/profile"
+    assert workspace_response.headers["location"] == "/profile"
 
     post_response = client.post(
-        "/app/profile",
+        "/profile",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={"display_name": "Updated Starter User", "theme_preference": "light", "csrf_token": session.csrf_secret},
         follow_redirects=False,
     )
 
     assert post_response.status_code == 303
-    assert post_response.headers["location"] == "/app/profile?updated=1"
+    assert post_response.headers["location"] == "/profile?updated=1"
     assert get_user_by_id(main.AUDIT_DB_PATH, user.id).display_name == "Updated Starter User"
     assert get_user_by_id(main.AUDIT_DB_PATH, user.id).theme_preference == "light"
 
-    updated_get_response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    updated_get_response = client.get("/profile", cookies={main.settings.session_cookie_name: session.session_id})
     assert updated_get_response.status_code == 200
     assert 'data-theme="light"' in updated_get_response.text
     assert 'value="light" checked' in updated_get_response.text
@@ -1076,12 +1076,12 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Coverage" in dashboard_html
     assert 'id="governance-attention-headline"' in dashboard_html
     assert 'id="governance-attention-list"' in dashboard_html
-    assert 'href="/app/repos"' in dashboard_html
-    assert 'href="/app/compliance"' in dashboard_html
-    assert 'href="/app/integrations/mcp"' in dashboard_html
+    assert 'href="/repos"' in dashboard_html
+    assert 'href="/compliance"' in dashboard_html
+    assert 'href="/integrations/mcp"' in dashboard_html
     assert 'aria-label="Policies"' in dashboard_html
     assert 'aria-label="Settings"' in dashboard_html
-    assert 'aria-label="Audit Logs"' not in dashboard_html
+    assert 'aria-label="Audit Logs"' in dashboard_html
     assert 'class="sidebar-profile-link"' in dashboard_html
     assert 'id="journey-repo-name"' in dashboard_html
     assert 'class="journey-stage loading-shell"' in dashboard_html
@@ -1099,10 +1099,10 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert "Static posture" not in repo_dashboard_html
     assert 'aria-label="Policies"' in repo_dashboard_html
     assert 'aria-label="Settings"' in repo_dashboard_html
-    assert 'aria-label="Audit Logs"' not in repo_dashboard_html
-    assert 'href="/app/repos"' in repo_dashboard_html
-    assert 'href="/app/compliance"' in repo_dashboard_html
-    assert 'href="/app/integrations/mcp"' in repo_dashboard_html
+    assert 'aria-label="Audit Logs"' in repo_dashboard_html
+    assert 'href="/repos"' in repo_dashboard_html
+    assert 'href="/compliance"' in repo_dashboard_html
+    assert 'href="/integrations/mcp"' in repo_dashboard_html
     assert "Generate Export Package" not in repo_dashboard_html
     assert "Recent Exports" not in repo_dashboard_html
     assert "Available repositories" not in repo_dashboard_html
@@ -1187,7 +1187,7 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
         },
     )
 
-    get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
     assert get_response.status_code == 200
     assert "Workspace settings" in get_response.text
     assert 'value="Settings Workspace"' in get_response.text
@@ -1198,13 +1198,13 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert "Onboarded and allocated repositories" in get_response.text
     assert 'data-theme-toggle' in get_response.text
     assert 'value="on" checked' in get_response.text
-    assert 'href="/app/billing"' in get_response.text
+    assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
     assert "{{WORKSPACE_NAME_INPUT}}" not in get_response.text
     assert "{{WORKSPACE_MEMBER_ACTIONS}}" not in get_response.text
 
     post_response = client.post(
-        "/app/settings",
+        "/settings",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
             "workspace_name": "Renamed Settings Workspace",
@@ -1215,12 +1215,12 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     )
 
     assert post_response.status_code == 303
-    assert post_response.headers["location"] == "/app/settings?updated=1"
+    assert post_response.headers["location"] == "/settings?updated=1"
     updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id)
     assert updated_workspace.pr_comments_setting_enabled is False
     assert updated_workspace.display_name == "Renamed Settings Workspace"
 
-    updated_get_response = client.get("/app/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    updated_get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
     assert updated_get_response.status_code == 200
     assert 'value="off" checked' in updated_get_response.text
     assert 'value="Renamed Settings Workspace"' in updated_get_response.text
@@ -1299,14 +1299,14 @@ def test_settings_page_can_queue_github_login_invite(tmp_path):
     )
 
     post_response = client.post(
-        "/app/settings/invite",
+        "/settings/invite",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={"github_login": "@new-teammate", "role": "admin", "csrf_token": session.csrf_secret},
         follow_redirects=False,
     )
 
     assert post_response.status_code == 303
-    assert post_response.headers["location"] == "/app/settings?invite_added=1"
+    assert post_response.headers["location"] == "/settings?invite_added=1"
 
     invites = list_workspace_invites_for_workspace(main.AUDIT_DB_PATH, workspace.id)
     assert len(invites) == 1
@@ -1314,7 +1314,7 @@ def test_settings_page_can_queue_github_login_invite(tmp_path):
     assert invites[0].role == "admin"
     assert invites[0].invitation_state == "pending"
 
-    get_response = client.get("/app/settings?invite_added=1", cookies={main.settings.session_cookie_name: session.session_id})
+    get_response = client.get("/settings?invite_added=1", cookies={main.settings.session_cookie_name: session.session_id})
     assert get_response.status_code == 200
     assert "Invitation queued." in get_response.text
     assert "new-teammate" in get_response.text
@@ -1644,13 +1644,15 @@ def test_help_page_renders_help_center_and_policies_stays_placeholder(tmp_path):
         build_profile_fn=build_attribute_profile,
     )
 
-    help_response = client.get("/app/help", cookies={main.settings.session_cookie_name: session.session_id})
-    policies_response = client.get("/app/policies", cookies={main.settings.session_cookie_name: session.session_id})
+    help_response = client.get("/help", cookies={main.settings.session_cookie_name: session.session_id})
+    policies_response = client.get("/policies", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
-    assert "Help that gets operators unstuck" in help_response.text
-    assert "This workspace currently has 2 visible repos, 2 onboarded repos, and 1 approved baselines." in help_response.text
+    assert "Vipari Help Center" in help_response.text
+    assert "Visible repos" in help_response.text
+    assert "Onboarded repos" in help_response.text
+    assert "Baselines approved" in help_response.text
     assert "Review pending baseline" in help_response.text
     assert "placeholder-org/repo-pending" in help_response.text
     assert "Use the platform in this order" in help_response.text
@@ -1658,8 +1660,8 @@ def test_help_page_renders_help_center_and_policies_stays_placeholder(tmp_path):
     assert "Submit a support ticket" in help_response.text
     assert "Ticket submission coming soon" in help_response.text
     assert "We are working on this" in policies_response.text
-    assert 'href="/app/compliance"' in help_response.text
-    assert 'href="/app/compliance"' in policies_response.text
+    assert 'href="/compliance"' in help_response.text
+    assert 'href="/compliance"' in policies_response.text
     assert 'data-theme-toggle' in help_response.text
     assert 'data-theme-toggle' in policies_response.text
 
@@ -1698,7 +1700,7 @@ def test_admin_page_requires_explicit_owner_identity(tmp_path):
         expires_at=time.time() + 3600,
     )
 
-    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "System owner access is not enabled for this GitHub identity."
@@ -1780,10 +1782,10 @@ def test_profile_page_shows_admin_link_for_local_billing_owner_without_owner_con
         expires_at=time.time() + 3600,
     )
 
-    response = client.get("/app/profile", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/profile", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
-    assert 'href="/app/admin"' in response.text
+    assert 'href="/admin"' in response.text
     assert "Open system admin" in response.text
 
     main.settings.owner_github_login = original_login
@@ -1834,7 +1836,7 @@ def test_admin_page_denies_billing_owner_fallback_outside_local_env(tmp_path):
         expires_at=time.time() + 3600,
     )
 
-    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "System owner access is not enabled for this GitHub identity."
@@ -1918,16 +1920,16 @@ def test_settings_help_and_policies_show_admin_link_for_local_billing_owner_with
     )
 
     cookies = {main.settings.session_cookie_name: session.session_id}
-    settings_response = client.get("/app/settings", cookies=cookies)
-    help_response = client.get("/app/help", cookies=cookies)
-    policies_response = client.get("/app/policies", cookies=cookies)
+    settings_response = client.get("/settings", cookies=cookies)
+    help_response = client.get("/help", cookies=cookies)
+    policies_response = client.get("/policies", cookies=cookies)
 
     assert settings_response.status_code == 200
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
-    assert 'href="/app/admin"' in settings_response.text
-    assert 'href="/app/admin"' in help_response.text
-    assert 'href="/app/admin"' in policies_response.text
+    assert 'href="/admin"' in settings_response.text
+    assert 'href="/admin"' in help_response.text
+    assert 'href="/admin"' in policies_response.text
 
     main.settings.owner_github_login = original_login
     main.settings.owner_github_user_id = original_id
@@ -2142,7 +2144,7 @@ def test_admin_page_renders_registered_and_unclaimed_install_data(tmp_path):
         expires_at=time.time() + 604800,
     )
 
-    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: admin_session.session_id})
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: admin_session.session_id})
 
     assert response.status_code == 200
     assert "Control-plane oversight" in response.text
@@ -2211,7 +2213,7 @@ def test_admin_page_renders_github_profile_details(tmp_path):
         access_token_encrypted="encrypted-token",
     )
 
-    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
     assert "profile@example.com" in response.text
@@ -2283,7 +2285,7 @@ def test_admin_logs_tab_renders_unified_activity_feed(tmp_path):
         status="processed",
     )
 
-    response = client.get("/app/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
     assert "Unified logs" in response.text
@@ -2358,7 +2360,7 @@ def test_admin_logs_tab_applies_query_filters(tmp_path):
     )
 
     response = client.get(
-        "/app/admin?tab=logs&query=Hidden+User",
+        "/admin?tab=logs&query=Hidden+User",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -2417,7 +2419,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     cookie = {main.settings.session_cookie_name: session.session_id}
 
     create_user_response = client.post(
-        "/app/admin/users/create",
+        "/admin/users/create",
         data={"display_name": "Managed User", "primary_email": "managed@example.com", "csrf_token": session.csrf_secret},
         cookies=cookie,
         follow_redirects=False,
@@ -2428,7 +2430,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     managed_user_id = managed_user_row.user_id
 
     create_workspace_response = client.post(
-        "/app/admin/workspaces/create",
+        "/admin/workspaces/create",
         data={
             "display_name": "Managed Workspace",
             "slug": "managed-workspace",
@@ -2445,7 +2447,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert workspace_id
 
     membership_response = client.post(
-        "/app/admin/memberships/upsert",
+        "/admin/memberships/upsert",
         data={
             "workspace_id": str(workspace_id),
             "user_id": str(admin_user.id),
@@ -2461,7 +2463,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert membership.role == "admin"
 
     update_user_response = client.post(
-        f"/app/admin/users/{managed_user_id}/update",
+        f"/admin/users/{managed_user_id}/update",
         data={
             "display_name": "Managed User Updated",
             "primary_email": "managed.updated@example.com",
@@ -2478,7 +2480,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert updated_user.active is False
 
     update_workspace_response = client.post(
-        f"/app/admin/workspaces/{workspace_id}/update",
+        f"/admin/workspaces/{workspace_id}/update",
         data={
             "display_name": "Managed Workspace Updated",
             "slug": "managed-workspace-updated",
@@ -2502,7 +2504,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert updated_entitlement.dashboard_enabled is True
 
     delete_membership_response = client.post(
-        f"/app/admin/memberships/{workspace_id}/{admin_user.id}/delete",
+        f"/admin/memberships/{workspace_id}/{admin_user.id}/delete",
         data={"csrf_token": session.csrf_secret},
         cookies=cookie,
         follow_redirects=False,
@@ -2511,7 +2513,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert get_workspace_membership(main.AUDIT_DB_PATH, workspace_id, admin_user.id) is None
 
     delete_workspace_response = client.post(
-        f"/app/admin/workspaces/{workspace_id}/delete",
+        f"/admin/workspaces/{workspace_id}/delete",
         data={"csrf_token": session.csrf_secret},
         cookies=cookie,
         follow_redirects=False,
@@ -2520,7 +2522,7 @@ def test_admin_page_can_create_update_and_delete_users_workspaces_and_membership
     assert get_workspace_by_id(main.AUDIT_DB_PATH, workspace_id) is None
 
     delete_user_response = client.post(
-        f"/app/admin/users/{managed_user_id}/delete",
+        f"/admin/users/{managed_user_id}/delete",
         data={"csrf_token": session.csrf_secret},
         cookies=cookie,
         follow_redirects=False,
@@ -2588,7 +2590,7 @@ def test_admin_page_delete_forms_include_confirmation_prompts(tmp_path):
         expires_at=time.time() + 3600,
     )
 
-    response = client.get("/app/admin", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
     assert "Delete this user and any linked workspace memberships?" in response.text
@@ -2710,7 +2712,7 @@ def test_billing_claim_rejects_workspace_user_with_mismatched_email(tmp_path):
     )
 
     response = client.get(
-        "/app/billing/claim?claim=claim-email-guard-1",
+        "/billing/claim?claim=claim-email-guard-1",
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
@@ -3017,7 +3019,7 @@ def test_local_debug_does_not_unlock_app_profile_without_session(tmp_path):
     )
 
     with TestClient(main.app) as local_client:
-        response = local_client.get("/app/profile")
+        response = local_client.get("/profile")
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required."
@@ -3146,7 +3148,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
 
     with patch.object(main.settings, "stripe_webhook_secret", "whsec_test"):
         billing_page_response = client.get(
-            "/app/billing?plan=team&source=base44",
+            "/billing?plan=team&source=base44",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
         assert billing_page_response.status_code == 200
@@ -3164,14 +3166,14 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         assert "{{CHECKOUT_STATE_LABEL}}" not in billing_page_response.text
 
         checkout_response = client.post(
-            "/app/billing/checkout?plan=team",
+            "/billing/checkout?plan=team",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
         )
 
         assert checkout_response.status_code == 303
-        assert "/app/billing?checkout_session_id=" in checkout_response.headers["location"]
+        assert "/billing?checkout_session_id=" in checkout_response.headers["location"]
 
         access_after_checkout = client.get(
             "/api/auth/session",
@@ -3223,14 +3225,14 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     assert access_after_billing["access"]["state"] == "awaiting_github_install"
 
     install_page_response = client.get(
-        "/app/setup/install",
+        "/setup/install",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert install_page_response.status_code == 200
-    assert "/app/setup/install/callback" in install_page_response.text
+    assert "/setup/install/callback" in install_page_response.text
 
     install_response = client.post(
-        "/app/setup/install/link",
+        "/setup/install/link",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
             "csrf_token": session.csrf_secret,
@@ -3243,7 +3245,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     )
 
     assert install_response.status_code == 303
-    assert install_response.headers["location"] == "/app/repos"
+    assert install_response.headers["location"] == "/repos"
 
     access_after_install = client.get(
         "/api/auth/session",
@@ -3257,14 +3259,14 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         "main.get_installation_token", return_value="installation-token"
     ), patch("main.onboard_repository", return_value=None):
         allocate_response = client.post(
-            "/app/repos/allocate?repo_full=doria90/dummyAI",
+            "/repos/allocate?repo_full=doria90/dummyAI",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
         )
 
     assert allocate_response.status_code == 303
-    assert allocate_response.headers["location"] == "/app"
+    assert allocate_response.headers["location"] == "/workspace"
 
     access_after_allocation = client.get(
         "/api/auth/session",
@@ -3279,7 +3281,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     assert dashboard_response.status_code == 200
     assert "Urgent changes to review" in dashboard_response.text
     assert "Posture map" in dashboard_response.text
-    assert 'href="/app/repos"' in dashboard_response.text
+    assert 'href="/repos"' in dashboard_response.text
 
     main.AUDIT_DB_PATH = original_db_path
     
@@ -3316,7 +3318,7 @@ def test_billing_page_renders_pricing_cards_and_plan_actions(tmp_path):
     )
 
     response = client.get(
-        "/app/billing?plan=starter&source=base44",
+        "/billing?plan=starter&source=base44",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -3335,11 +3337,11 @@ def test_billing_page_renders_pricing_cards_and_plan_actions(tmp_path):
     assert response.text.count("Talk to us") == 1
     assert response.text.count("billing-tier-button\" disabled") == 1
     assert response.text.count("billing-tier-button billing-tier-button-primary\" disabled") == 1
-    assert 'action="/app/billing/checkout?plan=free&source=base44" class="billing-tier-form">\n                    <input type="hidden" name="csrf_token" value="csrf-billing-render" />\n                    <button type="submit" class="button billing-tier-button">Start with GitHub</button>' in response.text
-    assert 'action="/app/billing/checkout?plan=free&source=base44"' in response.text
-    assert 'action="/app/billing/checkout?plan=starter&source=base44"' in response.text
-    assert 'action="/app/billing/checkout?plan=team&source=base44"' in response.text
-    assert 'action="/app/billing/checkout?plan=enterprise&source=base44"' in response.text
+    assert 'action="/billing/checkout?plan=free&source=base44" class="billing-tier-form">\n                    <input type="hidden" name="csrf_token" value="csrf-billing-render" />\n                    <button type="submit" class="button billing-tier-button">Start with GitHub</button>' in response.text
+    assert 'action="/billing/checkout?plan=free&source=base44"' in response.text
+    assert 'action="/billing/checkout?plan=starter&source=base44"' in response.text
+    assert 'action="/billing/checkout?plan=team&source=base44"' in response.text
+    assert 'action="/billing/checkout?plan=enterprise&source=base44"' in response.text
     assert "Portal unavailable" in response.text
 
     main.AUDIT_DB_PATH = original_db_path
@@ -3391,7 +3393,7 @@ def test_stripe_webhook_rejects_workspace_metadata_mismatch(tmp_path):
 
     with patch.object(main.settings, "stripe_webhook_secret", "whsec_test"):
         checkout_response = client.post(
-            "/app/billing/checkout?plan=team",
+            "/billing/checkout?plan=team",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
@@ -3488,12 +3490,12 @@ def test_workspace_viewer_cannot_mutate_billing_or_repo_setup(tmp_path):
     )
 
     billing_response = client.post(
-        "/app/billing/checkout?plan=team",
+        "/billing/checkout?plan=team",
         cookies={main.settings.session_cookie_name: viewer_session.session_id},
         data={"csrf_token": viewer_session.csrf_secret},
     )
     install_response = client.post(
-        "/app/setup/install/link",
+        "/setup/install/link",
         cookies={main.settings.session_cookie_name: viewer_session.session_id},
         data={
             "csrf_token": viewer_session.csrf_secret,
@@ -3557,7 +3559,7 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         ),
     ):
         response = client.get(
-            "/app/setup/install/callback?installation_id=12345&setup_action=install&state=install-state",
+            "/setup/install/callback?installation_id=12345&setup_action=install&state=install-state",
             cookies={
                 main.settings.session_cookie_name: session.session_id,
                 "promptdrift_install_state": install_state_cookie,
@@ -3566,12 +3568,12 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
         )
 
         repo_setup_response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/repos?installation_linked=1&setup_action=install"
+    assert response.headers["location"] == "/repos?installation_linked=1&setup_action=install"
 
     auth_payload = client.get(
         "/api/auth/session",
@@ -3588,7 +3590,7 @@ def test_install_callback_links_workspace_and_redirects_to_repo_setup(tmp_path):
     assert 'class="repo-setup-inventory-list"' in repo_setup_response.text
     assert 'data-repo-summary-sort' in repo_setup_response.text
     assert 'href="/dashboard"' in repo_setup_response.text
-    assert 'href="/app/repos"' in repo_setup_response.text
+    assert 'href="/repos"' in repo_setup_response.text
     assert "Allocate and onboard" in repo_setup_response.text
 
     main.AUDIT_DB_PATH = original_db_path
@@ -3659,7 +3661,7 @@ def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path)
         ],
     ):
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -3705,12 +3707,12 @@ def test_repo_setup_install_action_uses_install_start_route(tmp_path):
 
     with patch("main._github_account_repo_inventory", return_value=[{"repo_full": "doria90/another-repo", "is_connected": False, "is_allocated": False, "is_onboarded": False}]):
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
     assert response.status_code == 200
-    assert 'href="/app/setup/install/start"' in response.text
+    assert 'href="/setup/install/start"' in response.text
     assert "settings/installations" not in response.text
 
     main.AUDIT_DB_PATH = original_db_path
@@ -3821,7 +3823,7 @@ def test_repo_setup_disables_new_install_when_repo_limit_is_reached(tmp_path):
         ],
     ):
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -3830,7 +3832,7 @@ def test_repo_setup_disables_new_install_when_repo_limit_is_reached(tmp_path):
     assert response.status_code == 200
     assert "0 of 1 repository slots available on this plan." in response.text
     assert "Upgrade to add repo" in response.text
-    assert 'href="/app/billing?plan=starter"' in response.text
+    assert 'href="/billing?plan=starter"' in response.text
     assert 'data-upgrade-required="repo-limit"' in response.text
     assert "Install app" not in response.text
 
@@ -3948,13 +3950,13 @@ def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
 
     with patch("main.list_repo_dashboard_index", side_effect=[[summary_entry], []]):
         disconnect_response = client.post(
-            "/app/repos/disconnect?repo_full=doria90/current-repo",
+            "/repos/disconnect?repo_full=doria90/current-repo",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
         )
         repo_setup_response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -3963,7 +3965,7 @@ def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
         "main.onboard_repository", return_value=None
     ):
         next_repo_response = client.post(
-            "/app/repos/allocate?repo_full=doria90/next-repo",
+            "/repos/allocate?repo_full=doria90/next-repo",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
@@ -3972,7 +3974,7 @@ def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert disconnect_response.status_code == 303
-    assert disconnect_response.headers["location"] == "/app/repos?repo_removed=1"
+    assert disconnect_response.headers["location"] == "/repos?repo_removed=1"
     assert restored_allocation is not None
     assert restored_allocation.allocation_status == "inactive"
     assert repo_setup_response.status_code == 200
@@ -3981,7 +3983,7 @@ def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
     assert "doria90/current-repo" in repo_setup_response.text
     assert "No onboarded repositories yet" in repo_setup_response.text
     assert next_repo_response.status_code == 303
-    assert next_repo_response.headers["location"] == "/app"
+    assert next_repo_response.headers["location"] == "/workspace"
 
 
 def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
@@ -4088,7 +4090,7 @@ def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
         "main.onboard_repository", return_value=None
     ):
         restore_response = client.post(
-            "/app/repos/allocate?repo_full=doria90/current-repo",
+            "/repos/allocate?repo_full=doria90/current-repo",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={"csrf_token": session.csrf_secret},
             follow_redirects=False,
@@ -4098,7 +4100,7 @@ def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert restore_response.status_code == 303
-    assert restore_response.headers["location"] == "/app"
+    assert restore_response.headers["location"] == "/workspace"
     assert len(allocations) == 1
     assert allocations[0].id == allocation.id
     assert allocations[0].allocation_status == "onboarded"
@@ -4140,7 +4142,7 @@ def test_install_start_redirects_to_live_github_install_and_sets_state_cookie(tm
         main.settings, "github_app_private_key", "dummy-private-key"
     ), patch("main.get_live_github_install_url", return_value="https://github.com/apps/vipari/installations/new?state=test-state"):
         response = client.get(
-            "/app/setup/install/start",
+            "/setup/install/start",
             cookies={main.settings.session_cookie_name: session.session_id},
             follow_redirects=False,
         )
@@ -4185,7 +4187,7 @@ def test_install_callback_rejects_workspace_link_without_valid_nonce(tmp_path):
     )
 
     response = client.get(
-        "/app/setup/install/callback?installation_id=12345&setup_action=install&state=forged-state",
+        "/setup/install/callback?installation_id=12345&setup_action=install&state=forged-state",
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
@@ -4554,16 +4556,16 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
         result_blob=b"zip-artifact",
     )
 
-    response = client.get("/app/compliance", cookies={main.settings.session_cookie_name: session.session_id})
-    frameworks_response = client.get("/app/compliance/frameworks", cookies={main.settings.session_cookie_name: session.session_id})
-    exports_response = client.get("/app/compliance/exports", cookies={main.settings.session_cookie_name: session.session_id})
-    evidence_response = client.get("/app/compliance/evidence", cookies={main.settings.session_cookie_name: session.session_id})
+    response = client.get("/compliance", cookies={main.settings.session_cookie_name: session.session_id})
+    frameworks_response = client.get("/compliance/frameworks", cookies={main.settings.session_cookie_name: session.session_id})
+    exports_response = client.get("/compliance/exports", cookies={main.settings.session_cookie_name: session.session_id})
+    evidence_response = client.get("/compliance/evidence", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
     assert frameworks_response.status_code == 200
     assert exports_response.status_code == 200
     assert evidence_response.status_code == 200
-    assert "Compliance workspace" in response.text
+    assert 'aria-label="Compliance"' in response.text
     assert "Workspace readiness" in response.text
     assert "Readiness verdict" in response.text
     assert "Readiness by repository" in response.text
@@ -4572,7 +4574,7 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "compliance-org/repo-one" in response.text
     assert "compliance-org/repo-two" in response.text
     assert 'aria-label="Repositories"' in response.text
-    assert 'aria-label="Audit Logs"' not in response.text
+    assert 'aria-label="Audit Logs"' in response.text
     assert "Framework mapping" in frameworks_response.text
     assert "EU AI Act" in frameworks_response.text
     assert "SOC 2" in frameworks_response.text
@@ -4582,15 +4584,15 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Review-ready preset" in exports_response.text
     assert "Needs readiness work" in exports_response.text
     assert "Download" in exports_response.text
-    assert "Repository evidence posture" in evidence_response.text
+    assert "Evidence posture" in evidence_response.text
     assert "Stale (45d)" in evidence_response.text
     assert "Baseline Review" in evidence_response.text
     assert "Missing Governance" in evidence_response.text
-    assert '/app/compliance/evidence?gap=missing_governance' in response.text
-    assert '/app/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
+    assert '/compliance/evidence?gap=missing_governance' in response.text
+    assert '/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
 
     filtered_evidence_response = client.get(
-        "/app/compliance/evidence?gap=baseline_review&repo=compliance-org/repo-two",
+        "/compliance/evidence?gap=baseline_review&repo=compliance-org/repo-two",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -4712,7 +4714,7 @@ def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
     )
     with patch("main.build_compliance_export", return_value=created_result):
         response = client.post(
-            "/app/compliance/export",
+            "/compliance/export",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={
                 "export_scope": "selected",
@@ -4726,7 +4728,7 @@ def test_compliance_page_can_create_exports_for_selected_repos(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/app/compliance/exports?status=")
+    assert response.headers["location"].startswith("/compliance/exports?status=")
 
     jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
     assert len(jobs) == 1
@@ -4830,7 +4832,7 @@ def test_compliance_page_marks_failed_exports_and_reports_retryable_status(tmp_p
 
     with patch("main.build_compliance_export", side_effect=RuntimeError("zip failed")):
         response = client.post(
-            "/app/compliance/export",
+            "/compliance/export",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={
                 "export_scope": "selected",
@@ -5009,7 +5011,7 @@ def test_compliance_page_can_create_exports_for_review_ready_preset(tmp_path):
     )
     with patch("main.build_compliance_export", return_value=created_result):
         response = client.post(
-            "/app/compliance/export",
+            "/compliance/export",
             cookies={main.settings.session_cookie_name: session.session_id},
             data={
                 "export_scope": "all",
@@ -5023,7 +5025,7 @@ def test_compliance_page_can_create_exports_for_review_ready_preset(tmp_path):
         )
 
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/app/compliance/exports?status=")
+    assert response.headers["location"].startswith("/compliance/exports?status=")
 
     jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
     assert len(jobs) == 1
@@ -5174,7 +5176,7 @@ def test_public_install_callback_persists_unclaimed_installation(tmp_path):
         ),
     ):
         response = client.get(
-            "/app/setup/install/callback?installation_id=12345&setup_action=install",
+            "/setup/install/callback?installation_id=12345&setup_action=install",
             follow_redirects=False,
         )
 
@@ -5230,7 +5232,7 @@ def test_billing_checkout_rejects_unknown_plan(tmp_path):
     )
 
     response = client.post(
-        "/app/billing/checkout?plan=unknown",
+        "/billing/checkout?plan=unknown",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={"csrf_token": session.csrf_secret},
     )
@@ -5316,7 +5318,7 @@ def test_repo_setup_slot_summary_counts_onboarded_repos_shown_on_page(tmp_path):
         ],
     ):
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -5408,7 +5410,7 @@ def test_repo_setup_page_ignores_invalid_github_app_private_key(tmp_path):
         main.settings, "github_app_private_key", "not-a-pem"
     ), patch("main.sync_installation_repositories", side_effect=InvalidKeyError("bad key")):
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -5510,7 +5512,7 @@ def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
             ),
         ]
         response = client.get(
-            "/app/repos",
+            "/repos",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
 
@@ -5615,7 +5617,7 @@ def test_api_keys_page_loads_for_owner(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "owner-load", "1001")
 
     response = client.get(
-        "/app/settings/api-keys",
+        "/settings/api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
@@ -5629,7 +5631,7 @@ def test_api_keys_page_loads_for_owner(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert response.headers["location"] == "/integrations/mcp?tab=api-keys"
     assert page.status_code == 200
     assert "Machine principal credentials" in page.text
 
@@ -5640,7 +5642,7 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "viewer-deny", "1002", role="viewer")
 
     response = client.get(
-        "/app/settings/api-keys",
+        "/settings/api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
@@ -5653,7 +5655,7 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert response.headers["location"] == "/integrations/mcp?tab=api-keys"
     assert page.status_code == 200
     assert "Machine principal credentials" not in page.text
     assert "Only workspace owners and admins" not in page.text
@@ -5668,7 +5670,7 @@ def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
 
     # Create key → should redirect back to the page
     create_resp = client.post(
-        "/app/settings/api-keys",
+        "/settings/api-keys",
         data={
             "display_name": "flash-bot",
             "csrf_token": f"csrf-flash-secret",
@@ -5678,11 +5680,11 @@ def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
         follow_redirects=False,
     )
     assert create_resp.status_code == 303
-    assert create_resp.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert create_resp.headers["location"] == "/integrations/mcp?tab=api-keys"
 
     # First GET — secret must appear
     get1 = client.get(
-        "/app/integrations/mcp?tab=api-keys",
+        "/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert get1.status_code == 200
@@ -5691,7 +5693,7 @@ def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
 
     # Second GET — secret must be gone (consumed)
     get2 = client.get(
-        "/app/integrations/mcp?tab=api-keys",
+        "/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     assert get2.status_code == 200
@@ -5730,7 +5732,7 @@ def test_api_keys_create_respects_staging_cp_api_entitlement_flag(tmp_path):
     )
 
     response = client.post(
-        "/app/settings/api-keys",
+        "/settings/api-keys",
         data={
             "display_name": "staging-gated-bot",
             "csrf_token": "csrf-staging-gate",
@@ -5775,13 +5777,13 @@ def test_api_keys_revoke_works(tmp_path):
     )
 
     revoke_resp = client.post(
-        f"/app/settings/api-keys/{principal.client_id}/revoke",
+        f"/settings/api-keys/{principal.client_id}/revoke",
         data={"csrf_token": f"csrf-revoke-ok"},
         cookies={main.settings.session_cookie_name: session.session_id},
         follow_redirects=False,
     )
     assert revoke_resp.status_code == 303
-    assert revoke_resp.headers["location"] == "/app/integrations/mcp?tab=api-keys"
+    assert revoke_resp.headers["location"] == "/integrations/mcp?tab=api-keys"
 
     updated = get_machine_principal_by_client_id(main.AUDIT_DB_PATH, principal.client_id)
     assert updated is not None
@@ -5880,7 +5882,7 @@ def test_api_keys_revoke_idor_rejected(tmp_path):
 
     # Attacker (session1 → workspace1) tries to revoke workspace2's principal
     resp = client.post(
-        f"/app/settings/api-keys/{victim_principal.client_id}/revoke",
+        f"/settings/api-keys/{victim_principal.client_id}/revoke",
         data={"csrf_token": "csrf-idor-ws1"},
         cookies={main.settings.session_cookie_name: session1.session_id},
         follow_redirects=False,
@@ -5900,7 +5902,7 @@ def test_api_keys_create_rejects_empty_scopes(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "empty-scopes", "1005")
 
     response = client.post(
-        "/app/settings/api-keys",
+        "/settings/api-keys",
         data={
             "display_name": "no-scope-bot",
             "csrf_token": "csrf-empty-scopes",
@@ -5924,7 +5926,7 @@ def test_api_keys_page_shows_scope_checkboxes(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "scope-ui", "1006")
 
     response = client.get(
-        "/app/integrations/mcp?tab=api-keys",
+        "/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -5948,7 +5950,7 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-page", "1101")
 
     response = client.get(
-        "/app/integrations/mcp",
+        "/integrations/mcp",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -5957,16 +5959,16 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
 
     assert response.status_code == 200
     assert "Agent Integrations" in response.text
-    assert "Vipari MCP connector" in response.text
+    assert "Customer MCP connector package" in response.text
     assert "hosted Vipari broker" in response.text
     assert "internal Vipari bearer tokens" in response.text
-    assert "vipari.list_repos" in response.text
-    assert "/app/integrations/mcp/download" in response.text
+    assert "Trust boundary" in response.text
+    assert "/integrations/mcp/download" in response.text
     assert "API keys" in response.text
     assert "Activity" in response.text
-    assert "First successful connection" in response.text
-    assert "The client secret is shown once at creation time." in response.text
-    assert "401 Invalid client credentials" in response.text
+    assert "Download connector" in response.text
+    assert "Host configuration" in response.text
+    assert "One connector session maps to one workspace." in response.text
 
 
 def test_mcp_integrations_page_loads_for_viewer(tmp_path):
@@ -5977,7 +5979,7 @@ def test_mcp_integrations_page_loads_for_viewer(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-viewer", "1104", role="viewer")
 
     response = client.get(
-        "/app/integrations/mcp",
+        "/integrations/mcp",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -6002,11 +6004,11 @@ def test_mcp_integrations_sensitive_tabs_fall_back_to_overview_for_viewer(tmp_pa
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-viewer-tabs", "1106", role="viewer")
 
     api_keys_response = client.get(
-        "/app/integrations/mcp?tab=api-keys",
+        "/integrations/mcp?tab=api-keys",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
     activity_response = client.get(
-        "/app/integrations/mcp?tab=activity",
+        "/integrations/mcp?tab=activity",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -6031,7 +6033,7 @@ def test_settings_page_links_to_mcp_integrations(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-settings-link", "1103")
 
     response = client.get(
-        "/app/settings",
+        "/settings",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -6039,7 +6041,7 @@ def test_settings_page_links_to_mcp_integrations(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 200
-    assert "/app/integrations/mcp" in response.text
+    assert "/integrations/mcp" in response.text
     assert "Open Agent Integrations" in response.text
 
 
@@ -6054,7 +6056,7 @@ def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
     _user, _workspace, session = _setup_api_keys_db(tmp_path, "mcp-download", "1102")
 
     response = client.get(
-        "/app/integrations/mcp/download",
+        "/integrations/mcp/download",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
@@ -6100,7 +6102,7 @@ def test_mcp_activity_tab_shows_workspace_audit_events(tmp_path):
     )
 
     response = client.get(
-        "/app/integrations/mcp?tab=activity",
+        "/integrations/mcp?tab=activity",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 

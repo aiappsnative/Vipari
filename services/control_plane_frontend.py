@@ -160,30 +160,30 @@ def _render_checklist(resolution: WorkspaceAccessResolution) -> str:
 def _state_primary_action_url(resolution: WorkspaceAccessResolution) -> str | None:
     mapping = {
         "unauthenticated": "/login",
-        "authenticated_no_workspace": "/app/workspaces/new",
-        "invited_pending_acceptance": "/app",
-        "forbidden": "/app",
-        "workspace_no_subscription": "/app/billing",
-        "billing_pending_confirmation": "/app/billing",
-        "payment_failed": "/app/billing",
-        "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/repos",
-        "active_comments_only": "/app/billing?plan=starter",
+        "authenticated_no_workspace": "/workspaces/new",
+        "invited_pending_acceptance": "/workspace",
+        "forbidden": "/workspace",
+        "workspace_no_subscription": "/billing",
+        "billing_pending_confirmation": "/billing",
+        "payment_failed": "/billing",
+        "awaiting_github_install": "/setup/install",
+        "awaiting_repo_onboarding": "/repos",
+        "active_comments_only": "/billing?plan=starter",
         "active": "/dashboard",
-        "canceled_active_until_period_end": "/app/billing",
-        "expired_read_only": "/app/billing",
+        "canceled_active_until_period_end": "/billing",
+        "expired_read_only": "/billing",
     }
     return mapping.get(resolution.state)
 
 
 def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | None:
     mapping = {
-        "billing_pending_confirmation": "/app/billing",
-        "payment_failed": "/app/billing/portal",
-        "awaiting_github_install": "/app/setup/install",
-        "active_comments_only": "/app/repos",
-        "canceled_active_until_period_end": "/app/billing",
-        "expired_read_only": "/app/billing",
+        "billing_pending_confirmation": "/billing",
+        "payment_failed": "/billing/portal",
+        "awaiting_github_install": "/setup/install",
+        "active_comments_only": "/repos",
+        "canceled_active_until_period_end": "/billing",
+        "expired_read_only": "/billing",
     }
     return mapping.get(resolution.state)
 
@@ -191,35 +191,35 @@ def _state_secondary_action_url(resolution: WorkspaceAccessResolution) -> str | 
 def _state_next_action_url(resolution: WorkspaceAccessResolution) -> str | None:
     mapping = {
         "unauthenticated": "/login",
-        "authenticated_no_workspace": "/app/workspaces/new",
-        "workspace_no_subscription": "/app/billing",
-        "billing_pending_confirmation": "/app/billing",
-        "payment_failed": "/app/billing/portal",
-        "awaiting_github_install": "/app/setup/install",
-        "awaiting_repo_onboarding": "/app/repos",
-        "active_comments_only": "/app/repos",
+        "authenticated_no_workspace": "/workspaces/new",
+        "workspace_no_subscription": "/billing",
+        "billing_pending_confirmation": "/billing",
+        "payment_failed": "/billing/portal",
+        "awaiting_github_install": "/setup/install",
+        "awaiting_repo_onboarding": "/repos",
+        "active_comments_only": "/repos",
         "active": "/dashboard",
         "canceled_active_until_period_end": "/dashboard",
-        "expired_read_only": "/app/billing",
+        "expired_read_only": "/billing",
     }
     return mapping.get(resolution.state)
 
 
 def _checklist_cta_links(resolution: WorkspaceAccessResolution) -> dict[str, str]:
     links = {
-        "billing": "/app/billing",
-        "workspace": "/app/workspaces/new",
+        "billing": "/billing",
+        "workspace": "/workspaces/new",
         "github_login": "/login",
-        "installation": "/app/setup/install",
-        "repo_allocation": "/app/repos",
-        "first_scan": "/app/repos",
+        "installation": "/setup/install",
+        "repo_allocation": "/repos",
+        "first_scan": "/repos",
     }
     if resolution.state == "active":
         links["repo_allocation"] = "/dashboard"
         links["first_scan"] = "/dashboard"
     if resolution.state == "active_comments_only":
-        links["repo_allocation"] = "/app/repos"
-        links["first_scan"] = "/app/repos"
+        links["repo_allocation"] = "/repos"
+        links["first_scan"] = "/repos"
     return links
 
 
@@ -362,7 +362,7 @@ def _render_workspace_member_invite_form(*, csrf_token: str, invite_enabled: boo
     disabled = "disabled" if not invite_enabled else ""
     return f'''
         <div class="member-toolbar">
-            <form method="post" action="/app/settings/invite" class="member-toolbar-form">
+            <form method="post" action="/settings/invite" class="member-toolbar-form">
                 {_csrf_input(csrf_token)}
                 <input class="control-page-input member-toolbar-input" name="github_login" placeholder="GitHub login" maxlength="39" {disabled} />
                 <select class="control-page-select member-toolbar-select" name="role" {disabled}>
@@ -412,7 +412,7 @@ def _render_state_links(active_state: str) -> str:
         "expired_read_only",
     ]
     return "".join(
-        f'<a class="state-pill {"state-pill-active" if state == active_state else ""}" href="/app?state={html_escape(state)}">{html_escape(state.replace("_", " "))}</a>'
+        f'<a class="state-pill {"state-pill-active" if state == active_state else ""}" href="/workspace?state={html_escape(state)}">{html_escape(state.replace("_", " "))}</a>'
         for state in states
     )
 
@@ -575,7 +575,7 @@ def render_control_plane_billing_page(
                     <span class="billing-tier-price-suffix">{html_escape(str(card_copy.get("price_suffix") or ''))}</span>
                 </div>
                 <ul class="billing-tier-feature-list">{features}</ul>
-                <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}" class="billing-tier-form">
+                <form method="post" action="/billing/checkout?plan={html_escape(code)}{flow_query}" class="billing-tier-form">
                     {_csrf_input(csrf_token)}
                     <button type="submit" class="button billing-tier-button{' billing-tier-button-primary' if code == 'starter' else ''}"{' disabled' if button_disabled else ''}>{html_escape(button_label)}</button>
                 </form>
@@ -610,7 +610,7 @@ def render_control_plane_install_page(
         f'<a class="button" href="{html_escape(install_url)}">Start GitHub App install</a>' if install_url else '<span class="subtle-link">GitHub App install URL unavailable</span>'
     )
     manual_link_form = f'''
-        <form method="post" action="/app/setup/install/link" class="action-form">
+        <form method="post" action="/setup/install/link" class="action-form">
             {_csrf_input(csrf_token)}
             <label class="field-label" for="installation-id">Installation id</label>
             <input class="field-input" id="installation-id" name="installation_id" placeholder="12345678" />
@@ -636,11 +636,11 @@ def _repo_dashboard_href(repo_full: str) -> str:
 
 
 def _repo_allocate_href(repo_full: str) -> str:
-    return f'/app/repos/allocate?repo_full={quote(repo_full, safe="/")}'
+    return f'/repos/allocate?repo_full={quote(repo_full, safe="/")}'
 
 
 def _repo_disconnect_href(repo_full: str) -> str:
-    return f'/app/repos/disconnect?repo_full={quote(repo_full, safe="/")}'
+    return f'/repos/disconnect?repo_full={quote(repo_full, safe="/")}'
 
 
 def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark", sidebar_profile_initial: str = "V") -> str:
@@ -715,7 +715,7 @@ def render_repo_inventory_cards(
     csrf_token: str,
     install_start_href: str,
     install_disabled: bool = False,
-    install_disabled_href: str = "/app/billing?plan=starter",
+    install_disabled_href: str = "/billing?plan=starter",
 ) -> str:
     if not repositories:
         return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>No repositories available yet</h3><p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p></article>'
@@ -870,7 +870,7 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
-    return render_repo_inventory_cards(connections, csrf_token=csrf_token, install_start_href="/app/setup/install/start")
+    return render_repo_inventory_cards(connections, csrf_token=csrf_token, install_start_href="/setup/install/start")
 
 
 def render_repo_allocation_cards(allocations: list[dict[str, str]]) -> str:
@@ -974,7 +974,7 @@ def render_control_plane_settings_page(
     admin_control = ""
     if admin_url:
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
-    billing_link = '<a class="control-page-button" href="/app/billing">Open billing</a>'
+    billing_link = '<a class="control-page-button" href="/billing">Open billing</a>'
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
@@ -1095,15 +1095,15 @@ def render_control_plane_mcp_page(
         admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
 
     tab_urls = {
-        "overview": "/app/integrations/mcp?tab=overview",
-        "tools": "/app/integrations/mcp?tab=tools",
+        "overview": "/integrations/mcp?tab=overview",
+        "tools": "/integrations/mcp?tab=tools",
     }
     tab_labels = {"overview": "Overview", "tools": "Tools"}
     if can_manage:
         tab_urls.update(
             {
-                "api-keys": "/app/integrations/mcp?tab=api-keys",
-                "activity": "/app/integrations/mcp?tab=activity",
+                "api-keys": "/integrations/mcp?tab=api-keys",
+                "activity": "/integrations/mcp?tab=activity",
             }
         )
         tab_labels.update({"api-keys": "API keys", "activity": "Activity"})
@@ -1360,7 +1360,7 @@ def _build_help_context(
         next_step_label = "Connect a repository"
         next_title = "No repositories are visible yet"
         next_body = "Help should start with the actual blocking state. Right now the blocker is before drift review: the workspace has nothing in inventory to onboard or review."
-        next_href = "/app/repos"
+        next_href = "/repos"
         next_cta = "Open Repositories"
     elif connected_only_rows:
         target_repo = str(connected_only_rows[0].get("repo_full") or "your repo")
@@ -1368,7 +1368,7 @@ def _build_help_context(
         next_step_label = "Finish onboarding"
         next_title = "A visible repo still needs onboarding"
         next_body = f"{target_repo} is connected, but it does not yet have stored onboarding state. Until onboarding runs, Help, Dashboard, and Compliance can only explain so much because there is no review-ready baseline context."
-        next_href = "/app/repos"
+        next_href = "/repos"
         next_cta = "Go to Repositories"
     elif baseline_pending:
         target_repo = str(getattr(baseline_pending[0], "repo_full", "your repo"))
@@ -1391,7 +1391,7 @@ def _build_help_context(
         next_step_label = "Check pending exports"
         next_title = "Compliance work is active"
         next_body = f"This workspace has {len(baseline_approved)} approved baselines and {export_pending_count} pending export jobs. The most useful help now is operational: verify evidence generation is finishing cleanly."
-        next_href = "/app/compliance"
+        next_href = "/compliance"
         next_cta = "Open Compliance"
     else:
         start_here_copy = "This workspace already has review-ready repos. The next useful place to work is the Dashboard, where approved baselines and current repo state can be compared directly."
@@ -1468,10 +1468,10 @@ def _compliance_tone_class(tone: str) -> str:
 
 def _render_compliance_tab_bar(active_tab: str) -> str:
     items = (
-        ("readiness", "Readiness", "/app/compliance"),
-        ("frameworks", "Frameworks", "/app/compliance/frameworks"),
-        ("exports", "Exports", "/app/compliance/exports"),
-        ("evidence", "Evidence", "/app/compliance/evidence"),
+        ("readiness", "Readiness", "/compliance"),
+        ("frameworks", "Frameworks", "/compliance/frameworks"),
+        ("exports", "Exports", "/compliance/exports"),
+        ("evidence", "Evidence", "/compliance/evidence"),
     )
     return "".join(
         f'''<a class="control-page-tab-link" href="{html_escape(href)}"{' aria-current="page"' if key == active_tab else ''}>{html_escape(label)}</a>'''
@@ -1579,7 +1579,7 @@ def _render_compliance_export_summary(summary: ComplianceExportSummary) -> str:
             </div>
             <div class="compliance-export-summary-actions">
                 <span class="compliance-status-pill {_compliance_tone_class('success' if summary.ready_repo_count else 'warning')}">{html_escape(summary.latest_status_label)}</span>
-                <a class="control-page-button" href="/app/compliance/exports#new-export">Generate export</a>
+                <a class="control-page-button" href="/compliance/exports#new-export">Generate export</a>
                 {download_markup}
             </div>
         </article>
@@ -1662,7 +1662,7 @@ def _render_compliance_evidence_filter_note(gap_filter: str | None, repo_filter:
     return (
         f'<div class="control-page-inline-note">'
         f"{' '.join(fragments)}. "
-        f'<a class="subtle-link" href="/app/compliance/evidence">Show all evidence</a>'
+        f'<a class="subtle-link" href="/compliance/evidence">Show all evidence</a>'
         f'</div>'
     )
 
@@ -1735,7 +1735,7 @@ def _render_compliance_export_form(view: ComplianceWorkspaceView, csrf_token: st
                 <h2 class="control-page-section-title">Run compliance exports</h2>
                 <p>Generate a focused export for selected repositories or let the server-side presets choose the repos that are already ready.</p>
             </div>
-            <form method="post" action="/app/compliance/export" class="control-page-form compliance-export-form">
+            <form method="post" action="/compliance/export" class="control-page-form compliance-export-form">
                 {_csrf_input(csrf_token)}
                 <label class="compliance-export-field">
                     <span class="control-page-label">Server-side repo preset</span>
@@ -1970,7 +1970,7 @@ def render_control_plane_admin_page(
         <div class="admin-toolbar">
             <details class="admin-disclosure">
                 <summary>Add user</summary>
-                <form method="post" action="/app/admin/users/create" class="action-form admin-form-grid">
+                <form method="post" action="/admin/users/create" class="action-form admin-form-grid">
                     {_csrf_input(csrf_token)}
                     <input class="field-input" name="display_name" maxlength="120" placeholder="Display name" />
                     <input class="field-input" name="primary_email" maxlength="320" placeholder="Primary email" />
@@ -1979,7 +1979,7 @@ def render_control_plane_admin_page(
             </details>
             <details class="admin-disclosure">
                 <summary>Add workspace</summary>
-                <form method="post" action="/app/admin/workspaces/create" class="action-form admin-form-grid">
+                <form method="post" action="/admin/workspaces/create" class="action-form admin-form-grid">
                     {_csrf_input(csrf_token)}
                     <input class="field-input" name="display_name" maxlength="120" placeholder="Workspace name" />
                     <input class="field-input" name="slug" maxlength="120" placeholder="workspace-slug" />
@@ -1989,7 +1989,7 @@ def render_control_plane_admin_page(
             </details>
             <details class="admin-disclosure">
                 <summary>Assign membership</summary>
-                <form method="post" action="/app/admin/memberships/upsert" class="action-form admin-form-grid">
+                <form method="post" action="/admin/memberships/upsert" class="action-form admin-form-grid">
                     {_csrf_input(csrf_token)}
                     <select class="field-input" name="user_id">{user_options}</select>
                     <select class="field-input" name="workspace_id">{workspace_options}</select>
@@ -2043,7 +2043,7 @@ def render_control_plane_admin_page(
         user_edit = f'''
             <details class="admin-row-disclosure">
                 <summary>Edit user</summary>
-                <form method="post" action="/app/admin/users/{user_id}/update" class="action-form admin-form-grid">
+                <form method="post" action="/admin/users/{user_id}/update" class="action-form admin-form-grid">
                     {_csrf_input(csrf_token)}
                     <input class="field-input" name="display_name" maxlength="120" value="{html_escape(str(row.get('user_display_name') or ''))}" />
                     <input class="field-input" name="primary_email" maxlength="320" value="{html_escape(str(row.get('primary_email') or ''))}" />
@@ -2064,7 +2064,7 @@ def render_control_plane_admin_page(
             workspace_edit = f'''
                 <details class="admin-row-disclosure">
                     <summary>Edit workspace</summary>
-                    <form method="post" action="/app/admin/workspaces/{workspace_id}/update" class="action-form admin-form-grid">
+                    <form method="post" action="/admin/workspaces/{workspace_id}/update" class="action-form admin-form-grid">
                         {_csrf_input(csrf_token)}
                         <input class="field-input" name="display_name" maxlength="120" value="{html_escape(workspace_name)}" />
                         <input class="field-input" name="slug" maxlength="120" value="{html_escape(workspace_slug)}" />
@@ -2074,19 +2074,19 @@ def render_control_plane_admin_page(
                 </details>
             '''
             membership_delete = f'''
-                <form method="post" action="/app/admin/memberships/{workspace_id}/{user_id}/delete" class="action-form" onsubmit="return confirm('Remove this user from the workspace?');">
+                <form method="post" action="/admin/memberships/{workspace_id}/{user_id}/delete" class="action-form" onsubmit="return confirm('Remove this user from the workspace?');">
                     {_csrf_input(csrf_token)}
                     <button type="submit" class="button admin-danger-button">Remove member</button>
                 </form>
             '''
             workspace_delete = f'''
-                <form method="post" action="/app/admin/workspaces/{workspace_id}/delete" class="action-form" onsubmit="return confirm('Delete this workspace and all linked records?');">
+                <form method="post" action="/admin/workspaces/{workspace_id}/delete" class="action-form" onsubmit="return confirm('Delete this workspace and all linked records?');">
                     {_csrf_input(csrf_token)}
                     <button type="submit" class="button admin-danger-button">Delete workspace</button>
                 </form>
             '''
         user_delete = f'''
-            <form method="post" action="/app/admin/users/{user_id}/delete" class="action-form" onsubmit="return confirm('Delete this user and any linked workspace memberships?');">
+            <form method="post" action="/admin/users/{user_id}/delete" class="action-form" onsubmit="return confirm('Delete this user and any linked workspace memberships?');">
                 {_csrf_input(csrf_token)}
                 <button type="submit" class="button admin-danger-button">Delete user</button>
             </form>
@@ -2238,7 +2238,7 @@ def render_control_plane_admin_page(
                 <p class="eyebrow">Operational activity</p>
                 <h2>Unified logs</h2>
             </div>
-            <form method="get" action="/app/admin" class="admin-log-filters">
+            <form method="get" action="/admin" class="admin-log-filters">
                 <input type="hidden" name="tab" value="logs" />
                 <select class="field-input" name="event_type">
                     <option value="">All event types</option>
@@ -2256,7 +2256,7 @@ def render_control_plane_admin_page(
                 <input class="field-input" type="date" name="to_date" value="{html_escape(str(logs_filters.get("to_date") or ""))}" />
                 <input class="field-input admin-log-search" type="search" name="query" value="{html_escape(str(logs_filters.get("query") or ""))}" placeholder="Search event, subject, or details" />
                 <button type="submit" class="button">Apply filters</button>
-                <a class="subtle-link" href="/app/admin?tab=logs">Reset</a>
+                <a class="subtle-link" href="/admin?tab=logs">Reset</a>
             </form>
             <div class="admin-log-summary">
                 <span>{int(logs_state.get("result_count") or 0)} matching log rows</span>
@@ -2271,14 +2271,14 @@ def render_control_plane_admin_page(
     '''
     tabs_markup = f'''
         <nav class="admin-tabs" aria-label="Admin navigation">
-            <a href="/app/admin?tab=overview" class="admin-tab-link {"admin-tab-link-active" if active_tab == "overview" else ""}">Overview</a>
-            <a href="/app/admin?tab=logs" class="admin-tab-link {"admin-tab-link-active" if active_tab == "logs" else ""}">Logs</a>
+            <a href="/admin?tab=overview" class="admin-tab-link {"admin-tab-link-active" if active_tab == "overview" else ""}">Overview</a>
+            <a href="/admin?tab=logs" class="admin-tab-link {"admin-tab-link-active" if active_tab == "logs" else ""}">Logs</a>
         </nav>
     '''
 
     return (
         template.replace("{{ACTOR_GITHUB_LOGIN}}", html_escape(actor_github_login))
-        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url="/app/admin"))
+        .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/profile", admin_url="/admin"))
         .replace("{{ADMIN_TABS}}", tabs_markup)
         .replace("{{STATUS_NOTE}}", status_markup)
         .replace("{{ADMIN_CONTENT}}", logs_content if active_tab == "logs" else overview_content)
@@ -2316,7 +2316,7 @@ def _render_api_keys_section(
         revoke_form = ""
         if can_manage and p.status == "active":
             revoke_form = f"""
-            <form method="post" action="/app/settings/api-keys/{html_escape(p.client_id)}/revoke"
+            <form method="post" action="/settings/api-keys/{html_escape(p.client_id)}/revoke"
                   style="display:inline"
                   onsubmit="return confirm('Revoke this API key? This cannot be undone.')">
                 <input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />
@@ -2366,7 +2366,7 @@ def _render_api_keys_section(
         <div class="control-page-form-divider"></div>
         <div class="secondary-panel-title">Create API key</div>
         {limit_note}
-        <form method="post" action="/app/settings/api-keys" class="control-page-form">
+        <form method="post" action="/settings/api-keys" class="control-page-form">
             <input type="hidden" name="csrf_token" value="{html_escape(csrf_token)}" />
             <label class="control-page-label" for="api-key-name">Key name</label>
             <input class="control-page-input" id="api-key-name" name="display_name"
