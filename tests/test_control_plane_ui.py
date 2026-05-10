@@ -88,13 +88,11 @@ def test_dashboard_actor_login_uses_authenticated_identity_context():
     assert actor_login == "doria90"
 
 
-def test_marketing_page_renders():
-    response = client.get("/")
+def test_root_redirects_to_login_when_not_signed_in():
+    response = client.get("/", follow_redirects=False)
 
-    assert response.status_code == 200
-    assert "Vipari Control Plane" in response.text
-    assert "GitHub-native AI governance" in response.text
-    assert "AI-assisted review output labels" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
 
 
 def test_pricing_page_renders_plan_cards():
@@ -111,7 +109,8 @@ def test_login_page_renders_github_entry():
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "Sign in with GitHub" in response.text
+    assert "Continue with GitHub" in response.text
+    assert 'class="sidebar-logo-glyph login-sidebar-logo-glyph"' in response.text
 
 
 def test_login_page_preserves_handoff_context():
@@ -2792,7 +2791,7 @@ def test_dashboard_requires_session_when_local_env_uses_non_local_base_url(tmp_p
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_dashboard_local_debug_disable_login_uses_first_workspace_without_session(tmp_path):
+def test_dashboard_local_debug_disable_login_still_requires_session(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_app_env = main.settings.app_env
     original_app_base_url = main.settings.app_base_url
@@ -2828,9 +2827,10 @@ def test_dashboard_local_debug_disable_login_uses_first_workspace_without_sessio
         dashboard_response = local_client.get("/dashboard", follow_redirects=False)
         overview_response = local_client.get("/api/dashboard/overview")
 
-    assert dashboard_response.status_code == 200
-    assert overview_response.status_code == 200
-    assert overview_response.json()["repos"] == []
+    assert dashboard_response.status_code == 303
+    assert dashboard_response.headers["location"] == "/login"
+    assert overview_response.status_code == 401
+    assert overview_response.json()["detail"] == "Authentication required."
 
     main.settings.service_role = original_service_role
     main.settings.local_debug_disable_login = original_local_debug_disable_login

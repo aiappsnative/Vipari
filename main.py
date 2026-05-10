@@ -72,7 +72,6 @@ from services.control_plane_frontend import (
     render_control_plane_help_page,
     render_control_plane_install_page,
     render_control_plane_login_page,
-    render_control_plane_marketing_page,
     render_control_plane_mcp_page,
     render_control_plane_placeholder_page,
     render_control_plane_profile_page,
@@ -342,8 +341,6 @@ def _dashboard_redirect_for_request(request: Request):
     session = _get_session(request)
     if not _control_plane_active():
         return None, session, None, False
-    if session is None and _local_debug_dashboard_enabled() and _local_debug_workspace_context() is not None:
-        return None, None, _local_debug_workspace_context(), False
     if session is None:
         return RedirectResponse("/login", status_code=303), None, None, False
     access_context = _build_access_context(session)
@@ -1095,7 +1092,7 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:
-    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
+    access_context = _require_dashboard_read_access(request)
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
@@ -1779,8 +1776,10 @@ def _trusted_workspace_installation_id(access_context: dict[str, object], reques
 
 
 @app.get("/", response_class=HTMLResponse)
-async def marketing_page():
-    return HTMLResponse(render_control_plane_marketing_page())
+async def marketing_page(request: Request):
+    session = _get_session(request)
+    destination = "/dashboard" if session is not None else "/login"
+    return RedirectResponse(destination, status_code=303)
 
 
 @app.get("/pricing", response_class=HTMLResponse)
@@ -3642,7 +3641,7 @@ async def list_repos(request: Request):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
+    access_context = _require_dashboard_read_access(request)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3666,7 +3665,7 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
     access_started = time.perf_counter()
-    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
+    access_context = _require_dashboard_read_access(request)
     _record_server_timing_metric(timing_metrics, "access", access_started)
     visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
@@ -3697,7 +3696,7 @@ def persistence_status(request: Request):
 
 
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
-    access_context = _require_dashboard_read_access(request, allow_local_debug=_local_debug_dashboard_enabled())
+    access_context = _require_dashboard_read_access(request)
     visibility = _dashboard_repo_visibility(access_context)
     result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,

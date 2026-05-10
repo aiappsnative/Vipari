@@ -124,13 +124,17 @@ def main(argv: list[str] | None = None) -> int:
         summary_bits = [f"health={health.status_code}", f"ready={ready.status_code}"]
 
         if args.service_role == "monolith":
-            landing = client.get("/")
+            landing = client.get("/", follow_redirects=False)
             login = client.get("/login")
             pricing = client.get("/pricing")
             app_redirect = client.get("/app", follow_redirects=False)
             checks.extend(
                 [
-                    ("landing", landing.status_code == 200),
+                    (
+                        "landing_redirect",
+                        landing.status_code in {302, 303, 307, 308}
+                        and landing.headers.get("location") == "/login",
+                    ),
                     ("login", login.status_code == 200),
                     ("pricing", pricing.status_code == 200),
                     (

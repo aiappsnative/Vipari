@@ -76,6 +76,71 @@ a {
     padding: 40px;
 }
 
+.login-panel {
+    width: min(480px, 100%);
+    margin: 6vh auto 0;
+    display: grid;
+    gap: 24px;
+    justify-items: center;
+    text-align: center;
+    padding: 48px 40px 40px;
+}
+
+.login-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.login-sidebar-logo-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.login-sidebar-logo-glyph {
+    width: 55px;
+    height: 62px;
+}
+
+.login-brand-wordmark {
+    font-family: "Fraunces", serif;
+    font-size: clamp(2rem, 5vw, 2.5rem);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.login-context-note {
+    margin: 0;
+    max-width: 34ch;
+}
+
+.login-context-note-hidden {
+    display: none;
+}
+
+.login-cta-button {
+    min-width: min(320px, 100%);
+    gap: 12px;
+    padding: 14px 22px;
+    font-size: 1rem;
+    box-shadow: 0 12px 28px rgba(31, 58, 55, 0.16);
+}
+
+.login-cta-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.login-cta-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
 .hero-panel h1,
 .simple-panel h1,
 .page-header h1,
@@ -527,6 +592,29 @@ button.button {
 
     .admin-toolbar {
         flex-direction: column;
+    }
+
+    .login-panel {
+        margin-top: 4vh;
+        padding: 32px 24px 24px;
+    }
+
+    .login-brand {
+        gap: 10px;
+    }
+
+    .login-sidebar-logo-mark {
+        width: auto;
+        height: auto;
+    }
+
+    .login-sidebar-logo-glyph {
+        width: 44px;
+        height: 52px;
+    }
+
+    .login-cta-button {
+        min-width: 100%;
     }
 }
 
