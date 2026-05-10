@@ -484,20 +484,100 @@ def render_control_plane_billing_page(
     )
     flow_query = ""
     if flow_context:
-        flow_query = "?" + "&".join(f"{html_escape(key)}={html_escape(value)}" for key, value in flow_context.items())
+        flow_query = "&" + "&".join(
+            f"{html_escape(key)}={html_escape(value)}"
+            for key, value in flow_context.items()
+            if key != "plan"
+        )
+        if flow_query == "&":
+            flow_query = ""
+    plan_copy = {
+        "free": {
+            "tagline": "Try Vipari on a single repo.",
+            "price": "Free forever",
+            "price_suffix": "",
+            "features": (
+                "1 repository",
+                "Limited automated PR comments on detected AI drift",
+                "Read-only dashboard and audit details",
+                "No version history",
+            ),
+            "button_label": "Start with GitHub",
+        },
+        "starter": {
+            "tagline": "For pilots and small teams.",
+            "price": "$40",
+            "price_suffix": "/mo",
+            "features": (
+                "Up to 5 repositories",
+                "Unlimited PR drift comments",
+                "Core dashboard",
+                "Baseline comparisons",
+                "Version history",
+                "Review queue",
+                "Repo posture radar",
+                "Data export for SOC2 & ISO27001 compliance",
+                "Email support",
+            ),
+            "button_label": "Start with GitHub",
+            "badge": "Most popular",
+        },
+        "team": {
+            "tagline": "For active product teams.",
+            "price": "$150",
+            "price_suffix": "/mo",
+            "features": (
+                "Up to 20 repositories",
+                "Everything in Starter",
+                "Governance coverage views",
+                "Team access & roles",
+                "Priority support",
+            ),
+            "button_label": "Start with GitHub",
+        },
+        "enterprise": {
+            "tagline": "For larger organizations.",
+            "price": "Custom",
+            "price_suffix": "",
+            "features": (
+                "Custom repo limits",
+                "Everything in Team",
+                "Advanced governance",
+                "Custom onboarding",
+                "SSO & enterprise features",
+                "Dedicated support",
+            ),
+            "button_label": "Talk to us",
+        },
+    }
     plan_cards = []
     for code, plan in PLAN_DEFINITIONS.items():
-        recommendation = "Recommended from Base44." if code == selected_plan_code else ""
-        button_label = "Continue with this plan" if code == selected_plan_code else f"Choose {plan.label}"
+        card_copy = plan_copy.get(code, {})
+        button_label = str(card_copy.get("button_label") or f"Choose {plan.label}")
+        button_disabled = code in {"starter", "team"}
+        features = "".join(
+            f'<li class="billing-tier-feature-item">{html_escape(feature)}</li>'
+            for feature in card_copy.get("features", ())
+        )
+        badge_markup = ""
+        if card_copy.get("badge"):
+            badge_markup = f'<span class="billing-tier-badge">{html_escape(str(card_copy["badge"]))}</span>'
         plan_cards.append(
             f'''
-            <article class="action-card{' action-card-strong' if code == selected_plan_code else ''}">
-                <div class="eyebrow">{html_escape(plan.label)}</div>
-                <h2>{html_escape(plan.label)}</h2>
-                <p>Repo limit: {plan.repo_limit}. Seats: {plan.seat_limit}. {html_escape(recommendation)}</p>
-                <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}">
+            <article class="billing-tier-card{' billing-tier-card-featured' if code == 'starter' else ''}{' billing-tier-card-current' if code == selected_plan_code else ''}">
+                {badge_markup}
+                <div class="billing-tier-header">
+                    <p class="billing-tier-name">{html_escape(plan.label)}</p>
+                    <p class="billing-tier-tagline">{html_escape(str(card_copy.get("tagline") or ''))}</p>
+                </div>
+                <div class="billing-tier-price-row">
+                    <strong class="billing-tier-price">{html_escape(str(card_copy.get("price") or plan.label))}</strong>
+                    <span class="billing-tier-price-suffix">{html_escape(str(card_copy.get("price_suffix") or ''))}</span>
+                </div>
+                <ul class="billing-tier-feature-list">{features}</ul>
+                <form method="post" action="/app/billing/checkout?plan={html_escape(code)}{flow_query}" class="billing-tier-form">
                     {_csrf_input(csrf_token)}
-                    <button type="submit" class="button">{html_escape(button_label)}</button>
+                    <button type="submit" class="button billing-tier-button{' billing-tier-button-primary' if code == 'starter' else ''}"{' disabled' if button_disabled else ''}>{html_escape(button_label)}</button>
                 </form>
             </article>
             '''
@@ -1856,6 +1936,8 @@ def render_control_plane_admin_page(
     billing_claims: list[dict[str, object]],
     audit_logs: list[dict[str, object]],
     csrf_token: str,
+    active_tab: str = "overview",
+    logs_view: dict[str, object] | None = None,
     status_note: str | None = None,
 ) -> str:
     template = _load_template("control_plane_admin.html")
@@ -2083,15 +2165,123 @@ def render_control_plane_admin_page(
             for row in billing_claims
         ],
     )
+    overview_content = f'''
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Mutations</p>
+                <h2>Manage the control plane</h2>
+            </div>
+            {add_toolbar}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Registered users and workspaces</p>
+                <h2>Aggregated workspace accounts</h2>
+            </div>
+            {user_rows}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Audit</p>
+                <h2>Recent admin activity</h2>
+            </div>
+            {audit_rows}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">GitHub app installs</p>
+                <h2>Unclaimed public installations</h2>
+            </div>
+            {install_rows}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Billing handoff</p>
+                <h2>Stored billing claims</h2>
+            </div>
+            {claim_rows}
+        </section>
+    '''
+
+    logs_state = logs_view or {}
+    logs_filters = logs_state.get("filters") or {}
+    logs_rows = _render_table(
+        ["When", "Source", "Event", "Workspace", "Actor", "Subject", "Details"],
+        [
+            [
+                html_escape(_format_timestamp(row.get("occurred_at") if isinstance(row.get("occurred_at"), (int, float)) else None)),
+                html_escape(str(row.get("source") or "")),
+                html_escape(str(row.get("event_type") or "")),
+                html_escape(str(row.get("workspace_label") or "Global")),
+                html_escape(str(row.get("actor_label") or "System")),
+                html_escape(str(row.get("subject") or "")),
+                html_escape(str(row.get("details") or "")),
+            ]
+            for row in logs_state.get("rows") or []
+        ],
+    )
+    event_options_markup = "".join(
+        f'<option value="{html_escape(option)}" {"selected" if option == logs_filters.get("event_type") else ""}>{html_escape(option)}</option>'
+        for option in logs_state.get("event_options") or []
+    )
+    workspace_options_markup = "".join(
+        f'<option value="{html_escape(str(option.get("value") or ""))}" {"selected" if str(option.get("value") or "") == str(logs_filters.get("workspace") or "") else ""}>{html_escape(str(option.get("label") or ""))}</option>'
+        for option in logs_state.get("workspace_options") or []
+    )
+    actor_options_markup = "".join(
+        f'<option value="{html_escape(option)}" {"selected" if option == logs_filters.get("actor") else ""}>{html_escape(option)}</option>'
+        for option in logs_state.get("actor_options") or []
+    )
+    logs_content = f'''
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Operational activity</p>
+                <h2>Unified logs</h2>
+            </div>
+            <form method="get" action="/app/admin" class="admin-log-filters">
+                <input type="hidden" name="tab" value="logs" />
+                <select class="field-input" name="event_type">
+                    <option value="">All event types</option>
+                    {event_options_markup}
+                </select>
+                <select class="field-input" name="workspace">
+                    <option value="">All workspaces</option>
+                    {workspace_options_markup}
+                </select>
+                <select class="field-input" name="actor">
+                    <option value="">All actors</option>
+                    {actor_options_markup}
+                </select>
+                <input class="field-input" type="date" name="from_date" value="{html_escape(str(logs_filters.get("from_date") or ""))}" />
+                <input class="field-input" type="date" name="to_date" value="{html_escape(str(logs_filters.get("to_date") or ""))}" />
+                <input class="field-input admin-log-search" type="search" name="query" value="{html_escape(str(logs_filters.get("query") or ""))}" placeholder="Search event, subject, or details" />
+                <button type="submit" class="button">Apply filters</button>
+                <a class="subtle-link" href="/app/admin?tab=logs">Reset</a>
+            </form>
+            <div class="admin-log-summary">
+                <span>{int(logs_state.get("result_count") or 0)} matching log rows</span>
+                <span>Page {int(logs_state.get("page") or 1)}</span>
+            </div>
+            {logs_rows}
+            <div class="admin-log-pagination">
+                {f'<a class="subtle-link" href="{html_escape(str(logs_state.get("prev_href") or ""))}">Previous</a>' if logs_state.get("has_prev") and logs_state.get("prev_href") else '<span class="page-note">Previous</span>'}
+                {f'<a class="subtle-link" href="{html_escape(str(logs_state.get("next_href") or ""))}">Next</a>' if logs_state.get("has_next") and logs_state.get("next_href") else '<span class="page-note">Next</span>'}
+            </div>
+        </section>
+    '''
+    tabs_markup = f'''
+        <nav class="admin-tabs" aria-label="Admin navigation">
+            <a href="/app/admin?tab=overview" class="admin-tab-link {"admin-tab-link-active" if active_tab == "overview" else ""}">Overview</a>
+            <a href="/app/admin?tab=logs" class="admin-tab-link {"admin-tab-link-active" if active_tab == "logs" else ""}">Logs</a>
+        </nav>
+    '''
+
     return (
         template.replace("{{ACTOR_GITHUB_LOGIN}}", html_escape(actor_github_login))
         .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/app/profile", admin_url="/app/admin"))
+        .replace("{{ADMIN_TABS}}", tabs_markup)
         .replace("{{STATUS_NOTE}}", status_markup)
-        .replace("{{ADD_TOOLBAR}}", add_toolbar)
-        .replace("{{USER_ROWS}}", user_rows)
-        .replace("{{AUDIT_ROWS}}", audit_rows)
-        .replace("{{UNCLAIMED_INSTALL_ROWS}}", install_rows)
-        .replace("{{CLAIM_ROWS}}", claim_rows)
+        .replace("{{ADMIN_CONTENT}}", logs_content if active_tab == "logs" else overview_content)
     )
 
 

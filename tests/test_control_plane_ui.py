@@ -2228,6 +2228,151 @@ def test_admin_page_renders_github_profile_details(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_logs_tab_renders_unified_activity_feed(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.control_plane_records import create_control_plane_audit_log, create_user_session, create_workspace, record_webhook_event, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="972",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=admin_user.id,
+        display_name="Logs Workspace",
+        slug="logs-workspace",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-logs-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-logs",
+        expires_at=time.time() + 3600,
+    )
+
+    create_control_plane_audit_log(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_user.id,
+        event_type="admin_workspace_created",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"display_name": workspace.display_name},
+    )
+    record_webhook_event(
+        main.AUDIT_DB_PATH,
+        provider="github",
+        event_id="evt-admin-logs",
+        event_type="installation",
+        status="processed",
+    )
+
+    response = client.get("/app/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Unified logs" in response.text
+    assert "All event types" in response.text
+    assert "admin_workspace_created" in response.text
+    assert "Installation" in response.text or "installation" in response.text
+    assert "Logs Workspace" in response.text
+    assert "Admin User" in response.text
+    assert "matching log rows" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_logs_tab_applies_query_filters(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs-filter.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.control_plane_records import create_control_plane_audit_log, create_user_session, create_workspace, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="973",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=admin_user.id,
+        display_name="Filter Workspace",
+        slug="filter-workspace",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-logs-filter-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-logs-filter",
+        expires_at=time.time() + 3600,
+    )
+
+    create_control_plane_audit_log(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_user.id,
+        event_type="admin_workspace_created",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"display_name": "Filter Workspace"},
+    )
+    create_control_plane_audit_log(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=admin_user.id,
+        event_type="admin_user_created",
+        subject_type="user",
+        subject_id="42",
+        payload={"display_name": "Hidden User"},
+    )
+
+    response = client.get(
+        "/app/admin?tab=logs&query=Hidden+User",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert "Hidden User" in response.text
+    assert "admin_user_created" in response.text
+    assert "1 matching log rows" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_admin_page_can_create_update_and_delete_users_workspaces_and_memberships(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
@@ -3006,7 +3151,9 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         )
         assert billing_page_response.status_code == 200
         assert "Billing" in billing_page_response.text
-        assert "Continue with this plan" in billing_page_response.text
+        assert "Start with GitHub" in billing_page_response.text
+        assert "Most popular" in billing_page_response.text
+        assert "Talk to us" in billing_page_response.text
         assert 'aria-label="Repositories"' in billing_page_response.text
         assert 'aria-label="Agent Integrations"' in billing_page_response.text
         assert "Manage billing" in billing_page_response.text
@@ -3133,6 +3280,67 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
     assert "Urgent changes to review" in dashboard_response.text
     assert "Posture map" in dashboard_response.text
     assert 'href="/app/repos"' in dashboard_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+    
+def test_billing_page_renders_pricing_cards_and_plan_actions(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "billing-page-render.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1800",
+        github_login="billing-owner",
+        display_name="Billing Owner",
+        primary_email="billing-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="billing-render-workspace",
+        display_name="Billing Render Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="billing-render-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-billing-render",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.get(
+        "/app/billing?plan=starter&source=base44",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert response.text.count('<article class="billing-tier-card') == 4
+    assert 'class="billing-tier-card billing-tier-card-featured billing-tier-card-current"' in response.text
+    assert "Free forever" in response.text
+    assert "$40" in response.text
+    assert "$150" in response.text
+    assert "Custom" in response.text
+    assert "Limited automated PR comments on detected AI drift" in response.text
+    assert "Unlimited PR drift comments" in response.text
+    assert "Governance coverage views" in response.text
+    assert "SSO &amp; enterprise features" in response.text
+    assert response.text.count("Start with GitHub") == 3
+    assert response.text.count("Talk to us") == 1
+    assert response.text.count("billing-tier-button\" disabled") == 1
+    assert response.text.count("billing-tier-button billing-tier-button-primary\" disabled") == 1
+    assert 'action="/app/billing/checkout?plan=free&source=base44" class="billing-tier-form">\n                    <input type="hidden" name="csrf_token" value="csrf-billing-render" />\n                    <button type="submit" class="button billing-tier-button">Start with GitHub</button>' in response.text
+    assert 'action="/app/billing/checkout?plan=free&source=base44"' in response.text
+    assert 'action="/app/billing/checkout?plan=starter&source=base44"' in response.text
+    assert 'action="/app/billing/checkout?plan=team&source=base44"' in response.text
+    assert 'action="/app/billing/checkout?plan=enterprise&source=base44"' in response.text
+    assert "Portal unavailable" in response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

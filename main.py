@@ -27,6 +27,7 @@ from engine.relevance import needs_audit as engine_needs_audit
 from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_access_state
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
+from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.mcp_broker import (
     authenticate_mcp_broker_request,
@@ -84,6 +85,7 @@ from services.control_plane_frontend import (
     render_control_plane_workspace_new_page,
 )
 from services.control_plane_records import (
+    AdminActivityLogEntry,
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
     count_machine_principals_for_workspace,
@@ -126,6 +128,7 @@ from services.control_plane_records import (
     list_repo_allocations_for_workspace,
     list_repo_connections_for_workspace,
     list_unclaimed_installations,
+    list_webhook_event_receipts,
     list_workspace_invites_for_workspace,
     list_workspace_memberships_for_user,
     read_and_clear_session_flash,
@@ -841,6 +844,254 @@ def _workspace_slug_candidates(name: str) -> list[str]:
 
 def _admin_redirect(status: str) -> RedirectResponse:
     return RedirectResponse(f"/app/admin?updated={quote(status)}", status_code=303)
+
+
+_ADMIN_LOG_PAGE_SIZE = 50
+
+
+def _parse_admin_log_date(raw_value: str | None, *, inclusive_end: bool = False) -> float | None:
+    value = (raw_value or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    timestamp = parsed.timestamp()
+    if inclusive_end and len(value) == 10:
+        timestamp += 86399.999
+    return timestamp
+
+
+def _admin_activity_actor_label(actor_user_id: int | None, user_labels: dict[int, str]) -> str:
+    if actor_user_id is None:
+        return "System"
+    return user_labels.get(actor_user_id, f"User #{actor_user_id}")
+
+
+def _admin_activity_payload_details(payload_json: str | None) -> str:
+    if not payload_json:
+        return "{}"
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return str(payload_json)
+    if not isinstance(payload, dict):
+        return str(payload)
+    if not payload:
+        return "{}"
+    return ", ".join(f"{key}={payload[key]}" for key in sorted(payload))
+
+
+def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
+    entries: list[AdminActivityLogEntry] = []
+
+    for row in list_recent_control_plane_audit_logs(db_path, limit=fetch_limit):
+        entries.append(
+            AdminActivityLogEntry(
+                source="control_plane",
+                occurred_at=row.created_at,
+                event_type=row.event_type,
+                workspace_id=row.workspace_id,
+                actor_user_id=row.actor_user_id,
+                actor_label=_admin_activity_actor_label(row.actor_user_id, user_labels),
+                subject_type=row.subject_type,
+                subject_id=row.subject_id,
+                details=_admin_activity_payload_details(row.payload_json),
+                raw_id=f"control_plane:{row.id}",
+            )
+        )
+
+    for row in list_webhook_event_receipts(db_path, limit=fetch_limit):
+        details = [f"provider={row.provider}", f"status={row.status}"]
+        if row.error_summary:
+            details.append(f"error={row.error_summary}")
+        entries.append(
+            AdminActivityLogEntry(
+                source="webhook",
+                occurred_at=row.processed_at or row.created_at,
+                event_type=row.event_type,
+                workspace_id=None,
+                actor_user_id=None,
+                actor_label="System",
+                subject_type="webhook_event",
+                subject_id=row.event_id,
+                details=", ".join(details),
+                raw_id=f"webhook:{row.id}",
+            )
+        )
+
+    for row in list_recent_feedback_events(db_path, limit=fetch_limit):
+        detail_parts = [f"source={row.source}"]
+        if row.comment:
+            detail_parts.append(row.comment)
+        if row.metadata:
+            detail_parts.append(", ".join(f"{key}={row.metadata[key]}" for key in sorted(row.metadata)))
+        entries.append(
+            AdminActivityLogEntry(
+                source="audit_feedback",
+                occurred_at=row.created_at,
+                event_type=f"audit.feedback.{row.kind}",
+                workspace_id=row.workspace_id,
+                actor_user_id=None,
+                actor_label=row.source,
+                subject_type="audit",
+                subject_id=str(row.audit_id),
+                details=" | ".join(detail_parts),
+                raw_id=f"audit_feedback:{row.id}",
+            )
+        )
+
+    for row in list_recent_triage_events(db_path, limit=fetch_limit):
+        entries.append(
+            AdminActivityLogEntry(
+                source="audit_triage",
+                occurred_at=row.created_at,
+                event_type=f"audit.triage.{row.state}",
+                workspace_id=row.workspace_id,
+                actor_user_id=None,
+                actor_label="System",
+                subject_type="audit",
+                subject_id=str(row.audit_id),
+                details=row.reason or row.state,
+                raw_id=f"audit_triage:{row.id}",
+            )
+        )
+
+    entries.sort(key=lambda item: (item.occurred_at, item.raw_id), reverse=True)
+    return entries
+
+
+def _admin_log_entry_matches(entry: AdminActivityLogEntry, *, event_type: str, workspace: str, actor: str, from_ts: float | None, to_ts: float | None, query: str) -> bool:
+    if event_type and entry.event_type != event_type:
+        return False
+    if workspace:
+        workspace_value = "global" if entry.workspace_id is None else str(entry.workspace_id)
+        if workspace_value != workspace:
+            return False
+    if actor and entry.actor_label != actor:
+        return False
+    if from_ts is not None and entry.occurred_at < from_ts:
+        return False
+    if to_ts is not None and entry.occurred_at > to_ts:
+        return False
+    if query:
+        haystack = " ".join(
+            filter(
+                None,
+                [
+                    entry.source,
+                    entry.event_type,
+                    str(entry.workspace_id) if entry.workspace_id is not None else "global",
+                    entry.actor_label,
+                    entry.subject_type,
+                    entry.subject_id,
+                    entry.details,
+                ],
+            )
+        ).lower()
+        if query not in haystack:
+            return False
+    return True
+
+
+def _build_admin_logs_view(request: Request, *, admin_rows: list[dict[str, object]]) -> dict[str, object]:
+    event_type = (request.query_params.get("event_type") or "").strip()
+    workspace = (request.query_params.get("workspace") or "").strip().lower()
+    actor = (request.query_params.get("actor") or "").strip()
+    from_date = (request.query_params.get("from_date") or "").strip()
+    to_date = (request.query_params.get("to_date") or "").strip()
+    query = (request.query_params.get("query") or "").strip()
+    try:
+        page = max(int(request.query_params.get("page") or "1"), 1)
+    except ValueError:
+        page = 1
+
+    from_ts = _parse_admin_log_date(from_date)
+    to_ts = _parse_admin_log_date(to_date, inclusive_end=True)
+    fetch_limit = max(250, page * _ADMIN_LOG_PAGE_SIZE * 4)
+
+    user_labels = {
+        int(row.get("user_id") or 0): str(row.get("user_display_name") or f"User #{int(row.get('user_id') or 0)}")
+        for row in admin_rows
+        if row.get("user_id") is not None
+    }
+    workspace_labels = {
+        int(row.get("workspace_id") or 0): str(row.get("workspace_display_name") or f"Workspace #{int(row.get('workspace_id') or 0)}")
+        for row in admin_rows
+        if row.get("workspace_id") is not None
+    }
+
+    entries = _build_admin_activity_entries(db_path=AUDIT_DB_PATH, user_labels=user_labels, fetch_limit=fetch_limit)
+    filtered = [
+        entry
+        for entry in entries
+        if _admin_log_entry_matches(
+            entry,
+            event_type=event_type,
+            workspace=workspace,
+            actor=actor,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            query=query.lower(),
+        )
+    ]
+
+    start = (page - 1) * _ADMIN_LOG_PAGE_SIZE
+    end = start + _ADMIN_LOG_PAGE_SIZE
+    page_entries = filtered[start:end]
+
+    base_params = {"tab": "logs"}
+    if event_type:
+        base_params["event_type"] = event_type
+    if workspace:
+        base_params["workspace"] = workspace
+    if actor:
+        base_params["actor"] = actor
+    if from_date:
+        base_params["from_date"] = from_date
+    if to_date:
+        base_params["to_date"] = to_date
+    if query:
+        base_params["query"] = query
+
+    def _page_href(target_page: int) -> str:
+        return f"/app/admin?{urlencode({**base_params, 'page': target_page})}"
+
+    return {
+        "rows": [
+            {
+                "occurred_at": entry.occurred_at,
+                "source": entry.source.replace("_", " ").title(),
+                "event_type": entry.event_type,
+                "workspace_label": "Global" if entry.workspace_id is None else workspace_labels.get(entry.workspace_id, f"Workspace #{entry.workspace_id}"),
+                "actor_label": entry.actor_label,
+                "subject": f"{entry.subject_type}:{entry.subject_id}",
+                "details": entry.details,
+            }
+            for entry in page_entries
+        ],
+        "filters": {
+            "event_type": event_type,
+            "workspace": workspace,
+            "actor": actor,
+            "from_date": from_date,
+            "to_date": to_date,
+            "query": query,
+        },
+        "event_options": sorted({entry.event_type for entry in entries}),
+        "workspace_options": [{"value": "global", "label": "Global"}] + [
+            {"value": str(workspace_id), "label": workspace_labels[workspace_id]}
+            for workspace_id in sorted(workspace_labels)
+        ],
+        "actor_options": sorted({entry.actor_label for entry in entries}),
+        "result_count": len(filtered),
+        "page": page,
+        "has_prev": page > 1,
+        "has_next": end < len(filtered),
+        "prev_href": _page_href(page - 1) if page > 1 else None,
+        "next_href": _page_href(page + 1) if end < len(filtered) else None,
+    }
 
 
 def _normalize_nonempty_text(value: str | None, *, field_name: str, max_length: int) -> str:
@@ -2717,14 +2968,20 @@ async def compliance_export_page_submit(
 @app.get("/app/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_page(request: Request):
     admin_context = _require_owner_access(request)
+    active_tab = (request.query_params.get("tab") or "overview").strip().lower()
+    if active_tab not in {"overview", "logs"}:
+        active_tab = "overview"
+    admin_rows = [asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)]
     return HTMLResponse(
         render_control_plane_admin_page(
             actor_github_login=admin_context["identity"].github_login,
-            admin_rows=[asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)],
+            admin_rows=admin_rows,
             unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
             billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
             audit_logs=[asdict(row) for row in list_recent_control_plane_audit_logs(AUDIT_DB_PATH)],
             csrf_token=admin_context["session"].csrf_secret,
+            active_tab=active_tab,
+            logs_view=_build_admin_logs_view(request, admin_rows=admin_rows) if active_tab == "logs" else None,
             status_note=(request.query_params.get("updated") or "").replace("_", " ").strip().capitalize() or None,
         )
     )

@@ -5456,6 +5456,239 @@ body.control-page[data-theme="light"] {
     letter-spacing: -0.02em;
 }
 
+.billing-header-row {
+    display: grid;
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.billing-header-copy {
+    display: grid;
+    gap: 14px;
+}
+
+.billing-header-copy h1 {
+    margin: 0;
+    max-width: 11ch;
+    font-size: clamp(52px, 6vw, 86px);
+    line-height: 0.92;
+    letter-spacing: -0.06em;
+}
+
+.billing-header-copy p:last-child {
+    margin: 0;
+    max-width: 72ch;
+    color: var(--color-text-muted);
+    font-size: 17px;
+}
+
+.billing-meta-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.billing-meta-chip {
+    display: grid;
+    gap: 6px;
+    min-width: 160px;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.billing-meta-chip strong {
+    color: var(--color-text);
+    font-size: 17px;
+}
+
+.billing-meta-chip-portal {
+    min-width: 220px;
+}
+
+.billing-meta-label {
+    color: var(--color-text-faint);
+    font-size: var(--text-sm);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.billing-status-note {
+    margin: 0 0 18px;
+    color: var(--color-text-muted);
+    font-size: 15px;
+}
+
+.billing-layout {
+    display: grid;
+    gap: 20px;
+}
+
+.billing-plan-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.billing-tier-card {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    gap: 18px;
+    min-height: 520px;
+    padding: 28px 24px 24px;
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface)),
+        linear-gradient(180deg, var(--color-surface-glass-2), transparent 45%);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+.billing-tier-card-featured {
+    border-color: var(--color-primary-outline);
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.26), 0 0 0 1px rgba(79, 152, 163, 0.18);
+}
+
+.billing-tier-card-current {
+    background:
+        linear-gradient(180deg, rgba(79, 152, 163, 0.12), transparent 32%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.billing-tier-badge {
+    position: absolute;
+    top: -14px;
+    left: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0 14px;
+    border-radius: var(--radius-full);
+    background: var(--color-primary);
+    color: #ffffff;
+    font-size: var(--text-md);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.billing-tier-header {
+    display: grid;
+    gap: 8px;
+}
+
+.billing-tier-name {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+}
+
+.billing-tier-tagline {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 20px;
+    line-height: 1.45;
+}
+
+.billing-tier-price-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    min-height: 72px;
+}
+
+.billing-tier-price {
+    color: var(--color-text);
+    font-size: 58px;
+    line-height: 0.92;
+    letter-spacing: -0.06em;
+}
+
+.billing-tier-price-suffix {
+    color: var(--color-text-muted);
+    font-size: 28px;
+    line-height: 1.1;
+    padding-bottom: 6px;
+}
+
+.billing-tier-feature-list {
+    display: grid;
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.billing-tier-feature-item {
+    position: relative;
+    padding-left: 26px;
+    color: var(--color-text);
+    font-size: 16px;
+    line-height: 1.35;
+}
+
+.billing-tier-feature-item::before {
+    content: "✓";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--color-primary);
+    font-weight: 700;
+}
+
+.billing-tier-form {
+    margin-top: auto;
+}
+
+.billing-tier-button {
+    width: 100%;
+    min-height: 46px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 12px;
+    background: var(--color-surface-offset);
+    color: var(--color-text);
+    font-size: 18px;
+    font-weight: 700;
+    transition: transform var(--transition), border-color var(--transition), background var(--transition), color var(--transition);
+}
+
+.billing-tier-button:hover,
+.billing-tier-button:focus-visible {
+    border-color: var(--color-primary-outline);
+    background: color-mix(in srgb, var(--color-surface-offset) 68%, var(--color-primary) 32%);
+    color: #ffffff;
+}
+
+.billing-tier-button:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+    border-color: var(--color-border);
+    background: var(--color-surface-offset);
+    color: var(--color-text-muted);
+}
+
+.billing-tier-button-primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+}
+
+.billing-tier-button-primary:hover,
+.billing-tier-button-primary:focus-visible {
+    background: var(--color-primary-hover);
+    color: #ffffff;
+}
+
+.billing-portal-action {
+    display: inline-flex;
+    align-items: center;
+    min-height: auto;
+}
+
 .control-page-form {
     display: grid;
     gap: 16px;
@@ -6647,6 +6880,10 @@ body.control-page.compliance-page .compliance-shell-section {
     .help-page-next-grid {
         grid-template-columns: minmax(0, 1fr);
     }
+
+    .billing-plan-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 640px) {
@@ -6686,6 +6923,35 @@ body.control-page.compliance-page .compliance-shell-section {
 
     .theme-toggle-label {
         display: none;
+    }
+
+    .billing-plan-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .billing-header-copy h1 {
+        font-size: clamp(40px, 13vw, 62px);
+    }
+
+    .billing-tier-card {
+        min-height: auto;
+        padding: 24px 20px 20px;
+    }
+
+    .billing-tier-name {
+        font-size: 28px;
+    }
+
+    .billing-tier-tagline {
+        font-size: 18px;
+    }
+
+    .billing-tier-price {
+        font-size: 48px;
+    }
+
+    .billing-tier-price-suffix {
+        font-size: 22px;
     }
 }
 

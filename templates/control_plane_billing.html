@@ -63,57 +63,41 @@
 
         <div class="main-content">
             <main class="page-scroll control-page-shell" id="top">
-                <section class="control-page-hero">
-                    <div class="control-page-hero-copy">
+                <section class="billing-header-row">
+                    <div class="billing-header-copy">
                         <p class="control-page-eyebrow">Billing</p>
-                        <h1>{{WORKSPACE_NAME}}</h1>
-                        <p>Current plan: {{CURRENT_PLAN_LABEL}}. Subscription status: {{SUBSCRIPTION_STATUS}}.</p>
+                        <h1>Choose the plan that fits {{WORKSPACE_NAME}}</h1>
+                        <p>Pick a tier, keep the setup flow moving, and manage future changes without leaving the product shell.</p>
                     </div>
-                    <div class="control-page-hero-note">
-                        <span class="control-page-note-label">Next step</span>
-                        <span class="control-page-note-copy">Billing establishes plan access first. After checkout or portal updates, the workspace returns to installation and repository setup inside the same product shell.</span>
-                    </div>
-                </section>
-
-                <section class="control-page-stat-grid">
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Current plan</span>
-                        <strong>{{CURRENT_PLAN_LABEL}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Subscription</span>
-                        <strong>{{SUBSCRIPTION_STATUS}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Selected plan</span>
-                        <strong>{{SELECTED_PLAN_LABEL}}</strong>
-                    </article>
-                    <article class="control-page-stat-card">
-                        <span class="control-page-stat-label">Checkout state</span>
-                        <strong>{{CHECKOUT_STATE_LABEL}}</strong>
-                    </article>
-                </section>
-
-                <section class="control-page-sections">
-                    <article class="control-page-section control-page-section-wide">
-                        <div class="secondary-panel-title">Plan selection</div>
-                        <h2 class="control-page-section-title">Choose or resume a plan</h2>
-                        <p class="control-page-copy">{{CHECKOUT_STATUS_NOTE}}</p>
-                        <div class="billing-plan-grid">
-                            {{PLAN_CARDS}}
+                    <div class="billing-meta-strip">
+                        <div class="billing-meta-chip">
+                            <span class="billing-meta-label">Current plan</span>
+                            <strong>{{CURRENT_PLAN_LABEL}}</strong>
                         </div>
-                    </article>
-                    <article class="control-page-section">
-                        <div class="secondary-panel-title">Portal</div>
-                        <h2 class="control-page-section-title">Manage billing</h2>
-                        <p class="control-page-copy">Open the customer portal to update payment details, review invoices, or resume service without leaving the workspace shell.</p>
-                        <div class="billing-portal-action">{{PORTAL_ACTION}}</div>
-                    </article>
-                    <article class="control-page-section">
-                        <div class="secondary-panel-title">Sequence</div>
-                        <h2 class="control-page-section-title">What happens after billing</h2>
-                        <p class="control-page-copy">After billing is confirmed, Vipari unlocks GitHub installation and repository allocation. That keeps pricing, installation, onboarding, and review in one continuous flow instead of separate product surfaces.</p>
-                    </article>
+                        <div class="billing-meta-chip">
+                            <span class="billing-meta-label">Subscription</span>
+                            <strong>{{SUBSCRIPTION_STATUS}}</strong>
+                        </div>
+                        <div class="billing-meta-chip">
+                            <span class="billing-meta-label">Selected plan</span>
+                            <strong>{{SELECTED_PLAN_LABEL}}</strong>
+                        </div>
+                        <div class="billing-meta-chip">
+                            <span class="billing-meta-label">Checkout state</span>
+                            <strong>{{CHECKOUT_STATE_LABEL}}</strong>
+                        </div>
+                        <div class="billing-meta-chip billing-meta-chip-portal">
+                            <span class="billing-meta-label">Manage billing</span>
+                            <div class="billing-portal-action">{{PORTAL_ACTION}}</div>
+                        </div>
+                    </div>
+                </section>
+                <p class="billing-status-note">{{CHECKOUT_STATUS_NOTE}}</p>
+
+                <section class="billing-layout">
+                    <div class="billing-plan-grid">
+                        {{PLAN_CARDS}}
+                    </div>
                 </section>
             </main>
         </div>

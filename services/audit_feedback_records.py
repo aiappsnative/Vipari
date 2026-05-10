@@ -233,11 +233,29 @@ def list_feedback_for_audit(db_path: str, audit_id: int) -> list[AuditFeedbackEv
     return [_row_to_feedback(row) for row in rows]
 
 
+def list_recent_feedback_events(db_path: str, *, limit: int = 100) -> list[AuditFeedbackEvent]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_feedback_events ORDER BY created_at DESC, id DESC LIMIT ?",
+            (max(int(limit), 1),),
+        ).fetchall()
+    return [_row_to_feedback(row) for row in rows]
+
+
 def list_triage_for_audit(db_path: str, audit_id: int) -> list[AuditTriageEvent]:
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT * FROM audit_triage_events WHERE audit_id = ? ORDER BY created_at ASC",
             (audit_id,),
+        ).fetchall()
+    return [_row_to_triage(row) for row in rows]
+
+
+def list_recent_triage_events(db_path: str, *, limit: int = 100) -> list[AuditTriageEvent]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_triage_events ORDER BY created_at DESC, id DESC LIMIT ?",
+            (max(int(limit), 1),),
         ).fetchall()
     return [_row_to_triage(row) for row in rows]
 

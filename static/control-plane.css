@@ -365,6 +365,30 @@ button.button {
     flex-wrap: wrap;
 }
 
+.admin-tabs {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.admin-tab-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--muted);
+    font-weight: 600;
+}
+
+.admin-tab-link-active {
+    background: var(--panel-strong);
+    color: #fff;
+}
+
 .admin-disclosure,
 .admin-row-disclosure {
     border: 1px solid var(--line);
@@ -506,6 +530,29 @@ button.button {
     color: var(--ink);
 }
 
+.admin-log-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.admin-log-search {
+    min-width: 220px;
+}
+
+.admin-log-summary,
+.admin-log-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 12px 0 16px;
+    color: var(--muted);
+    font-size: 0.94rem;
+}
+
 .admin-danger-button {
     background: var(--danger);
 }
@@ -592,6 +639,12 @@ button.button {
 
     .admin-toolbar {
         flex-direction: column;
+    }
+
+    .admin-log-summary,
+    .admin-log-pagination {
+        flex-direction: column;
+        align-items: flex-start;
     }
 
     .login-panel {

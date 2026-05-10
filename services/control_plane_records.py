@@ -323,6 +323,32 @@ class ControlPlaneAuditLogRecord:
     created_at: float
 
 
+@dataclass(frozen=True)
+class WebhookEventReceiptRecord:
+    id: int
+    provider: str
+    event_id: str
+    event_type: str
+    status: str
+    processed_at: float | None
+    error_summary: str | None
+    created_at: float
+
+
+@dataclass(frozen=True)
+class AdminActivityLogEntry:
+    source: str
+    occurred_at: float
+    event_type: str
+    workspace_id: int | None
+    actor_user_id: int | None
+    actor_label: str
+    subject_type: str
+    subject_id: str
+    details: str
+    raw_id: str
+
+
 def _row_to_user(row: sqlite3.Row) -> UserRecord:
     return UserRecord(
         id=row["id"],
@@ -356,6 +382,19 @@ def _row_to_github_identity(row: sqlite3.Row) -> GithubIdentityRecord:
         last_login_at=row["last_login_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_webhook_event_receipt(row: sqlite3.Row) -> WebhookEventReceiptRecord:
+    return WebhookEventReceiptRecord(
+        id=row["id"],
+        provider=row["provider"],
+        event_id=row["event_id"],
+        event_type=row["event_type"],
+        status=row["status"],
+        processed_at=row["processed_at"],
+        error_summary=row["error_summary"],
+        created_at=row["created_at"],
     )
 
 
@@ -2108,6 +2147,15 @@ def list_recent_control_plane_audit_logs(db_path: str, *, limit: int = 20) -> li
             (max(int(limit), 1),),
         ).fetchall()
     return [_row_to_control_plane_audit_log(row) for row in rows]
+
+
+def list_webhook_event_receipts(db_path: str, *, limit: int = 100) -> list[WebhookEventReceiptRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM webhook_event_receipts ORDER BY created_at DESC, id DESC LIMIT ?",
+            (max(int(limit), 1),),
+        ).fetchall()
+    return [_row_to_webhook_event_receipt(row) for row in rows]
 
 
 def list_unclaimed_installations(db_path: str) -> list[AdminInstallationRecord]:
