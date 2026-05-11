@@ -1037,6 +1037,225 @@ def render_control_plane_placeholder_page(
     )
 
 
+def _render_policies_summary_cards(cards: list[dict[str, str]]) -> str:
+    return "".join(
+        f'''
+        <article class="secondary-panel secondary-panel-flat">
+            <div class="secondary-panel-title">{html_escape(card["label"])}</div>
+            <p><strong>{html_escape(card["value"])}</strong></p>
+            <p class="muted">{html_escape(card["detail"])}</p>
+        </article>
+        '''
+        for card in cards
+    )
+
+
+def _render_policies_classification_form(
+    system: dict[str, object],
+    *,
+    csrf_token: str,
+    can_manage: bool,
+    compact: bool = False,
+) -> str:
+    risk_options = [
+        ("unclassified", "Unclassified"),
+        ("minimal-risk", "Minimal risk"),
+        ("limited-risk", "Limited risk"),
+        ("high-risk", "High risk"),
+        ("prohibited", "Prohibited"),
+    ]
+    domain_options = [
+        ("", "Not set"),
+        ("general_purpose", "General purpose AI"),
+        ("employment", "Employment and worker management"),
+        ("education", "Education and vocational training"),
+        ("essential_services", "Essential private or public services"),
+        ("biometric", "Biometrics or identity verification"),
+        ("law_enforcement", "Law enforcement or public authority support"),
+        ("internal_productivity", "Internal productivity support"),
+    ]
+
+    def _option_markup(options: list[tuple[str, str]], selected: str | None) -> str:
+        return "".join(
+            f'<option value="{html_escape(value)}"{' selected' if value == (selected or "") else ''}>{html_escape(label)}</option>'
+            for value, label in options
+        )
+
+    risk_level = str(system.get("risk_level") or "unclassified")
+    domain_value = str(system.get("eu_ai_act_domain") or "")
+    purpose_summary = str(system.get("purpose_summary") or "")
+    last_reviewed_at = str(system.get("last_reviewed_at") or "Not reviewed")
+    provenance_note = (
+        "Auto-prefilled from deterministic repository evidence. Review and confirm before relying on it for compliance decisions."
+        if last_reviewed_at == "Not reviewed"
+        else "Reviewer-confirmed classification stored in the workspace registry."
+    )
+    form_class = "control-page-inline-form policies-review-form" if compact else "control-page-inline-form"
+
+    if not can_manage:
+        return (
+            '<p class="muted">Owners and admins can update classification and policy context.</p>'
+            f'<p class="muted">{html_escape(provenance_note)}</p>'
+        )
+
+    return f'''
+        <form method="post" action="/policies/systems/{int(system["id"])}" class="{form_class}">
+            {_csrf_input(csrf_token)}
+            <label class="policies-form-field">
+                <span class="secondary-panel-title">Risk classification</span>
+                <select class="control-page-select policies-form-select policies-form-select-risk" name="risk_level">{_option_markup(risk_options, risk_level)}</select>
+            </label>
+            <label class="policies-form-field">
+                <span class="secondary-panel-title">Domain</span>
+                <select class="control-page-select policies-form-select" name="eu_ai_act_domain">{_option_markup(domain_options, domain_value)}</select>
+            </label>
+            <label class="policies-form-field">
+                <span class="secondary-panel-title">System purpose</span>
+                <input class="control-page-input policies-form-input" type="text" name="purpose_summary" value="{html_escape(purpose_summary)}" maxlength="280" />
+            </label>
+            <p class="muted">{html_escape(provenance_note)}</p>
+            <button type="submit" class="button">Save classification</button>
+        </form>
+    '''
+
+
+def _render_policies_review_queue(system_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
+    review_rows = [row for row in system_rows if str(row.get("last_reviewed_at") or "Not reviewed") == "Not reviewed"]
+    if not review_rows:
+        return (
+            '<article class="secondary-panel secondary-panel-flat">'
+            '<div class="secondary-panel-title">Needs review now</div>'
+            '<p class="muted">Every registered AI system in this workspace already has a reviewer-confirmed classification.</p>'
+            '</article>'
+        )
+
+    remaining_count = len(review_rows)
+    review_copy = (
+        f'{remaining_count} system still relies on auto-prefilled registry context and should be confirmed before it is used in compliance decisions.'
+        if remaining_count == 1
+        else f'{remaining_count} systems still rely on auto-prefilled registry context and should be confirmed before they are used in compliance decisions.'
+    )
+    cards = []
+    for system in review_rows:
+        display_name = str(system.get("display_name") or system.get("repo_full") or "Unknown")
+        repo_full = str(system.get("repo_full") or "Unknown")
+        evidence_summary = str(system.get("evidence_summary") or "GitHub repository evidence")
+        onboarding_status = str(system.get("onboarding_status") or "Unknown")
+        risk_label = str(system.get("risk_level_label") or "Unclassified")
+        if str(system.get("risk_level") or "unclassified") == "high-risk":
+            review_priority = "High-risk prefill should be confirmed before evidence exports or formal review follow-up."
+        elif onboarding_status == "Baseline Approved":
+            review_priority = "Baseline evidence is approved, so this system is ready for reviewer confirmation now."
+        else:
+            review_priority = "Confirm this registry entry before relying on it in downstream compliance decisions."
+        dashboard_href = f'/dashboard/{quote(repo_full, safe="")}'
+        cards.append(
+            f'''
+            <article class="secondary-panel policies-review-card">
+                <div class="stack compact-stack">
+                    <div class="policies-review-head">
+                        <div class="stack compact-stack">
+                            <div class="secondary-panel-title">Needs confirmation</div>
+                            <h3 class="control-page-section-title policies-review-title">{html_escape(display_name)}</h3>
+                        </div>
+                        <span class="compliance-status-pill tone-warning">Auto-prefilled</span>
+                    </div>
+                    <p class="muted policies-review-repo">{html_escape(repo_full)}</p>
+                    <div class="policies-review-meta">
+                        <span>{html_escape(evidence_summary)}</span>
+                        <span>Onboarding: {html_escape(onboarding_status)}</span>
+                        <span>Risk: {html_escape(risk_label)}</span>
+                    </div>
+                    <p class="muted policies-review-priority">{html_escape(review_priority)}</p>
+                    <div class="policies-review-actions">
+                        <a class="subtle-link" href="{html_escape(dashboard_href)}">Open repo dashboard</a>
+                        <a class="subtle-link" href="/compliance">Open compliance workspace view</a>
+                    </div>
+                </div>
+                {_render_policies_classification_form(system, csrf_token=csrf_token, can_manage=can_manage, compact=True)}
+            </article>
+            '''
+        )
+    return (
+        '<article class="control-page-section control-page-section-wide">'
+        '<div class="secondary-panel-title">Needs review now</div>'
+        '<h2 class="control-page-section-title">Clear confirmation debt before export or audit follow-up</h2>'
+        f'<p class="control-page-copy">{html_escape(review_copy)}</p>'
+        f'<div class="policies-review-grid">{"".join(cards)}</div>'
+        '</article>'
+    )
+
+
+def _render_policies_system_rows(system_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
+    if not system_rows:
+        return (
+            '<div class="empty-state">'
+            '<strong>No registered AI systems yet.</strong>'
+            '<p>Attach and onboard a repository from Repositories to create the first registry entry for this workspace.</p>'
+            '</div>'
+        )
+
+    rows: list[str] = []
+    for system in system_rows:
+        repo_full = str(system.get("repo_full") or "Unknown")
+        display_name = str(system.get("display_name") or repo_full)
+        evidence_summary = str(system.get("evidence_summary") or "GitHub repository evidence")
+        onboarding_status = str(system.get("onboarding_status") or "Unknown")
+        risk_level = str(system.get("risk_level") or "unclassified")
+        risk_label = str(system.get("risk_level_label") or risk_level)
+        domain_label = str(system.get("eu_ai_act_domain_label") or "Not set")
+        last_reviewed_at = str(system.get("last_reviewed_at") or "Not reviewed")
+        form_markup = _render_policies_classification_form(system, csrf_token=csrf_token, can_manage=can_manage)
+        rows.append(
+            f'''
+            <tr>
+                <td>
+                    <strong>{html_escape(display_name)}</strong>
+                    <div class="muted">{html_escape(repo_full)}</div>
+                </td>
+                <td>
+                    <div>{html_escape(evidence_summary)}</div>
+                    <div class="muted">Last review: {html_escape(last_reviewed_at)}</div>
+                </td>
+                <td>
+                    <div>{html_escape(onboarding_status)}</div>
+                    <div class="muted">Risk: {html_escape(risk_label)} · Domain: {html_escape(domain_label)}</div>
+                </td>
+                <td>{form_markup}</td>
+            </tr>
+            '''
+        )
+    return "".join(rows)
+
+
+def render_control_plane_policies_page(
+    *,
+    workspace_name: str,
+    audit_href: str,
+    plan_label: str,
+    theme_preference: str,
+    admin_url: str | None,
+    summary_cards: list[dict[str, str]],
+    system_rows: list[dict[str, object]],
+    status_note: str | None,
+    can_manage: bool,
+    csrf_token: str,
+    sidebar_profile_initial: str = "V",
+) -> str:
+    template = _load_template("control_plane_policies.html")
+    status_markup = f'<div class="secondary-panel"><p>{html_escape(status_note)}</p></div>' if status_note else ""
+    return (
+        template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
+        .replace("{{AUDIT_HREF}}", html_escape(audit_href))
+        .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
+        .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
+        .replace("{{STATUS_NOTE}}", status_markup)
+        .replace("{{SUMMARY_CARDS}}", _render_policies_summary_cards(summary_cards))
+        .replace("{{REVIEW_QUEUE}}", _render_policies_review_queue(system_rows, csrf_token=csrf_token, can_manage=can_manage))
+        .replace("{{SYSTEM_ROWS}}", _render_policies_system_rows(system_rows, csrf_token=csrf_token, can_manage=can_manage))
+    )
+
+
 def render_control_plane_help_page(
     *,
     workspace_name: str,
@@ -1541,6 +1760,13 @@ def _render_compliance_repo_table(rows: tuple[ComplianceRepoReadinessRow, ...]) 
             <td><span class="compliance-status-pill {_compliance_tone_class(row.overall_tone)}">{html_escape(row.overall_label)}</span></td>
             <td><span class="compliance-status-pill {_compliance_tone_class(row.baseline_tone)}">{html_escape(row.baseline_label)}</span></td>
             <td><span class="compliance-status-pill {_compliance_tone_class(row.governance_tone)}">{html_escape(row.governance_label)}</span></td>
+            <td>
+                <div class="stack compact-stack">
+                    <span class="compliance-status-pill {_compliance_tone_class(row.ai_act_status_tone)}">{html_escape(row.ai_act_status_label)}</span>
+                    <span class="control-page-microcopy {_compliance_tone_class(row.ai_act_provenance_tone)}">{html_escape(row.ai_act_provenance_label)}</span>
+                    <span class="control-page-microcopy">{html_escape(row.ai_act_review_detail)}</span>
+                </div>
+            </td>
             <td><span class="compliance-status-pill {_compliance_tone_class(row.freshness_tone)}">{html_escape(row.freshness_label)}</span></td>
             <td>
                 <div class="stack compact-stack">
@@ -1554,7 +1780,7 @@ def _render_compliance_repo_table(rows: tuple[ComplianceRepoReadinessRow, ...]) 
     )
     return (
         '<div class="table-shell"><table class="data-table"><thead><tr>'
-        '<th>Repository</th><th>Status</th><th>Baseline</th><th>Governance</th><th>Freshness</th><th>Next action</th>'
+        '<th>Repository</th><th>Status</th><th>Baseline</th><th>Governance</th><th>AI Act</th><th>Freshness</th><th>Next action</th>'
         f'</tr></thead><tbody>{body}</tbody></table></div>'
     )
 
@@ -1687,6 +1913,7 @@ def _render_compliance_export_scope_rows(rows: tuple[ComplianceRepoReadinessRow,
                         <strong>{html_escape(row.repo_full)}</strong>
                         <span>{html_escape(row.connection_status)} · default branch {html_escape(row.default_branch)}</span>
                         <div class="tag-row">{"".join(eligibility_chips)}</div>
+                        <span class="control-page-microcopy">AI system: {html_escape(row.ai_act_provenance_label)} · {html_escape(row.ai_act_review_detail)}</span>
                         <span>{html_escape(row.action_detail)}</span>
                     </div>
                     <a class="subtle-link" href="{html_escape(row.repo_href)}">Open audit page</a>
@@ -1697,14 +1924,43 @@ def _render_compliance_export_scope_rows(rows: tuple[ComplianceRepoReadinessRow,
     return "".join(rendered)
 
 
-def _render_compliance_export_history(jobs: tuple[ExportJob, ...] | list[ExportJob]) -> str:
+def _render_compliance_export_history(
+    jobs: tuple[ExportJob, ...] | list[ExportJob],
+    repo_rows: tuple[ComplianceRepoReadinessRow, ...],
+) -> str:
     if not jobs:
         return '<div class="control-page-empty">No compliance exports have been generated for this workspace yet.</div>'
+    repo_row_by_full = {row.repo_full: row for row in repo_rows}
     rows: list[str] = []
     for job in jobs:
         range_label = (
             f"{datetime.fromtimestamp(job.from_ts).strftime('%Y-%m-%d')} to {datetime.fromtimestamp(job.to_ts).strftime('%Y-%m-%d')}"
         )
+        repo_markup = html_escape(job.repo_full)
+        repo_row = repo_row_by_full.get(job.repo_full)
+        provenance_label = job.ai_system_provenance_label
+        review_detail = job.ai_system_review_detail
+        if (not provenance_label or not review_detail) and repo_row is not None:
+            provenance_label = repo_row.ai_act_provenance_label
+            review_detail = repo_row.ai_act_review_detail
+        error_detail = ""
+        if job.status == "failed" and job.last_error:
+            error_detail = f'<span class="control-page-microcopy">Failure: {html_escape(job.last_error)}</span>'
+        if repo_row is not None:
+            repo_markup = (
+                f'<div class="stack compact-stack">'
+                f'<span>{html_escape(job.repo_full)}</span>'
+                f'<span class="control-page-microcopy">AI system: {html_escape(provenance_label or "No registry entry")} · {html_escape(review_detail or "Last review: Not yet reviewed")}</span>'
+                f'{error_detail}'
+                f'</div>'
+            )
+        elif error_detail:
+            repo_markup = (
+                f'<div class="stack compact-stack">'
+                f'<span>{html_escape(job.repo_full)}</span>'
+                f'{error_detail}'
+                f'</div>'
+            )
         if job.status == "completed" and job.download_token and job.result_blob:
             download_markup = f'<a class="link" href="/api/export/{job.id}/download?token={quote(job.download_token)}">Download</a>'
         else:
@@ -1712,7 +1968,7 @@ def _render_compliance_export_history(jobs: tuple[ExportJob, ...] | list[ExportJ
         rows.append(
             f'''
             <tr>
-                <td>{html_escape(job.repo_full)}</td>
+                <td>{repo_markup}</td>
                 <td>{html_escape(job.export_mode.replace('_', ' ').title())}</td>
                 <td>{html_escape(range_label)}</td>
                 <td>{html_escape(job.status.replace('_', ' ').title())}</td>
@@ -1839,7 +2095,7 @@ def _render_compliance_page_content(
                     <p class="secondary-panel-title">Recent activity</p>
                     <h2 class="control-page-section-title">Export history</h2>
                 </div>
-                {_render_compliance_export_history(export_jobs)}
+                {_render_compliance_export_history(export_jobs, view.repo_rows)}
             </section>
         '''
     if active_tab == "evidence":
@@ -1900,7 +2156,7 @@ def render_control_plane_compliance_page(
 ) -> str:
     template = _load_template("control_plane_compliance.html")
     export_job_items = export_jobs or tuple()
-    show_status_note = bool(status_note and active_tab == "readiness")
+    show_status_note = bool(status_note)
     status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if show_status_note else ""
     blocked_class = " dashboard-shell-blocked" if shell_state != "active" else ""
     shell_notice = ""

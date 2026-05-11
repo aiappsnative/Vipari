@@ -9,6 +9,7 @@ from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
 from services.audit_jobs import init_db
 from services.compliance_readiness import build_compliance_workspace_view
+from services.control_plane_records import create_workspace, update_ai_system_classification, upsert_ai_system_for_repo, upsert_github_identity
 from services.export_jobs import create_export_job, get_export_job, update_export_job_status
 from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
 
@@ -230,3 +231,91 @@ def test_build_compliance_workspace_view_summarizes_export_counts_and_latest_dow
     assert view.export_summary.failed_count == 1
     assert view.export_summary.latest_status_label == "Completed"
     assert view.export_summary.latest_download_href == f"/api/export/{completed_job.id}/download?token={completed_record.download_token}"
+
+
+def test_build_compliance_workspace_view_surfaces_ai_system_classification_gap(tmp_path):
+    db_path = str(tmp_path / "compliance-ai-systems.db")
+    init_db(db_path)
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="2001",
+        github_login="compliance-owner",
+        display_name="Compliance Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="compliance-ai-workspace",
+        display_name="Compliance AI Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    _record_onboarding(
+        db_path,
+        repo_full="acme/ai-repo",
+        status="baseline_approved",
+        artifact_types=["prompt", "policy"],
+    )
+
+    ai_system = upsert_ai_system_for_repo(
+        db_path,
+        workspace_id=workspace.id,
+        repo_full="acme/ai-repo",
+        display_name="acme/ai-repo",
+        latest_onboarding_status="baseline_approved",
+        artifact_families=["prompt", "governance"],
+        purpose_summary="Repository-backed AI assistant",
+        created_by_user_id=user.id,
+    )
+
+    view = build_compliance_workspace_view(
+        db_path,
+        [_repo_row("acme/ai-repo")],
+        (),
+        (),
+        workspace_id=workspace.id,
+    )
+
+    assert view.metrics[3].label == "AI systems confirmed"
+    assert view.metrics[3].value == "0/1"
+    assert view.repo_rows[0].ai_act_status_label == "Classification pending"
+    assert view.repo_rows[0].ai_act_provenance_label == "Auto-prefilled from repository evidence"
+    assert view.repo_rows[0].ai_act_review_detail == "Last review: Not yet reviewed"
+    eu_ai_act_card = next(card for card in view.framework_cards if card.title == "EU AI Act")
+    assert eu_ai_act_card.status_label == "Needs confirmation"
+    assert "0 repos have reviewer-confirmed AI Act classifications." in eu_ai_act_card.bullets
+    assert "1 repo still relies on auto-prefilled registry context." in eu_ai_act_card.bullets
+    assert "1 repo still relies on auto-prefilled registry context and needs reviewer confirmation." in view.verdict.detail
+    assert view.top_gaps[0].key == "ai_act_classification"
+    assert view.repo_rows[0].action_href == "/policies"
+
+    update_ai_system_classification(
+        db_path,
+        ai_system_id=ai_system.id,
+        risk_level="high-risk",
+        eu_ai_act_domain="employment",
+        purpose_summary="Repository-backed AI assistant",
+        reviewed_by_user_id=user.id,
+    )
+
+    classified_view = build_compliance_workspace_view(
+        db_path,
+        [_repo_row("acme/ai-repo")],
+        (),
+        (),
+        workspace_id=workspace.id,
+    )
+
+    assert classified_view.metrics[3].label == "AI systems confirmed"
+    assert classified_view.metrics[3].value == "1/1"
+    assert classified_view.repo_rows[0].ai_act_status_label == "High Risk"
+    assert classified_view.repo_rows[0].ai_act_provenance_label == "Reviewer confirmed"
+    assert classified_view.repo_rows[0].ai_act_review_detail.startswith("Last review: ")
+    classified_eu_ai_act_card = next(card for card in classified_view.framework_cards if card.title == "EU AI Act")
+    assert classified_eu_ai_act_card.status_label == "Ready to review"
+    assert "1 repo has reviewer-confirmed AI Act classifications." in classified_eu_ai_act_card.bullets
+    assert "0 repos still rely on auto-prefilled registry context." in classified_eu_ai_act_card.bullets

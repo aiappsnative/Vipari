@@ -21,6 +21,7 @@ CONTROL_PLANE_TABLES = (
     "github_installations",
     "repo_connections",
     "repo_allocations",
+    "ai_systems",
     "billing_handoff_claims",
     "control_plane_audit_logs",
     "webhook_event_receipts",
@@ -220,6 +221,25 @@ class RepoAllocationRecord:
     activated_by_user_id: int | None
     activated_at: float | None
     deactivated_at: float | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class AiSystemRecord:
+    id: int
+    workspace_id: int
+    repo_full: str
+    display_name: str
+    source_kind: str
+    risk_level: str
+    eu_ai_act_domain: str | None
+    purpose_summary: str | None
+    latest_onboarding_status: str
+    artifact_families_json: str
+    created_by_user_id: int | None
+    last_reviewed_by_user_id: int | None
+    last_reviewed_at: float | None
     created_at: float
     updated_at: float
 
@@ -549,6 +569,26 @@ def _row_to_repo_allocation(row: sqlite3.Row) -> RepoAllocationRecord:
         activated_by_user_id=row["activated_by_user_id"],
         activated_at=row["activated_at"],
         deactivated_at=row["deactivated_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_ai_system(row: sqlite3.Row) -> AiSystemRecord:
+    return AiSystemRecord(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        repo_full=row["repo_full"],
+        display_name=row["display_name"],
+        source_kind=row["source_kind"],
+        risk_level=row["risk_level"],
+        eu_ai_act_domain=row["eu_ai_act_domain"],
+        purpose_summary=row["purpose_summary"],
+        latest_onboarding_status=row["latest_onboarding_status"],
+        artifact_families_json=row["artifact_families_json"],
+        created_by_user_id=row["created_by_user_id"],
+        last_reviewed_by_user_id=row["last_reviewed_by_user_id"],
+        last_reviewed_at=row["last_reviewed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -989,6 +1029,31 @@ def init_control_plane_db(db_path: str) -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS ai_systems (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                repo_full TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                source_kind TEXT NOT NULL DEFAULT 'github_repository',
+                risk_level TEXT NOT NULL DEFAULT 'unclassified',
+                eu_ai_act_domain TEXT,
+                purpose_summary TEXT,
+                latest_onboarding_status TEXT NOT NULL DEFAULT 'unknown',
+                artifact_families_json TEXT NOT NULL DEFAULT '[]',
+                created_by_user_id INTEGER,
+                last_reviewed_by_user_id INTEGER,
+                last_reviewed_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(workspace_id, repo_full),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY(last_reviewed_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS control_plane_audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 workspace_id INTEGER,
@@ -1081,6 +1146,15 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "repo_allocations", "deactivated_at", "REAL")
         if not uses_postgres and _repo_allocations_needs_rebuild(conn):
             _rebuild_repo_allocations_table(conn)
+        _ensure_column(conn, "ai_systems", "source_kind", "TEXT NOT NULL DEFAULT 'github_repository'")
+        _ensure_column(conn, "ai_systems", "risk_level", "TEXT NOT NULL DEFAULT 'unclassified'")
+        _ensure_column(conn, "ai_systems", "eu_ai_act_domain", "TEXT")
+        _ensure_column(conn, "ai_systems", "purpose_summary", "TEXT")
+        _ensure_column(conn, "ai_systems", "latest_onboarding_status", "TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(conn, "ai_systems", "artifact_families_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "ai_systems", "created_by_user_id", "INTEGER")
+        _ensure_column(conn, "ai_systems", "last_reviewed_by_user_id", "INTEGER")
+        _ensure_column(conn, "ai_systems", "last_reviewed_at", "REAL")
         _ensure_column(conn, "webhook_event_receipts", "processed_at", "REAL")
         _ensure_column(conn, "webhook_event_receipts", "error_summary", "TEXT")
 
@@ -2315,6 +2389,114 @@ def update_repo_allocation_status(db_path: str, allocation_id: int, allocation_s
         if row is not None:
             _refresh_workspace_setup_state(conn, row["workspace_id"])
     return _row_to_repo_allocation(row)
+
+
+def list_ai_systems_for_workspace(db_path: str, workspace_id: int) -> list[AiSystemRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM ai_systems WHERE workspace_id = ? ORDER BY lower(display_name), lower(repo_full)",
+            (workspace_id,),
+        ).fetchall()
+    return [_row_to_ai_system(row) for row in rows]
+
+
+def get_ai_system_by_id(db_path: str, ai_system_id: int) -> AiSystemRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM ai_systems WHERE id = ?", (ai_system_id,)).fetchone()
+    return _row_to_ai_system(row) if row else None
+
+
+def get_ai_system_for_workspace_repo(db_path: str, workspace_id: int, repo_full: str) -> AiSystemRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM ai_systems WHERE workspace_id = ? AND repo_full = ?",
+            (workspace_id, repo_full),
+        ).fetchone()
+    return _row_to_ai_system(row) if row else None
+
+
+def upsert_ai_system_for_repo(
+    db_path: str,
+    *,
+    workspace_id: int,
+    repo_full: str,
+    display_name: str,
+    latest_onboarding_status: str,
+    artifact_families: list[str],
+    eu_ai_act_domain: str | None = None,
+    purpose_summary: str | None = None,
+    created_by_user_id: int | None = None,
+) -> AiSystemRecord:
+    now = time.time()
+    artifact_families_json = json.dumps(sorted({item for item in artifact_families if item}))
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_systems (
+                workspace_id, repo_full, display_name, source_kind, risk_level, eu_ai_act_domain,
+                purpose_summary, latest_onboarding_status, artifact_families_json,
+                created_by_user_id, last_reviewed_by_user_id, last_reviewed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'github_repository', 'unclassified', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+            ON CONFLICT(workspace_id, repo_full) DO UPDATE SET
+                display_name = excluded.display_name,
+                eu_ai_act_domain = CASE
+                    WHEN ai_systems.eu_ai_act_domain IS NULL OR ai_systems.eu_ai_act_domain = '' THEN excluded.eu_ai_act_domain
+                    ELSE ai_systems.eu_ai_act_domain
+                END,
+                purpose_summary = CASE
+                    WHEN ai_systems.purpose_summary IS NULL OR ai_systems.purpose_summary = '' THEN excluded.purpose_summary
+                    ELSE ai_systems.purpose_summary
+                END,
+                latest_onboarding_status = excluded.latest_onboarding_status,
+                artifact_families_json = excluded.artifact_families_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                workspace_id,
+                repo_full,
+                display_name,
+                eu_ai_act_domain,
+                purpose_summary,
+                latest_onboarding_status,
+                artifact_families_json,
+                created_by_user_id,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM ai_systems WHERE workspace_id = ? AND repo_full = ?",
+            (workspace_id, repo_full),
+        ).fetchone()
+    return _row_to_ai_system(row)
+
+
+def update_ai_system_classification(
+    db_path: str,
+    *,
+    ai_system_id: int,
+    risk_level: str,
+    eu_ai_act_domain: str | None,
+    purpose_summary: str | None,
+    reviewed_by_user_id: int | None,
+) -> AiSystemRecord:
+    now = time.time()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE ai_systems
+            SET risk_level = ?,
+                eu_ai_act_domain = ?,
+                purpose_summary = ?,
+                last_reviewed_by_user_id = ?,
+                last_reviewed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (risk_level, eu_ai_act_domain, purpose_summary, reviewed_by_user_id, now, now, ai_system_id),
+        )
+        row = conn.execute("SELECT * FROM ai_systems WHERE id = ?", (ai_system_id,)).fetchone()
+    return _row_to_ai_system(row)
 
 
 # ---------------------------------------------------------------------------
