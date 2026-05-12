@@ -1968,7 +1968,7 @@ def test_admin_page_denies_billing_owner_fallback_outside_local_env(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_settings_help_and_policies_show_admin_link_for_local_billing_owner_without_owner_config(tmp_path):
+def test_help_shows_admin_link_for_local_billing_owner_without_owner_config(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login
     original_id = main.settings.owner_github_user_id
@@ -2049,7 +2049,7 @@ def test_settings_help_and_policies_show_admin_link_for_local_billing_owner_with
     assert settings_response.status_code == 200
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
-    assert 'href="/admin"' in settings_response.text
+    assert 'href="/admin"' not in settings_response.text
     assert 'href="/admin"' in help_response.text
     assert 'href="/admin"' not in policies_response.text
 
@@ -6405,7 +6405,7 @@ def test_repo_setup_page_ignores_invalid_github_app_private_key(tmp_path):
         )
 
     assert response.status_code == 200
-    assert "Repository Inventory" in response.text
+    assert "Available Repositories" in response.text
     assert "20 of 20 repository slots available on this plan." in response.text
 
     main.AUDIT_DB_PATH = original_db_path
@@ -6507,7 +6507,7 @@ def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
         )
 
     assert response.status_code == 200
-    assert "Repository Inventory" in response.text
+    assert "Available Repositories" in response.text
     assert "doria90/dummyAI" in response.text
     assert "doria90/PromptDrift" in response.text
 
@@ -6649,7 +6649,9 @@ def test_api_keys_page_denied_for_viewer(tmp_path):
     assert page.status_code == 200
     assert "Machine principal credentials" not in page.text
     assert "Only workspace owners and admins" not in page.text
-    assert "Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins." in page.text
+    assert "Download connector" in page.text
+    assert "Request API-key access" in page.text
+    assert 'aria-current="page">Overview<' in page.text
 def test_api_keys_create_delivers_secret_in_flash_once(tmp_path):
     """POST create → 303, GET → secret shown; second GET → secret absent."""
     original_db_path = main.AUDIT_DB_PATH
@@ -6983,8 +6985,9 @@ def test_mcp_integrations_page_loads_for_viewer(tmp_path):
     assert "Download connector" in response.text
     assert "API keys" not in response.text
     assert "Activity" not in response.text
-    assert "Workspace machine-principal inventory and API-key management stay restricted to workspace owners and admins." in response.text
-    assert "Recent integration and API-key activity stays visible only to workspace owners and admins." in response.text
+    assert "Request API-key access" in response.text
+    assert "Coordinate rollout" in response.text
+    assert 'aria-current="page">Overview<' in response.text
     assert "Client ID" not in response.text
 
 
