@@ -192,6 +192,95 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
     )
 
 
+def _seed_repo_dashboard_access(tmp_path, *, repo_full: str = "doria90/dummyAI", installation_id: int = 123, session_id: str = "operator-session"):
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        upsert_workspace_membership,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id=f"user-{session_id}",
+        github_login=f"owner-{session_id}",
+        display_name="Operator Owner",
+        primary_email=f"{session_id}@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug=f"workspace-{session_id}",
+        display_name="Operator Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_workspace_membership(main.AUDIT_DB_PATH, workspace_id=workspace.id, user_id=user.id, role="owner", invitation_state="accepted")
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id=f"sub-{session_id}",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=2.0,
+        next_payment_at=2.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=str(installation_id),
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id="dummyAI",
+        repo_full=repo_full,
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    return create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id=session_id,
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=9999999999.0,
+    )
+
+
 def test_onboard_api_runs_workflow_and_returns_dashboard_payload(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
@@ -485,6 +574,118 @@ def test_onboard_api_rejects_installation_mismatch(tmp_path):
     assert response.json()["detail"] == "Installation mismatch for workspace access."
 
 
+def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-options.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    session = _seed_repo_dashboard_access(tmp_path, session_id="artifact-options-session")
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch(
+        "main.list_repository_files", return_value=["prompts/system.txt", "policies/usage.md", "src/app.py"]
+    ), patch(
+        "main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")
+    ):
+        with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
+            response = client.get("/api/repos/doria90%2FdummyAI/artifacts/options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tracked_paths"] == ["prompts/system.txt"]
+    file_paths = [item["path"] for item in payload["files"]]
+    inferred_types = {item["path"]: item["inferred_artifact_type"] for item in payload["files"]}
+    assert "prompts/system.txt" not in file_paths
+    assert "policies/usage.md" in file_paths
+    assert inferred_types["policies/usage.md"] == "policy"
+    assert "prompt" in payload["artifact_type_options"]
+
+
+def test_repo_artifact_mutation_apis_return_refreshed_dashboard(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-mutations.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    session = _seed_repo_dashboard_access(tmp_path, session_id="artifact-mutations-session")
+
+    added_artifact = OnboardedArtifactRecord(
+        id=2,
+        onboarding_id=1,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+        artifact_type="policy",
+        discovery_reason="Manually added from repository audit page.",
+        confidence=1.0,
+        created_at=2.0,
+    )
+    added_baseline = OnboardingBaselineVersionRecord(
+        id=2,
+        onboarding_id=1,
+        onboarded_artifact_id=2,
+        normalized_artifact_id="doria90/dummyai::policies/usage.md",
+        artifact_path="policies/usage.md",
+        artifact_type="policy",
+        version_hash="hash-2",
+        signal_terms=["review"],
+        line_count=2,
+        profile=_profile(),
+        approval_status="approved",
+        approved_by=None,
+        approved_at=2.0,
+        approval_note=None,
+        created_at=2.0,
+    )
+    updated_artifact = OnboardedArtifactRecord(
+        id=2,
+        onboarding_id=1,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+        artifact_type="guardrail",
+        discovery_reason="Manually added from repository audit page.",
+        confidence=1.0,
+        created_at=2.0,
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch(
+        "main.add_repo_artifact_to_onboarding", return_value=(added_artifact, added_baseline)
+    ), patch(
+        "main.update_repo_artifact_type", return_value=updated_artifact
+    ), patch(
+        "main.remove_repo_artifact_from_onboarding", return_value=None
+    ), patch(
+        "main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")
+    ):
+        with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
+
+            add_response = client.post(
+                "/api/repos/doria90%2FdummyAI/artifacts",
+                json={"artifact_path": "policies/usage.md"},
+            )
+            patch_response = client.patch(
+                "/api/repos/doria90%2FdummyAI/artifacts/policies%2Fusage.md",
+                json={"artifact_type": "guardrail"},
+            )
+            delete_response = client.delete("/api/repos/doria90%2FdummyAI/artifacts/policies%2Fusage.md")
+
+    assert add_response.status_code == 200
+    assert add_response.json()["artifact"]["artifact_path"] == "policies/usage.md"
+    assert add_response.json()["baseline"]["artifact_type"] == "policy"
+    assert add_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["artifact"]["artifact_type"] == "guardrail"
+    assert patch_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+
+    assert delete_response.status_code == 200
+    assert delete_response.json()["artifact_path"] == "policies/usage.md"
+    assert delete_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+
+
 def test_persistence_api_requires_authentication(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator.db")
@@ -535,6 +736,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "/static/dashboard-repo.js" in repo_response.text
     assert 'data-repo-tab-link="audit"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
+    assert 'id="artifact-add-controls"' in repo_response.text
+    assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
     assert "/api/dashboard/overview" not in repo_response.text
 
@@ -543,6 +746,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert ".posture-strip" in css_response.text
     assert ".detail-panel" in css_response.text
     assert "--color-border" in css_response.text
+    assert ".artifact-add-controls" in css_response.text
+    assert ".artifact-action-group" in css_response.text
     assert index_js_response.status_code == 200
     assert "renderUrgentRow" in index_js_response.text
     assert "renderRepoAtlasCard" in index_js_response.text
@@ -552,6 +757,9 @@ def test_dashboard_html_pages_render(tmp_path):
     assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
     assert "Open baseline review" in repo_js_response.text
+    assert "/artifacts/options" in repo_js_response.text
+    assert "data-artifact-edit-path" in repo_js_response.text
+    assert "data-artifact-remove-path" in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text
     assert "Compare repository context" in repo_js_response.text
