@@ -14,6 +14,7 @@ from services.baseline_approval_service import approve_repo_baseline_artifact
 from services.baseline_provenance import approved_onboarding_provenance, baseline_provenance_to_json
 from services.compliance_export_service import ComplianceExportRequest, build_compliance_export
 from services.audit_records import init_audit_record_db
+from services.control_plane_records import create_workspace, get_ai_system_for_workspace_repo, init_control_plane_db, update_ai_system_classification, upsert_ai_system_for_repo, upsert_github_identity
 from services.onboarding_records import OnboardingBaselineVersionRecord, init_onboarding_record_db, list_baseline_audit_log_for_onboarding
 from services.repo_journey_records import init_repo_journey_db, upsert_repo_posture_snapshot
 
@@ -54,12 +55,13 @@ def _normalized_artifact_id(repo_full: str, artifact_path: str) -> str:
 
 
 def _init_export_db(db_path: str) -> None:
+    init_control_plane_db(db_path)
     init_onboarding_record_db(db_path)
     init_audit_record_db(db_path)
     init_repo_journey_db(db_path)
 
 
-def _seed_export_fixture(db_path: str) -> dict[str, float]:
+def _seed_export_fixture(db_path: str, *, reviewed_ai_system: bool = True) -> dict[str, float]:
     repo_full = "test/repo"
     artifact_path = "prompts/system.txt"
     normalized_artifact_id = _normalized_artifact_id(repo_full, artifact_path)
@@ -77,6 +79,41 @@ def _seed_export_fixture(db_path: str) -> dict[str, float]:
     )
     baseline_created_at = 1_700_000_000.0
     audit_created_at = 1_700_000_100.0
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="501",
+        github_login="export-owner",
+        display_name="Export Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="export-workspace",
+        display_name="Export Workspace",
+        billing_owner_user_id=user.id,
+    )
+    ai_system = upsert_ai_system_for_repo(
+        db_path,
+        workspace_id=workspace.id,
+        repo_full=repo_full,
+        display_name=repo_full,
+        latest_onboarding_status="completed",
+        artifact_families=["prompt"],
+        purpose_summary="Repository-backed AI system used for export tests.",
+        created_by_user_id=user.id,
+    )
+    if reviewed_ai_system:
+        update_ai_system_classification(
+            db_path,
+            ai_system_id=ai_system.id,
+            risk_level="high-risk",
+            eu_ai_act_domain="employment",
+            purpose_summary="Repository-backed AI system used for export tests.",
+            reviewed_by_user_id=user.id,
+        )
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -246,7 +283,7 @@ def _seed_export_fixture(db_path: str) -> dict[str, float]:
         materializer_version=1,
     )
 
-    return {"baseline_created_at": baseline_created_at, "audit_created_at": audit_created_at}
+    return {"baseline_created_at": baseline_created_at, "audit_created_at": audit_created_at, "workspace_id": workspace.id}
 
 
 def _read_csv_from_zip(zf: zipfile.ZipFile, filename: str) -> list[dict[str, str]]:
@@ -317,6 +354,7 @@ class TestComplianceExportService:
             to_ts=timestamps["audit_created_at"] + 1,
             export_mode="compliance_plus_drift",
             include_artifact_content=True,
+            workspace_id=timestamps["workspace_id"],
         )
 
         result = build_compliance_export(db_path, request)
@@ -328,6 +366,7 @@ class TestComplianceExportService:
             assert "supports control review and audit follow-up" in readme_text
             assert "not a standalone certification statement" in readme_text
             assert "Historical backfill content is intentionally not included" in readme_text
+            assert "reviewer-confirmed workspace registry entry" in readme_text
 
             control_mapping_text = zf.read("08-control-mapping.md").decode()
             assert "It does not claim that a control is fully satisfied by this package alone" in control_mapping_text
@@ -368,6 +407,24 @@ class TestComplianceExportService:
                     }
                 ],
             }
+
+            ai_system_profile = json.loads(zf.read("02-ai-system-profile.json"))
+            assert ai_system_profile["repo_full"] == "test/repo"
+            assert ai_system_profile["display_name"] == "test/repo"
+            assert ai_system_profile["source_kind"] == "github_repository"
+            assert ai_system_profile["risk_level"] == "high-risk"
+            assert ai_system_profile["eu_ai_act_domain"] == "employment"
+            assert ai_system_profile["purpose_summary"] == "Repository-backed AI system used for export tests."
+            assert ai_system_profile["latest_onboarding_status"] == "completed"
+            assert ai_system_profile["artifact_families"] == ["prompt"]
+            assert ai_system_profile["registry_provenance"] == "reviewer_confirmed"
+            assert ai_system_profile["review_detail"].startswith("Last review: ")
+            assert ai_system_profile["last_reviewed_at"].endswith("Z")
+            assert ai_system_profile["registry_updated_at"].endswith("Z")
+
+            manifest = json.loads(zf.read("manifest.json"))
+            assert manifest["workspace_id"] == timestamps["workspace_id"]
+            assert "02-ai-system-profile.json" in manifest["included_files"]
 
             version_rows = _read_csv_from_zip(zf, "03-version-history.csv")
             assert version_rows[0]["high-level_risk_status"] == "high"
@@ -503,6 +560,133 @@ class TestComplianceExportService:
                 },
             ]
 
+    def test_build_compliance_export_includes_auto_prefilled_ai_system_provenance(self, tmp_path):
+        db_path = str(tmp_path / "test-auto-prefilled.db")
+        _init_export_db(db_path)
+        timestamps = _seed_export_fixture(db_path, reviewed_ai_system=False)
+
+        request = ComplianceExportRequest(
+            repo_full="test/repo",
+            from_ts=timestamps["baseline_created_at"] - 1,
+            to_ts=timestamps["audit_created_at"] + 1,
+            export_mode="compliance",
+            include_artifact_content=False,
+            workspace_id=timestamps["workspace_id"],
+        )
+
+        result = build_compliance_export(db_path, request)
+
+        with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
+            readme_text = zf.read("README.txt").decode()
+            assert "auto-prefilled registry context derived from repository evidence" in readme_text
+
+            ai_system_profile = json.loads(zf.read("02-ai-system-profile.json"))
+
+            assert ai_system_profile["risk_level"] == "unclassified"
+            assert ai_system_profile["eu_ai_act_domain"] is None
+            assert ai_system_profile["registry_provenance"] == "auto_prefilled"
+            assert ai_system_profile["review_detail"] == "Last review: Not yet reviewed"
+            assert ai_system_profile["last_reviewed_at"] is None
+
+    def test_build_compliance_export_honors_snapshotted_auto_prefilled_provenance_on_rebuild(self, tmp_path):
+        db_path = str(tmp_path / "test-snapshot-auto.db")
+        _init_export_db(db_path)
+        timestamps = _seed_export_fixture(db_path, reviewed_ai_system=True)
+
+        request = ComplianceExportRequest(
+            repo_full="test/repo",
+            from_ts=timestamps["baseline_created_at"] - 1,
+            to_ts=timestamps["audit_created_at"] + 1,
+            export_mode="compliance",
+            include_artifact_content=False,
+            workspace_id=timestamps["workspace_id"],
+            ai_system_provenance_label="Auto-prefilled from repository evidence",
+            ai_system_review_detail="Last review: Not yet reviewed",
+            ai_system_risk_level="unclassified",
+            ai_system_eu_ai_act_domain=None,
+            ai_system_purpose_summary="Repository-backed AI system used for export tests.",
+        )
+
+        result = build_compliance_export(db_path, request)
+
+        with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
+            readme_text = zf.read("README.txt").decode()
+            assert "auto-prefilled registry context derived from repository evidence" in readme_text
+
+            ai_system_profile = json.loads(zf.read("02-ai-system-profile.json"))
+            assert ai_system_profile["risk_level"] == "unclassified"
+            assert ai_system_profile["eu_ai_act_domain"] is None
+            assert ai_system_profile["purpose_summary"] == "Repository-backed AI system used for export tests."
+            assert ai_system_profile["registry_provenance"] == "auto_prefilled"
+            assert ai_system_profile["review_detail"] == "Last review: Not yet reviewed"
+            assert ai_system_profile["last_reviewed_at"] is None
+
+    def test_build_compliance_export_honors_snapshotted_reviewer_confirmed_profile_values_on_rebuild(self, tmp_path):
+        db_path = str(tmp_path / "test-snapshot-reviewed-values.db")
+        _init_export_db(db_path)
+        timestamps = _seed_export_fixture(db_path, reviewed_ai_system=True)
+
+        ai_system = get_ai_system_for_workspace_repo(db_path, timestamps["workspace_id"], "test/repo")
+        assert ai_system is not None
+        update_ai_system_classification(
+            db_path,
+            ai_system_id=ai_system.id,
+            risk_level="prohibited",
+            eu_ai_act_domain="biometric",
+            purpose_summary="Updated live registry value.",
+            reviewed_by_user_id=1,
+        )
+
+        request = ComplianceExportRequest(
+            repo_full="test/repo",
+            from_ts=timestamps["baseline_created_at"] - 1,
+            to_ts=timestamps["audit_created_at"] + 1,
+            export_mode="compliance",
+            include_artifact_content=False,
+            workspace_id=timestamps["workspace_id"],
+            ai_system_provenance_label="Reviewer confirmed",
+            ai_system_review_detail="Last review: 2023-11-14T22:13:20Z",
+            ai_system_risk_level="high-risk",
+            ai_system_eu_ai_act_domain="employment",
+            ai_system_purpose_summary="Repository-backed AI system used for export tests.",
+        )
+
+        result = build_compliance_export(db_path, request)
+
+        with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
+            readme_text = zf.read("README.txt").decode()
+            assert "reviewer-confirmed workspace registry entry" in readme_text
+
+            ai_system_profile = json.loads(zf.read("02-ai-system-profile.json"))
+            assert ai_system_profile["risk_level"] == "high-risk"
+            assert ai_system_profile["eu_ai_act_domain"] == "employment"
+            assert ai_system_profile["purpose_summary"] == "Repository-backed AI system used for export tests."
+            assert ai_system_profile["registry_provenance"] == "reviewer_confirmed"
+            assert ai_system_profile["review_detail"] == "Last review: 2023-11-14T22:13:20Z"
+
+    def test_build_compliance_export_omits_ai_system_profile_when_snapshot_had_no_registry_entry(self, tmp_path):
+        db_path = str(tmp_path / "test-snapshot-none.db")
+        _init_export_db(db_path)
+        timestamps = _seed_export_fixture(db_path, reviewed_ai_system=True)
+
+        request = ComplianceExportRequest(
+            repo_full="test/repo",
+            from_ts=timestamps["baseline_created_at"] - 1,
+            to_ts=timestamps["audit_created_at"] + 1,
+            export_mode="compliance",
+            include_artifact_content=False,
+            workspace_id=timestamps["workspace_id"],
+            ai_system_provenance_label="No registry entry",
+            ai_system_review_detail="Last review: Not yet reviewed",
+        )
+
+        result = build_compliance_export(db_path, request)
+
+        with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
+            readme_text = zf.read("README.txt").decode()
+            assert "No workspace AI system registry entry was recorded" in readme_text
+            assert "02-ai-system-profile.json" not in zf.namelist()
+
     def test_build_compliance_export_omits_artifact_content_when_not_requested(self, tmp_path):
         db_path = str(tmp_path / "test.db")
         _init_export_db(db_path)
@@ -521,6 +705,7 @@ class TestComplianceExportService:
         with zipfile.ZipFile(io.BytesIO(result.zip_bytes)) as zf:
             assert "09-artifact-content.json" not in zf.namelist()
             assert "07-drift/posture-summary.json" not in zf.namelist()
+            assert "02-ai-system-profile.json" not in zf.namelist()
 
     def test_empty_date_range_keeps_headers_without_rows(self, tmp_path):
         db_path = str(tmp_path / "test.db")

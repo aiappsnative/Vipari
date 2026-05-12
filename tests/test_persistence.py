@@ -77,11 +77,84 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0005_add_session_flash",
         "0006_add_audit_feedback_and_triage_tables",
         "0007_add_high_risk_proposal_tables",
+        "0008_ensure_ai_system_registry_schema",
+        "0009_ensure_export_jobs_snapshot_columns",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
     assert result.pending_versions == []
     assert [item.version for item in applied] == _all_versions
+
+
+def test_migrate_database_repairs_missing_ai_systems_table_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-ai-systems.db")
+
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE ai_systems")
+        conn.execute("DELETE FROM schema_migrations WHERE version = ?", ("0008_ensure_ai_system_registry_schema",))
+
+    result = migrate_database(db_path)
+
+    assert "0008_ensure_ai_system_registry_schema" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_systems'"
+        ).fetchone()
+
+    assert row == ("ai_systems",)
+
+
+def test_migrate_database_repairs_missing_export_job_snapshot_columns_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-export-jobs.db")
+
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE export_jobs")
+        conn.execute(
+            """
+            CREATE TABLE export_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full TEXT NOT NULL,
+                from_ts REAL NOT NULL,
+                to_ts REAL NOT NULL,
+                export_mode TEXT NOT NULL,
+                include_artifact_content INTEGER NOT NULL,
+                export_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at REAL NOT NULL,
+                last_error TEXT,
+                download_token TEXT,
+                result_size_bytes INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                completed_at REAL
+            )
+            """
+        )
+        conn.execute("DELETE FROM schema_migrations WHERE version = ?", ("0009_ensure_export_jobs_snapshot_columns",))
+
+    result = migrate_database(db_path)
+
+    assert "0009_ensure_export_jobs_snapshot_columns" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(export_jobs)").fetchall()
+        }
+
+    assert "ai_system_provenance_label" in columns
+    assert "ai_system_review_detail" in columns
+    assert "ai_system_risk_level" in columns
+    assert "ai_system_eu_ai_act_domain" in columns
+    assert "ai_system_purpose_summary" in columns
+    assert "result_sha256" in columns
+    assert "result_blob" in columns
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

@@ -5,6 +5,7 @@ import hashlib
 import html
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -74,6 +75,7 @@ from services.control_plane_frontend import (
     render_control_plane_install_page,
     render_control_plane_login_page,
     render_control_plane_mcp_page,
+    render_control_plane_policies_page,
     render_control_plane_placeholder_page,
     render_control_plane_profile_page,
     render_control_plane_settings_page,
@@ -105,6 +107,8 @@ from services.control_plane_records import (
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
     get_github_installation_by_installation_id,
+    get_ai_system_by_id,
+    get_ai_system_for_workspace_repo,
     get_repo_allocation_for_installation,
     get_repo_allocation_for_workspace,
     get_github_identity_for_user,
@@ -123,6 +127,7 @@ from services.control_plane_records import (
     list_admin_workspace_users,
     list_control_plane_audit_logs_for_workspace,
     list_billing_handoff_claims,
+    list_ai_systems_for_workspace,
     list_machine_principals_for_workspace,
     list_recent_control_plane_audit_logs,
     list_repo_allocations_for_workspace,
@@ -138,6 +143,7 @@ from services.control_plane_records import (
     revoke_machine_principal,
     revoke_user_session,
     accept_workspace_invites_for_github_login,
+    update_ai_system_classification,
     update_repo_allocation_status,
     update_session_workspace,
     update_user_admin_fields,
@@ -164,6 +170,7 @@ from services.compliance_export_service import ComplianceExportRequest as Compli
 from services.compliance_readiness import build_compliance_workspace_view, filter_compliance_evidence_view
 from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
+from services.ai_system_registry import sync_ai_system_for_repo
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
@@ -210,6 +217,8 @@ CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
 CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
 CONTROL_PLANE_INSTALL_STATE_COOKIE = "promptdrift_install_state"
 SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
+
+logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL) if AI_API_KEY else None
 worker: AuditWorker | None = None
@@ -1817,6 +1826,54 @@ def _compliance_export_preset_repo_fulls(visible_repo_fulls: set[str], export_pr
     return selected_repo_fulls
 
 
+def _user_safe_compliance_export_error(exc: Exception) -> str:
+    detail = " ".join(str(exc).split()).lower()
+    if "no onboarding found" in detail:
+        return "No onboarding evidence is available for this repository yet."
+    return "Export generation failed. Retry after checking onboarding and evidence coverage."
+
+
+_AI_SYSTEM_ALLOWED_RISK_LEVELS = {
+    "unclassified",
+    "minimal-risk",
+    "limited-risk",
+    "high-risk",
+    "prohibited",
+}
+
+_AI_SYSTEM_ALLOWED_DOMAINS = {
+    None,
+    "general_purpose",
+    "employment",
+    "education",
+    "essential_services",
+    "biometric",
+    "law_enforcement",
+    "internal_productivity",
+}
+
+
+def _normalize_ai_system_classification(
+    *,
+    risk_level: str,
+    eu_ai_act_domain: str | None,
+    purpose_summary: str | None,
+) -> tuple[str, str | None, str | None]:
+    normalized_risk = (risk_level or "").strip().lower() or "unclassified"
+    if normalized_risk not in _AI_SYSTEM_ALLOWED_RISK_LEVELS:
+        raise HTTPException(status_code=400, detail="Choose a valid risk classification.")
+
+    normalized_domain = (eu_ai_act_domain or "").strip().lower() or None
+    if normalized_domain not in _AI_SYSTEM_ALLOWED_DOMAINS:
+        raise HTTPException(status_code=400, detail="Choose a valid AI system domain.")
+
+    normalized_purpose = (purpose_summary or "").strip() or None
+    if normalized_purpose is not None and len(normalized_purpose) > 280:
+        raise HTTPException(status_code=400, detail="System purpose must be 280 characters or fewer.")
+
+    return normalized_risk, normalized_domain, normalized_purpose
+
+
 def _run_compliance_export_job(
     *,
     repo_full: str,
@@ -1828,6 +1885,29 @@ def _run_compliance_export_job(
     requested_by_user_id: int | None,
     requested_by_github_login: str | None,
 ):
+    ai_system = (
+        get_ai_system_for_workspace_repo(AUDIT_DB_PATH, workspace_id, repo_full)
+        if workspace_id is not None
+        else None
+    )
+    if ai_system is None:
+        ai_system_provenance_label = "No registry entry"
+        ai_system_review_detail = "Last review: Not yet reviewed"
+        ai_system_risk_level = None
+        ai_system_eu_ai_act_domain = None
+        ai_system_purpose_summary = None
+    elif ai_system.last_reviewed_at:
+        ai_system_provenance_label = "Reviewer confirmed"
+        ai_system_review_detail = f"Last review: {datetime.fromtimestamp(ai_system.last_reviewed_at).strftime('%Y-%m-%d %H:%M UTC')}"
+        ai_system_risk_level = ai_system.risk_level
+        ai_system_eu_ai_act_domain = ai_system.eu_ai_act_domain
+        ai_system_purpose_summary = ai_system.purpose_summary
+    else:
+        ai_system_provenance_label = "Auto-prefilled from repository evidence"
+        ai_system_review_detail = "Last review: Not yet reviewed"
+        ai_system_risk_level = ai_system.risk_level
+        ai_system_eu_ai_act_domain = ai_system.eu_ai_act_domain
+        ai_system_purpose_summary = ai_system.purpose_summary
     job = create_export_job(
         AUDIT_DB_PATH,
         repo_full=repo_full,
@@ -1838,6 +1918,11 @@ def _run_compliance_export_job(
         workspace_id=workspace_id,
         requested_by_user_id=requested_by_user_id,
         requested_by_github_login=requested_by_github_login,
+        ai_system_provenance_label=ai_system_provenance_label,
+        ai_system_review_detail=ai_system_review_detail,
+        ai_system_risk_level=ai_system_risk_level,
+        ai_system_eu_ai_act_domain=ai_system_eu_ai_act_domain,
+        ai_system_purpose_summary=ai_system_purpose_summary,
     )
     try:
         result = build_compliance_export(
@@ -1849,10 +1934,12 @@ def _run_compliance_export_job(
                 export_mode=export_mode,
                 include_artifact_content=include_artifact_content,
                 export_version=job.export_version,
+                workspace_id=workspace_id,
             ),
         )
     except Exception as exc:
-        update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
+        logger.exception("Compliance export job failed for %s", repo_full)
+        update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=_user_safe_compliance_export_error(exc))
         raise
     update_export_job_status(
         AUDIT_DB_PATH,
@@ -2325,7 +2412,6 @@ async def settings_page(request: Request):
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
             resolution=access_context["resolution"],
-            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
@@ -2722,23 +2808,139 @@ async def policies_page(request: Request):
     entitlement = access_context["entitlement"]
     user = access_context["user"]
     identity = access_context["identity"]
+    membership = access_context["membership"]
+    session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    can_manage = membership is not None and membership.role in {"owner", "admin"}
+
+    for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id):
+        if allocation.allocation_status in {"active", "onboarded"}:
+            sync_ai_system_for_repo(
+                AUDIT_DB_PATH,
+                workspace_id=workspace.id,
+                repo_full=allocation.repo_full,
+                created_by_user_id=session.user_id,
+            )
+
+    def _labelize(value: str | None) -> str:
+        if not value:
+            return "Not set"
+        return value.replace("_", " ").replace("-", " ").title()
+
+    systems = list_ai_systems_for_workspace(AUDIT_DB_PATH, workspace.id)
+    summary_cards = [
+        {
+            "label": "Registered systems",
+            "value": str(len(systems)),
+            "detail": "Workspace-backed AI systems derived from repo allocations and onboarding evidence.",
+        },
+        {
+            "label": "Reviewer-confirmed",
+            "value": str(sum(1 for system in systems if system.last_reviewed_at is not None)),
+            "detail": "Systems whose registry classification and policy context were explicitly confirmed by a reviewer.",
+        },
+        {
+            "label": "Auto-prefilled",
+            "value": str(sum(1 for system in systems if system.last_reviewed_at is None)),
+            "detail": "Systems still relying on deterministic repository evidence until a reviewer confirms the registry entry.",
+        },
+        {
+            "label": "High-risk flagged",
+            "value": str(sum(1 for system in systems if system.risk_level == "high-risk")),
+            "detail": "Systems currently marked for the higher-control operating path.",
+        },
+    ]
+    system_rows = []
+    for system in systems:
+        try:
+            artifact_families = json.loads(system.artifact_families_json or "[]")
+        except json.JSONDecodeError:
+            artifact_families = []
+        evidence_summary = ", ".join(str(item).replace("_", " ") for item in artifact_families) if artifact_families else "Static repository evidence"
+        system_rows.append(
+            {
+                "id": system.id,
+                "display_name": system.display_name,
+                "repo_full": system.repo_full,
+                "evidence_summary": evidence_summary,
+                "onboarding_status": _labelize(system.latest_onboarding_status),
+                "risk_level": system.risk_level,
+                "risk_level_label": _labelize(system.risk_level),
+                "eu_ai_act_domain": system.eu_ai_act_domain or "",
+                "eu_ai_act_domain_label": _labelize(system.eu_ai_act_domain),
+                "purpose_summary": system.purpose_summary or "",
+                "last_reviewed_at": datetime.fromtimestamp(system.last_reviewed_at).strftime("%Y-%m-%d %H:%M UTC") if system.last_reviewed_at else "Not reviewed",
+            }
+        )
+
+    status_note = None
+    if request.query_params.get("classification_saved") == "1":
+        status_note = "AI system classification saved. The registry remains deterministic; human review controls the final policy state."
     return HTMLResponse(
-        render_control_plane_placeholder_page(
-            page_title="Policies",
-            page_kicker="Workspace policy library",
-            page_copy="We are working on this page now. It will become the home for workspace guardrails, policy packs, and audit rules.",
+        render_control_plane_policies_page(
             workspace_name=workspace.display_name,
+            audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
-            active_nav="policies",
+            summary_cards=summary_cards,
+            system_rows=system_rows,
+            status_note=status_note,
+            can_manage=can_manage,
+            csrf_token=session.csrf_secret,
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
                 github_login=identity.github_login if identity else None,
             ),
         )
     )
+
+
+@app.post("/policies/systems/{ai_system_id}")
+@app.post("/app/policies/systems/{ai_system_id}")
+async def classify_policy_system(
+    request: Request,
+    ai_system_id: int,
+    risk_level: str = Form(...),
+    eu_ai_act_domain: str | None = Form(default=None),
+    purpose_summary: str | None = Form(default=None),
+    csrf_token: str | None = Form(default=None),
+):
+    access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    workspace = access_context["workspace"]
+    ai_system = get_ai_system_by_id(AUDIT_DB_PATH, ai_system_id)
+    if ai_system is None or ai_system.workspace_id != workspace.id:
+        raise HTTPException(status_code=404, detail="AI system not found for this workspace.")
+
+    normalized_risk, normalized_domain, normalized_purpose = _normalize_ai_system_classification(
+        risk_level=risk_level,
+        eu_ai_act_domain=eu_ai_act_domain,
+        purpose_summary=purpose_summary,
+    )
+    updated = update_ai_system_classification(
+        AUDIT_DB_PATH,
+        ai_system_id=ai_system_id,
+        risk_level=normalized_risk,
+        eu_ai_act_domain=normalized_domain,
+        purpose_summary=normalized_purpose,
+        reviewed_by_user_id=access_context["session"].user_id,
+    )
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=access_context["session"].user_id,
+        event_type="ai_system_classification_updated",
+        subject_type="ai_system",
+        subject_id=str(updated.id),
+        payload={
+            "repo_full": updated.repo_full,
+            "risk_level": updated.risk_level,
+            "eu_ai_act_domain": updated.eu_ai_act_domain,
+        },
+    )
+    return RedirectResponse("/policies?classification_saved=1", status_code=303)
 
 
 @app.get("/compliance", response_class=HTMLResponse)
@@ -2850,7 +3052,7 @@ def _build_compliance_workspace_api_context(access_context: dict[str, object]) -
     workspace = access_context.get("workspace") if access_context else None
     session = access_context.get("session") if access_context else None
     if workspace is None:
-        return build_compliance_workspace_view(AUDIT_DB_PATH, [], (), ()), tuple()
+        return build_compliance_workspace_view(AUDIT_DB_PATH, [], (), (), workspace_id=None), tuple()
 
     visibility = _dashboard_repo_visibility(access_context)
     allowed_repo_fulls = visibility.get("allowed_repo_fulls")
@@ -2869,7 +3071,7 @@ def _build_compliance_workspace_api_context(access_context: dict[str, object]) -
         if session is not None
         else tuple()
     )
-    view = build_compliance_workspace_view(AUDIT_DB_PATH, repo_rows, repo_summaries, export_jobs)
+    view = build_compliance_workspace_view(AUDIT_DB_PATH, repo_rows, repo_summaries, export_jobs, workspace_id=workspace.id)
     return view, export_jobs
 
 
@@ -2909,6 +3111,7 @@ async def help_page(request: Request):
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            resolution=access_context["resolution"],
             repo_rows=repo_rows,
             repo_summaries=repo_summaries,
             export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
@@ -2951,17 +3154,23 @@ async def compliance_export_page_submit(
     if export_preset not in {"none", "review_ready", "fresh_review_ready"}:
         return RedirectResponse("/compliance/exports?status=Choose+a+valid+export+preset.", status_code=303)
 
-    visible_repo_rows = _workspace_repo_rows(workspace.id)
-    visible_repo_fulls = {str(item["repo_full"]) for item in visible_repo_rows}
+    view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    visible_repo_fulls = {str(row.repo_full) for row in view.repo_rows}
+    exportable_repo_fulls = {str(row.repo_full) for row in view.repo_rows if row.last_onboarded_at is not None}
     if export_preset != "none":
-        selected_repo_fulls = _compliance_export_preset_repo_fulls(visible_repo_fulls, export_preset)
+        selected_repo_fulls = _compliance_export_preset_repo_fulls(exportable_repo_fulls, export_preset)
     else:
-        selected_repo_fulls = sorted(visible_repo_fulls) if export_scope == "all_visible" else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
+        selected_repo_fulls = (
+            sorted(exportable_repo_fulls)
+            if export_scope == "all_visible"
+            else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
+        )
     if not selected_repo_fulls:
         return RedirectResponse("/compliance/exports?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
 
     completed = 0
     failed = 0
+    failure_details: list[str] = []
     for repo_full in selected_repo_fulls:
         try:
             _run_compliance_export_job(
@@ -2975,12 +3184,17 @@ async def compliance_export_page_submit(
                 requested_by_github_login=_dashboard_actor_login(request),
             )
             completed += 1
-        except Exception:
+        except Exception as exc:
             failed += 1
+            if not failure_details:
+                error_detail = _user_safe_compliance_export_error(exc)
+                failure_details.append(f"{repo_full}: {error_detail}")
     status_message = f"Completed exports for {completed} repo(s)."
     if failed:
         status_message += f" {failed} repo(s) failed and can be retried."
-    return RedirectResponse(f"/app/compliance/exports?status={quote(status_message)}", status_code=303)
+    if failure_details:
+        status_message += f" First failure: {failure_details[0]}"
+    return RedirectResponse(f"/compliance/exports?status={quote(status_message)}", status_code=303)
 
 
 @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
@@ -3757,6 +3971,12 @@ async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None
         )
 
     update_repo_allocation_status(AUDIT_DB_PATH, allocation.id, "onboarded")
+    sync_ai_system_for_repo(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        repo_full=allocation.repo_full,
+        created_by_user_id=access_context["session"].user_id,
+    )
     return RedirectResponse("/workspace", status_code=303)
 
 
@@ -4289,9 +4509,10 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="An identical export request is already in progress. Change the date range or wait for it to finish.")
     except Exception as exc:
+        safe_error = _user_safe_compliance_export_error(exc)
         if "job" in locals():
-            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=safe_error)
+        raise HTTPException(status_code=500, detail=safe_error) from exc
     return JSONResponse({
         "job_id": job.id,
         "status": job.status,

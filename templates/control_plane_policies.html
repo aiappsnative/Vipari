@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Integrations | Vipari</title>
+    <title>Policies | Vipari</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -37,11 +37,11 @@
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
                     <span>Compliance</span>
                 </a>
-                <a href="/policies" class="sidebar-nav-item" aria-label="Policies">
+                <a href="/policies" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Policies">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 4v5c0 4.6-2.8 7.9-7 9-4.2-1.1-7-4.4-7-9V7z"/><path d="m9.5 12 1.7 1.7 3.3-3.7"/></svg>
                     <span>Policies</span>
                 </a>
-                <a href="/integrations/mcp" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Agent Integrations">
+                <a href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations">
                     <svg class="sidebar-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7v4H4z"/><path d="M13 6h7v6h-7z"/><path d="M4 13h7v5H4z"/><path d="M13 14h7v4h-7z"/></svg>
                     <span>Agent Integrations</span>
                 </a>
@@ -55,87 +55,86 @@
                 </a>
             </div>
             <div class="sidebar-profile-wrap">
-                <a href="/profile" class="sidebar-profile-link" aria-label="User profile">{{SIDEBAR_PROFILE_INITIAL}}</a>
+                <a href="/profile" class="sidebar-profile-link" aria-label="Profile">{{SIDEBAR_PROFILE_INITIAL}}</a>
             </div>
         </nav>
 
         <div class="main-content">
             <main class="page-scroll control-page-shell">
-                <section class="control-page-sticky-header" aria-label="Agent integration tabs">
-                    <div class="control-page-sticky-header-row">
-                        <div class="control-page-sticky-tab-bar" role="tablist" aria-label="Agent integration sections">
-                            {{MCP_TAB_BAR}}
-                        </div>
-                        <div class="control-page-sticky-header-meta">{{MCP_ACTIVE_KEY_BULLET}}</div>
-                    </div>
+                <section class="control-page-sticky-header" aria-label="Policies sections">
+                    <nav class="control-page-sticky-tab-bar" aria-label="Policies sections">
+                        <a class="control-page-sticky-tab-link" href="#policies-overview">Overview</a>
+                        <a class="control-page-sticky-tab-link" href="#policies-review-queue">Needs review</a>
+                        <a class="control-page-sticky-tab-link" href="#policies-registry">Registered systems</a>
+                        <a class="control-page-sticky-tab-link" href="#policies-glossary">Glossary</a>
+                    </nav>
                 </section>
 
-                <section class="control-page-tab-intro mcp-tab-intro" aria-label="Agent integrations section overview">
+                <section class="control-page-tab-intro control-page-anchor-section" id="policies-overview" aria-label="Policies overview">
                     <div class="control-page-tab-intro-copy">
-                        <p class="control-page-eyebrow">Agent Integrations</p>
-                        <h1 class="control-page-tab-intro-title">{{MCP_TAB_TITLE}}</h1>
-                        <p class="control-page-tab-intro-description">{{MCP_TAB_DESCRIPTION}}</p>
+                        <p class="control-page-eyebrow">Policies</p>
+                        <h1 class="control-page-tab-intro-title">AI System Registry</h1>
+                        <p class="control-page-tab-intro-description">Review and confirm AI system classifications for {{WORKSPACE_NAME}} using the workspace registry and the supporting repository evidence already in scope.</p>
                     </div>
-                    <p class="control-page-tab-intro-note">{{MCP_TAB_NOTE}}</p>
+                    <p class="control-page-tab-intro-note">Use this page to clear confirmation debt first, then keep the full registry aligned with your EU AI Act review workflow.</p>
                 </section>
 
-                <section class="control-page-stat-grid">
-                    <article class="control-page-stat-card"><span class="control-page-stat-label">Workspace</span><strong>{{WORKSPACE_NAME}}</strong></article>
-                    <article class="control-page-stat-card"><span class="control-page-stat-label">Broker URL</span><strong>{{BROKER_HOST}}</strong></article>
-                    <article class="control-page-stat-card"><span class="control-page-stat-label">Available tools</span><strong>{{TOOL_COUNT}}</strong></article>
-                    <article class="control-page-stat-card"><span class="control-page-stat-label">{{ACTIVE_API_KEY_LABEL}}</span><strong>{{ACTIVE_API_KEY_COUNT}}</strong></article>
-                </section>
-
-                {{ONE_TIME_SECRET_BLOCK}}
+                {{STATUS_NOTE}}
 
                 <section class="control-page-sections">
-                    {{MCP_ACTIVE_PANEL}}
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section">
+                        <div class="control-page-sections">{{SUMMARY_CARDS}}</div>
+                    </article>
+
+                    {{REVIEW_QUEUE}}
+
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section" id="policies-registry">
+                        <div class="secondary-panel-title">Registered systems</div>
+                        <div class="control-page-table-wrap">
+                            <table class="control-page-table control-page-table-wide">
+                                <thead>
+                                    <tr>
+                                        <th>System</th>
+                                        <th>Evidence</th>
+                                        <th>Status</th>
+                                        <th>Classification</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{{SYSTEM_ROWS}}</tbody>
+                            </table>
+                        </div>
+                    </article>
+
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section" id="policies-glossary">
+                        <div class="policies-glossary-header">
+                            <div>
+                                <div class="secondary-panel-title">Glossary</div>
+                                <h2 class="control-page-section-title">EU AI Act risk classification</h2>
+                            </div>
+                            <a class="policies-glossary-link" href="https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng" target="_blank" rel="noopener noreferrer" aria-label="Open the official EU AI Act text in a new tab">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5A2.5 2.5 0 0 0 3.5 7v10A2.5 2.5 0 0 0 6 19.5h12A2.5 2.5 0 0 0 20.5 17V7A2.5 2.5 0 0 0 18 4.5Zm0 1.5h5v12H6A1 1 0 0 1 5 17V7a1 1 0 0 1 1-1Zm6.5 0H18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-5.5Z"/></svg>
+                            </a>
+                        </div>
+                        <p class="control-page-copy">Use this glossary to keep registry labels aligned with the Act\'s risk-based structure. Final legal interpretation still belongs with your counsel and compliance owners.</p>
+                        <div class="control-page-sections policies-glossary-grid">
+                            <article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-unclassified"><div class="secondary-panel-title">Unclassified</div><p class="muted">This system still needs a formal EU AI Act review. Treat it as confirmation debt until a reviewer records a category and domain.</p></article>
+                            <article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-minimal"><div class="secondary-panel-title">Minimal risk</div><p class="muted">Most internal productivity and low-impact assistive systems land here. The focus stays on clear ownership, normal oversight, and keeping the evidence trail current.</p></article>
+                            <article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-limited"><div class="secondary-panel-title">Limited risk</div><p class="muted">These systems may trigger transparency duties, such as disclosing AI-generated content or making it clear when a person is interacting with AI assistance.</p></article>
+                            <article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-high"><div class="secondary-panel-title">High risk</div><p class="muted">These uses demand the strongest operating discipline: documented controls, risk management, human oversight, and a defensible evidence package before relying on the system.</p></article>
+                            <article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-prohibited"><div class="secondary-panel-title">Prohibited</div><p class="muted">These uses are not a ship-with-guardrails scenario. If a system falls here, the correct response is to stop and escalate rather than package it as compliant.</p></article>
+                        </div>
+                    </article>
                 </section>
             </main>
         </div>
     </div>
-    <script>
-        document.addEventListener("DOMContentLoaded", () => {
-            const scope = "activity";
-            const rows = Array.from(document.querySelectorAll(`[data-filter-row="${scope}"]`));
-            const inputs = Array.from(document.querySelectorAll(`[data-filter-scope="${scope}"] [data-filter-target]`));
-            const status = document.querySelector(`[data-filter-status="${scope}"]`);
-            const reset = document.querySelector(`[data-filter-reset="${scope}"]`);
-            if (!rows.length || !inputs.length || !status || !reset) {
-                return;
-            }
 
-            const applyFilters = () => {
-                const filters = Object.fromEntries(
-                    inputs.map((input) => [input.dataset.filterTarget, (input.value || "").trim().toLowerCase()])
-                );
-                let visible = 0;
-                rows.forEach((row) => {
-                    const matches = Object.entries(filters).every(([key, value]) => {
-                        if (!value) {
-                            return true;
-                        }
-                        return (row.dataset[`filter${key.charAt(0).toUpperCase()}${key.slice(1)}`] || "").includes(value);
-                    });
-                    row.hidden = !matches;
-                    if (matches) {
-                        visible += 1;
-                    }
-                });
-                const activeCount = Object.values(filters).filter(Boolean).length;
-                status.textContent = activeCount
-                    ? `Showing ${visible} matching event${visible === 1 ? "" : "s"}.`
-                    : "Showing all events.";
-            };
-
-            inputs.forEach((input) => input.addEventListener("input", applyFilters));
-            reset.addEventListener("click", () => {
-                inputs.forEach((input) => {
-                    input.value = "";
-                });
-                applyFilters();
-            });
-        });
-    </script>
+    <div class="theme-toggle-shell">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        </button>
+    </div>
 </body>
 </html>

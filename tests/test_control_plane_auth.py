@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
@@ -783,6 +784,182 @@ def test_legacy_admin_api_route_still_works(tmp_path, monkeypatch):
         )
     assert response.status_code == 200
     assert response.json()["backend"] == "sqlite"
+
+
+def test_admin_export_download_rebuild_uses_snapshotted_ai_system_profile(tmp_path, monkeypatch):
+    import io
+    import json
+    import zipfile
+
+    from engine.diff_parser import extract_signal_terms_from_text
+    from engine.drift_profile import build_attribute_profile
+    from services.control_plane_records import (
+        replace_repo_connections,
+        update_ai_system_classification,
+        upsert_ai_system_for_repo,
+        upsert_entitlement,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.export_jobs import create_export_job, update_export_job_status
+    from services.onboarding_records import DiscoveredArtifactInput, record_repository_onboarding
+
+    db_path = str(tmp_path / "export-download-rebuild.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-export-download")
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace_id,
+        stripe_subscription_id="sub_export_download",
+        stripe_price_id="price_export_download",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace_id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=9901,
+        account_id="9901",
+        account_login="export-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=9901,
+        repositories=[
+            {
+                "repo_github_id": "repo-1",
+                "repo_full": "export-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    record_repository_onboarding(
+        db_path,
+        repo_full="export-org/repo-one",
+        installation_id=9901,
+        default_branch="main",
+        status="baseline_approved",
+        discovered_artifacts=[
+            DiscoveredArtifactInput(
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Prompt file",
+                confidence=0.9,
+                baseline_content="Follow the approved employment workflow.",
+            ),
+            DiscoveredArtifactInput(
+                artifact_path="policies/governance.md",
+                artifact_type="policy",
+                discovery_reason="Governance policy",
+                confidence=0.8,
+                baseline_content="Human review is required for sensitive changes.",
+            ),
+        ],
+        extract_signal_terms_fn=extract_signal_terms_from_text,
+        build_profile_fn=build_attribute_profile,
+    )
+    ai_system = upsert_ai_system_for_repo(
+        db_path,
+        workspace_id=workspace_id,
+        repo_full="export-org/repo-one",
+        display_name="export-org/repo-one",
+        latest_onboarding_status="baseline_approved",
+        artifact_families=["prompt", "governance"],
+        eu_ai_act_domain="employment",
+        purpose_summary="Historical purpose summary.",
+        created_by_user_id=user_id,
+    )
+    update_ai_system_classification(
+        db_path,
+        ai_system_id=ai_system.id,
+        risk_level="high-risk",
+        eu_ai_act_domain="employment",
+        purpose_summary="Historical purpose summary.",
+        reviewed_by_user_id=user_id,
+    )
+    job = create_export_job(
+        db_path,
+        repo_full="export-org/repo-one",
+        from_ts=1700000000,
+        to_ts=1700086400,
+        workspace_id=workspace_id,
+        requested_by_user_id=user_id,
+        requested_by_github_login="owner",
+        export_mode="compliance",
+        include_artifact_content=False,
+        ai_system_provenance_label="Reviewer confirmed",
+        ai_system_review_detail="Reviewed on 2026-05-10",
+        ai_system_risk_level="high-risk",
+        ai_system_eu_ai_act_domain="employment",
+        ai_system_purpose_summary="Historical purpose summary.",
+    )
+    update_export_job_status(
+        db_path,
+        job.id,
+        "completed",
+        result_size_bytes=1,
+        result_sha256="rebuild-only",
+    )
+
+    update_ai_system_classification(
+        db_path,
+        ai_system_id=ai_system.id,
+        risk_level="limited-risk",
+        eu_ai_act_domain="biometrics",
+        purpose_summary="Current live registry value that should not leak into the rebuild.",
+        reviewed_by_user_id=user_id,
+    )
+
+    with TestClient(create_api_app()) as client:
+        unauthorized = client.get(f"/api/export/{job.id}/download")
+        authorized = client.get(
+            f"/api/export/{job.id}/download",
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.headers["content-type"] == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(authorized.content)) as archive:
+        ai_system_profile = json.loads(archive.read("02-ai-system-profile.json"))
+
+    assert ai_system_profile["registry_provenance"] == "reviewer_confirmed"
+    assert ai_system_profile["review_detail"] == "Reviewed on 2026-05-10"
+    assert ai_system_profile["risk_level"] == "high-risk"
+    assert ai_system_profile["eu_ai_act_domain"] == "employment"
+    assert ai_system_profile["purpose_summary"] == "Historical purpose summary."
+    assert ai_system_profile["eu_ai_act_domain"] != "biometrics"
+    assert "Current live registry value" not in json.dumps(ai_system_profile)
 
 
 # ===========================================================================
