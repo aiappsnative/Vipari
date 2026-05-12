@@ -5,6 +5,7 @@ import hashlib
 import html
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -216,6 +217,8 @@ CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
 CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
 CONTROL_PLANE_INSTALL_STATE_COOKIE = "promptdrift_install_state"
 SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
+
+logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL) if AI_API_KEY else None
 worker: AuditWorker | None = None
@@ -1823,6 +1826,13 @@ def _compliance_export_preset_repo_fulls(visible_repo_fulls: set[str], export_pr
     return selected_repo_fulls
 
 
+def _user_safe_compliance_export_error(exc: Exception) -> str:
+    detail = " ".join(str(exc).split()).lower()
+    if "no onboarding found" in detail:
+        return "No onboarding evidence is available for this repository yet."
+    return "Export generation failed. Retry after checking onboarding and evidence coverage."
+
+
 def _run_compliance_export_job(
     *,
     repo_full: str,
@@ -1887,7 +1897,8 @@ def _run_compliance_export_job(
             ),
         )
     except Exception as exc:
-        update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
+        logger.exception("Compliance export job failed for %s", repo_full)
+        update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=_user_safe_compliance_export_error(exc))
         raise
     update_export_job_status(
         AUDIT_DB_PATH,
@@ -3100,11 +3111,16 @@ async def compliance_export_page_submit(
         return RedirectResponse("/compliance/exports?status=Choose+a+valid+export+preset.", status_code=303)
 
     view, _export_jobs = _build_compliance_workspace_api_context(access_context)
+    visible_repo_fulls = {str(row.repo_full) for row in view.repo_rows}
     exportable_repo_fulls = {str(row.repo_full) for row in view.repo_rows if row.last_onboarded_at is not None}
     if export_preset != "none":
         selected_repo_fulls = _compliance_export_preset_repo_fulls(exportable_repo_fulls, export_preset)
     else:
-        selected_repo_fulls = sorted(exportable_repo_fulls) if export_scope == "all_visible" else sorted({repo for repo in repo_fulls if repo in exportable_repo_fulls})
+        selected_repo_fulls = (
+            sorted(exportable_repo_fulls)
+            if export_scope == "all_visible"
+            else sorted({repo for repo in repo_fulls if repo in visible_repo_fulls})
+        )
     if not selected_repo_fulls:
         return RedirectResponse("/compliance/exports?status=Select+at+least+one+repository+or+choose+all+repos.", status_code=303)
 
@@ -3127,7 +3143,7 @@ async def compliance_export_page_submit(
         except Exception as exc:
             failed += 1
             if not failure_details:
-                error_detail = " ".join(str(exc).split()) or "Export generation failed."
+                error_detail = _user_safe_compliance_export_error(exc)
                 failure_details.append(f"{repo_full}: {error_detail}")
     status_message = f"Completed exports for {completed} repo(s)."
     if failed:

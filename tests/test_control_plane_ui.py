@@ -1200,6 +1200,7 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert 'value="on" checked' in get_response.text
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
+    assert get_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < get_response.text.index('href="/settings" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Settings"')
     assert "{{WORKSPACE_NAME_INPUT}}" not in get_response.text
     assert "{{WORKSPACE_MEMBER_ACTIONS}}" not in get_response.text
 
@@ -3433,6 +3434,8 @@ def test_billing_page_renders_pricing_cards_and_plan_actions(tmp_path):
     assert 'action="/billing/checkout?plan=starter&source=base44"' in response.text
     assert 'action="/billing/checkout?plan=team&source=base44"' in response.text
     assert 'action="/billing/checkout?plan=enterprise&source=base44"' in response.text
+    assert 'href="/settings" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Settings"' in response.text
+    assert response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < response.text.index('href="/settings" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Settings"')
     assert "Portal unavailable" in response.text
 
     main.AUDIT_DB_PATH = original_db_path
@@ -5380,13 +5383,13 @@ def test_compliance_page_marks_failed_exports_and_reports_retryable_status(tmp_p
 
     assert response.status_code == 303
     assert "Completed%20exports%20for%200%20repo%28s%29.%201%20repo%28s%29%20failed%20and%20can%20be%20retried." in response.headers["location"]
-    assert "First%20failure%3A%20compliance-org/repo-one%3A%20zip%20failed" in response.headers["location"]
+    assert "First%20failure%3A%20compliance-org/repo-one%3A%20Export%20generation%20failed.%20Retry%20after%20checking%20onboarding%20and%20evidence%20coverage." in response.headers["location"]
 
     jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
     assert len(jobs) == 1
     assert jobs[0].repo_full == "compliance-org/repo-one"
     assert jobs[0].status == "failed"
-    assert jobs[0].last_error == "zip failed"
+    assert jobs[0].last_error == "Export generation failed. Retry after checking onboarding and evidence coverage."
 
     exports_response = client.get(
         response.headers["location"],
@@ -5394,8 +5397,129 @@ def test_compliance_page_marks_failed_exports_and_reports_retryable_status(tmp_p
     )
 
     assert exports_response.status_code == 200
-    assert "First failure: compliance-org/repo-one: zip failed" in exports_response.text
-    assert "Failure: zip failed" in exports_response.text
+    assert "First failure: compliance-org/repo-one: Export generation failed. Retry after checking onboarding and evidence coverage." in exports_response.text
+    assert "Failure: Export generation failed. Retry after checking onboarding and evidence coverage." in exports_response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_compliance_page_selected_exports_can_include_visible_repo_without_onboarding(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "compliance-export-selected-visible.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.export_jobs import list_export_jobs_for_workspace_requester
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="974",
+        github_login="selected-visible-exporter",
+        display_name="Selected Visible Exporter",
+        primary_email="selected-visible-exporter@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="compliance-export-selected-visible-workspace",
+        display_name="Compliance Export Selected Visible Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="compliance-export-selected-visible-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_compliance_selected_visible",
+        stripe_price_id="price_compliance_selected_visible",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9740,
+        account_id="9740",
+        account_login="compliance-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9740,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "compliance-org/repo-connected-only",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/compliance/export",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "export_scope": "selected",
+            "repo_fulls": ["compliance-org/repo-connected-only"],
+            "from_date": "2023-11-14",
+            "to_date": "2023-11-15",
+            "export_mode": "compliance",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "Completed%20exports%20for%200%20repo%28s%29.%201%20repo%28s%29%20failed%20and%20can%20be%20retried." in response.headers["location"]
+    assert "First%20failure%3A%20compliance-org/repo-connected-only%3A%20No%20onboarding%20evidence%20is%20available%20for%20this%20repository%20yet." in response.headers["location"]
+
+    jobs = list_export_jobs_for_workspace_requester(main.AUDIT_DB_PATH, workspace.id, user.id)
+    assert len(jobs) == 1
+    assert jobs[0].repo_full == "compliance-org/repo-connected-only"
+    assert jobs[0].status == "failed"
+    assert jobs[0].last_error == "No onboarding evidence is available for this repository yet."
 
     main.AUDIT_DB_PATH = original_db_path
 
