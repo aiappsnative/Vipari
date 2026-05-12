@@ -1108,8 +1108,9 @@ def render_control_plane_mcp_page(
         )
         tab_labels.update({"api-keys": "API keys", "activity": "Activity"})
     tab_bar = "".join(
-        f'''<a class="control-page-tab-link" href="{html_escape(tab_urls[tab_key])}"{' aria-current="page"' if tab_key == active_tab else ''}>{html_escape(tab_labels[tab_key])}</a>'''
+        f'''<a class="control-page-tab-link" href="{html_escape(tab_urls[tab_key])}"{current_attr}>{html_escape(tab_labels[tab_key])}</a>'''
         for tab_key in tab_urls
+        for current_attr in [' aria-current="page"' if tab_key == active_tab else ""]
     )
     tab_intro_content = {
         "overview": (
