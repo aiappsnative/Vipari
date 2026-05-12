@@ -1833,6 +1833,47 @@ def _user_safe_compliance_export_error(exc: Exception) -> str:
     return "Export generation failed. Retry after checking onboarding and evidence coverage."
 
 
+_AI_SYSTEM_ALLOWED_RISK_LEVELS = {
+    "unclassified",
+    "minimal-risk",
+    "limited-risk",
+    "high-risk",
+    "prohibited",
+}
+
+_AI_SYSTEM_ALLOWED_DOMAINS = {
+    None,
+    "general_purpose",
+    "employment",
+    "education",
+    "essential_services",
+    "biometric",
+    "law_enforcement",
+    "internal_productivity",
+}
+
+
+def _normalize_ai_system_classification(
+    *,
+    risk_level: str,
+    eu_ai_act_domain: str | None,
+    purpose_summary: str | None,
+) -> tuple[str, str | None, str | None]:
+    normalized_risk = (risk_level or "").strip().lower() or "unclassified"
+    if normalized_risk not in _AI_SYSTEM_ALLOWED_RISK_LEVELS:
+        raise HTTPException(status_code=400, detail="Choose a valid risk classification.")
+
+    normalized_domain = (eu_ai_act_domain or "").strip().lower() or None
+    if normalized_domain not in _AI_SYSTEM_ALLOWED_DOMAINS:
+        raise HTTPException(status_code=400, detail="Choose a valid AI system domain.")
+
+    normalized_purpose = (purpose_summary or "").strip() or None
+    if normalized_purpose is not None and len(normalized_purpose) > 280:
+        raise HTTPException(status_code=400, detail="System purpose must be 280 characters or fewer.")
+
+    return normalized_risk, normalized_domain, normalized_purpose
+
+
 def _run_compliance_export_job(
     *,
     repo_full: str,
@@ -2371,7 +2412,6 @@ async def settings_page(request: Request):
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
             resolution=access_context["resolution"],
-            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
             pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
@@ -2874,12 +2914,15 @@ async def classify_policy_system(
     if ai_system is None or ai_system.workspace_id != workspace.id:
         raise HTTPException(status_code=404, detail="AI system not found for this workspace.")
 
-    normalized_domain = (eu_ai_act_domain or "").strip() or None
-    normalized_purpose = (purpose_summary or "").strip() or None
+    normalized_risk, normalized_domain, normalized_purpose = _normalize_ai_system_classification(
+        risk_level=risk_level,
+        eu_ai_act_domain=eu_ai_act_domain,
+        purpose_summary=purpose_summary,
+    )
     updated = update_ai_system_classification(
         AUDIT_DB_PATH,
         ai_system_id=ai_system_id,
-        risk_level=risk_level.strip() or "unclassified",
+        risk_level=normalized_risk,
         eu_ai_act_domain=normalized_domain,
         purpose_summary=normalized_purpose,
         reviewed_by_user_id=access_context["session"].user_id,
@@ -3068,6 +3111,7 @@ async def help_page(request: Request):
             plan_label=get_plan_definition(plan_code).label,
             theme_preference=user.theme_preference if user else "dark",
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            resolution=access_context["resolution"],
             repo_rows=repo_rows,
             repo_summaries=repo_summaries,
             export_ready_count=sum(1 for job in export_jobs if job.status == "completed"),
@@ -4465,9 +4509,10 @@ async def create_compliance_export(repo_full: str, payload: ComplianceExportRequ
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="An identical export request is already in progress. Change the date range or wait for it to finish.")
     except Exception as exc:
+        safe_error = _user_safe_compliance_export_error(exc)
         if "job" in locals():
-            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+            update_export_job_status(AUDIT_DB_PATH, job.id, "failed", last_error=safe_error)
+        raise HTTPException(status_code=500, detail=safe_error) from exc
     return JSONResponse({
         "job_id": job.id,
         "status": job.status,

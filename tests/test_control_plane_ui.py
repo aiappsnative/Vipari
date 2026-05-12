@@ -1770,6 +1770,21 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert "Reviewer-confirmed" in refreshed_policies_response.text
     assert "Auto-prefilled" in refreshed_policies_response.text
 
+    invalid_update_response = client.post(
+        f"/policies/systems/{approved_system.id}",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "csrf_token": session.csrf_secret,
+            "risk_level": "totally-invalid",
+            "eu_ai_act_domain": "employment",
+            "purpose_summary": "Assists hiring reviewers with prompt-based triage.",
+        },
+        follow_redirects=False,
+    )
+
+    assert invalid_update_response.status_code == 400
+    assert invalid_update_response.json()["detail"] == "Choose a valid risk classification."
+
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -4485,6 +4500,135 @@ def test_export_download_serves_completed_artifact_without_rebuild(tmp_path):
     assert download_response.status_code == 200
     assert download_response.content == b"immutable-export-zip"
     assert download_response.headers["content-type"] == "application/zip"
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_api_compliance_export_sanitizes_failure_details(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "api-compliance-export-failure.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.export_jobs import list_export_jobs_for_requester
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="981",
+        github_login="api-export-failure-user",
+        display_name="API Export Failure User",
+        primary_email="api-export-failure@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="api-export-failure-workspace",
+        display_name="API Export Failure Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="api-export-failure-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_api_export_failure",
+        stripe_price_id="price_api_export_failure",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9810,
+        account_id="9810",
+        account_login="export-org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9810,
+        repositories=[
+            {
+                "repo_github_id": "export-org/repo-one",
+                "repo_full": "export-org/repo-one",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=9810,
+        repo_github_id="export-org/repo-one",
+        repo_full="export-org/repo-one",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    with patch("main.build_compliance_export", side_effect=RuntimeError("zip failed with stack details")):
+        response = client.post(
+            "/api/repos/export-org/repo-one/export/compliance",
+            cookies={main.settings.session_cookie_name: session.session_id},
+            json={
+                "from_ts": 1700000000,
+                "to_ts": 1700086400,
+                "export_mode": "compliance",
+                "include_artifact_content": False,
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Export generation failed. Retry after checking onboarding and evidence coverage."
+
+    jobs = list_export_jobs_for_requester(main.AUDIT_DB_PATH, "export-org/repo-one", workspace.id, user.id)
+    assert len(jobs) == 1
+    assert jobs[0].status == "failed"
+    assert jobs[0].last_error == "Export generation failed. Retry after checking onboarding and evidence coverage."
 
     main.AUDIT_DB_PATH = original_db_path
 

@@ -948,7 +948,6 @@ def render_control_plane_settings_page(
     theme_preference: str,
     status_note: str | None,
     resolution: WorkspaceAccessResolution,
-    admin_url: str | None,
     csrf_token: str,
     pr_comments_allowed_by_plan: bool,
     pr_comments_setting_enabled: bool,
