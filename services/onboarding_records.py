@@ -529,12 +529,64 @@ def add_onboarded_artifact(
     return _row_to_onboarded_artifact(row)
 
 
+def get_onboarded_artifact_by_path(db_path: str, onboarding_id: int, artifact_path: str) -> OnboardedArtifactRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM onboarded_artifacts WHERE onboarding_id = ? AND artifact_path = ? ORDER BY id DESC LIMIT 1",
+            (onboarding_id, artifact_path),
+        ).fetchone()
+    return _row_to_onboarded_artifact(row) if row else None
+
+
 def delete_onboarded_artifact_by_path(db_path: str, onboarding_id: int, artifact_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM onboarded_artifacts WHERE onboarding_id = ? AND artifact_path = ?",
             (onboarding_id, artifact_path),
         )
+
+
+def update_onboarded_artifact_type(
+    db_path: str,
+    *,
+    onboarding_id: int,
+    artifact_path: str,
+    artifact_type: str,
+) -> OnboardedArtifactRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM onboarded_artifacts WHERE onboarding_id = ? AND artifact_path = ? ORDER BY id DESC LIMIT 1",
+            (onboarding_id, artifact_path),
+        ).fetchone()
+        if row is None:
+            return None
+
+        onboarded_artifact_id = int(row["id"])
+        normalized_artifact_id = _build_normalized_artifact_id(str(row["repo_full"]), artifact_path)
+
+        conn.execute(
+            "UPDATE onboarded_artifacts SET artifact_type = ? WHERE id = ?",
+            (artifact_type, onboarded_artifact_id),
+        )
+        conn.execute(
+            "UPDATE onboarding_baseline_versions SET artifact_type = ? WHERE onboarded_artifact_id = ? OR (onboarding_id = ? AND artifact_path = ?) OR normalized_artifact_id = ?",
+            (artifact_type, onboarded_artifact_id, onboarding_id, artifact_path, normalized_artifact_id),
+        )
+        conn.execute(
+            "UPDATE historical_backfill_jobs SET artifact_type = ? WHERE onboarded_artifact_id = ? OR (onboarding_id = ? AND artifact_path = ?)",
+            (artifact_type, onboarded_artifact_id, onboarding_id, artifact_path),
+        )
+        conn.execute(
+            "UPDATE historical_artifact_versions SET artifact_type = ? WHERE onboarded_artifact_id = ? OR (onboarding_id = ? AND artifact_path = ?) OR normalized_artifact_id = ?",
+            (artifact_type, onboarded_artifact_id, onboarding_id, artifact_path, normalized_artifact_id),
+        )
+        conn.execute(
+            "UPDATE historical_static_profiles SET artifact_type = ? WHERE onboarded_artifact_id = ? OR (onboarding_id = ? AND artifact_path = ?) OR normalized_artifact_id = ?",
+            (artifact_type, onboarded_artifact_id, onboarding_id, artifact_path, normalized_artifact_id),
+        )
+
+        updated = conn.execute("SELECT * FROM onboarded_artifacts WHERE id = ?", (onboarded_artifact_id,)).fetchone()
+    return _row_to_onboarded_artifact(updated) if updated else None
 
 
 def refresh_onboarding_discovered_count(db_path: str, onboarding_id: int) -> None:

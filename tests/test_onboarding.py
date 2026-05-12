@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services.audit_jobs import init_db
-from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill, sync_on_pr_merge_artifact_changes
+from services.onboarding import add_repo_artifact_to_onboarding, execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill, remove_repo_artifact_from_onboarding, sync_on_pr_merge_artifact_changes, update_repo_artifact_type
 from services.onboarding_records import (
     get_latest_repository_onboarding,
     list_historical_artifact_versions_for_repo_artifact,
@@ -216,6 +216,88 @@ def test_plan_repository_history_backfill_creates_jobs_for_onboarded_artifacts(t
     assert len(persisted_jobs) == 2
     assert {job.artifact_path for job in persisted_jobs} == {"prompts/system.txt", "config/model.yaml"}
     assert persisted_jobs[0].commit_shas
+
+
+def test_manual_repo_artifact_mutations_persist_and_refresh_counts(tmp_path):
+    db_path = str(tmp_path / "onboarding-manual.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/system.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "You are a safe assistant.",
+    )
+
+    artifact, baseline = add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="policies/usage.md",
+        artifact_type="policy",
+        fetch_file_content_fn=lambda repo, path, token, ref: "Human review is required for production-impacting AI changes.",
+    )
+
+    assert artifact.artifact_path == "policies/usage.md"
+    assert artifact.artifact_type == "policy"
+    assert baseline.artifact_type == "policy"
+    assert baseline.approval_status == "approved"
+
+    updated = update_repo_artifact_type(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+        artifact_type="guardrail",
+    )
+    assert updated.artifact_type == "guardrail"
+
+    latest = get_latest_repository_onboarding(db_path, "doria90/dummyAI")
+    assert latest is not None
+    baselines = list_onboarding_baseline_versions_for_onboarding(db_path, latest.id)
+    baseline_by_path = {item.artifact_path: item for item in baselines}
+    assert baseline_by_path["policies/usage.md"].artifact_type == "guardrail"
+
+    remove_repo_artifact_from_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+    )
+
+    latest = get_latest_repository_onboarding(db_path, "doria90/dummyAI")
+    assert latest is not None
+    artifacts = list_onboarded_artifacts_for_onboarding(db_path, latest.id)
+    assert {item.artifact_path for item in artifacts} == {"prompts/system.txt"}
+    assert latest.discovered_artifact_count == 1
+
+
+def test_manual_repo_artifact_add_can_infer_type_from_path(tmp_path):
+    db_path = str(tmp_path / "onboarding-manual-infer.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/system.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "You are a safe assistant.",
+    )
+
+    artifact, baseline = add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="policies/usage.md",
+        artifact_type=None,
+        fetch_file_content_fn=lambda repo, path, token, ref: "Human review is required for production-impacting AI changes.",
+    )
+
+    assert artifact.artifact_type == "policy"
+    assert baseline.artifact_type == "policy"
 
 
 def test_execute_repository_history_backfill_persists_historical_lineage(tmp_path):

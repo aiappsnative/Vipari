@@ -26,6 +26,7 @@ from .onboarding_records import (
     RepositoryOnboardingRecord,
     create_historical_backfill_jobs,
     get_historical_backfill_job,
+    get_onboarded_artifact_by_path,
     get_latest_repository_onboarding,
     list_historical_backfill_jobs_for_repo,
     list_latest_onboarding_baseline_versions_for_onboarding,
@@ -34,6 +35,7 @@ from .onboarding_records import (
     refresh_onboarding_discovered_count,
     record_historical_backfill_versions,
     record_repository_onboarding,
+    update_onboarded_artifact_type,
     update_repository_onboarding_approval_status,
     update_historical_backfill_job_status,
 )
@@ -499,3 +501,124 @@ def sync_on_pr_merge_artifact_changes(
 
     materialize_repo_journey(db_path, repo_full)
     return RepositoryOnboardingResult(onboarding=onboarding, artifacts=latest_artifacts, baseline_versions=baselines)
+
+
+TRACKED_ARTIFACT_TYPE_OPTIONS = tuple(sorted({
+    str(rule[1])
+    for rule in PATH_RULES
+    if len(rule) >= 2 and rule[1]
+}))
+
+
+def tracked_artifact_type_options() -> list[str]:
+    return list(TRACKED_ARTIFACT_TYPE_OPTIONS)
+
+
+def infer_artifact_type_from_path(artifact_path: str, *, default: str = "generic") -> str:
+    lowered = str(artifact_path or "").lower()
+    for keywords, artifact_type, _reason, _weight in PATH_RULES:
+        variants: set[str] = set()
+        for keyword in keywords:
+            variants.add(keyword)
+            variants.add(f"{keyword}s")
+            if keyword.endswith("y") and len(keyword) > 1:
+                variants.add(f"{keyword[:-1]}ies")
+        if any(variant in lowered for variant in variants):
+            return str(artifact_type)
+    return default
+
+
+def add_repo_artifact_to_onboarding(
+    db_path: str,
+    *,
+    repo_full: str,
+    token: str,
+    artifact_path: str,
+    artifact_type: str | None,
+    fetch_file_content_fn=fetch_file_content,
+) -> tuple[OnboardedArtifactRecord, OnboardingBaselineVersionRecord]:
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        raise ValueError("Repository onboarding was not found.")
+    resolved_artifact_type = infer_artifact_type_from_path(artifact_path) if not artifact_type else artifact_type
+    if resolved_artifact_type not in TRACKED_ARTIFACT_TYPE_OPTIONS:
+        raise ValueError("Artifact type is not supported.")
+
+    existing = get_onboarded_artifact_by_path(db_path, onboarding.id, artifact_path)
+    if existing is not None:
+        raise ValueError("Artifact is already tracked for this repository.")
+
+    content_text = fetch_file_content_fn(repo_full, artifact_path, token, ref=onboarding.default_branch)
+    artifact = add_onboarded_artifact(
+        db_path,
+        onboarding_id=onboarding.id,
+        repo_full=repo_full,
+        artifact_path=artifact_path,
+        artifact_type=resolved_artifact_type,
+        discovery_reason="Manually added from repository audit page.",
+        confidence=1.0,
+    )
+    baseline = create_onboarding_baseline_version(
+        db_path,
+        onboarding_id=onboarding.id,
+        onboarded_artifact_id=artifact.id,
+        repo_full=repo_full,
+        artifact_path=artifact_path,
+        artifact_type=resolved_artifact_type,
+        content_text=content_text,
+        profile=build_attribute_profile(content_text),
+        signal_terms=extract_signal_terms_from_text(content_text),
+        approval_status="approved",
+        approved_at=time.time(),
+    )
+    refresh_onboarding_discovered_count(db_path, onboarding.id)
+
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
+    return artifact, baseline
+
+
+def remove_repo_artifact_from_onboarding(db_path: str, *, repo_full: str, artifact_path: str) -> None:
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        raise ValueError("Repository onboarding was not found.")
+
+    artifact = get_onboarded_artifact_by_path(db_path, onboarding.id, artifact_path)
+    if artifact is None:
+        raise ValueError("Tracked artifact was not found.")
+
+    delete_onboarded_artifact_by_path(db_path, onboarding.id, artifact_path)
+    refresh_onboarding_discovered_count(db_path, onboarding.id)
+
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
+
+
+def update_repo_artifact_type(
+    db_path: str,
+    *,
+    repo_full: str,
+    artifact_path: str,
+    artifact_type: str,
+) -> OnboardedArtifactRecord:
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    if onboarding is None:
+        raise ValueError("Repository onboarding was not found.")
+    if artifact_type not in TRACKED_ARTIFACT_TYPE_OPTIONS:
+        raise ValueError("Artifact type is not supported.")
+
+    updated = update_onboarded_artifact_type(
+        db_path,
+        onboarding_id=onboarding.id,
+        artifact_path=artifact_path,
+        artifact_type=artifact_type,
+    )
+    if updated is None:
+        raise ValueError("Tracked artifact was not found.")
+
+    from .repo_journey import materialize_repo_journey
+
+    materialize_repo_journey(db_path, repo_full)
+    return updated

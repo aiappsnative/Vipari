@@ -30,6 +30,7 @@ from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import update_pull_request_audit_state
 from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
 from services.audit_worker import AuditWorker, WorkerSettings
+from services.audit_records import list_pre_audit_relevance_decisions
 from services.mcp_broker import (
     authenticate_mcp_broker_request,
     invoke_mcp_broker_tool,
@@ -161,17 +162,18 @@ from services.control_plane_records import (
     write_session_flash,
 )
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
+from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
 from services.compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
 from services.compliance_readiness import build_compliance_workspace_view, filter_compliance_evidence_view
-from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token
+from services.cloud_common import evaluate_and_persist_audit_decision
+from services.github_integration import fetch_commit_pair_diff, fetch_file_content, fetch_pr_diff, generate_jwt, get_installation_token, list_repository_files
 from services.github_provisioning import get_live_github_install_url, sync_installation_repositories
 from services.ai_system_registry import sync_ai_system_for_repo
-from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.onboarding import add_repo_artifact_to_onboarding, execute_repository_history_backfill, infer_artifact_type_from_path, onboard_repository, plan_repository_history_backfill, remove_repo_artifact_from_onboarding, tracked_artifact_type_options, update_repo_artifact_type
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
 from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
@@ -207,6 +209,7 @@ AUDIT_WORKER_ENABLED = settings.audit_worker_enabled and bool(
     settings.has_github_app_credentials and GITHUB_WEBHOOK_SECRET and AI_API_KEY
 )
 LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
+RELEVANCE_MICRO_CLASSIFIER_TIMEOUT_SECONDS = min(LLM_TIMEOUT_SECONDS, 5.0)
 AUDIT_MAX_ATTEMPTS = settings.audit_max_attempts
 AUDIT_MAX_RETRY_WINDOW_SECONDS = settings.audit_max_retry_window_seconds
 AUDIT_WORKER_POLL_SECONDS = settings.audit_worker_poll_seconds
@@ -1356,11 +1359,11 @@ def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dic
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
-        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status, "repo_installation_id": allocation.installation_id}
     connection = get_repo_connection_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, repo_full)
     if connection is not None and connection.status == "available" and onboarding is not None:
-        return {**access_context, "dashboard_repo_scope": "connected_history", "dashboard_repo_allocation_status": None}
+        return {**access_context, "dashboard_repo_scope": "connected_history", "dashboard_repo_allocation_status": None, "repo_installation_id": connection.installation_id}
     raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
 
 
@@ -1369,7 +1372,7 @@ def _require_repo_dashboard_mutation_access(request: Request, repo_full: str) ->
     workspace = access_context["workspace"]
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
-        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status}
+        return {**access_context, "dashboard_repo_scope": "allocated", "dashboard_repo_allocation_status": allocation.allocation_status, "repo_installation_id": allocation.installation_id}
     raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
 
 
@@ -4271,9 +4274,27 @@ def list_pending_proposals_for_repo(request: Request, repo_full: str):
     )
 
 
+def list_pre_audit_relevance_for_repo(request: Request, repo_full: str):
+    _require_repo_dashboard_read_access(request, repo_full)
+    raw_pr_number = (request.query_params.get("pr_number") or "").strip()
+    raw_head_sha = (request.query_params.get("head_sha") or "").strip()
+    if not raw_pr_number.isdigit() or not raw_head_sha:
+        raise HTTPException(status_code=400, detail="pr_number and head_sha are required.")
+    return JSONResponse(
+        build_pre_audit_relevance_payload(
+            AUDIT_DB_PATH,
+            repo_full,
+            pr_number=int(raw_pr_number),
+            head_sha=raw_head_sha,
+            list_pre_audit_relevance_decisions_fn=list_pre_audit_relevance_decisions,
+        )
+    )
+
+
 app.include_router(
     create_repo_read_router(
         pending_proposals_handler=list_pending_proposals_for_repo,
+        pre_audit_relevance_handler=list_pre_audit_relevance_for_repo,
     )
 )
 
@@ -4282,6 +4303,8 @@ app.include_router(
         authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
         resolve_db_path_fn=lambda: AUDIT_DB_PATH,
         build_repo_dashboard_view_with_timings_fn=build_repo_dashboard_view_with_timings,
+        build_pre_audit_relevance_payload_fn=build_pre_audit_relevance_payload,
+        list_pre_audit_relevance_decisions_fn=list_pre_audit_relevance_decisions,
         list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
         export_job_payload_fn=_export_job_payload,
         record_server_timing_metric_fn=_record_server_timing_metric,
@@ -4308,6 +4331,7 @@ app.include_router(
 
 app.include_router(
     create_repo_onboarding_router(
+        authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
         authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
         resolve_installation_id_fn=lambda access_context, installation_id: _trusted_workspace_installation_id(access_context, installation_id),
         resolve_db_path_fn=lambda: AUDIT_DB_PATH,
@@ -4315,7 +4339,13 @@ app.include_router(
         github_private_key_path=GITHUB_PRIVATE_KEY_PATH,
         generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
         get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+        list_repository_files_fn=lambda repo_full, token, ref=None: list_repository_files(repo_full, token, ref=ref),
         onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
+        add_repo_artifact_to_onboarding_fn=lambda active_db_path, **kwargs: add_repo_artifact_to_onboarding(active_db_path, **kwargs),
+        remove_repo_artifact_from_onboarding_fn=lambda active_db_path, **kwargs: remove_repo_artifact_from_onboarding(active_db_path, **kwargs),
+        update_repo_artifact_type_fn=lambda active_db_path, **kwargs: update_repo_artifact_type(active_db_path, **kwargs),
+        infer_artifact_type_from_path_fn=infer_artifact_type_from_path,
+        tracked_artifact_type_options_fn=tracked_artifact_type_options,
         plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
         execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
         build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
@@ -4824,7 +4854,19 @@ async def webhook(request: Request):
         head_sha=head_sha,
     )
 
-    if not needs_audit(diff_text):
+    audit_decision = evaluate_and_persist_audit_decision(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        diff_text=diff_text,
+        llm_client=client,
+        model=(AI_MODEL if client is not None else None),
+        timeout_seconds=RELEVANCE_MICRO_CLASSIFIER_TIMEOUT_SECONDS,
+        provider=AI_PROVIDER,
+    )
+
+    if not audit_decision.should_audit:
         return JSONResponse({"message": "no relevant changes"})
 
     job = create_audit_job(

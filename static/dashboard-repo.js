@@ -35,6 +35,16 @@ window.__artifactEntries = [];
 window.__artifactTypeFilter = "all";
 window.__artifactQuery = "";
 window.__artifactsCollapsed = false;
+window.__artifactTypeOptions = [];
+window.__artifactOptionEntries = [];
+window.__artifactOptionsLoaded = false;
+window.__artifactOptionsLoading = false;
+window.__artifactOptionsError = "";
+window.__artifactAddPath = "";
+window.__artifactEditPath = "";
+window.__artifactMutationBusyPath = "";
+window.__artifactActionStatusMessage = "";
+window.__artifactActionStatusTone = "info";
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
@@ -487,6 +497,48 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
                 <div class="artifact-card-reason">${escapeHtml(repoStatus)} · ${escapeHtml(`${items.length} stored artifacts`)}</div>
                 <div class="detail-note">${escapeHtml(reviewState)}</div>
             </div>
+        </div>
+    `;
+}
+
+function renderPreAuditRelevancePanel(preAuditRelevance) {
+    const scopedPrNumber = String(preAuditRelevance?.pr_number || "").trim();
+    const scopedHeadSha = String(preAuditRelevance?.head_sha || "").trim();
+    const decisions = asArray(preAuditRelevance?.decisions);
+    if (!scopedPrNumber || !scopedHeadSha) {
+        return '<div class="artifact-card"><strong>PR-scoped relevance</strong><div class="detail-note">Open this repo from a pull-request deep link to review the persisted pre-audit relevance gate for that exact change set.</div></div>';
+    }
+    if (!decisions.length) {
+        return `<div class="artifact-card"><strong>PR-scoped relevance</strong><div class="artifact-card-reason">PR #${escapeHtml(scopedPrNumber)} · ${escapeHtml(scopedHeadSha.slice(0, 12))}</div><div class="detail-note">No persisted pre-audit relevance decisions were found for this pull request snapshot.</div></div>`;
+    }
+    return `
+        <div class="stack compact-stack">
+            <div class="artifact-card">
+                <strong>PR-scoped relevance gate</strong>
+                <div class="artifact-card-reason">PR #${escapeHtml(scopedPrNumber)} · ${escapeHtml(scopedHeadSha.slice(0, 12))} · ${escapeHtml(`${decisions.length} decision${decisions.length === 1 ? "" : "s"}`)}</div>
+                <div class="detail-note">These rows show how the confidence-tiered relevance filter treated the incoming change set before audit creation.</div>
+            </div>
+            ${decisions.slice(0, 4).map((decision) => {
+                const tier = String(decision?.confidence_tier || "uncertain").replaceAll("_", " ");
+                const classifierStatus = String(decision?.classifier_status || "not_run").replaceAll("_", " ");
+                const classifierVerdict = decision?.classifier_is_relevant === true
+                    ? "Relevant"
+                    : decision?.classifier_is_relevant === false
+                        ? "Not relevant"
+                        : "No classifier verdict";
+                const rationale = decision?.classifier_reason || decision?.heuristic_reason || "No rationale recorded.";
+                return `
+                    <div class="artifact-card">
+                        <strong>${escapeHtml(decision?.artifact_path || "Unknown artifact")}</strong>
+                        <div class="artifact-card-reason">${escapeHtml(tier)} · heuristic ${escapeHtml(String(decision?.heuristic_score ?? "0"))} · ${escapeHtml(classifierStatus)}</div>
+                        <div class="detail-note">${escapeHtml(rationale)}</div>
+                        <div class="tag-row">
+                            <span class="drift-chip chip-model">${escapeHtml(classifierVerdict)}</span>
+                            ${decision?.changed_artifact_id ? `<span class="drift-chip chip-guardrails">Linked to audit artifact #${escapeHtml(String(decision.changed_artifact_id))}</span>` : '<span class="drift-chip chip-baseline">No audit artifact link yet</span>'}
+                        </div>
+                    </div>
+                `;
+            }).join("")}
         </div>
     `;
 }
@@ -1400,20 +1452,204 @@ function bindCueCards() {
     });
 }
 
+function artifactTypeOptions() {
+    const optionSet = new Set();
+    asArray(window.__artifactTypeOptions).forEach((value) => {
+        const normalized = String(value || "").trim();
+        if (normalized) {
+            optionSet.add(normalized);
+        }
+    });
+    asArray(window.__artifactEntries).forEach((item) => {
+        const normalized = String(item?.artifact_type || "").trim();
+        if (normalized) {
+            optionSet.add(normalized);
+        }
+    });
+    return [...optionSet].sort();
+}
+
+function artifactOptionEntries() {
+    return asArray(window.__artifactOptionEntries).filter((item) => item && typeof item === "object");
+}
+
+function inferredArtifactTypeForPath(artifactPath) {
+    const match = artifactOptionEntries().find((item) => String(item.path || "") === String(artifactPath || ""));
+    return String(match?.inferred_artifact_type || "generic");
+}
+
+function replaceArtifactEntryLocal(artifactPath, updates = {}) {
+    const path = String(artifactPath || "");
+    window.__artifactEntries = asArray(window.__artifactEntries).map((item) => {
+        if (String(item?.artifact_path || "") !== path) {
+            return item;
+        }
+        return { ...item, ...updates };
+    });
+}
+
+function removeArtifactEntryLocal(artifactPath) {
+    const path = String(artifactPath || "");
+    window.__artifactEntries = asArray(window.__artifactEntries).filter((item) => String(item?.artifact_path || "") !== path);
+}
+
+function setArtifactActionStatus(message = "", tone = "info") {
+    window.__artifactActionStatusMessage = String(message || "").trim();
+    window.__artifactActionStatusTone = tone;
+    const status = document.getElementById("artifact-action-status");
+    if (!status) {
+        return;
+    }
+    if (!window.__artifactActionStatusMessage) {
+        status.hidden = true;
+        status.textContent = "";
+        status.removeAttribute("data-tone");
+        return;
+    }
+    status.hidden = false;
+    status.textContent = window.__artifactActionStatusMessage;
+    status.setAttribute("data-tone", tone);
+}
+
+async function readErrorMessage(response, fallbackMessage) {
+    try {
+        const payload = await response.json();
+        if (payload && typeof payload.detail === "string" && payload.detail.trim()) {
+            return payload.detail.trim();
+        }
+    } catch {
+        // Ignore non-JSON responses and fall back to the provided message.
+    }
+    return fallbackMessage;
+}
+
+async function loadArtifactOptions(force = false) {
+    if (!repoFull) {
+        return;
+    }
+    if (window.__artifactOptionsLoading) {
+        return;
+    }
+    if (window.__artifactOptionsLoaded && !force) {
+        return;
+    }
+
+    window.__artifactOptionsLoading = true;
+    refreshArtifactsSection();
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/options`);
+        if (!response.ok) {
+            throw new Error(await readErrorMessage(response, `Artifact options request failed with ${response.status}`));
+        }
+        const payload = await response.json();
+        window.__artifactTypeOptions = asArray(payload.artifact_type_options);
+        window.__artifactOptionEntries = asArray(payload.files);
+        window.__artifactOptionsLoaded = true;
+        window.__artifactOptionsError = "";
+
+        const optionPaths = artifactOptionEntries().map((item) => String(item.path || ""));
+        if (!optionPaths.includes(window.__artifactAddPath)) {
+            window.__artifactAddPath = optionPaths[0] || "";
+        }
+    } catch (error) {
+        window.__artifactOptionsError = error instanceof Error ? error.message : "Unable to load repository files.";
+    } finally {
+        window.__artifactOptionsLoading = false;
+        refreshArtifactsSection();
+    }
+}
+
+function renderArtifactTypeOptionTags(selectedType = "") {
+    return artifactTypeOptions().map((type) => `
+        <option value="${escapeHtml(type)}"${type === selectedType ? " selected" : ""}>${escapeHtml(artifactTypeLabel(type))}</option>
+    `).join("");
+}
+
+function renderArtifactAddControls() {
+    const isBusy = window.__artifactOptionsLoading || window.__artifactMutationBusyPath === "__artifact_add__";
+    const options = artifactOptionEntries();
+
+    if (window.__artifactOptionsLoading && !window.__artifactOptionsLoaded) {
+        return '<div class="artifact-add-copy">Loading repository files that can be tracked...</div>';
+    }
+
+    if (window.__artifactOptionsError && !window.__artifactOptionsLoaded) {
+        return `
+            <div class="artifact-add-copy">Unable to load repository files. ${escapeHtml(window.__artifactOptionsError)}</div>
+            <div class="artifact-add-row">
+                <button type="button" class="cue-action-button" id="artifact-options-retry">Retry</button>
+            </div>
+        `;
+    }
+
+    if (!options.length) {
+        return `
+            <div class="artifact-add-copy">All visible repository files that can be added are already tracked, or no repository file inventory is available yet.</div>
+            <div class="artifact-add-row">
+                <button type="button" class="cue-action-button" id="artifact-options-refresh"${isBusy ? " disabled" : ""}>Refresh file list</button>
+            </div>
+        `;
+    }
+
+    const optionPaths = options.map((item) => String(item.path || ""));
+    const selectedPath = optionPaths.includes(window.__artifactAddPath)
+        ? window.__artifactAddPath
+        : (optionPaths[0] || "");
+    const inferredType = inferredArtifactTypeForPath(selectedPath);
+
+    return `
+        <div class="artifact-add-copy">Add a repository file to the tracked artifact registry. Vipari will infer its type from the selected path, fetch the file from the repo, and create a baseline immediately. If the inferred type is wrong, edit it after adding.</div>
+        <div class="artifact-add-row">
+            <select id="artifact-add-path-select" class="artifact-add-select" aria-label="Repository file to track"${isBusy ? " disabled" : ""}>
+                ${options.map((item) => {
+                    const path = String(item.path || "");
+                    const type = String(item.inferred_artifact_type || "generic");
+                    return `<option value="${escapeHtml(path)}"${path === selectedPath ? " selected" : ""}>${escapeHtml(path)} (${escapeHtml(artifactTypeLabel(type))})</option>`;
+                }).join("")}
+            </select>
+            <div class="artifact-add-copy">Detected type: <strong>${escapeHtml(artifactTypeLabel(inferredType))}</strong></div>
+            <button type="button" class="cue-action-button" id="artifact-options-refresh"${isBusy ? " disabled" : ""}>Refresh file list</button>
+            <button type="button" class="cue-action-button" id="artifact-add-submit"${isBusy ? " disabled" : ""}>Add tracked artifact</button>
+        </div>
+    `;
+}
+
 function renderArtifactTable(items = []) {
     const storylineCallToAction = storylinePanelCopy().cta;
     if (!items.length) {
         return '<tr><td colspan="5" class="muted">No onboarded artifacts were found for this repository yet.</td></tr>';
     }
-    return items.map((item) => `
-        <tr>
+    return items.map((item, index) => {
+        const encodedPath = encodeURIComponent(item.artifact_path);
+        const isEditing = window.__artifactEditPath === item.artifact_path;
+        const isBusy = window.__artifactMutationBusyPath === item.artifact_path;
+        const typeCell = isEditing
+            ? `
+                <div class="artifact-inline-type">
+                    <label class="visually-hidden" for="artifact-type-select-${index}">Artifact type for ${escapeHtml(item.artifact_path)}</label>
+                    <select id="artifact-type-select-${index}" class="artifact-type-select" data-artifact-type-select="${encodedPath}"${isBusy ? " disabled" : ""}>
+                        ${renderArtifactTypeOptionTags(String(item.artifact_type || ""))}
+                    </select>
+                    <div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div>
+                </div>
+            `
+            : `<div>${escapeHtml(item.artifact_type)}</div><div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div>`;
+        return `
+        <tr data-artifact-row-path="${encodedPath}">
             <td>${escapeHtml(item.artifact_path)}</td>
-            <td><div>${escapeHtml(item.artifact_type)}</div><div class="muted">${escapeHtml(item.provenance_label || "Supporting repository artifact")}</div></td>
+            <td>${typeCell}</td>
             <td>${Number(item.historical_profile_count || 0)}</td>
             <td>${Math.max(Number(item.latest_historical_drift_magnitude || 0), Number(item.leaderboard_drift_magnitude || 0)).toFixed(3)}</td>
-            <td><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(item.artifact_path)}">${escapeHtml(storylineCallToAction)}</button></td>
+            <td>
+                <div class="artifact-action-group">
+                    <button type="button" class="cue-action-button" data-storyline-artifact="${encodedPath}"${isBusy ? " disabled" : ""}>${escapeHtml(storylineCallToAction)}</button>
+                    <button type="button" class="cue-action-button artifact-icon-button" data-artifact-edit-path="${encodedPath}" aria-label="${isEditing ? "Confirm artifact type" : "Edit artifact type"}" title="${isEditing ? "Confirm artifact type" : "Edit artifact type"}"${isBusy ? " disabled" : ""}>${isEditing ? "✓" : "✎"}</button>
+                    <button type="button" class="cue-action-button artifact-icon-button" data-artifact-remove-path="${encodedPath}" aria-label="Remove tracked artifact" title="Remove tracked artifact"${isBusy ? " disabled" : ""}>X</button>
+                </div>
+            </td>
         </tr>
-    `).join("");
+    `;
+    }).join("");
 }
 
 function artifactTypeLabel(value) {
@@ -1460,6 +1696,7 @@ function refreshArtifactsSection() {
     const items = asArray(window.__artifactEntries);
     const filtered = filteredArtifactEntries(items);
     setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
+    setSectionHtml("artifact-add-controls", renderArtifactAddControls());
     const filterHost = document.getElementById("artifact-filter-chips");
     if (filterHost) {
         filterHost.innerHTML = renderArtifactFilterChips(items);
@@ -1477,7 +1714,9 @@ function refreshArtifactsSection() {
         toggle.textContent = window.__artifactsCollapsed ? "Expand" : "Collapse";
         toggle.setAttribute("aria-expanded", window.__artifactsCollapsed ? "false" : "true");
     }
+    setArtifactActionStatus(window.__artifactActionStatusMessage, window.__artifactActionStatusTone);
     bindCueCards();
+    bindArtifactMutationControls();
 }
 
 function bindArtifactControls() {
@@ -1509,6 +1748,192 @@ function bindArtifactControls() {
             }
             window.__artifactTypeFilter = target.getAttribute("data-artifact-type-filter") || "all";
             refreshArtifactsSection();
+        });
+    }
+
+    if (!window.__artifactOptionsLoaded && !window.__artifactOptionsLoading) {
+        void loadArtifactOptions();
+    }
+}
+
+async function addTrackedArtifact() {
+    if (!window.__artifactAddPath) {
+        setArtifactActionStatus("Choose a repository file before adding it.", "error");
+        return;
+    }
+
+    window.__artifactMutationBusyPath = "__artifact_add__";
+    setArtifactActionStatus("");
+    refreshArtifactsSection();
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artifact_path: window.__artifactAddPath }),
+        });
+        if (!response.ok) {
+            throw new Error(await readErrorMessage(response, `Artifact add failed with ${response.status}`));
+        }
+        const payload = await response.json();
+        const inferredType = payload?.artifact?.artifact_type || inferredArtifactTypeForPath(window.__artifactAddPath);
+        window.__artifactEntries = [
+            ...asArray(window.__artifactEntries),
+            {
+                artifact_path: window.__artifactAddPath,
+                artifact_type: inferredType,
+                historical_profile_count: 0,
+                latest_historical_drift_magnitude: 0,
+                leaderboard_drift_magnitude: 0,
+                provenance_label: "Supporting repository artifact",
+            },
+        ].sort((left, right) => String(left?.artifact_path || "").localeCompare(String(right?.artifact_path || "")));
+        refreshArtifactsSection();
+        if (payload?.dashboard) {
+            void Promise.resolve().then(() => applyDashboardPayload(payload.dashboard));
+        } else {
+            void loadDashboard();
+        }
+        setArtifactActionStatus(`Added ${window.__artifactAddPath} to the tracked artifact registry.`, "success");
+        void loadArtifactOptions(true);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to add the selected artifact.";
+        setArtifactActionStatus(message, "error");
+    } finally {
+        window.__artifactMutationBusyPath = "";
+        refreshArtifactsSection();
+    }
+}
+
+async function removeTrackedArtifact(artifactPath) {
+    const confirmed = window.confirm(`Remove ${artifactPath} from tracked artifacts? This will also remove its stored onboarding baseline history for the tracked set.`);
+    if (!confirmed) {
+        return;
+    }
+
+    window.__artifactMutationBusyPath = artifactPath;
+    setArtifactActionStatus("");
+    refreshArtifactsSection();
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${encodeURIComponent(artifactPath)}`, {
+            method: "DELETE",
+        });
+        if (!response.ok) {
+            throw new Error(await readErrorMessage(response, `Artifact removal failed with ${response.status}`));
+        }
+        const payload = await response.json();
+        window.__artifactEditPath = "";
+        removeArtifactEntryLocal(artifactPath);
+        refreshArtifactsSection();
+        if (payload?.dashboard) {
+            void Promise.resolve().then(() => applyDashboardPayload(payload.dashboard));
+        } else {
+            void loadDashboard();
+        }
+        setArtifactActionStatus(`Removed ${artifactPath} from tracked artifacts.`, "success");
+        void loadArtifactOptions(true);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to remove the tracked artifact.";
+        setArtifactActionStatus(message, "error");
+    } finally {
+        window.__artifactMutationBusyPath = "";
+        refreshArtifactsSection();
+    }
+}
+
+async function saveTrackedArtifactType(artifactPath, artifactType) {
+    window.__artifactMutationBusyPath = artifactPath;
+    setArtifactActionStatus("");
+    refreshArtifactsSection();
+    try {
+        const response = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/artifacts/${encodeURIComponent(artifactPath)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artifact_type: artifactType }),
+        });
+        if (!response.ok) {
+            throw new Error(await readErrorMessage(response, `Artifact type update failed with ${response.status}`));
+        }
+        const payload = await response.json();
+        window.__artifactEditPath = "";
+        replaceArtifactEntryLocal(artifactPath, { artifact_type: payload?.artifact?.artifact_type || artifactType });
+        refreshArtifactsSection();
+        if (payload?.dashboard) {
+            void Promise.resolve().then(() => applyDashboardPayload(payload.dashboard));
+        } else {
+            void loadDashboard();
+        }
+        setArtifactActionStatus(`Updated ${artifactPath} to ${artifactTypeLabel(artifactType)}.`, "success");
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to update the tracked artifact type.";
+        setArtifactActionStatus(message, "error");
+    } finally {
+        window.__artifactMutationBusyPath = "";
+        refreshArtifactsSection();
+    }
+}
+
+function bindArtifactMutationControls() {
+    const addPathSelect = document.getElementById("artifact-add-path-select");
+    if (addPathSelect instanceof HTMLSelectElement && addPathSelect.dataset.boundArtifactAddPath !== "true") {
+        addPathSelect.dataset.boundArtifactAddPath = "true";
+        addPathSelect.addEventListener("change", () => {
+            window.__artifactAddPath = addPathSelect.value || "";
+        });
+    }
+
+    const refreshButton = document.getElementById("artifact-options-refresh") || document.getElementById("artifact-options-retry");
+    if (refreshButton && refreshButton.dataset.boundArtifactOptionsRefresh !== "true") {
+        refreshButton.dataset.boundArtifactOptionsRefresh = "true";
+        refreshButton.addEventListener("click", () => {
+            void loadArtifactOptions(true);
+        });
+    }
+
+    const addButton = document.getElementById("artifact-add-submit");
+    if (addButton && addButton.dataset.boundArtifactAdd !== "true") {
+        addButton.dataset.boundArtifactAdd = "true";
+        addButton.addEventListener("click", () => {
+            void addTrackedArtifact();
+        });
+    }
+
+    const tbody = document.getElementById("artifacts-tbody");
+    if (tbody && tbody.dataset.boundArtifactMutations !== "true") {
+        tbody.dataset.boundArtifactMutations = "true";
+        tbody.addEventListener("click", (event) => {
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            if (!target) {
+                return;
+            }
+
+            const editButton = target.closest("[data-artifact-edit-path]");
+            if (editButton instanceof HTMLElement) {
+                const encodedPath = editButton.getAttribute("data-artifact-edit-path") || "";
+                const artifactPath = decodeURIComponent(encodedPath);
+                if (!artifactPath) {
+                    return;
+                }
+                if (window.__artifactEditPath === artifactPath) {
+                    const select = document.querySelector(`[data-artifact-type-select="${encodedPath}"]`);
+                    const selectedType = select instanceof HTMLSelectElement ? select.value : "";
+                    if (selectedType) {
+                        void saveTrackedArtifactType(artifactPath, selectedType);
+                    }
+                    return;
+                }
+                window.__artifactEditPath = artifactPath;
+                refreshArtifactsSection();
+                return;
+            }
+
+            const removeButton = target.closest("[data-artifact-remove-path]");
+            if (removeButton instanceof HTMLElement) {
+                const encodedPath = removeButton.getAttribute("data-artifact-remove-path") || "";
+                const artifactPath = decodeURIComponent(encodedPath);
+                if (artifactPath) {
+                    void removeTrackedArtifact(artifactPath);
+                }
+            }
         });
     }
 }
@@ -1981,7 +2406,7 @@ function applyDashboardPayload(payload) {
         setSectionHtml("featured-storyline", `<div class="muted">${escapeHtml(storylinePanelCopy().select)}</div>`);
     }
     setSectionHtml("control-surfaces", renderControlSurfaces(controlSurfaces));
-    setSectionHtml("repo-ai-act-assessment", renderAiActAssessment(onboarding, artifacts, baselineReview));
+    setSectionHtml("repo-ai-act-assessment", `${renderAiActAssessment(onboarding, artifacts, baselineReview)}${renderPreAuditRelevancePanel(payload.pre_audit_relevance)}`);
     setSectionHtml("history-cues", renderCueCards(historyCues));
     setSectionHtml("baseline-review-panel", renderBaselineReviewPanel(baselineReview));
     setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
@@ -1996,11 +2421,16 @@ function applyDashboardPayload(payload) {
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
     window.__artifactEntries = artifacts;
+    if (window.__artifactEditPath && !artifacts.some((item) => item.artifact_path === window.__artifactEditPath)) {
+        window.__artifactEditPath = "";
+    }
+    const types = artifactTypeOptions();
     refreshArtifactsSection();
     bindArtifactControls();
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
+    void loadArtifactOptions();
 
     renderDecisionSection(insights, payload);
     renderRepoActionsSection(insights);
@@ -2201,7 +2631,7 @@ async function loadDashboard() {
         if (!repoFull) {
             throw new Error("Repository context is missing from this page.");
         }
-        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard`);
+        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard${window.location.search || ""}`);
         if (!dashboardResponse.ok) {
             throw new Error(`Repo dashboard request failed with ${dashboardResponse.status}`);
         }

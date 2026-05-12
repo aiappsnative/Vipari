@@ -1459,6 +1459,60 @@ strong {
     margin-bottom: 12px;
 }
 
+.artifact-add-controls {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.artifact-add-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(160px, 0.9fr) auto auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.artifact-add-select,
+.artifact-type-select {
+    min-height: 38px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+}
+
+.artifact-add-select:focus,
+.artifact-type-select:focus {
+    outline: none;
+    border-color: var(--color-primary-outline);
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.artifact-add-copy {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+}
+
+.artifact-status {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-glass-3);
+    color: var(--color-text-muted);
+}
+
+.artifact-status[data-tone="error"] {
+    border-color: rgba(189, 75, 75, 0.35);
+    color: var(--color-danger, #cf6b6b);
+}
+
+.artifact-status[data-tone="success"] {
+    border-color: rgba(109, 170, 69, 0.35);
+    color: var(--color-success, #74b75b);
+}
+
 .artifact-search-label {
     position: absolute;
     width: 1px;
@@ -1546,6 +1600,24 @@ strong {
     border-color: var(--color-primary-outline);
     background: var(--color-primary-soft);
     color: var(--color-primary);
+}
+
+.artifact-inline-type {
+    display: grid;
+    gap: 4px;
+}
+
+.artifact-action-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.artifact-icon-button {
+    min-width: 34px;
+    padding: 7px 9px;
+    font-weight: 600;
 }
 
 .triage-row {
@@ -2417,6 +2489,16 @@ strong {
 .cue-action-button:hover {
     border-color: var(--color-primary-outline);
     background: var(--color-primary-soft);
+}
+
+@media (max-width: 900px) {
+    .artifact-add-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .artifact-action-group {
+        justify-content: flex-start;
+    }
 }
 
 .detail-note {
@@ -3316,6 +3398,7 @@ body.dashboard-index-page[data-theme="light"] {
 
 .dashboard-index-page .repo-atlas-scope,
 .dashboard-index-page .repo-atlas-baseline,
+.dashboard-index-page .repo-atlas-context,
 .dashboard-index-page .repo-atlas-open,
 .dashboard-index-page .repo-atlas-metrics {
     color: rgba(211, 218, 225, 0.64);
@@ -3327,10 +3410,19 @@ body.dashboard-index-page[data-theme="light"] {
 
 .dashboard-index-page[data-theme="light"] .repo-atlas-scope,
 .dashboard-index-page[data-theme="light"] .repo-atlas-baseline,
+.dashboard-index-page[data-theme="light"] .repo-atlas-context,
 .dashboard-index-page[data-theme="light"] .repo-atlas-metrics,
 .dashboard-index-page[data-theme="light"] .radar-repo-title,
 .dashboard-index-page[data-theme="light"] .journey-repo-name {
     color: var(--color-text-faint);
+}
+
+.dashboard-index-page .repo-atlas-context {
+    color: #8de8dc;
+}
+
+.dashboard-index-page[data-theme="light"] .repo-atlas-context {
+    color: var(--color-primary);
 }
 
 .dashboard-index-page .repo-atlas-status {
@@ -7488,6 +7580,14 @@ body.control-page.compliance-page .compliance-shell-section {
 .escalation-meta-baseline {
     font-size: 0.73rem;
     color: rgba(255, 255, 255, 0.4);
+}
+
+.escalation-meta-context {
+    font-size: 0.71rem;
+    color: rgba(141, 232, 220, 0.92);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .escalation-row-action {

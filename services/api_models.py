@@ -14,6 +14,15 @@ class RepositoryBackfillRequest(BaseModel):
 	installation_id: int
 
 
+class RepoArtifactAddRequest(BaseModel):
+	artifact_path: str
+	artifact_type: str | None = None
+
+
+class RepoArtifactUpdateRequest(BaseModel):
+	artifact_type: str
+
+
 class BaselineDecisionRequest(BaseModel):
 	note: str | None = None
 	actor_login: str | None = None

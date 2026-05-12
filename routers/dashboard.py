@@ -7,7 +7,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from services.api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+from services.api_models import BaselineDecisionRequest, RepoArtifactAddRequest, RepoArtifactUpdateRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
 
 
 def create_dashboard_read_router(
@@ -95,10 +95,13 @@ def create_compliance_api_router(
 def create_repo_read_router(
 	*,
 	pending_proposals_handler: Callable | None = None,
+	pre_audit_relevance_handler: Callable | None = None,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	if pending_proposals_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/proposals/pending", pending_proposals_handler, methods=["GET"])
+	if pre_audit_relevance_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/relevance-decisions", pre_audit_relevance_handler, methods=["GET"])
 	return router
 
 
@@ -107,6 +110,8 @@ def create_repo_dashboard_router(
 	authorize_repo_read_fn: Callable,
 	resolve_db_path_fn: Callable[[], str],
 	build_repo_dashboard_view_with_timings_fn: Callable,
+	build_pre_audit_relevance_payload_fn: Callable | None,
+	list_pre_audit_relevance_decisions_fn: Callable | None,
 	list_export_jobs_for_requester_fn: Callable,
 	export_job_payload_fn: Callable,
 	record_server_timing_metric_fn: Callable,
@@ -135,6 +140,18 @@ def create_repo_dashboard_router(
 			]
 		else:
 			payload["export_jobs"] = []
+		raw_pr_number = (request.query_params.get("pr") or request.query_params.get("pr_number") or "").strip()
+		raw_head_sha = (request.query_params.get("head_sha") or "").strip()
+		if build_pre_audit_relevance_payload_fn is not None and list_pre_audit_relevance_decisions_fn is not None and raw_pr_number.isdigit() and raw_head_sha:
+			payload["pre_audit_relevance"] = build_pre_audit_relevance_payload_fn(
+				resolve_db_path_fn(),
+				repo_full,
+				pr_number=int(raw_pr_number),
+				head_sha=raw_head_sha,
+				list_pre_audit_relevance_decisions_fn=list_pre_audit_relevance_decisions_fn,
+			)
+		else:
+			payload["pre_audit_relevance"] = None
 		response = JSONResponse(payload)
 		record_server_timing_metric_fn(timing_metrics, "json", json_started)
 		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
@@ -156,6 +173,7 @@ def create_repo_dashboard_router(
 
 def create_repo_onboarding_router(
 	*,
+	authorize_repo_read_fn: Callable,
 	authorize_repo_mutation_fn: Callable,
 	resolve_installation_id_fn: Callable,
 	resolve_db_path_fn: Callable[[], str],
@@ -163,12 +181,48 @@ def create_repo_onboarding_router(
 	github_private_key_path: str,
 	generate_jwt_fn: Callable,
 	get_installation_token_fn: Callable,
+	list_repository_files_fn: Callable,
 	onboard_repository_fn: Callable,
+	add_repo_artifact_to_onboarding_fn: Callable,
+	remove_repo_artifact_from_onboarding_fn: Callable,
+	update_repo_artifact_type_fn: Callable,
+	infer_artifact_type_from_path_fn: Callable,
+	tracked_artifact_type_options_fn: Callable,
 	plan_repository_history_backfill_fn: Callable,
 	execute_repository_history_backfill_fn: Callable,
 	build_repo_dashboard_view_fn: Callable,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
+
+	def list_repo_artifact_options(request: Request, repo_full: str):
+		auth_context = authorize_repo_read_fn(request, repo_full)
+		installation_id = auth_context.get("repo_installation_id")
+		if installation_id is None:
+			raise HTTPException(status_code=404, detail="Repository installation was not found.")
+		jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+		token = get_installation_token_fn(jwt_token, int(installation_id))
+		db_path = resolve_db_path_fn()
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		tracked_paths = {item.artifact_path for item in dashboard.artifacts}
+		onboarding = dashboard.onboarding
+		ref = onboarding.default_branch if onboarding is not None else None
+		file_paths = list_repository_files_fn(repo_full, token, ref=ref)
+		return JSONResponse(
+			{
+				"repo_full": repo_full,
+				"default_branch": ref,
+				"tracked_paths": sorted(tracked_paths),
+				"artifact_type_options": tracked_artifact_type_options_fn(),
+				"files": [
+					{
+						"path": path,
+						"inferred_artifact_type": infer_artifact_type_from_path_fn(path),
+					}
+					for path in file_paths
+					if path not in tracked_paths
+				],
+			}
+		)
 
 	def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
 		auth_context = authorize_repo_mutation_fn(request, repo_full)
@@ -234,8 +288,63 @@ def create_repo_onboarding_router(
 			}
 		)
 
+	def add_repo_artifact(request: Request, repo_full: str, payload: RepoArtifactAddRequest):
+		auth_context = authorize_repo_mutation_fn(request, repo_full)
+		installation_id = auth_context.get("repo_installation_id")
+		if installation_id is None:
+			raise HTTPException(status_code=404, detail="Repository installation was not found.")
+		jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+		token = get_installation_token_fn(jwt_token, int(installation_id))
+		db_path = resolve_db_path_fn()
+		try:
+			artifact, baseline = add_repo_artifact_to_onboarding_fn(
+				db_path,
+				repo_full=repo_full,
+				token=token,
+				artifact_path=payload.artifact_path,
+				artifact_type=payload.artifact_type,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({
+			"repo_full": repo_full,
+			"artifact": asdict(artifact),
+			"baseline": asdict(baseline),
+			"dashboard": asdict(dashboard),
+		})
+
+	def remove_repo_artifact(request: Request, repo_full: str, artifact_path: str):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			remove_repo_artifact_from_onboarding_fn(db_path, repo_full=repo_full, artifact_path=artifact_path)
+		except ValueError as exc:
+			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "dashboard": asdict(dashboard)})
+
+	def update_repo_artifact(request: Request, repo_full: str, artifact_path: str, payload: RepoArtifactUpdateRequest):
+		authorize_repo_mutation_fn(request, repo_full)
+		db_path = resolve_db_path_fn()
+		try:
+			artifact = update_repo_artifact_type_fn(
+				db_path,
+				repo_full=repo_full,
+				artifact_path=artifact_path,
+				artifact_type=payload.artifact_type,
+			)
+		except ValueError as exc:
+			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+		return JSONResponse({"repo_full": repo_full, "artifact": asdict(artifact), "dashboard": asdict(dashboard)})
+
+	router.add_api_route("/api/repos/{repo_full:path}/artifacts/options", list_repo_artifact_options, methods=["GET"])
 	router.add_api_route("/api/repos/{repo_full:path}/onboard", run_repo_onboarding, methods=["POST"])
 	router.add_api_route("/api/repos/{repo_full:path}/backfill", run_repo_backfill, methods=["POST"])
+	router.add_api_route("/api/repos/{repo_full:path}/artifacts", add_repo_artifact, methods=["POST"])
+	router.add_api_route("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}", remove_repo_artifact, methods=["DELETE"])
+	router.add_api_route("/api/repos/{repo_full:path}/artifacts/{artifact_path:path}", update_repo_artifact, methods=["PATCH"])
 	return router
 
 

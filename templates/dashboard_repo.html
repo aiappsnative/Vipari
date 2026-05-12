@@ -472,6 +472,17 @@
                         <input type="search" id="artifact-search-input" class="artifact-search-input" placeholder="Search by path or type" autocomplete="off">
                         <div id="artifact-filter-chips" class="artifact-filter-chips" role="group" aria-label="Artifact type filters"></div>
                     </div>
+                    <div id="artifact-add-controls" class="artifact-add-controls loading-shell" aria-busy="true">
+                        <span class="visually-hidden">Loading artifact add controls...</span>
+                        <div class="skeleton-stack" aria-hidden="true">
+                            <div class="skeleton-table-row">
+                                <span class="skeleton-table-cell"></span>
+                                <span class="skeleton-table-cell"></span>
+                                <span class="skeleton-table-cell"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="artifact-action-status" class="artifact-status" hidden></div>
                     <div id="artifacts-panel-body">
                         <table class="repos-table">
                             <thead>
