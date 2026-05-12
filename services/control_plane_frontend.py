@@ -1070,10 +1070,12 @@ def _render_policies_classification_form(
     ]
 
     def _option_markup(options: list[tuple[str, str]], selected: str | None) -> str:
-        return "".join(
-            f'<option value="{html_escape(value)}"{' selected' if value == (selected or "") else ''}>{html_escape(label)}</option>'
-            for value, label in options
-        )
+        rendered: list[str] = []
+        selected_value = selected or ""
+        for value, label in options:
+            selected_attr = " selected" if value == selected_value else ""
+            rendered.append(f'<option value="{html_escape(value)}"{selected_attr}>{html_escape(label)}</option>')
+        return "".join(rendered)
 
     risk_level = str(system.get("risk_level") or "unclassified")
     domain_value = str(system.get("eu_ai_act_domain") or "")
@@ -1691,8 +1693,9 @@ def _render_compliance_tab_bar(active_tab: str) -> str:
         ("evidence", "Evidence", "/compliance/evidence"),
     )
     return "".join(
-        f'''<a class="control-page-tab-link" href="{html_escape(href)}"{' aria-current="page"' if key == active_tab else ''}>{html_escape(label)}</a>'''
+        f'''<a class="control-page-tab-link" href="{html_escape(href)}"{current_attr}>{html_escape(label)}</a>'''
         for key, label, href in items
+        for current_attr in [' aria-current="page"' if key == active_tab else ""]
     )
 
 
@@ -2301,7 +2304,7 @@ def render_control_plane_admin_page(
                     {_csrf_input(csrf_token)}
                     <input class="field-input" name="display_name" maxlength="120" value="{html_escape(str(row.get('user_display_name') or ''))}" />
                     <input class="field-input" name="primary_email" maxlength="320" value="{html_escape(str(row.get('primary_email') or ''))}" />
-                    <label class="admin-checkbox-row"><input type="checkbox" name="active" value="1" {'checked' if bool(row.get('user_active')) else ''} /> Active user</label>
+                    <label class="admin-checkbox-row"><input type="checkbox" name="active" value="1" {"checked" if bool(row.get('user_active')) else ""} /> Active user</label>
                     <button type="submit" class="button">Save user</button>
                 </form>
             </details>
