@@ -126,6 +126,18 @@ def _ensure_high_risk_proposal_tables(db_path: str) -> None:
     bootstrap_proposal_tables(db_path)
 
 
+def _ensure_ai_system_registry_schema(db_path: str) -> None:
+    from .control_plane_records import init_control_plane_db
+
+    init_control_plane_db(db_path)
+
+
+def _ensure_export_jobs_snapshot_columns(db_path: str) -> None:
+    from .export_jobs import init_export_job_db
+
+    init_export_job_db(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -162,6 +174,16 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0007_add_high_risk_proposal_tables",
         "Create cp_baseline_proposals and cp_repo_onboarding_proposals tables for human-gated high-risk change proposals (issue #61).",
         _ensure_high_risk_proposal_tables,
+    ),
+    (
+        "0008_ensure_ai_system_registry_schema",
+        "Repair legacy control-plane databases so the AI system registry table and columns exist even when bootstrap migrations were applied before that schema was introduced.",
+        _ensure_ai_system_registry_schema,
+    ),
+    (
+        "0009_ensure_export_jobs_snapshot_columns",
+        "Repair legacy export_jobs tables so AI system snapshot columns and result storage columns exist even when earlier bootstrap migrations were already recorded.",
+        _ensure_export_jobs_snapshot_columns,
     ),
 )
 

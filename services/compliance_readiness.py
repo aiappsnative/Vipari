@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
+from .control_plane_records import AiSystemRecord, list_ai_systems_for_workspace
 from .dashboard_views import RepoDashboardIndexEntry
 from .export_jobs import ExportJob
 from .onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding
@@ -15,9 +17,10 @@ _EXPORT_COMPLETED_STATUSES = {"completed"}
 _GAP_PRIORITY = {
     "needs_setup": 0,
     "baseline_review": 1,
-    "missing_governance": 2,
-    "stale_evidence": 3,
-    "aging_evidence": 4,
+    "ai_act_classification": 2,
+    "missing_governance": 3,
+    "stale_evidence": 4,
+    "aging_evidence": 5,
 }
 _ALLOWED_GAP_FILTERS = frozenset(_GAP_PRIORITY)
 
@@ -79,6 +82,11 @@ class ComplianceRepoReadinessRow:
     artifact_families: tuple[str, ...]
     has_ai_surface: bool
     has_model_surface: bool
+    ai_act_status_label: str
+    ai_act_status_tone: str
+    ai_act_provenance_label: str
+    ai_act_provenance_tone: str
+    ai_act_review_detail: str
     last_onboarded_at: float | None
 
 
@@ -161,6 +169,13 @@ def _freshness_payload(last_onboarded_at: float | None) -> tuple[str, str, int |
     return (f"Fresh ({age_days}d)", "success", age_days)
 
 
+def _review_detail(reviewed_at: float | None) -> str:
+    if not reviewed_at:
+        return "Last review: Not yet reviewed"
+    rendered = datetime.fromtimestamp(reviewed_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return f"Last review: {rendered}"
+
+
 def _collect_artifact_families(db_path: str, repo_full: str) -> tuple[tuple[str, ...], float | None, str | None]:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
     if onboarding is None:
@@ -180,6 +195,8 @@ def _repo_action(row_href: str, repo_full: str, gap_keys: Sequence[str]) -> tupl
         return ("Complete onboarding", _repo_gap_cta_href(repo_full, "needs_setup"), "No stored baseline or evidence package yet.")
     if "baseline_review" in gap_keys:
         return ("Review baseline", _repo_gap_cta_href(repo_full, "baseline_review"), "Approve the pending baseline before exporting evidence.")
+    if "ai_act_classification" in gap_keys:
+        return ("Classify AI system", "/policies", "Add a risk level and domain so EU AI Act readiness is reviewable.")
     if "missing_governance" in gap_keys:
         return ("Add governance evidence", _repo_gap_cta_href(repo_full, "missing_governance"), "Capture policy or approval artifacts for this repo.")
     if "stale_evidence" in gap_keys:
@@ -194,7 +211,7 @@ def _overall_status(gap_keys: Sequence[str]) -> tuple[str, str]:
         return ("Ready", "success")
     if "needs_setup" in gap_keys or "baseline_review" in gap_keys:
         return ("Blocked", "danger")
-    if "missing_governance" in gap_keys or "stale_evidence" in gap_keys:
+    if "ai_act_classification" in gap_keys or "missing_governance" in gap_keys or "stale_evidence" in gap_keys:
         return ("Needs work", "warning")
     return ("Monitor", "muted")
 
@@ -203,6 +220,7 @@ def _build_repo_row(
     db_path: str,
     repo_row: dict[str, object],
     repo_summary: RepoDashboardIndexEntry | None,
+    ai_system: AiSystemRecord | None,
 ) -> ComplianceRepoReadinessRow:
     repo_full = str(repo_row.get("repo_full") or "")
     repo_href = str(repo_row.get("href") or "#")
@@ -241,15 +259,46 @@ def _build_repo_row(
     elif freshness_tone == "warning":
         gap_keys.append("aging_evidence")
 
-    overall_label, overall_tone = _overall_status(gap_keys)
-    action_label, action_href, action_detail = _repo_action(repo_href, repo_full, gap_keys)
     has_ai_surface = "ai" in artifact_families or "runtime" in artifact_families
     has_model_surface = "model_config" in artifact_families or "model" in artifact_families
-    export_ready = overall_label == "Ready"
+
+    if ai_system is None:
+        ai_act_status_label = "Not registered"
+        ai_act_status_tone = "muted"
+        ai_act_provenance_label = "No registry entry"
+        ai_act_provenance_tone = "muted"
+    elif ai_system.risk_level == "unclassified":
+        ai_act_status_label = "Classification pending"
+        ai_act_status_tone = "warning"
+        ai_act_provenance_label = "Auto-prefilled from repository evidence"
+        ai_act_provenance_tone = "warning"
+        gap_keys.append("ai_act_classification")
+    elif ai_system.risk_level == "prohibited":
+        ai_act_status_label = "Prohibited"
+        ai_act_status_tone = "danger"
+        if ai_system.last_reviewed_at:
+            ai_act_provenance_label = "Reviewer confirmed"
+            ai_act_provenance_tone = "success"
+        else:
+            ai_act_provenance_label = "Auto-prefilled from repository evidence"
+            ai_act_provenance_tone = "warning"
+    else:
+        ai_act_status_label = ai_system.risk_level.replace("_", " ").replace("-", " ").title()
+        ai_act_status_tone = "success"
+        if ai_system.last_reviewed_at:
+            ai_act_provenance_label = "Reviewer confirmed"
+            ai_act_provenance_tone = "success"
+        else:
+            ai_act_provenance_label = "Auto-prefilled from repository evidence"
+            ai_act_provenance_tone = "warning"
 
     if repo_summary is not None and repo_summary.onboarding_status == "baseline_approved" and onboarding_status is None:
         baseline_label = "Approved"
         baseline_tone = "success"
+
+    overall_label, overall_tone = _overall_status(gap_keys)
+    action_label, action_href, action_detail = _repo_action(repo_href, repo_full, gap_keys)
+    export_ready = overall_label == "Ready"
 
     return ComplianceRepoReadinessRow(
         repo_full=repo_full,
@@ -272,6 +321,11 @@ def _build_repo_row(
         artifact_families=artifact_families,
         has_ai_surface=has_ai_surface,
         has_model_surface=has_model_surface,
+        ai_act_status_label=ai_act_status_label,
+        ai_act_status_tone=ai_act_status_tone,
+        ai_act_provenance_label=ai_act_provenance_label,
+        ai_act_provenance_tone=ai_act_provenance_tone,
+        ai_act_review_detail=_review_detail(ai_system.last_reviewed_at if ai_system is not None else None),
         last_onboarded_at=last_onboarded_at,
     )
 
@@ -294,6 +348,12 @@ def _gap_items(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[Complia
             "Evidence exists, but the baseline still needs a human decision.",
             "Review baselines",
             _gap_cta_href("baseline_review"),
+        ),
+        "ai_act_classification": (
+            "Classify AI systems",
+            "At least one registered AI system is still missing an EU AI Act risk classification.",
+            "Open registry",
+            "/policies",
         ),
         "missing_governance": (
             "Add governance artifacts",
@@ -335,6 +395,18 @@ def _gap_items(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[Complia
 def _build_verdict(repo_rows: Sequence[ComplianceRepoReadinessRow], top_gaps: Sequence[ComplianceGapItem]) -> ComplianceVerdict:
     repo_count = len(repo_rows)
     ready_count = sum(1 for row in repo_rows if row.export_ready)
+    auto_prefilled_count = sum(1 for row in repo_rows if row.ai_act_provenance_label == "Auto-prefilled from repository evidence")
+
+    def _with_confirmation_debt(base_detail: str) -> str:
+        if auto_prefilled_count == 0:
+            return base_detail
+        debt_label = "repo still relies" if auto_prefilled_count == 1 else "repos still rely"
+        confirmation_label = "needs" if auto_prefilled_count == 1 else "need"
+        return (
+            f"{base_detail} "
+            f"{auto_prefilled_count} {debt_label} on auto-prefilled registry context and {confirmation_label} reviewer confirmation."
+        )
+
     if repo_count == 0:
         return ComplianceVerdict(
             tone="muted",
@@ -347,7 +419,7 @@ def _build_verdict(repo_rows: Sequence[ComplianceRepoReadinessRow], top_gaps: Se
         return ComplianceVerdict(
             tone="success",
             headline="The monitored repos are ready for export.",
-            detail="Baseline approval, governance evidence, and freshness are all in the green window.",
+            detail=_with_confirmation_debt("Baseline approval, governance evidence, and freshness are all in the green window."),
             cta_label="Generate export",
             cta_href="/app/compliance/exports#new-export",
         )
@@ -356,7 +428,7 @@ def _build_verdict(repo_rows: Sequence[ComplianceRepoReadinessRow], top_gaps: Se
         return ComplianceVerdict(
             tone="danger",
             headline="The workspace is not export-ready yet.",
-            detail=(primary_gap.detail if primary_gap is not None else "Resolve the blockers below before packaging evidence."),
+            detail=_with_confirmation_debt(primary_gap.detail if primary_gap is not None else "Resolve the blockers below before packaging evidence."),
             cta_label=(primary_gap.cta_label if primary_gap is not None else "Review evidence"),
             cta_href=(primary_gap.cta_href if primary_gap is not None else "/app/compliance/evidence"),
         )
@@ -364,7 +436,7 @@ def _build_verdict(repo_rows: Sequence[ComplianceRepoReadinessRow], top_gaps: Se
     return ComplianceVerdict(
         tone="warning",
         headline=f"{ready_count} of {repo_count} monitored repos are ready right now.",
-        detail=(primary_gap.detail if primary_gap is not None else "The workspace is partially ready. Clear the remaining blockers to stabilize export packs."),
+        detail=_with_confirmation_debt(primary_gap.detail if primary_gap is not None else "The workspace is partially ready. Clear the remaining blockers to stabilize export packs."),
         cta_label=(primary_gap.cta_label if primary_gap is not None else "Review readiness"),
         cta_href=(primary_gap.cta_href if primary_gap is not None else "/app/compliance/evidence"),
     )
@@ -377,13 +449,24 @@ def _framework_cards(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[C
     fresh_ready = sum(1 for row in repo_rows if row.freshness_tone == "success")
     ai_surface = sum(1 for row in repo_rows if row.has_ai_surface)
     model_surface = sum(1 for row in repo_rows if row.has_model_surface)
+    ai_act_classified = sum(1 for row in repo_rows if row.ai_act_status_label not in {"Not registered", "Classification pending"})
+    ai_act_confirmed = sum(1 for row in repo_rows if row.ai_act_provenance_label == "Reviewer confirmed")
+    ai_act_prefilled = sum(1 for row in repo_rows if row.ai_act_provenance_label == "Auto-prefilled from repository evidence")
+    ai_act_pending = sum(1 for row in repo_rows if row.ai_act_status_label == "Classification pending")
     return (
         ComplianceFrameworkCard(
             title="EU AI Act",
-            status_label=("Ready to review" if ai_surface and governance_ready else "Needs evidence"),
+            status_label=(
+                "Needs confirmation"
+                if ai_act_pending or ai_act_prefilled
+                else ("Ready to review" if ai_act_confirmed and governance_ready else "Needs evidence")
+            ),
             detail="Focuses on AI system scope, governance evidence, and baseline accountability.",
             bullets=(
                 f"{ai_surface} repos expose AI or runtime control surfaces.",
+                f"{ai_act_classified} repos already have a recorded AI Act classification.",
+                f"{ai_act_confirmed} {'repo has' if ai_act_confirmed == 1 else 'repos have'} reviewer-confirmed AI Act classifications.",
+                f"{ai_act_prefilled} {'repo still relies' if ai_act_prefilled == 1 else 'repos still rely'} on auto-prefilled registry context.",
                 f"{governance_ready} repos already carry governance artifacts.",
                 f"{baseline_ready} repos have an approved baseline trail.",
             ),
@@ -486,19 +569,35 @@ def build_compliance_workspace_view(
     repo_rows: Sequence[dict[str, object]],
     repo_summaries: Iterable[RepoDashboardIndexEntry],
     export_jobs: Sequence[ExportJob],
+    workspace_id: int | None = None,
 ) -> ComplianceWorkspaceView:
     repo_summary_by_full = {summary.repo_full: summary for summary in repo_summaries}
+    ai_systems_by_repo = (
+        {item.repo_full: item for item in list_ai_systems_for_workspace(db_path, workspace_id)} if workspace_id is not None else {}
+    )
     readiness_rows = tuple(
-        _build_repo_row(db_path, repo_row, repo_summary_by_full.get(str(repo_row.get("repo_full") or "")))
+        _build_repo_row(
+            db_path,
+            repo_row,
+            repo_summary_by_full.get(str(repo_row.get("repo_full") or "")),
+            ai_systems_by_repo.get(str(repo_row.get("repo_full") or "")),
+        )
         for repo_row in repo_rows
     )
     ready_count = sum(1 for row in readiness_rows if row.export_ready)
     needs_attention = sum(1 for row in readiness_rows if row.overall_tone != "success")
+    ai_system_count = len(ai_systems_by_repo)
+    ai_system_confirmed = sum(1 for item in ai_systems_by_repo.values() if item.last_reviewed_at is not None)
     top_gaps = _gap_items(readiness_rows)
     metrics = (
         ComplianceMetric("Repos in scope", str(len(readiness_rows)), "Connected repos with a tracked readiness posture."),
         ComplianceMetric("Ready now", str(ready_count), "Repos that can be packaged into an export immediately."),
         ComplianceMetric("Need attention", str(needs_attention), "Repos blocked by onboarding, governance, or freshness gaps."),
+        ComplianceMetric(
+            "AI systems confirmed",
+            f"{ai_system_confirmed}/{ai_system_count}" if ai_system_count else "0",
+            "Registered AI systems with reviewer-confirmed EU AI Act classifications.",
+        ),
         ComplianceMetric(
             "Pending exports",
             str(sum(1 for job in export_jobs if job.status in _EXPORT_PENDING_STATUSES)),

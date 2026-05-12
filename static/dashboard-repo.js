@@ -2149,6 +2149,25 @@ function populateAuditRepoLists(repos = []) {
     setSectionHtml("audit-logs-list", `<nav class="sidebar-sublist-nav">${navItems}</nav>`);
 }
 
+function bindAuditLogsToggle() {
+    const toggle = document.getElementById("audit-logs-toggle");
+    const list = document.getElementById("audit-logs-list");
+    if (!toggle || !list || toggle.dataset.boundToggle === "true") {
+        return;
+    }
+    toggle.dataset.boundToggle = "true";
+    toggle.addEventListener("click", () => {
+        const expanded = !list.hasAttribute("hidden");
+        if (expanded) {
+            list.setAttribute("hidden", "true");
+            toggle.setAttribute("aria-expanded", "false");
+        } else {
+            list.removeAttribute("hidden");
+            toggle.setAttribute("aria-expanded", "true");
+        }
+    });
+}
+
 async function loadAvailableRepos() {
     try {
         if (dashboardShellState() !== "active") {
@@ -2228,6 +2247,8 @@ async function loadDashboard() {
         }
     }
 }
+
+bindAuditLogsToggle();
 
 bindSidebarNavigation();
 applyRepoTabVisibility();

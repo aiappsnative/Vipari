@@ -421,6 +421,12 @@ def create_api_app() -> FastAPI:
                     export_mode=job.export_mode,
                     include_artifact_content=job.include_artifact_content,
                     export_version=job.export_version,
+                    workspace_id=job.workspace_id,
+                    ai_system_provenance_label=job.ai_system_provenance_label,
+                    ai_system_review_detail=job.ai_system_review_detail,
+                    ai_system_risk_level=job.ai_system_risk_level,
+                    ai_system_eu_ai_act_domain=job.ai_system_eu_ai_act_domain,
+                    ai_system_purpose_summary=job.ai_system_purpose_summary,
                 ),
             )
         except Exception as exc:

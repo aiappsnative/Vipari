@@ -17,6 +17,11 @@ class ExportJob:
     workspace_id: int | None
     requested_by_user_id: int | None
     requested_by_github_login: str | None
+    ai_system_provenance_label: str | None
+    ai_system_review_detail: str | None
+    ai_system_risk_level: str | None
+    ai_system_eu_ai_act_domain: str | None
+    ai_system_purpose_summary: str | None
     export_mode: str
     include_artifact_content: bool
     export_version: str
@@ -47,6 +52,11 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
     has_workspace_id = "workspace_id" in columns
     has_requested_by_user_id = "requested_by_user_id" in columns
     has_requested_by_github_login = "requested_by_github_login" in columns
+    has_ai_system_provenance_label = "ai_system_provenance_label" in columns
+    has_ai_system_review_detail = "ai_system_review_detail" in columns
+    has_ai_system_risk_level = "ai_system_risk_level" in columns
+    has_ai_system_eu_ai_act_domain = "ai_system_eu_ai_act_domain" in columns
+    has_ai_system_purpose_summary = "ai_system_purpose_summary" in columns
     has_result_sha256 = "result_sha256" in columns
     has_result_blob = "result_blob" in columns
     conn.execute(
@@ -59,6 +69,11 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             workspace_id INTEGER,
             requested_by_user_id INTEGER,
             requested_by_github_login TEXT,
+            ai_system_provenance_label TEXT,
+            ai_system_review_detail TEXT,
+            ai_system_risk_level TEXT,
+            ai_system_eu_ai_act_domain TEXT,
+            ai_system_purpose_summary TEXT,
             export_mode TEXT NOT NULL,
             include_artifact_content INTEGER NOT NULL,
             export_version TEXT NOT NULL,
@@ -86,6 +101,11 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             workspace_id,
             requested_by_user_id,
             requested_by_github_login,
+            ai_system_provenance_label,
+            ai_system_review_detail,
+            ai_system_risk_level,
+            ai_system_eu_ai_act_domain,
+            ai_system_purpose_summary,
             export_mode,
             include_artifact_content,
             export_version,
@@ -109,6 +129,11 @@ def _rebuild_export_jobs_table(conn: sqlite3.Connection) -> None:
             {"workspace_id" if has_workspace_id else 'NULL'},
             {"requested_by_user_id" if has_requested_by_user_id else 'NULL'},
             {"requested_by_github_login" if has_requested_by_github_login else 'NULL'},
+            {"ai_system_provenance_label" if has_ai_system_provenance_label else 'NULL'},
+            {"ai_system_review_detail" if has_ai_system_review_detail else 'NULL'},
+            {"ai_system_risk_level" if has_ai_system_risk_level else 'NULL'},
+            {"ai_system_eu_ai_act_domain" if has_ai_system_eu_ai_act_domain else 'NULL'},
+            {"ai_system_purpose_summary" if has_ai_system_purpose_summary else 'NULL'},
             export_mode,
             include_artifact_content,
             export_version,
@@ -143,6 +168,11 @@ def init_export_job_db(db_path: str) -> None:
                 workspace_id INTEGER,
                 requested_by_user_id INTEGER,
                 requested_by_github_login TEXT,
+                ai_system_provenance_label TEXT,
+                ai_system_review_detail TEXT,
+                ai_system_risk_level TEXT,
+                ai_system_eu_ai_act_domain TEXT,
+                ai_system_purpose_summary TEXT,
                 export_mode TEXT NOT NULL,
                 include_artifact_content INTEGER NOT NULL,
                 export_version TEXT NOT NULL,
@@ -173,6 +203,16 @@ def init_export_job_db(db_path: str) -> None:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN requested_by_user_id INTEGER")
         if "requested_by_github_login" not in columns:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN requested_by_github_login TEXT")
+        if "ai_system_provenance_label" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN ai_system_provenance_label TEXT")
+        if "ai_system_review_detail" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN ai_system_review_detail TEXT")
+        if "ai_system_risk_level" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN ai_system_risk_level TEXT")
+        if "ai_system_eu_ai_act_domain" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN ai_system_eu_ai_act_domain TEXT")
+        if "ai_system_purpose_summary" not in columns:
+            conn.execute("ALTER TABLE export_jobs ADD COLUMN ai_system_purpose_summary TEXT")
         if "result_sha256" not in columns:
             conn.execute("ALTER TABLE export_jobs ADD COLUMN result_sha256 TEXT")
         if "result_blob" not in columns:
@@ -190,6 +230,11 @@ def _row_to_job(row: sqlite3.Row) -> ExportJob:
         workspace_id=row["workspace_id"],
         requested_by_user_id=row["requested_by_user_id"],
         requested_by_github_login=row["requested_by_github_login"],
+        ai_system_provenance_label=row["ai_system_provenance_label"],
+        ai_system_review_detail=row["ai_system_review_detail"],
+        ai_system_risk_level=row["ai_system_risk_level"],
+        ai_system_eu_ai_act_domain=row["ai_system_eu_ai_act_domain"],
+        ai_system_purpose_summary=row["ai_system_purpose_summary"],
         export_mode=row["export_mode"],
         include_artifact_content=bool(row["include_artifact_content"]),
         export_version=row["export_version"],
@@ -217,6 +262,11 @@ def create_export_job(
     workspace_id: int | None = None,
     requested_by_user_id: int | None = None,
     requested_by_github_login: str | None = None,
+    ai_system_provenance_label: str | None = None,
+    ai_system_review_detail: str | None = None,
+    ai_system_risk_level: str | None = None,
+    ai_system_eu_ai_act_domain: str | None = None,
+    ai_system_purpose_summary: str | None = None,
     export_version: str = "1",
 ) -> ExportJob:
     now = time.time()
@@ -226,9 +276,11 @@ def create_export_job(
             """
             INSERT INTO export_jobs (
                 repo_full, from_ts, to_ts, workspace_id, requested_by_user_id, requested_by_github_login,
+                ai_system_provenance_label, ai_system_review_detail,
+                ai_system_risk_level, ai_system_eu_ai_act_domain, ai_system_purpose_summary,
                 export_mode, include_artifact_content, export_version,
                 status, attempt_count, next_attempt_at, download_token, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?)
             """,
             (
                 repo_full,
@@ -237,6 +289,11 @@ def create_export_job(
                 workspace_id,
                 requested_by_user_id,
                 requested_by_github_login,
+                ai_system_provenance_label,
+                ai_system_review_detail,
+                ai_system_risk_level,
+                ai_system_eu_ai_act_domain,
+                ai_system_purpose_summary,
                 export_mode,
                 int(include_artifact_content),
                 export_version,

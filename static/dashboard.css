@@ -906,6 +906,38 @@ strong {
     font-weight: 600;
 }
 
+.control-page-checklist .checklist-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--color-text);
+    font-size: var(--text-md);
+    font-weight: 600;
+}
+
+.control-page-checklist .checklist-detail,
+.control-page-checklist .checklist-meta {
+    color: var(--color-text-muted);
+}
+
+.control-page-checklist .checklist-meta {
+    display: grid;
+    justify-items: end;
+    gap: 4px;
+    text-transform: capitalize;
+}
+
+.control-page-checklist .checklist-item-complete {
+    border-color: var(--color-primary-outline);
+}
+
+.control-page-checklist .checklist-item-current {
+    border-color: var(--color-medium-soft);
+}
+
+.control-page-checklist .checklist-item-blocked {
+    border-color: var(--color-high-soft);
+}
+
 .triage-column,
 .detail-panel {
     min-width: 0;
@@ -5689,6 +5721,18 @@ body.control-page[data-theme="light"] {
     min-height: auto;
 }
 
+.control-page-section-spacer {
+    width: 100%;
+}
+
+.control-page-section-spacer-lg {
+    min-height: 20px;
+}
+
+.control-page-section-spacer-xl {
+    min-height: 32px;
+}
+
 .control-page-form {
     display: grid;
     gap: 16px;
@@ -6088,6 +6132,275 @@ body.control-page[data-theme="light"] {
 
 .control-page-table-wide {
     min-width: 1160px;
+}
+
+.policies-review-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.policies-glossary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+
+.policies-glossary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.policies-glossary-card {
+    position: relative;
+    overflow: hidden;
+    display: grid;
+    gap: 10px;
+    min-height: 188px;
+    padding: 18px;
+    border-radius: 18px;
+    border: 1px solid var(--color-border);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+}
+
+.policies-glossary-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 4px;
+    border-radius: 18px 18px 0 0;
+    background: currentColor;
+    opacity: 0.95;
+}
+
+.policies-glossary-card .secondary-panel-title {
+    letter-spacing: 0.12em;
+}
+
+.policies-glossary-card p {
+    margin: 0;
+    line-height: 1.65;
+}
+
+.policies-glossary-card-unclassified {
+    color: #9bb4c2;
+    border-color: rgba(155, 180, 194, 0.28);
+    background:
+        radial-gradient(circle at top right, rgba(155, 180, 194, 0.16), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.policies-glossary-card-minimal {
+    color: #56d2a5;
+    border-color: rgba(86, 210, 165, 0.28);
+    background:
+        radial-gradient(circle at top right, rgba(86, 210, 165, 0.16), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.policies-glossary-card-limited {
+    color: #f0c56d;
+    border-color: rgba(240, 197, 109, 0.3);
+    background:
+        radial-gradient(circle at top right, rgba(240, 197, 109, 0.17), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.policies-glossary-card-high {
+    color: #ff9a5a;
+    border-color: rgba(255, 154, 90, 0.3);
+    background:
+        radial-gradient(circle at top right, rgba(255, 154, 90, 0.18), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.policies-glossary-card-prohibited {
+    color: #ff6a6a;
+    border-color: rgba(255, 106, 106, 0.34);
+    background:
+        radial-gradient(circle at top right, rgba(255, 106, 106, 0.18), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 46%),
+        linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card {
+    box-shadow: 0 16px 32px rgba(91, 76, 59, 0.12);
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card-unclassified {
+    background:
+        radial-gradient(circle at top right, rgba(124, 146, 157, 0.16), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(240, 245, 247, 0.96));
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card-minimal {
+    background:
+        radial-gradient(circle at top right, rgba(86, 210, 165, 0.14), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(237, 248, 242, 0.98));
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card-limited {
+    background:
+        radial-gradient(circle at top right, rgba(240, 197, 109, 0.14), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(249, 244, 229, 0.98));
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card-high {
+    background:
+        radial-gradient(circle at top right, rgba(255, 154, 90, 0.16), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(251, 238, 227, 0.98));
+}
+
+body.control-page[data-theme="light"] .policies-glossary-card-prohibited {
+    background:
+        radial-gradient(circle at top right, rgba(255, 106, 106, 0.16), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(252, 235, 235, 0.98));
+}
+
+.policies-glossary-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    text-decoration: none;
+    flex: 0 0 auto;
+}
+
+.policies-glossary-link svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+}
+
+.policies-glossary-link:hover,
+.policies-glossary-link:focus-visible {
+    border-color: var(--color-primary-outline);
+    color: var(--color-primary);
+}
+
+.policies-review-card {
+    display: grid;
+    gap: 16px;
+    padding: 18px;
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+}
+
+.policies-review-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.policies-review-title {
+    margin: 0;
+    font-size: 20px;
+}
+
+.policies-review-repo {
+    margin: 0;
+}
+
+.policies-review-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--color-text-muted);
+    font-size: var(--text-md);
+}
+
+.policies-review-priority {
+    margin: 0;
+}
+
+.policies-review-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+}
+
+.policies-form-field {
+    display: grid;
+    gap: 8px;
+}
+
+.policies-form-select {
+    width: 100%;
+    padding-right: 42px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, currentColor 50%),
+        linear-gradient(135deg, currentColor 50%, transparent 50%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 55%);
+    background-position:
+        calc(100% - 20px) calc(50% - 3px),
+        calc(100% - 14px) calc(50% - 3px),
+        0 0;
+    background-size: 6px 6px, 6px 6px, 100% 100%;
+    background-repeat: no-repeat;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.policies-form-select:hover,
+.policies-form-select:focus-visible,
+.policies-form-input:hover,
+.policies-form-input:focus-visible {
+    border-color: var(--color-primary-outline);
+    box-shadow: 0 0 0 4px rgba(79, 152, 163, 0.14);
+    outline: none;
+}
+
+.policies-form-select-risk {
+    background-color: rgba(79, 152, 163, 0.08);
+}
+
+.policies-form-input {
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.policies-review-form .policies-form-select,
+.policies-review-form .policies-form-input {
+    min-height: 46px;
+}
+
+body.control-page[data-theme="light"] .policies-form-select {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.policies-review-form {
+    display: grid;
+    gap: 12px;
+}
+
+@media (max-width: 980px) {
+    .policies-glossary-header {
+        align-items: flex-start;
+    }
+
+    .policies-review-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .policies-review-head {
+        flex-direction: column;
+    }
 }
 
 .control-page-monospace-break {

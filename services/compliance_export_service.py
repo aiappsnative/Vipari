@@ -21,6 +21,7 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_static_profiles_for_repo_artifact,
 )
+from .control_plane_records import get_ai_system_for_workspace_repo
 from .baseline_provenance import BASELINE_SOURCE_NONE
 from .onboarding_records import (
     BaselineAuditLogRecord,
@@ -49,6 +50,12 @@ class ComplianceExportRequest:
     export_mode: ExportMode
     include_artifact_content: bool
     export_version: str = "1"
+    workspace_id: int | None = None
+    ai_system_provenance_label: str | None = None
+    ai_system_review_detail: str | None = None
+    ai_system_risk_level: str | None = None
+    ai_system_eu_ai_act_domain: str | None = None
+    ai_system_purpose_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,14 @@ def build_compliance_export(
     pr_audits = [a for a in pr_audits if request.from_ts <= a.created_at <= request.to_ts]
     posture_snapshots = list_repo_posture_snapshots_for_repo(db_path, request.repo_full)
     posture_snapshots = [s for s in posture_snapshots if request.from_ts <= s.created_at <= request.to_ts]
+    ai_system = (
+        get_ai_system_for_workspace_repo(db_path, request.workspace_id, request.repo_full)
+        if request.workspace_id is not None
+        else None
+    )
+    export_ai_system = ai_system
+    if request.ai_system_provenance_label == "No registry entry":
+        export_ai_system = None
 
     audit_by_id = {audit.id: audit for audit in pr_audits}
     changed_artifacts: list[ChangedArtifactRecord] = []
@@ -131,6 +146,9 @@ def build_compliance_export(
         changed_artifact_by_id,
         baseline_artifact_types_by_version_id,
         baseline_artifact_types_by_path,
+        export_ai_system,
+        request.ai_system_provenance_label,
+        request.ai_system_review_detail,
     ))
 
     if request.export_mode == "compliance_plus_drift":
@@ -143,7 +161,12 @@ def build_compliance_export(
         )
 
     # Build README and manifest
-    readme_content = _build_readme(request.export_mode, request.include_artifact_content)
+    readme_content = _build_readme(
+        request.export_mode,
+        request.include_artifact_content,
+        export_ai_system,
+        request.ai_system_provenance_label,
+    )
     files["README.txt"] = readme_content
 
     manifest = _build_manifest(files, request)
@@ -181,6 +204,9 @@ def _build_core_compliance_files(
     changed_artifact_by_id: dict[int, ChangedArtifactRecord],
     baseline_artifact_types_by_version_id: dict[int, str],
     baseline_artifact_types_by_path: dict[str, str],
+    ai_system,
+    ai_system_provenance_label: str | None,
+    ai_system_review_detail: str | None,
 ) -> dict[str, str]:
     files = {}
 
@@ -199,6 +225,26 @@ def _build_core_compliance_files(
         _build_governance_summary(baseline_versions, baseline_audit_log),
         indent=2,
     )
+
+    if ai_system is not None:
+        files["02-ai-system-profile.json"] = json.dumps(
+            _build_ai_system_profile(
+                ai_system,
+                provenance_label=ai_system_provenance_label,
+                review_detail=ai_system_review_detail,
+                risk_level=request.ai_system_risk_level,
+                eu_ai_act_domain=request.ai_system_eu_ai_act_domain,
+                purpose_summary=request.ai_system_purpose_summary,
+                use_snapshotted_profile_fields=(
+                    request.ai_system_provenance_label is not None
+                    or request.ai_system_review_detail is not None
+                    or request.ai_system_risk_level is not None
+                    or request.ai_system_eu_ai_act_domain is not None
+                    or request.ai_system_purpose_summary is not None
+                ),
+            ),
+            indent=2,
+        )
 
     # 03-version-history.csv
     files["03-version-history.csv"] = _build_version_history_csv(posture_snapshots)
@@ -241,14 +287,66 @@ def _build_governance_summary(
                 "action": log.action,
                 "decision_type": log.decision_type,
                 "artifact_path": log.artifact_path,
-                    "artifact_type": artifact_types_by_path.get(log.artifact_path, "unknown") if log.artifact_path else "repository",
+                "artifact_type": artifact_types_by_path.get(log.artifact_path, "unknown") if log.artifact_path else "repository",
                 "actor": log.actor_login,
                 "rationale": log.note,
                 "linked_findings": log.linked_findings,
-                    "created_at": _ts_to_iso(log.created_at),
+                "created_at": _ts_to_iso(log.created_at),
             }
             for log in baseline_audit_log[-10:]
         ],
+    }
+
+
+def _registry_provenance_from_label(label: str | None) -> str | None:
+    if label == "Reviewer confirmed":
+        return "reviewer_confirmed"
+    if label == "Auto-prefilled from repository evidence":
+        return "auto_prefilled"
+    if label == "No registry entry":
+        return "no_registry_entry"
+    return None
+
+
+def _build_ai_system_profile(
+    ai_system,
+    *,
+    provenance_label: str | None = None,
+    review_detail: str | None = None,
+    risk_level: str | None = None,
+    eu_ai_act_domain: str | None = None,
+    purpose_summary: str | None = None,
+    use_snapshotted_profile_fields: bool = False,
+) -> dict[str, object]:
+    artifact_families: list[str] = []
+    try:
+        artifact_families = json.loads(ai_system.artifact_families_json or "[]")
+    except json.JSONDecodeError:
+        artifact_families = []
+    registry_provenance = _registry_provenance_from_label(provenance_label) or (
+        "reviewer_confirmed" if ai_system.last_reviewed_at else "auto_prefilled"
+    )
+    resolved_review_detail = review_detail or (
+        f"Last review: {_ts_to_iso(ai_system.last_reviewed_at)}"
+        if ai_system.last_reviewed_at
+        else "Last review: Not yet reviewed"
+    )
+    last_reviewed_at = _ts_to_iso(ai_system.last_reviewed_at) if ai_system.last_reviewed_at else None
+    if registry_provenance != "reviewer_confirmed":
+        last_reviewed_at = None
+    return {
+        "repo_full": ai_system.repo_full,
+        "display_name": ai_system.display_name,
+        "source_kind": ai_system.source_kind,
+        "risk_level": risk_level if use_snapshotted_profile_fields else (risk_level if risk_level is not None else ai_system.risk_level),
+        "eu_ai_act_domain": eu_ai_act_domain if use_snapshotted_profile_fields else (eu_ai_act_domain if eu_ai_act_domain is not None else ai_system.eu_ai_act_domain),
+        "purpose_summary": purpose_summary if use_snapshotted_profile_fields else (purpose_summary if purpose_summary is not None else ai_system.purpose_summary),
+        "latest_onboarding_status": ai_system.latest_onboarding_status,
+        "artifact_families": artifact_families,
+        "registry_provenance": registry_provenance,
+        "review_detail": resolved_review_detail,
+        "last_reviewed_at": last_reviewed_at,
+        "registry_updated_at": _ts_to_iso(ai_system.updated_at),
     }
 
 
@@ -593,7 +691,21 @@ def _build_artifact_content_payload(
     return payload
 
 
-def _build_readme(export_mode: ExportMode, include_artifact_content: bool) -> str:
+def _build_readme(
+    export_mode: ExportMode,
+    include_artifact_content: bool,
+    ai_system,
+    ai_system_provenance_label: str | None,
+) -> str:
+    ai_system_note = ""
+    snapshot_provenance = _registry_provenance_from_label(ai_system_provenance_label)
+    if snapshot_provenance == "no_registry_entry":
+        ai_system_note = "- No workspace AI system registry entry was recorded for this repository when the export job was created.\n"
+    elif ai_system is not None:
+        if snapshot_provenance == "reviewer_confirmed" or (snapshot_provenance is None and ai_system.last_reviewed_at):
+            ai_system_note = "- The AI system profile captures a reviewer-confirmed workspace registry entry for this repository and includes the latest review detail.\n"
+        else:
+            ai_system_note = "- The AI system profile reflects auto-prefilled registry context derived from repository evidence and still requires reviewer confirmation.\n"
     return f"""# PromptDrift Compliance Export
 
 This package contains repository-change evidence assembled from PromptDrift's persisted monitoring records for the requested export window.
@@ -606,6 +718,7 @@ Generated: {_ts_to_iso(time.time())}
 - 01-baseline-registry.csv: Approved baseline inventory
 - 02-baseline-audit-log.csv: Chain of custody and baseline decisions
 - 02-governance-summary.json: Machine-readable baseline approval state and recent governance decisions
+- 02-ai-system-profile.json: Current AI system registry classification and policy metadata for this repo when a workspace-scoped registry entry exists
 - 03-version-history.csv: High-level version / posture timeline
 - 04-pr-scan-history.csv: Proof that monitoring and review happened
 - 05-findings.csv: Actionable issues surfaced by analysis
@@ -629,7 +742,8 @@ All timestamps are in ISO 8601 UTC format.
 ## Interpreting the Data
 
 - Baseline files describe the currently approved artifact inventory and approval trail.
-- Version and PR scan history show when PromptDrift evaluated repository changes during the requested window.
+- The AI system profile, when present, reflects the current workspace registry entry tied to this repository rather than legal advice or automatic certification.
+{ai_system_note}- Version and PR scan history show when PromptDrift evaluated repository changes during the requested window.
 - Review-output provenance labels distinguish deterministic fallback records from AI-assisted review narratives when reviewer-facing output was generated.
 - Findings and risk events are derived from persisted scan and posture records; no synthetic placeholder rows are added.
 - Drift files, when present, summarize recorded static-profile deltas for artifacts scanned during the requested window.
@@ -704,6 +818,7 @@ It is intended as an evidence guide for auditors or internal reviewers. It does 
 - 01-baseline-registry.csv identifies the approved repository control-surface baseline under review.
 - 02-baseline-audit-log.csv records who approved or changed baseline decisions and when those actions were taken.
 - 02-governance-summary.json summarizes the current approval state and recent human-review decisions in a machine-readable format.
+- 02-ai-system-profile.json captures the current repository-level AI system classification recorded by workspace owners or admins.
 
 ## SOC 2 CC7.2 - System Operations
 
@@ -739,6 +854,7 @@ def _build_manifest(files: dict[str, str], request: ComplianceExportRequest) -> 
     manifest = {
         "export_mode": request.export_mode,
         "repo_full": request.repo_full,
+        "workspace_id": request.workspace_id,
         "date_range": {
             "from": _ts_to_iso(request.from_ts),
             "to": _ts_to_iso(request.to_ts),
