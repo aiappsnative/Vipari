@@ -971,19 +971,14 @@ def render_control_plane_settings_page(
     if not pr_comments_allowed_by_plan:
         status_copy = "Your current plan does not permit PR comments, so this setting will not take effect until comments are included in the workspace entitlement."
     manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
-    admin_control = ""
-    if admin_url:
-        admin_control = f'''<a class="control-page-admin-link" href="{html_escape(admin_url)}">Open system admin</a>'''
     billing_link = '<a class="control-page-button" href="/billing">Open billing</a>'
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{CSRF_INPUT}}", _csrf_input(csrf_token))
-        .replace("{{ADMIN_CONTROL}}", admin_control)
         .replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{STATUS_NOTE}}", html_escape(status_copy))
-        .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
         .replace("{{WORKSPACE_NAME_INPUT}}", html_escape(workspace_name))
         .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
         .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
@@ -1262,6 +1257,7 @@ def render_control_plane_help_page(
     plan_label: str,
     theme_preference: str,
     admin_url: str | None,
+    resolution: WorkspaceAccessResolution,
     repo_rows: list[dict[str, object]],
     repo_summaries: list[object],
     export_ready_count: int,
@@ -1284,6 +1280,8 @@ def render_control_plane_help_page(
         .replace("{{HELP_NEXT_STEP_LABEL}}", html_escape(help_context["next_step_label"]))
         .replace("{{HELP_STATUS_CARDS}}", help_context["status_cards_html"])
         .replace("{{HELP_NEXT_STEP_PANEL}}", help_context["next_step_panel_html"])
+        .replace("{{CHECKLIST_ITEMS}}", _render_checklist(resolution))
+        .replace("{{CHECKLIST_ITEMS}}", "")
     )
 
 

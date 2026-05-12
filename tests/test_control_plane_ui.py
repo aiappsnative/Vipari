@@ -1100,9 +1100,13 @@ def test_profile_page_renders_and_updates_display_name(tmp_path):
     assert 'aria-label="Policies"' in repo_dashboard_html
     assert 'aria-label="Settings"' in repo_dashboard_html
     assert 'aria-label="Audit Logs"' in repo_dashboard_html
+    assert 'id="audit-logs-toggle"' in repo_dashboard_html
+    assert 'id="audit-logs-list" class="sidebar-sublist"' in repo_dashboard_html
+    assert 'class="sidebar-nav-item sidebar-nav-item-toggle sidebar-nav-item-active" aria-label="Audit Logs" id="audit-logs-toggle" aria-expanded="true"' in repo_dashboard_html
     assert 'href="/repos"' in repo_dashboard_html
     assert 'href="/compliance"' in repo_dashboard_html
     assert 'href="/integrations/mcp"' in repo_dashboard_html
+    assert repo_dashboard_html.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < repo_dashboard_html.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
     assert "Generate Export Package" not in repo_dashboard_html
     assert "Recent Exports" not in repo_dashboard_html
     assert "Available repositories" not in repo_dashboard_html
@@ -1200,7 +1204,11 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert 'value="on" checked' in get_response.text
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
-    assert get_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < get_response.text.index('href="/settings" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Settings"')
+    assert 'aria-label="Settings"' in get_response.text
+    assert "Vipari MCP connector" not in get_response.text
+    assert "Open Agent Integrations" not in get_response.text
+    assert "Open system admin" not in get_response.text
+    assert "Setup checklist" not in get_response.text
     assert "{{WORKSPACE_NAME_INPUT}}" not in get_response.text
     assert "{{WORKSPACE_MEMBER_ACTIONS}}" not in get_response.text
 
@@ -1678,11 +1686,19 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert "Review pending baseline" in help_response.text
     assert "placeholder-org/repo-pending" in help_response.text
     assert "Use the platform in this order" in help_response.text
+    assert "Setup checklist" in help_response.text
+    assert "Workspace readiness" in help_response.text
+    assert 'class="checklist-item checklist-item-' in help_response.text
+    assert "{{CHECKLIST_ITEMS}}" not in help_response.text
     assert "Connected is not the same as onboarded" in help_response.text
     assert "Submit a support ticket" in help_response.text
     assert "Ticket submission coming soon" in help_response.text
+    assert help_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < help_response.text.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
+    assert 'class="sidebar-nav-item sidebar-nav-item-active" aria-label="Help"' in help_response.text
+    assert "Settings" in help_response.text
     assert "AI System Registry" in policies_response.text
     assert 'class="sidebar-nav-item sidebar-nav-item-active" aria-label="Policies"' in policies_response.text
+    assert policies_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < policies_response.text.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
     assert 'class="sidebar-nav-icon"' in policies_response.text
     assert 'href="/dashboard"' in policies_response.text
     assert 'href="#policies-overview"' in policies_response.text
@@ -6789,6 +6805,8 @@ def test_mcp_integrations_page_loads_for_owner(tmp_path):
 
     assert response.status_code == 200
     assert "Agent Integrations" in response.text
+    assert 'href="/integrations/mcp" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Agent Integrations"' in response.text
+    assert response.text.index('href="/integrations/mcp" class="sidebar-nav-item sidebar-nav-item-active" aria-label="Agent Integrations"') < response.text.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
     assert "Customer MCP connector package" in response.text
     assert "hosted Vipari broker" in response.text
     assert "internal Vipari bearer tokens" in response.text
@@ -6855,7 +6873,7 @@ def test_mcp_integrations_sensitive_tabs_fall_back_to_overview_for_viewer(tmp_pa
     assert 'aria-current="page">Overview<' in activity_response.text
 
 
-def test_settings_page_links_to_mcp_integrations(tmp_path):
+def test_settings_page_hides_mcp_integrations_block(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_enc = main.settings.app_encryption_key
     main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
@@ -6871,8 +6889,8 @@ def test_settings_page_links_to_mcp_integrations(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert response.status_code == 200
-    assert "/integrations/mcp" in response.text
-    assert "Open Agent Integrations" in response.text
+    assert "Vipari MCP connector" not in response.text
+    assert "Open Agent Integrations" not in response.text
 
 
 def test_mcp_integrations_download_returns_customer_bundle(tmp_path):
