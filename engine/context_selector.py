@@ -27,8 +27,11 @@ def determine_context_mode(artifact_type: str) -> SemanticContextMode:
 def apply_context_mode(result: RelevanceResult) -> RelevanceResult:
     return RelevanceResult(
         path=result.path,
-        ai_relevant=result.ai_relevant,
         artifact_type=result.artifact_type,
         reason=result.reason,
         context_mode=determine_context_mode(result.artifact_type),
+        heuristic_score=result.heuristic_score,
+        confidence_tier=result.confidence_tier,
+        matched_signals=list(result.matched_signals),
+        micro_classifier=result.micro_classifier,
     )

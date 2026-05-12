@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict
+import json
 
 from services.control_plane_records import list_repo_allocations_for_workspace
 from services.dashboard_views import build_dashboard_overview_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
@@ -145,6 +146,54 @@ def build_pending_proposals_payload(
 
     proposals_out.sort(key=lambda proposal: proposal["created_at"])
     return {"proposals": proposals_out, "pending_count": len(proposals_out)}
+
+
+def build_pre_audit_relevance_payload(
+    db_path: str,
+    repo_full: str,
+    *,
+    pr_number: int,
+    head_sha: str,
+    list_pre_audit_relevance_decisions_fn: Callable[..., list],
+) -> dict[str, object]:
+    decisions = list_pre_audit_relevance_decisions_fn(
+        db_path,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+    )
+    payload_rows: list[dict[str, object]] = []
+    for decision in decisions:
+        try:
+            matched_signals = json.loads(decision.matched_signals_json or "[]")
+        except json.JSONDecodeError:
+            matched_signals = []
+        payload_rows.append(
+            {
+                "artifact_path": decision.artifact_path,
+                "artifact_type": decision.artifact_type,
+                "confidence_tier": decision.confidence_tier,
+                "heuristic_score": decision.heuristic_score,
+                "heuristic_reason": decision.heuristic_reason,
+                "matched_signals": matched_signals if isinstance(matched_signals, list) else [],
+                "classifier_status": decision.classifier_status,
+                "classifier_is_relevant": decision.classifier_is_relevant,
+                "classifier_reason": decision.classifier_reason,
+                "provider": decision.provider,
+                "model": decision.model,
+                "latency_ms": decision.latency_ms,
+                "changed_artifact_id": decision.changed_artifact_id,
+                "created_at": decision.created_at,
+                "updated_at": decision.updated_at,
+            }
+        )
+    return {
+        "repo_full": repo_full,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "decision_count": len(payload_rows),
+        "decisions": payload_rows,
+    }
 
 
 def build_artifact_storyline_payload(

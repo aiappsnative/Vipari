@@ -8,6 +8,8 @@ from config import get_settings
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
+from engine.diff_parser import extract_changed_files
+from engine.relevance import classify_changed_file, resolve_relevance_with_micro_classifier
 from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db, mark_job_completed, mark_job_failed
 from services.audit_jobs import (
     claim_next_job,
@@ -27,6 +29,8 @@ from services.audit_records import (
     list_artifact_versions_for_repo_artifact,
     list_changed_artifacts_for_audit,
     list_findings_for_audit,
+    list_pre_audit_relevance_decisions,
+    record_pre_audit_relevance_decision,
     record_audit_result,
     update_pull_request_audit_state,
 )
@@ -231,6 +235,62 @@ def test_create_audit_job_does_not_requeue_completed_same_sha_job(tmp_path):
     assert recreated.installation_id == 123
     assert recreated.diff_text.endswith("index 1..2\n")
     assert recreated.comment_body == "posted"
+
+
+def test_record_audit_result_links_pre_audit_uncertain_decision_to_changed_artifact(tmp_path):
+    db_path = str(tmp_path / "audit-link.db")
+    init_db(db_path)
+    diff_text = "diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n"
+    changed_file = extract_changed_files(diff_text)[0]
+    relevance = resolve_relevance_with_micro_classifier(
+        classify_changed_file(changed_file),
+        is_relevant=True,
+        reason="Routes assistant behavior for AI requests.",
+        status="completed",
+    )
+    record_pre_audit_relevance_decision(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=404,
+        head_sha="sha-404",
+        relevance=relevance,
+    )
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=404,
+        installation_id=123,
+        head_sha="sha-404",
+        diff_text=diff_text,
+    )
+
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=404,
+        installation_id=123,
+        head_sha="sha-404",
+        deterministic_analysis=analyze_diff(diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
+    decisions = list_pre_audit_relevance_decisions(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=404,
+        head_sha="sha-404",
+    )
+
+    assert len(artifacts) == 1
+    assert len(decisions) == 1
+    assert decisions[0].changed_artifact_id == artifacts[0].id
 
 
 def test_update_job_pr_state_clears_closed_timestamp_when_pr_reopens(tmp_path):

@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -21,6 +22,18 @@ client = TestClient(main.app)
 def sign_payload(payload: bytes, secret: str) -> str:
     mac = hmac.new(secret.encode(), payload, hashlib.sha256)
     return "sha256=" + mac.hexdigest()
+
+
+def _fake_llm_client(payload: dict[str, object]):
+    return SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_kwargs: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))]
+                )
+            )
+        )
+    )
 
 
 def test_verify_signature_valid():
@@ -140,6 +153,61 @@ def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
     fetch_commit_pair_diff.assert_called_once_with("doria90/dummyAI", "base123", "head456", "installation-token")
     fetch_pr_diff.assert_not_called()
     create_job.assert_called_once()
+
+
+def test_webhook_runs_micro_classifier_for_uncertain_diff_and_persists_decision(tmp_path):
+    from services.audit_records import list_pre_audit_relevance_decisions
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_client = main.client
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-uncertain.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.client = _fake_llm_client({"is_relevant": True, "reason": "Routes assistant behavior for AI requests."})
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {
+            "number": 17,
+            "base": {"sha": "base-opened"},
+            "head": {"sha": "uncertain-head"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "pull_request",
+    }
+
+    try:
+        with patch("main.generate_jwt", return_value="jwt-token"), patch(
+            "main.get_installation_token", return_value="installation-token"
+        ), patch(
+            "main.fetch_pr_diff",
+            return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
+        ), patch("main.fetch_commit_pair_diff") as fetch_commit_pair_diff, patch("main.create_audit_job") as create_job:
+            fetch_commit_pair_diff.return_value = ""
+            create_job.return_value = type("Job", (), {"id": 77})()
+            response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
+
+        assert response.status_code == 200
+        assert response.json() == {"message": "audit queued", "job_id": 77}
+        create_job.assert_called_once()
+        decisions = list_pre_audit_relevance_decisions(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=17,
+            head_sha="uncertain-head",
+        )
+        assert len(decisions) == 1
+        assert decisions[0].artifact_path == "src/assistant_router.py"
+        assert decisions[0].confidence_tier == "uncertain"
+        assert decisions[0].classifier_is_relevant is True
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+        main.client = original_client
 
 
 def test_webhook_ignores_pr_when_workspace_settings_disable_comments(tmp_path):

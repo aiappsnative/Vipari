@@ -8,7 +8,9 @@ from urllib.error import HTTPError, URLError
 
 from github.GithubException import GithubException
 
-from engine.relevance import needs_audit as engine_needs_audit
+from engine.models import RelevanceConfidenceTier
+from engine.relevance import evaluate_diff_for_audit, needs_audit as engine_needs_audit
+from .audit_records import record_pre_audit_relevance_decision
 from .github_integration import fetch_commit_pair_diff, fetch_pr_diff
 
 
@@ -22,6 +24,37 @@ def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
 
 def needs_audit(diff_text: str) -> bool:
     return engine_needs_audit(diff_text)
+
+
+def evaluate_and_persist_audit_decision(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+    diff_text: str,
+    llm_client: object | None = None,
+    model: str | None = None,
+    timeout_seconds: float = 5.0,
+    provider: str | None = None,
+):
+    decision = evaluate_diff_for_audit(
+        diff_text,
+        llm_client=llm_client,
+        model=model,
+        timeout_seconds=timeout_seconds,
+        provider=provider,
+    )
+    for relevance in decision.all_results:
+        if relevance.confidence_tier == RelevanceConfidenceTier.UNCERTAIN:
+            record_pre_audit_relevance_decision(
+                db_path,
+                repo_full=repo_full,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                relevance=relevance,
+            )
+    return decision
 
 
 def get_diff_fetch_error_status_code(exc: Exception) -> int | None:

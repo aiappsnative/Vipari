@@ -16,7 +16,12 @@ from config import get_settings
 from engine.analysis import analyze_diff
 from services.audit_jobs import claim_next_job, create_audit_job, get_job, init_db
 from services.branch_scan_jobs import claim_next_branch_scan_job
-from services.audit_records import get_audit_comment_episode_for_pr_head_sha, has_completed_audit, record_audit_result
+from services.audit_records import (
+    get_audit_comment_episode_for_pr_head_sha,
+    has_completed_audit,
+    list_pre_audit_relevance_decisions,
+    record_audit_result,
+)
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.observability import configure_logging
 from services.control_plane_records import (
@@ -83,6 +88,20 @@ def _seed_worker_control_plane_state(db_path: str, *, installation_id: int, repo
         activated_by_user_id=user.id,
     )
     update_repo_allocation_status(db_path, allocation.id, "active")
+
+
+def _fake_llm_client(payload: dict[str, object]):
+    return Mock(
+        chat=Mock(
+            completions=Mock(
+                create=Mock(
+                    return_value=Mock(
+                        choices=[Mock(message=Mock(content=json.dumps(payload)))]
+                    )
+                )
+            )
+        )
+    )
 
 
 def test_local_sqlite_queue_round_trip(tmp_path):
@@ -437,6 +456,9 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
         "0005_add_session_flash",
         "0006_add_audit_feedback_and_triage_tables",
         "0007_add_high_risk_proposal_tables",
+        "0008_ensure_ai_system_registry_schema",
+        "0009_ensure_export_jobs_snapshot_columns",
+        "0010_ensure_relevance_decision_tables",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.api_service.init_db") as init_db_mock, patch(
@@ -536,6 +558,9 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
         "0005_add_session_flash",
         "0006_add_audit_feedback_and_triage_tables",
         "0007_add_high_risk_proposal_tables",
+        "0008_ensure_ai_system_registry_schema",
+        "0009_ensure_export_jobs_snapshot_columns",
+        "0010_ensure_relevance_decision_tables",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.webhook_service.init_db") as init_db_mock, patch(
@@ -1336,6 +1361,70 @@ def test_token_cache_falls_back_to_in_process_cache(monkeypatch):
         assert await get_installation_token(321) == "cached-token"
 
     asyncio.run(exercise_cache())
+
+
+def test_worker_skips_uncertain_diff_when_micro_classifier_rejects_and_persists_decision(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-uncertain.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+            self.nacked = []
+            self.dlq = []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, receipt_handle, delay_seconds):
+            self.nacked.append((receipt_handle, delay_seconds))
+
+        async def move_to_dlq(self, receipt_handle):
+            self.dlq.append(receipt_handle)
+
+    message = QueueMessage(
+        message_id="msg-uncertain-1",
+        receipt_handle="receipt-uncertain-1",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 19,
+            "head_sha": "worker-uncertain-head",
+        },
+        attempt_count=1,
+    )
+
+    queue = AckQueue()
+    llm_client = _fake_llm_client({"is_relevant": False, "reason": "General routing code; not an AI control surface."})
+
+    with patch("services.cloud_worker._message_still_authorized", return_value=True), patch(
+        "services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
+    ), patch("services.cloud_worker.create_audit_job") as create_job, patch("services.cloud_worker.process_job") as process_job:
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), llm_client))
+
+    assert queue.acked == ["receipt-uncertain-1"]
+    assert queue.nacked == []
+    assert queue.dlq == []
+    create_job.assert_not_called()
+    process_job.assert_not_called()
+    decisions = list_pre_audit_relevance_decisions(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=19,
+        head_sha="worker-uncertain-head",
+    )
+    assert len(decisions) == 1
+    assert decisions[0].artifact_path == "src/assistant_router.py"
+    assert decisions[0].classifier_is_relevant is False
+    assert decisions[0].confidence_tier == "uncertain"
 
 
 def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):

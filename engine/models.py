@@ -21,6 +21,12 @@ class RiskLevel(str, Enum):
     HIGH = "High"
 
 
+class RelevanceConfidenceTier(str, Enum):
+    CLEAR_YES = "clear_yes"
+    UNCERTAIN = "uncertain"
+    CLEAR_NO = "clear_no"
+
+
 @dataclass(frozen=True)
 class ChangedFile:
     old_path: str
@@ -41,10 +47,43 @@ class ChangedFile:
 @dataclass(frozen=True)
 class RelevanceResult:
     path: str
-    ai_relevant: bool
     artifact_type: str
     reason: str
     context_mode: SemanticContextMode
+    heuristic_score: int = 0
+    confidence_tier: RelevanceConfidenceTier = RelevanceConfidenceTier.CLEAR_NO
+    matched_signals: List["RelevanceSignal"] = field(default_factory=list)
+    micro_classifier: "MicroClassifierResult | None" = None
+
+    @property
+    def ai_relevant(self) -> bool:
+        if self.micro_classifier is not None:
+            return self.micro_classifier.is_relevant
+        return self.confidence_tier != RelevanceConfidenceTier.CLEAR_NO
+
+    @property
+    def needs_micro_classifier(self) -> bool:
+        return self.confidence_tier == RelevanceConfidenceTier.UNCERTAIN and self.micro_classifier is None
+
+
+@dataclass(frozen=True)
+class RelevanceSignal:
+    source: str
+    label: str
+    weight: int
+    artifact_type: str
+    reason: str
+    matched_value: str | None = None
+
+
+@dataclass(frozen=True)
+class MicroClassifierResult:
+    is_relevant: bool
+    reason: str
+    status: str = "completed"
+    provider: str | None = None
+    model: str | None = None
+    latency_ms: float | None = None
 
 
 @dataclass(frozen=True)

@@ -64,6 +64,29 @@ class ChangedArtifactRecord:
 
 
 @dataclass(frozen=True)
+class PreAuditRelevanceDecisionRecord:
+    id: int
+    repo_full: str
+    pr_number: int
+    head_sha: str
+    artifact_path: str
+    artifact_type: str
+    confidence_tier: str
+    heuristic_score: int
+    heuristic_reason: str
+    matched_signals_json: str
+    classifier_status: str | None
+    classifier_is_relevant: bool | None
+    classifier_reason: str | None
+    provider: str | None
+    model: str | None
+    latency_ms: float | None
+    changed_artifact_id: int | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
 class FindingRecord:
     id: int
     audit_id: int
@@ -357,6 +380,50 @@ def init_audit_record_db(db_path: str) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pull_request_audits_created_at ON pull_request_audits(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_changed_artifacts_path ON changed_artifacts(artifact_path)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pre_audit_relevance_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                confidence_tier TEXT NOT NULL,
+                heuristic_score INTEGER NOT NULL,
+                heuristic_reason TEXT NOT NULL,
+                matched_signals_json TEXT NOT NULL,
+                classifier_status TEXT,
+                classifier_is_relevant INTEGER,
+                classifier_reason TEXT,
+                provider TEXT,
+                model TEXT,
+                latency_ms REAL,
+                changed_artifact_id INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, pr_number, head_sha, artifact_path),
+                FOREIGN KEY(changed_artifact_id) REFERENCES changed_artifacts(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pre_audit_relevance_decisions_lookup ON pre_audit_relevance_decisions(repo_full, pr_number, head_sha)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS repo_signal_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full TEXT NOT NULL,
+                path_pattern TEXT NOT NULL,
+                artifact_type TEXT,
+                weight_adjustment INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_source_severity ON findings(source, severity)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_rule_id ON findings(rule_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_versions_normalized_id ON artifact_versions(normalized_artifact_id, created_at)")
@@ -558,6 +625,14 @@ def record_audit_result(
                 ),
             )
             changed_artifact_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                UPDATE pre_audit_relevance_decisions
+                SET changed_artifact_id = ?, updated_at = ?
+                WHERE repo_full = ? AND pr_number = ? AND head_sha = ? AND artifact_path = ?
+                """,
+                (changed_artifact_id, now, repo_full, pr_number, head_sha, artifact.relevance.path),
+            )
 
             for finding in artifact.findings:
                 conn.execute(
@@ -763,6 +838,103 @@ def record_audit_result(
     if row is None:
         raise RuntimeError("Failed to store or reload pull request audit record.")
     return _row_to_pull_request_audit(row)
+
+
+def record_pre_audit_relevance_decision(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+    relevance,
+) -> None:
+    now = time.time()
+    micro_classifier = getattr(relevance, "micro_classifier", None)
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO pre_audit_relevance_decisions (
+                repo_full, pr_number, head_sha, artifact_path, artifact_type,
+                confidence_tier, heuristic_score, heuristic_reason, matched_signals_json,
+                classifier_status, classifier_is_relevant, classifier_reason,
+                provider, model, latency_ms, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(repo_full, pr_number, head_sha, artifact_path) DO UPDATE SET
+                artifact_type = excluded.artifact_type,
+                confidence_tier = excluded.confidence_tier,
+                heuristic_score = excluded.heuristic_score,
+                heuristic_reason = excluded.heuristic_reason,
+                matched_signals_json = excluded.matched_signals_json,
+                classifier_status = excluded.classifier_status,
+                classifier_is_relevant = excluded.classifier_is_relevant,
+                classifier_reason = excluded.classifier_reason,
+                provider = excluded.provider,
+                model = excluded.model,
+                latency_ms = excluded.latency_ms,
+                updated_at = excluded.updated_at
+            """,
+            (
+                repo_full,
+                pr_number,
+                head_sha,
+                relevance.path,
+                relevance.artifact_type,
+                relevance.confidence_tier.value,
+                relevance.heuristic_score,
+                relevance.reason,
+                json.dumps([asdict(signal) for signal in relevance.matched_signals]),
+                micro_classifier.status if micro_classifier is not None else None,
+                int(micro_classifier.is_relevant) if micro_classifier is not None else None,
+                micro_classifier.reason if micro_classifier is not None else None,
+                micro_classifier.provider if micro_classifier is not None else None,
+                micro_classifier.model if micro_classifier is not None else None,
+                micro_classifier.latency_ms if micro_classifier is not None else None,
+                now,
+                now,
+            ),
+        )
+
+
+def list_pre_audit_relevance_decisions(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+) -> list[PreAuditRelevanceDecisionRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM pre_audit_relevance_decisions
+            WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
+            ORDER BY artifact_path ASC, id ASC
+            """,
+            (repo_full, pr_number, head_sha),
+        ).fetchall()
+    return [
+        PreAuditRelevanceDecisionRecord(
+            id=row["id"],
+            repo_full=row["repo_full"],
+            pr_number=row["pr_number"],
+            head_sha=row["head_sha"],
+            artifact_path=row["artifact_path"],
+            artifact_type=row["artifact_type"],
+            confidence_tier=row["confidence_tier"],
+            heuristic_score=row["heuristic_score"],
+            heuristic_reason=row["heuristic_reason"],
+            matched_signals_json=row["matched_signals_json"],
+            classifier_status=row["classifier_status"],
+            classifier_is_relevant=(bool(row["classifier_is_relevant"]) if row["classifier_is_relevant"] is not None else None),
+            classifier_reason=row["classifier_reason"],
+            provider=row["provider"],
+            model=row["model"],
+            latency_ms=row["latency_ms"],
+            changed_artifact_id=row["changed_artifact_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
 
 
 def get_pull_request_audit_by_id(db_path: str, audit_id: int) -> Optional[PullRequestAuditRecord]:

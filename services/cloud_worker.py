@@ -14,7 +14,7 @@ from .branch_scan_jobs import create_branch_scan_job
 from .branch_scan_worker import BranchScanWorkerSettings, process_next_branch_scan_job_once
 from .audit_records import has_completed_audit
 from .audit_worker import WorkerSettings, process_job
-from .cloud_common import fetch_diff_with_retry, is_transient_error, needs_audit
+from .cloud_common import evaluate_and_persist_audit_decision, fetch_diff_with_retry, is_transient_error
 from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
 from .observability import configure_logging
@@ -168,7 +168,19 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         logger.info("Moved job to DLQ after diff fetch failure", extra={"repo": repo_full, "pr_number": pr_number})
         return
 
-    if not needs_audit(diff_text):
+    audit_decision = evaluate_and_persist_audit_decision(
+        settings.resolved_db_path,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        diff_text=diff_text,
+        llm_client=llm_client,
+        model=settings.ai_model,
+        timeout_seconds=min(settings.llm_timeout_seconds, 5.0),
+        provider=settings.resolved_ai_provider.value,
+    )
+
+    if not audit_decision.should_audit:
         JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return
