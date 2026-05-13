@@ -604,10 +604,11 @@ def render_control_plane_install_page(
     install_url: str | None,
     install_callback_url: str,
     csrf_token: str,
+    install_action_label: str = "Start GitHub App install",
 ) -> str:
     template = _load_template("control_plane_install.html")
     install_action = (
-        f'<a class="button" href="{html_escape(install_url)}">Start GitHub App install</a>' if install_url else '<span class="subtle-link">GitHub App install URL unavailable</span>'
+        f'<a class="button" href="{html_escape(install_url)}">{html_escape(install_action_label)}</a>' if install_url else '<span class="subtle-link">GitHub App install URL unavailable</span>'
     )
     manual_link_form = f'''
         <form method="post" action="/setup/install/link" class="action-form">
@@ -716,9 +717,17 @@ def render_repo_inventory_cards(
     install_start_href: str,
     install_disabled: bool = False,
     install_disabled_href: str = "/billing?plan=starter",
+    install_action_label: str = "Install app",
 ) -> str:
     if not repositories:
-        return '<article class="repo-setup-card repo-setup-card-empty"><div class="repo-setup-card-label">Repository inventory</div><h3>No repositories available yet</h3><p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p></article>'
+        return (
+            '<article class="repo-setup-card repo-setup-card-empty">'
+            '<div class="repo-setup-card-label">Repository inventory</div>'
+            '<h3>No repositories available yet</h3>'
+            '<p>Reconnect GitHub if repository enumeration has not been granted for this workspace identity.</p>'
+            f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">{html_escape(install_action_label)}</a>'
+            '</article>'
+        )
 
     rendered: list[str] = []
     for repository in sorted(repositories, key=lambda item: str(item.get("repo_full") or "").lower()):
@@ -802,7 +811,7 @@ def render_repo_inventory_cards(
                 )
                 status = "upgrade_required"
             else:
-                action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">Install app</a>'
+                action = f'<a class="repo-setup-button repo-setup-button-link" href="{html_escape(install_start_href)}">{html_escape(install_action_label)}</a>'
                 status = "available"
         rendered.append(
             f'''

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from engine.drift_profile import build_attribute_profile
 
 import main
+from services.control_plane_records import allocate_repo_to_workspace, create_workspace, get_repo_allocation_for_workspace, get_repo_connection_for_workspace, upsert_github_identity, upsert_github_installation
 
 client = TestClient(main.app)
 
@@ -86,6 +87,160 @@ def test_webhook_invalid_signature():
     payload = {"action": "opened"}
     response = client.post("/webhook", json=payload, headers={"X-Hub-Signature-256": "bad"})
     assert response.status_code == 400
+
+
+def test_webhook_marks_installation_inactive_on_delete(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-install-delete.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="321",
+        github_login="install-delete-owner",
+        display_name="Install Delete Owner",
+        primary_email="install-delete-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="install-delete-workspace",
+        display_name="Install Delete Workspace",
+        billing_owner_user_id=user.id,
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=321,
+        account_id="321",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "action": "deleted",
+        "installation": {
+            "id": 321,
+            "account": {"id": 321, "login": "doria90", "type": "Organization"},
+        },
+        "target_type": "Organization",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "installation",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = client.post("/webhook", content=body, headers=headers)
+        assert response.status_code == 200
+        assert response.json() == {"message": "installation status updated", "status": "inactive"}
+        installation = main.get_github_installation_by_installation_id(main.AUDIT_DB_PATH, 321)
+        assert installation is not None
+        assert installation.status == "inactive"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+
+def test_webhook_marks_removed_installation_repository_inactive(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-installation-repositories.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="654",
+        github_login="repo-grant-owner",
+        display_name="Repo Grant Owner",
+        primary_email="repo-grant-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-grant-workspace",
+        display_name="Repo Grant Workspace",
+        billing_owner_user_id=user.id,
+    )
+    installation = upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=654,
+        account_id="654",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    main.replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repositories=[
+            {
+                "repo_github_id": "1",
+                "repo_full": "doria90/removed-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "2",
+                "repo_full": "doria90/kept-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="1",
+        repo_full="doria90/removed-repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    main.update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "action": "removed",
+        "installation": {"id": 654},
+        "repositories_added": [],
+        "repositories_removed": [
+            {
+                "id": 1,
+                "full_name": "doria90/removed-repo",
+                "default_branch": "main",
+                "private": True,
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "installation_repositories",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = client.post("/webhook", content=body, headers=headers)
+        assert response.status_code == 200
+        assert response.json() == {
+            "message": "installation repositories updated",
+            "connected_repo_count": 1,
+            "deactivated_allocation_count": 1,
+        }
+        assert get_repo_connection_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/removed-repo") is None
+        assert get_repo_connection_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/kept-repo") is not None
+        removed_allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/removed-repo")
+        assert removed_allocation is not None
+        assert removed_allocation.allocation_status == "inactive"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
 
 
 def test_webhook_queues_relevant_audit_job():

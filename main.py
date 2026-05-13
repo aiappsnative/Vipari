@@ -91,6 +91,7 @@ from services.control_plane_records import (
     AdminActivityLogEntry,
     activate_billing_handoff_claim,
     allocate_repo_to_workspace,
+    apply_github_installation_repository_event,
     count_machine_principals_for_workspace,
     create_control_plane_audit_log,
     get_billing_customer_by_stripe_customer_id,
@@ -118,6 +119,7 @@ from services.control_plane_records import (
     get_user_session,
     get_workspace_by_id,
     get_workspace_entitlement,
+    get_latest_workspace_installation,
     get_workspace_installation,
     get_workspace_membership,
     get_workspace_subscription,
@@ -144,6 +146,7 @@ from services.control_plane_records import (
     revoke_machine_principal,
     revoke_user_session,
     accept_workspace_invites_for_github_login,
+    apply_github_installation_lifecycle_event,
     update_ai_system_classification,
     update_repo_allocation_status,
     update_session_workspace,
@@ -364,7 +367,7 @@ def _dashboard_redirect_for_request(request: Request):
 
     # If no dashboard access, deny unless it's a deep link
     if not resolution.can_access_dashboard:
-        if is_deep_link:
+        if is_deep_link or resolution.state == "awaiting_github_install":
             return None, session, access_context, True
         return RedirectResponse("/workspace", status_code=303), session, access_context, False
 
@@ -406,7 +409,7 @@ def _repo_visible_for_dashboard_shell(access_context: dict[str, object] | None, 
     if workspace is None:
         return False
     allocation = get_repo_allocation_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
-    if allocation is not None:
+    if allocation is not None and allocation.allocation_status in {"active", "onboarded"}:
         return True
     connection = get_repo_connection_for_workspace(AUDIT_DB_PATH, workspace.id, repo_full)
     return connection is not None and connection.status == "available"
@@ -419,6 +422,7 @@ def _dashboard_shell_copy(access_context: dict[str, object] | None, *, repo_full
 
     shell_title = resolution.ui_title
     shell_body = resolution.ui_body
+    shell_cta_label = resolution.primary_cta
     if repo_full and resolution.state == "awaiting_repo_onboarding":
         shell_body = (
             f"{repo_full} has not yet been onboarded in this workspace. Complete the first repository scan to unlock the case file view for this link."
@@ -429,7 +433,34 @@ def _dashboard_shell_copy(access_context: dict[str, object] | None, *, repo_full
         )
     elif resolution.state == "active_comments_only":
         shell_body = "This workspace can receive PR comments, but dashboard views require a paid plan. Upgrade to open linked dashboard context."
-    return (shell_title, shell_body, _dashboard_shell_cta_href(resolution), resolution.primary_cta)
+    elif resolution.state == "awaiting_github_install":
+        workspace = access_context.get("workspace") if access_context else None
+        latest_installation = get_latest_workspace_installation(AUDIT_DB_PATH, workspace.id) if workspace else None
+        if latest_installation is not None and latest_installation.status != "active":
+            shell_title = "Reconnect Vipari on GitHub"
+            shell_body = "GitHub App access for this workspace was removed. Reconnect Vipari on GitHub to restore dashboard access and resume repository automation."
+            shell_cta_label = "Reconnect GitHub App"
+        else:
+            shell_body = "GitHub App access is required before Vipari can reopen this dashboard view. Reinstall or reconnect the GitHub App to continue."
+    return (shell_title, shell_body, _dashboard_shell_cta_href(resolution), shell_cta_label)
+
+
+def _post_billing_activation_redirect(access_context: dict[str, object], flow_context: dict[str, str], *, activation_flag: str) -> RedirectResponse:
+    refreshed_access_context = _build_access_context(access_context["session"])
+    state = refreshed_access_context["resolution"].state
+    if state == "awaiting_github_install":
+        return RedirectResponse(
+            _path_with_flow_context(f"/setup/install?{activation_flag}=1", flow_context),
+            status_code=303,
+        )
+    if state == "awaiting_repo_onboarding":
+        return RedirectResponse(_path_with_flow_context("/repos", flow_context), status_code=303)
+    if state in {"active", "active_comments_only", "canceled_active_until_period_end", "expired_read_only"}:
+        return RedirectResponse(_path_with_flow_context("/dashboard", flow_context), status_code=303)
+    return RedirectResponse(
+        _resume_destination_for_session(refreshed_access_context["session"], flow_context),
+        status_code=303,
+    )
 
 
 def _free_tier_upgrade_shell_copy(scope_label: str) -> tuple[str, str, str, str]:
@@ -438,6 +469,63 @@ def _free_tier_upgrade_shell_copy(scope_label: str) -> tuple[str, str, str, str]
         f"This workspace can review dashboard and audit surfaces, but {scope_label} requires Starter or above.",
         "/app/billing?plan=starter",
         "Upgrade to Starter",
+    )
+
+
+def _missing_repo_shell_copy(access_context: dict[str, object] | None, repo_full: str) -> tuple[str, str, str, str]:
+    workspace = access_context.get("workspace") if access_context else None
+    latest_installation = get_latest_workspace_installation(AUDIT_DB_PATH, workspace.id) if workspace else None
+    if latest_installation is not None and latest_installation.status != "active":
+        return (
+            "Reconnect Vipari on GitHub",
+            f"{repo_full} is no longer available because GitHub App access for this workspace was removed. Reconnect Vipari on GitHub to restore repository access and reopen this link.",
+            "/setup/install",
+            "Reconnect GitHub App",
+        )
+    return (
+        "Repository access removed",
+        f"{repo_full} is no longer available in this workspace dashboard. It may have been removed from the GitHub App installation scope or disconnected from this workspace. Choose another repository to continue.",
+        "/repos",
+        "Open Repository Setup",
+    )
+
+
+def _render_missing_repo_dashboard_page(
+    request: Request,
+    repo_full: str,
+    *,
+    requested_tab: str,
+    access_context: dict[str, object] | None,
+    artifact: str | None = None,
+    pr: str | None = None,
+    head_sha: str | None = None,
+    status_code: int = 404,
+) -> HTMLResponse:
+    shell_title, shell_body, shell_cta_href, shell_cta_label = _missing_repo_shell_copy(access_context, repo_full)
+    user = access_context.get("user") if access_context else None
+    identity = access_context.get("identity") if access_context else None
+    active_tab = requested_tab.strip().lower() if requested_tab else "audit"
+    if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
+        active_tab = "audit"
+    return HTMLResponse(
+        render_repo_dashboard_page(
+            repo_full,
+            theme_preference=_current_theme_preference(request),
+            active_tab=active_tab,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
+            shell_state="repo_access_removed",
+            shell_title=shell_title,
+            shell_body=shell_body,
+            shell_cta_href=shell_cta_href,
+            shell_cta_label=shell_cta_label,
+            deep_link_artifact=(artifact or "").strip(),
+            deep_link_pr=(pr or "").strip(),
+            deep_link_head_sha=(head_sha or "").strip(),
+        ),
+        status_code=status_code,
     )
 
 
@@ -3508,6 +3596,7 @@ async def billing_page(request: Request):
     workspace = access_context["workspace"]
     subscription = access_context["subscription"]
     entitlement = access_context["entitlement"]
+    resolution = access_context["resolution"]
     customer = get_billing_customer_for_workspace(AUDIT_DB_PATH, workspace.id)
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     current_plan_label = get_plan_definition(plan_code).label if plan_code else "No plan"
@@ -3524,6 +3613,12 @@ async def billing_page(request: Request):
         checkout_status_note = "Paid plan checkout is handled by the external billing provider before Vipari grants access."
     elif request.query_params.get("canceled"):
         checkout_status_note = "Checkout was canceled before payment confirmation."
+    elif resolution.state in {"active", "active_comments_only", "canceled_active_until_period_end", "expired_read_only"}:
+        checkout_status_note = "GitHub installation and repository onboarding are already in place. Choosing a plan here will return you to the dashboard instead of restarting setup."
+    elif resolution.state == "awaiting_repo_onboarding":
+        checkout_status_note = "GitHub installation is already linked. After plan activation, the next step is selecting repositories and finishing onboarding."
+    elif resolution.state == "awaiting_github_install":
+        checkout_status_note = "Choose a plan to continue. GitHub App installation is still required before repositories can be allocated."
     return HTMLResponse(
         render_control_plane_billing_page(
             workspace_name=workspace.display_name,
@@ -3576,7 +3671,7 @@ async def billing_checkout(request: Request, plan: str | None = Form(default=Non
             workspace_id=workspace.id,
             payload=derive_entitlement_payload(normalized_plan, "free_active"),
         )
-        return RedirectResponse(_path_with_flow_context("/setup/install?free_activated=1", flow_context), status_code=303)
+        return _post_billing_activation_redirect(access_context, flow_context, activation_flag="free_activated")
 
     if settings.base44_checkout_url:
         checkout_params = {
@@ -3705,15 +3800,23 @@ async def install_page(request: Request):
     flow_context = _flow_context_from_request(request)
     workspace = access_context["workspace"]
     installation = access_context["installation"]
+    latest_installation = get_latest_workspace_installation(AUDIT_DB_PATH, workspace.id)
     install_url = _path_with_flow_context("/setup/install/start", flow_context) if settings.has_github_app_credentials else None
     installation_summary = (
         f"Connected installation {installation.account_login} ({installation.account_type})." if installation else "No GitHub App installation is linked yet."
     )
     install_hint = "Billing is active. The next gate is granting GitHub App installation authority."
+    install_action_label = "Start GitHub App install"
     if request.query_params.get("installation_linked"):
         install_hint = "GitHub installation linked successfully. Review the synced repositories below."
     elif request.query_params.get("install_error"):
         install_hint = "GitHub installation completed, but DriftGuard could not finish linking it automatically. Use the manual fallback form below."
+    elif installation is None and latest_installation is not None and latest_installation.status != "active":
+        install_hint = "Vipari was previously installed for this workspace, but GitHub App access is no longer active. Reconnect the app to restore dashboard access and automation."
+        installation_summary = (
+            f"Last linked installation {latest_installation.account_login} ({latest_installation.account_type}) is currently {latest_installation.status}."
+        )
+        install_action_label = "Reconnect GitHub App"
     return HTMLResponse(
         render_control_plane_install_page(
             workspace_name=workspace.display_name,
@@ -3722,6 +3825,7 @@ async def install_page(request: Request):
             install_url=install_url,
             install_callback_url=_path_with_flow_context("/setup/install/callback", flow_context),
             csrf_token=access_context["session"].csrf_secret,
+            install_action_label=install_action_label,
         )
     )
 
@@ -3853,6 +3957,8 @@ async def repo_setup_page(request: Request):
     workspace = access_context["workspace"]
     user = access_context["user"]
     identity = access_context["identity"]
+    installation = access_context.get("installation")
+    latest_installation = get_latest_workspace_installation(AUDIT_DB_PATH, workspace.id)
     entitlement = access_context["entitlement"]
     subscription = access_context["subscription"]
     repo_inventory = _github_account_repo_inventory(access_context)
@@ -3885,6 +3991,13 @@ async def repo_setup_page(request: Request):
     remaining_repo_slots = max(repo_limit - consumed_repo_slots, 0)
     install_disabled = remaining_repo_slots <= 0
     inventory_summary = f"{remaining_repo_slots} of {repo_limit} repository slots available on this plan."
+    install_action_label = "Install app"
+    if installation is None and latest_installation is not None and latest_installation.status != "active":
+        inventory_summary = (
+            f"GitHub App access for {latest_installation.account_login} is currently {latest_installation.status}. "
+            f"Reconnect Vipari to restore repository visibility. {remaining_repo_slots} of {repo_limit} repository slots remain available."
+        )
+        install_action_label = "Reconnect GitHub App"
     audit_repo_full = (
         (active_allocations[0]["repo_full"] if active_allocations else None)
         or (connections[0]["repo_full"] if connections else None)
@@ -3900,6 +4013,7 @@ async def repo_setup_page(request: Request):
                 install_start_href=_path_with_flow_context("/setup/install/start", flow_context),
                 install_disabled=install_disabled,
                 install_disabled_href="/billing?plan=starter",
+                install_action_label=install_action_label,
             ),
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
@@ -4113,8 +4227,37 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
     if redirect is not None:
         timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
         return _attach_server_timing(redirect, timing_metrics)
+    if _control_plane_active() and access_context is not None and not shell_mode:
+        try:
+            access_context = _require_repo_dashboard_read_access(request, repo_full)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                response = _render_missing_repo_dashboard_page(
+                    request,
+                    repo_full,
+                    requested_tab=requested_tab,
+                    access_context=access_context,
+                    artifact=artifact,
+                    pr=pr,
+                    head_sha=head_sha,
+                    status_code=404,
+                )
+                timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+                return _attach_server_timing(response, timing_metrics)
+            raise
     if shell_mode and not _repo_visible_for_dashboard_shell(access_context, repo_full):
-        raise HTTPException(status_code=404, detail="Repository is not visible in this workspace dashboard.")
+        response = _render_missing_repo_dashboard_page(
+            request,
+            repo_full,
+            requested_tab=requested_tab,
+            access_context=access_context,
+            artifact=artifact,
+            pr=pr,
+            head_sha=head_sha,
+            status_code=404,
+        )
+        timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+        return _attach_server_timing(response, timing_metrics)
     render_started = time.perf_counter()
     active_tab = requested_tab.strip().lower() if requested_tab else "audit"
     if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
@@ -4739,10 +4882,44 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event = request.headers.get("X-GitHub-Event", "")
-    if event not in {"pull_request", "push"}:
+    if event not in {"pull_request", "push", "installation", "installation_repositories"}:
         return JSONResponse({"message": "ignored"})
 
     payload = await request.json()
+    if event == "installation":
+        action = str(payload.get("action") or "").strip().lower()
+        installation = payload.get("installation") or {}
+        installation_id = installation.get("id")
+        if not installation_id:
+            raise HTTPException(status_code=400, detail="Missing installation id")
+        account = installation.get("account") if isinstance(installation, dict) else {}
+        updated_installation = apply_github_installation_lifecycle_event(
+            AUDIT_DB_PATH,
+            installation_id=int(installation_id),
+            action=action,
+            account_id=str(account.get("id") or "") if isinstance(account, dict) else "",
+            account_login=str(account.get("login") or "") if isinstance(account, dict) else "",
+            account_type=str(account.get("type") or "Organization") if isinstance(account, dict) else "Organization",
+            target_type=str(payload.get("target_type") or "Organization"),
+        )
+        if updated_installation is None:
+            return JSONResponse({"message": "ignored"})
+        return JSONResponse({"message": "installation status updated", "status": updated_installation.status})
+    if event == "installation_repositories":
+        installation = payload.get("installation") or {}
+        installation_id = installation.get("id")
+        if not installation_id:
+            raise HTTPException(status_code=400, detail="Missing installation id")
+        result = apply_github_installation_repository_event(
+            AUDIT_DB_PATH,
+            installation_id=int(installation_id),
+            repositories_added=payload.get("repositories_added") if isinstance(payload.get("repositories_added"), list) else [],
+            repositories_removed=payload.get("repositories_removed") if isinstance(payload.get("repositories_removed"), list) else [],
+        )
+        if result is None:
+            return JSONResponse({"message": "ignored"})
+        return JSONResponse({"message": "installation repositories updated", **result})
+
     if event == "push":
         installation_id = payload.get("installation", {}).get("id")
         repo_full = payload.get("repository", {}).get("full_name")

@@ -26,8 +26,12 @@ from services.cloud_worker import _message_still_authorized, _process_message, r
 from services.observability import configure_logging
 from services.control_plane_records import (
     allocate_repo_to_workspace,
+    apply_github_installation_lifecycle_event,
+    get_repo_allocation_for_workspace,
+    get_repo_connection_for_workspace,
     create_workspace,
     init_control_plane_db,
+    replace_repo_connections,
     update_repo_allocation_status,
     update_workspace_pr_comments_setting,
     upsert_entitlement,
@@ -212,6 +216,165 @@ def test_webhook_redelivery_retries_after_enqueue_failure(tmp_path, monkeypatch)
     assert second.status_code == 202
     assert len(queue.messages) == 1
     assert queue.messages[0]["delivery_id"] == "delivery-retry"
+
+
+def test_webhook_app_processes_installation_delete_without_queueing(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-install-delete.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    _reset_settings_cache()
+
+    init_control_plane_db(db_path)
+    upsert_github_installation(
+        db_path,
+        workspace_id=None,
+        installation_id=999,
+        account_id="999",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+
+    queue = LocalSQLiteQueue(db_path)
+    app = create_webhook_app(queue)
+    payload = {
+        "action": "deleted",
+        "installation": {
+            "id": 999,
+            "account": {"id": 999, "login": "doria90", "type": "Organization"},
+        },
+        "target_type": "Organization",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": signature,
+                "X-GitHub-Event": "installation",
+                "X-GitHub-Delivery": "delivery-install-delete",
+                "Content-Type": "application/json",
+            },
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {"message": "installation status updated", "status": "inactive"}
+    saved = apply_github_installation_lifecycle_event(db_path, installation_id=999, action="unsuspend")
+    assert saved is not None
+    assert saved.status == "active"
+
+
+def test_webhook_app_processes_installation_repository_removal_without_queueing(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "webhook-install-repositories.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    _reset_settings_cache()
+
+    init_control_plane_db(db_path)
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="1001",
+        github_login="repo-removal-owner",
+        display_name="Repo Removal Owner",
+        primary_email="repo-removal-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        db_path,
+        slug="repo-removal-workspace",
+        display_name="Repo Removal Workspace",
+        billing_owner_user_id=user.id,
+    )
+    installation = upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=1001,
+        account_id="1001",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repositories=[
+            {
+                "repo_github_id": "11",
+                "repo_full": "doria90/removed-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+            {
+                "repo_github_id": "12",
+                "repo_full": "doria90/kept-repo",
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            },
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="11",
+        repo_full="doria90/removed-repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "onboarded")
+
+    queue = LocalSQLiteQueue(db_path)
+    app = create_webhook_app(queue)
+    payload = {
+        "action": "removed",
+        "installation": {"id": 1001},
+        "repositories_added": [],
+        "repositories_removed": [
+            {
+                "id": 11,
+                "full_name": "doria90/removed-repo",
+                "default_branch": "main",
+                "private": True,
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": signature,
+                "X-GitHub-Event": "installation_repositories",
+                "X-GitHub-Delivery": "delivery-install-repositories",
+                "Content-Type": "application/json",
+            },
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "message": "installation repositories updated",
+        "connected_repo_count": 1,
+        "deactivated_allocation_count": 1,
+    }
+    assert get_repo_connection_for_workspace(db_path, workspace.id, "doria90/removed-repo") is None
+    assert get_repo_connection_for_workspace(db_path, workspace.id, "doria90/kept-repo") is not None
+    removed_allocation = get_repo_allocation_for_workspace(db_path, workspace.id, "doria90/removed-repo")
+    assert removed_allocation is not None
+    assert removed_allocation.allocation_status == "inactive"
+    assert asyncio.run(queue.dequeue(10)) == []
 
 
 def test_webhook_delivery_dedupe_survives_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
