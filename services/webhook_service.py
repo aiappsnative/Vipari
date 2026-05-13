@@ -10,6 +10,7 @@ from config import get_settings
 from .audit_jobs import init_db
 from .cloud_common import build_webhook_envelope, verify_signature
 from .observability import configure_logging, instrument_fastapi
+from .control_plane_records import apply_github_installation_lifecycle_event, apply_github_installation_repository_event
 from .queue import LocalSQLiteQueue, QueueBackend, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
 from .webhook_deliveries import (
@@ -66,7 +67,7 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid signature")
 
         event = request.headers.get("X-GitHub-Event", "")
-        if event not in {"pull_request", "push"}:
+        if event not in {"pull_request", "push", "installation", "installation_repositories"}:
             return JSONResponse({"message": "ignored"}, status_code=202)
 
         delivery_id = request.headers.get("X-GitHub-Delivery")
@@ -78,6 +79,55 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
             return JSONResponse({"message": "duplicate ignored"}, status_code=202)
 
         payload = json.loads(body.decode("utf-8"))
+        if event == "installation":
+            action = str(payload.get("action") or "").strip().lower()
+            installation = payload.get("installation") or {}
+            installation_id = installation.get("id")
+            if not installation_id:
+                raise HTTPException(status_code=400, detail="Missing installation id")
+            account = installation.get("account") if isinstance(installation, dict) else {}
+            updated_installation = apply_github_installation_lifecycle_event(
+                db_path,
+                installation_id=int(installation_id),
+                action=action,
+                account_id=str(account.get("id") or "") if isinstance(account, dict) else "",
+                account_login=str(account.get("login") or "") if isinstance(account, dict) else "",
+                account_type=str(account.get("type") or "Organization") if isinstance(account, dict) else "Organization",
+                target_type=str(payload.get("target_type") or "Organization"),
+            )
+            mark_webhook_delivery_enqueued(db_path, delivery_id)
+            if updated_installation is None:
+                return JSONResponse({"message": "ignored"}, status_code=202)
+            logger.info(
+                "Processed installation lifecycle event",
+                extra={"delivery_id": delivery_id, "installation_id": installation_id, "status": updated_installation.status},
+            )
+            return JSONResponse({"message": "installation status updated", "status": updated_installation.status}, status_code=202)
+        if event == "installation_repositories":
+            installation = payload.get("installation") or {}
+            installation_id = installation.get("id")
+            if not installation_id:
+                raise HTTPException(status_code=400, detail="Missing installation id")
+            result = apply_github_installation_repository_event(
+                db_path,
+                installation_id=int(installation_id),
+                repositories_added=payload.get("repositories_added") if isinstance(payload.get("repositories_added"), list) else [],
+                repositories_removed=payload.get("repositories_removed") if isinstance(payload.get("repositories_removed"), list) else [],
+            )
+            mark_webhook_delivery_enqueued(db_path, delivery_id)
+            if result is None:
+                return JSONResponse({"message": "ignored"}, status_code=202)
+            logger.info(
+                "Processed installation repository event",
+                extra={
+                    "delivery_id": delivery_id,
+                    "installation_id": installation_id,
+                    "connected_repo_count": result["connected_repo_count"],
+                    "deactivated_allocation_count": result["deactivated_allocation_count"],
+                },
+            )
+            return JSONResponse({"message": "installation repositories updated", **result}, status_code=202)
+
         envelope = build_webhook_envelope(payload, delivery_id=delivery_id)
         if envelope is None:
             mark_webhook_delivery_enqueued(db_path, delivery_id)

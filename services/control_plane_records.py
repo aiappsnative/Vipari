@@ -1601,6 +1601,15 @@ def get_workspace_installation(db_path: str, workspace_id: int) -> GithubInstall
     return _row_to_installation(row) if row else None
 
 
+def get_latest_workspace_installation(db_path: str, workspace_id: int) -> GithubInstallationRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM github_installations WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (workspace_id,),
+        ).fetchone()
+    return _row_to_installation(row) if row else None
+
+
 def get_github_installation_by_installation_id(db_path: str, installation_id: int) -> GithubInstallationRecord | None:
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -2070,6 +2079,170 @@ def upsert_github_installation(
         if workspace_id is not None:
             _refresh_workspace_setup_state(conn, workspace_id)
     return _row_to_installation(row)
+
+
+def update_github_installation_status(
+    db_path: str,
+    *,
+    installation_id: int,
+    status: str,
+) -> GithubInstallationRecord | None:
+    now = time.time()
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT * FROM github_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        if existing is None:
+            return None
+        conn.execute(
+            "UPDATE github_installations SET status = ?, updated_at = ? WHERE installation_id = ?",
+            (status, now, installation_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM github_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        workspace_id = row["workspace_id"] if row is not None else None
+        if workspace_id is not None:
+            _refresh_workspace_setup_state(conn, int(workspace_id))
+    return _row_to_installation(row) if row is not None else None
+
+
+def apply_github_installation_lifecycle_event(
+    db_path: str,
+    *,
+    installation_id: int,
+    action: str,
+    account_id: str = "",
+    account_login: str = "",
+    account_type: str = "Organization",
+    target_type: str = "Organization",
+) -> GithubInstallationRecord | None:
+    normalized_action = action.strip().lower()
+    if normalized_action in {"deleted", "suspend"}:
+        return update_github_installation_status(db_path, installation_id=installation_id, status="inactive")
+    if normalized_action not in {"created", "unsuspend"}:
+        return None
+
+    existing = update_github_installation_status(db_path, installation_id=installation_id, status="active")
+    if existing is not None:
+        return existing
+
+    normalized_account_id = account_id.strip() or str(installation_id)
+    normalized_account_login = account_login.strip() or str(installation_id)
+    normalized_account_type = account_type.strip() or "Organization"
+    normalized_target_type = target_type.strip() or normalized_account_type
+    return upsert_github_installation(
+        db_path,
+        workspace_id=None,
+        installation_id=installation_id,
+        account_id=normalized_account_id,
+        account_login=normalized_account_login,
+        account_type=normalized_account_type,
+        target_type=normalized_target_type,
+        status="active",
+    )
+
+
+def apply_github_installation_repository_event(
+    db_path: str,
+    *,
+    installation_id: int,
+    repositories_added: list[dict[str, object]] | None = None,
+    repositories_removed: list[dict[str, object]] | None = None,
+) -> dict[str, int] | None:
+    normalized_added: list[dict[str, object]] = []
+    for repo in repositories_added or []:
+        repo_full = str(repo.get("full_name") or repo.get("repo_full") or "").strip()
+        if not repo_full:
+            continue
+        repo_github_id = str(repo.get("id") or repo.get("repo_github_id") or repo_full).strip()
+        normalized_added.append(
+            {
+                "repo_github_id": repo_github_id,
+                "repo_full": repo_full,
+                "default_branch": str(repo.get("default_branch") or "main"),
+                "is_private": bool(repo.get("private", repo.get("is_private", True))),
+                "status": str(repo.get("status") or "available"),
+            }
+        )
+    removed_repo_fulls = {
+        str(repo.get("full_name") or repo.get("repo_full") or "").strip()
+        for repo in repositories_removed or []
+        if str(repo.get("full_name") or repo.get("repo_full") or "").strip()
+    }
+    now = time.time()
+    with _connect(db_path) as conn:
+        installation = conn.execute(
+            "SELECT * FROM github_installations WHERE installation_id = ?",
+            (installation_id,),
+        ).fetchone()
+        if installation is None:
+            return None
+
+        workspace_id = installation["workspace_id"]
+        for repo_full in removed_repo_fulls:
+            conn.execute(
+                "DELETE FROM repo_connections WHERE installation_id = ? AND repo_full = ?",
+                (installation_id, repo_full),
+            )
+        for repo in normalized_added:
+            conn.execute(
+                """
+                INSERT INTO repo_connections (
+                    installation_id, workspace_id, repo_github_id, repo_full, default_branch, is_private, status, last_synced_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(installation_id, repo_github_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    repo_full = excluded.repo_full,
+                    default_branch = excluded.default_branch,
+                    is_private = excluded.is_private,
+                    status = excluded.status,
+                    last_synced_at = excluded.last_synced_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    installation_id,
+                    workspace_id,
+                    repo["repo_github_id"],
+                    repo["repo_full"],
+                    repo.get("default_branch"),
+                    int(bool(repo.get("is_private", True))),
+                    repo.get("status", "available"),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+        deactivated_allocation_count = 0
+        if removed_repo_fulls:
+            placeholders = ", ".join("?" for _ in removed_repo_fulls)
+            allocation_rows = conn.execute(
+                f"SELECT id, workspace_id FROM repo_allocations WHERE installation_id = ? AND allocation_status IN ('active', 'onboarded') AND repo_full IN ({placeholders})",
+                (installation_id, *sorted(removed_repo_fulls)),
+            ).fetchall()
+            deactivated_allocation_count = len(allocation_rows)
+            if allocation_rows:
+                conn.execute(
+                    f"UPDATE repo_allocations SET allocation_status = 'inactive', deactivated_at = ?, updated_at = ? WHERE installation_id = ? AND allocation_status IN ('active', 'onboarded') AND repo_full IN ({placeholders})",
+                    (now, now, installation_id, *sorted(removed_repo_fulls)),
+                )
+                for row in allocation_rows:
+                    if row["workspace_id"] is not None:
+                        _refresh_workspace_setup_state(conn, int(row["workspace_id"]))
+        elif workspace_id is not None:
+            _refresh_workspace_setup_state(conn, int(workspace_id))
+
+        connection_count = int(
+            conn.execute("SELECT COUNT(*) FROM repo_connections WHERE installation_id = ?", (installation_id,)).fetchone()[0]
+        )
+
+    return {
+        "connected_repo_count": connection_count,
+        "deactivated_allocation_count": deactivated_allocation_count,
+    }
 
 
 def replace_repo_connections(db_path: str, *, workspace_id: int | None, installation_id: int, repositories: list[dict[str, object]]) -> None:

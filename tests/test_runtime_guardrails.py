@@ -267,6 +267,9 @@ async def test_readiness_verifies_postgres_connectivity(monkeypatch):
         "0005_add_session_flash",
         "0006_add_audit_feedback_and_triage_tables",
         "0007_add_high_risk_proposal_tables",
+        "0008_ensure_ai_system_registry_schema",
+        "0009_ensure_export_jobs_snapshot_columns",
+        "0010_ensure_relevance_decision_tables",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.runtime_guardrails.connect_sqlite") as connect, patch(

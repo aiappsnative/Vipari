@@ -159,6 +159,8 @@ class DashboardOverviewAttentionRepo:
     top_drift_magnitude: float
     avg_semantic_distance: float
     discovered_artifact_count: int
+    highest_review_pr_number: int | None = None
+    highest_review_head_sha: str | None = None
     highest_updated_at: float | None = None
 
 
@@ -218,6 +220,8 @@ class DashboardOverviewRegressionEntry:
     drift_magnitude: float
     capability_shift: float
     guardrail_shift: float
+    review_pr_number: int | None = None
+    review_head_sha: str | None = None
     attribute_profile: list["AttributeProfileDimension"] | None = None
 
 
@@ -350,6 +354,7 @@ class RepoDashboardInsightEntry:
     provenance_summary: str = ""
     review_target: str | None = None
     review_url: str | None = None
+    review_pr_number: int | None = None
     review_head_sha: str | None = None
     supporting_review_target: str | None = None
     supporting_review_url: str | None = None
@@ -589,6 +594,8 @@ class EscalationQueueItem:
     baseline_label: str
     review_target: str | None
     review_url: str | None
+    review_pr_number: int | None
+    review_head_sha: str | None
     attribute_deltas: list[dict[str, Any]]  # top-2 changed dimensions
     updated_at: float | None
 
@@ -645,6 +652,8 @@ def build_workspace_escalation_queue(
                     baseline_label=insight.baseline_label,
                     review_target=insight.review_target,
                     review_url=insight.review_url,
+                    review_pr_number=insight.review_pr_number,
+                    review_head_sha=insight.review_head_sha,
                     attribute_deltas=deltas,
                     updated_at=insight.updated_at,
                 ))
@@ -715,6 +724,8 @@ def build_workspace_escalation_queue(
                 "baseline_label": item.baseline_label,
                 "review_target": item.review_target,
                 "review_url": item.review_url,
+                "review_pr_number": item.review_pr_number,
+                "review_head_sha": item.review_head_sha,
                 "attribute_deltas": item.attribute_deltas,
                 "updated_at": item.updated_at,
             }
@@ -1885,6 +1896,7 @@ def _load_overview_batch_state(
             pra.repo_full,
             sap.artifact_path,
             pra.pr_number,
+                pra.head_sha,
             pra.output_mode,
             pra.suggested_risk_level,
             pra.status,
@@ -1947,6 +1959,8 @@ def _load_overview_batch_state(
             label=pr_source["label"],
             source_ref=pr_source["source_ref"],
             source_url=pr_source["source_url"],
+            review_pr_number=int(row["pr_number"]),
+            review_head_sha=str(row["head_sha"] or "").strip() or None,
             review_context=pr_source["review_context"],
             created_at=created_at,
             baseline_provenance=baseline_provenance,
@@ -2240,6 +2254,7 @@ class _RepoArtifactProfileContext:
     narrative: list[str]
     signal_terms: list[str]
     content_text: str | None
+    review_pr_number: int | None = None
     review_head_sha: str | None = None
 
 
@@ -2353,6 +2368,7 @@ def _load_repo_artifact_profile_contexts(db_path: str, repo_full: str) -> dict[s
                 label=pr_source["label"],
                 source_ref=pr_source["source_ref"],
                 source_url=pr_source["source_url"],
+                review_pr_number=int(row["pr_number"]),
                 review_head_sha=str(row["head_sha"] or "").strip() or None,
                 review_context=pr_source["review_context"],
                 created_at=float(row["created_at"]),
@@ -2562,6 +2578,7 @@ def _build_repo_insights(
             provenance_summary=_provenance_summary(evidence_bundle),
             review_target=_review_target(evidence_bundle),
             review_url=_review_url(evidence_bundle),
+            review_pr_number=(review_context.review_pr_number if review_context is not None else None),
             review_head_sha=(review_context.review_head_sha if review_context is not None else None),
             supporting_review_target=_supporting_review_target(evidence_bundle),
             supporting_review_url=_supporting_review_url(evidence_bundle),
@@ -4492,6 +4509,8 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 highest_baseline_label=top_insight.baseline_label if top_insight is not None else None,
                 highest_review_target=top_insight.review_target if top_insight is not None else None,
                 highest_review_url=top_insight.review_url if top_insight is not None else None,
+                highest_review_pr_number=top_insight.review_pr_number if top_insight is not None else None,
+                highest_review_head_sha=top_insight.review_head_sha if top_insight is not None else None,
                 insight_count=len(view.insights),
                 lower_confidence_count=len(view.lower_confidence_insights),
                 review_now_count=sum(1 for insight in view.insights if insight.priority == "review_now"),
@@ -4761,6 +4780,8 @@ def _build_overview_regressions(repo_views: list[RepoDashboardView]) -> list[Das
                     provenance_summary=insight.provenance_summary,
                     review_target=insight.review_target,
                     review_url=insight.review_url,
+                    review_pr_number=insight.review_pr_number,
+                    review_head_sha=insight.review_head_sha,
                     change_summary=insight.change_summary,
                     flag_summary=insight.flag_summary,
                     rationale=insight.rationale,

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-05-12 — Pre-audit relevance visibility and PR-scoped dashboard continuity
+
+### Added
+- repo-scoped read access for persisted pre-audit relevance decisions at `/api/repos/{owner/repo}/relevance-decisions`
+
+### Changed
+- repo dashboard payloads can now include PR/head-scoped `pre_audit_relevance` context when the case file is opened with `pr` and `head_sha`
+- workspace overview and escalation links now preserve `artifact`, `pr`, and `head_sha` when routing into the repo case file
+- workspace dashboard cards and escalation rows now show a visible PR-scoped cue when their repo link targets a preserved review episode
+
+### Verified
+- focused dashboard API regressions for repo-scoped relevance decisions, PR-scoped repo payloads, and workspace deep-link metadata passed locally
+
 ## 2026-05-03 — Post-merge doc and cleanup pass for PR comment dashboard deep links
 
 ### Changed

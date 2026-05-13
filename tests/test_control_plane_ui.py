@@ -105,6 +105,384 @@ def test_pricing_page_renders_plan_cards():
     assert "Business" in response.text
 
 
+def test_free_billing_checkout_redirects_active_workspace_to_dashboard(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "billing-active-redirect.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_repo_allocation_status,
+    )
+    from services.entitlements import derive_entitlement_payload
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1900",
+        github_login="billing-active-owner",
+        display_name="Billing Active Owner",
+        primary_email="billing-active-owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="billing-active-workspace",
+        display_name="Billing Active Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="billing-active-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="billing-active-csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_active",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="12345",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="doria90/dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    response = client.post(
+        "/billing/checkout?plan=free",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"csrf_token": session.csrf_secret},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard")
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_renders_obscured_shell_when_install_is_missing(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "dashboard-install-missing.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_subscription
+    from services.entitlements import derive_entitlement_payload
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1901",
+        github_login="billing-install-missing",
+        display_name="Billing Install Missing",
+        primary_email="billing-install-missing@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="dashboard-install-missing-workspace",
+        display_name="Dashboard Install Missing Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="dashboard-install-missing-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="dashboard-install-missing-csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_missing_install",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+
+    response = client.get(
+        "/dashboard",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert "Install Vipari on GitHub" in response.text
+    assert "Reinstall or reconnect the GitHub App to continue" in response.text
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_dashboard_renders_reconnect_copy_when_installation_was_removed(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "dashboard-install-removed.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_github_installation, upsert_subscription, update_github_installation_status
+    from services.entitlements import derive_entitlement_payload
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1902",
+        github_login="billing-install-removed",
+        display_name="Billing Install Removed",
+        primary_email="billing-install-removed@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="dashboard-install-removed-workspace",
+        display_name="Dashboard Install Removed Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="dashboard-install-removed-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="dashboard-install-removed-csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_removed_install",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=22222,
+        account_id="22222",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    update_github_installation_status(main.AUDIT_DB_PATH, installation_id=22222, status="inactive")
+
+    response = client.get(
+        "/dashboard",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert "Reconnect Vipari on GitHub" in response.text
+    assert "GitHub App access for this workspace was removed" in response.text
+    assert "Reconnect GitHub App" in response.text
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_install_page_uses_reconnect_copy_for_inactive_installation(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "install-page-reconnect.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_github_installation, upsert_subscription, update_github_installation_status
+    from services.entitlements import derive_entitlement_payload
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1903",
+        github_login="install-page-reconnect",
+        display_name="Install Page Reconnect",
+        primary_email="install-page-reconnect@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="install-page-reconnect-workspace",
+        display_name="Install Page Reconnect Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="install-page-reconnect-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="install-page-reconnect-csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_install_reconnect",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=33333,
+        account_id="33333",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    update_github_installation_status(main.AUDIT_DB_PATH, installation_id=33333, status="inactive")
+
+    response = client.get(
+        "/setup/install",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert "Reconnect the app to restore dashboard access and automation" in response.text
+    assert "Last linked installation doria90 (Organization) is currently inactive." in response.text
+    assert "Reconnect GitHub App" in response.text
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_page_uses_reconnect_copy_for_inactive_installation(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-setup-reconnect.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity, upsert_github_installation, upsert_subscription, update_github_installation_status
+    from services.entitlements import derive_entitlement_payload
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="1904",
+        github_login="repo-setup-reconnect",
+        display_name="Repo Setup Reconnect",
+        primary_email="repo-setup-reconnect@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-setup-reconnect-workspace",
+        display_name="Repo Setup Reconnect Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-setup-reconnect-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="repo-setup-reconnect-csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_repo_setup_reconnect",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload=derive_entitlement_payload("team", "active"),
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=44444,
+        account_id="44444",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    update_github_installation_status(main.AUDIT_DB_PATH, installation_id=44444, status="inactive")
+
+    response = client.get(
+        "/repos",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert "Reconnect Vipari to restore repository visibility" in response.text
+    assert "Reconnect GitHub App" in response.text
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_login_page_renders_github_entry():
     response = client.get("/login")
 
@@ -4231,6 +4609,375 @@ def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
     assert allocations[0].allocation_status == "onboarded"
 
 
+def test_repo_setup_page_hides_repo_removed_from_installation_scope(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-installation-removal-ui.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        apply_github_installation_repository_event,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="846",
+        github_login="install-scope-owner",
+        display_name="Install Scope Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-installation-removal-workspace",
+        display_name="Repo Installation Removal Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-installation-removal-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:installation-removal",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-installation-removal",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    installation = upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/removed-repo", "default_branch": "main", "is_private": True, "status": "available"},
+            {"repo_github_id": "2", "repo_full": "doria90/kept-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="1",
+        repo_full="doria90/removed-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    apply_github_installation_repository_event(
+        main.AUDIT_DB_PATH,
+        installation_id=installation.installation_id,
+        repositories_removed=[{"id": 1, "full_name": "doria90/removed-repo", "default_branch": "main", "private": True}],
+    )
+
+    with patch("main.list_github_user_repositories", return_value=[]):
+        response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "doria90/kept-repo" in response.text
+    assert "doria90/removed-repo" not in response.text
+    assert "No onboarded repositories yet" in response.text
+
+
+def test_repo_dashboard_deep_link_returns_404_after_repo_removed_from_installation_scope(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-installation-removal-deep-link.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        apply_github_installation_repository_event,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="847",
+        github_login="deep-link-owner",
+        display_name="Deep Link Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-installation-removal-deep-link-workspace",
+        display_name="Repo Installation Removal Deep Link Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-installation-removal-deep-link-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:installation-removal-deep-link",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-installation-removal-deep-link",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    installation = upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/removed-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="1",
+        repo_full="doria90/removed-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+    apply_github_installation_repository_event(
+        main.AUDIT_DB_PATH,
+        installation_id=installation.installation_id,
+        repositories_removed=[{"id": 1, "full_name": "doria90/removed-repo", "default_branch": "main", "private": True}],
+    )
+
+    with patch("main._control_plane_active", return_value=True):
+        response = client.get(
+            "/dashboard/doria90/removed-repo?artifact=prompts/system.txt&pr=42&head_sha=abc123",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 404
+    assert 'data-dashboard-shell-state="repo_access_removed"' in response.text
+    assert "Repository access removed" in response.text
+    assert "doria90/removed-repo is no longer available in this workspace dashboard." in response.text
+    assert 'href="/repos"' in response.text
+    assert "Open Repository Setup" in response.text
+
+
+def test_settings_page_hides_repo_removed_from_installation_scope(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-installation-removal.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        apply_github_installation_repository_event,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="848",
+        github_login="settings-removal-owner",
+        display_name="Settings Removal Owner",
+        primary_email="settings-removal@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-removal-workspace",
+        display_name="Settings Removal Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-removal-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-settings-removal",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:starter:settings-removal",
+        stripe_price_id="local:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    installation = upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/removed-repo", "default_branch": "main", "is_private": True, "status": "available"},
+            {"repo_github_id": "2", "repo_full": "doria90/kept-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    removed_allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="1",
+        repo_full="doria90/removed-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    kept_allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=installation.installation_id,
+        repo_github_id="2",
+        repo_full="doria90/kept-repo",
+        baseline_mode="onboarding",
+        activated_by_user_id=user.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, removed_allocation.id, "onboarded")
+    update_repo_allocation_status(main.AUDIT_DB_PATH, kept_allocation.id, "onboarded")
+    apply_github_installation_repository_event(
+        main.AUDIT_DB_PATH,
+        installation_id=installation.installation_id,
+        repositories_removed=[{"id": 1, "full_name": "doria90/removed-repo", "default_branch": "main", "private": True}],
+    )
+
+    response = client.get(
+        "/settings",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "doria90/kept-repo" in response.text
+    assert "doria90/removed-repo" not in response.text
+
+
 def test_install_start_redirects_to_live_github_install_and_sets_state_cookie(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "install-start.db")
@@ -6035,6 +6782,19 @@ def test_versioned_dashboard_assets_are_cacheable():
     assert css_response.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert js_response.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert plain_response.headers["cache-control"] == "public, max-age=300"
+
+
+def test_dashboard_index_asset_includes_scoped_review_cues():
+    js_response = client.get("/static/dashboard-index.js?v=123")
+    css_response = client.get("/static/dashboard.css?v=123")
+
+    assert js_response.status_code == 200
+    assert css_response.status_code == 200
+    assert "function reviewScopeLabel(repoLike)" in js_response.text
+    assert 'class="repo-atlas-context"' in js_response.text
+    assert 'class="escalation-meta-context"' in js_response.text
+    assert ".repo-atlas-context" in css_response.text
+    assert ".escalation-meta-context" in css_response.text
 
 
 def test_dashboard_pages_emit_server_timing_headers():

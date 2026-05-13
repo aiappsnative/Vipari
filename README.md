@@ -54,10 +54,12 @@ In practical terms, Vipari currently provides:
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
 - reviewer queues now distinguish `proposal only`, `proposal + history`, and `history only` evidence so the repo case file can route reviewers to the right PR or merged commit without contaminating landed posture
 - repo-detail provenance links that route directly to the backing PR or commit when stored source context exists
+- repo-scoped pre-audit relevance decisions are now readable from the dashboard surface and can be surfaced inside PR/head-scoped repo case-file views
 - concise `What changed`, `Why flagged`, and `Where` explanations in both overview and repo dashboard surfaces
 - baseline-vs-current posture detail with qualitative drift labels, per-attribute findings, and code-level evidence when stored snapshots are available
 - a lightweight baseline-promotion action that lets operators promote the latest stored source version as the approved baseline for an artifact
 - a control-tower portfolio layer with workspace posture, ranked escalation queueing, and repo-level decision panels that keep review attention on the next human action
+- workspace overview and escalation links now preserve `artifact`, `pr`, and `head_sha` so reviewers can move from portfolio triage into the exact repo review episode
 - workspace-scoped pending proposal views that preserve human-vs-agent origin and no longer leak cross-workspace proposal metadata
 - a contextual Help Center at `/app/help` that reflects current workspace onboarding/baseline/export state instead of a static placeholder
 - batched overview aggregation, repo-preview caching, fingerprinted static asset caching, and `Server-Timing` response instrumentation for materially faster dashboard loads
@@ -132,6 +134,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - builds compliance export packages from persisted baseline, audit, posture, and drift records, with per-file manifest hashes and optional raw artifact content limited to approved baselines plus in-range PR scan versions
 - exposes JSON query APIs for repository listings and unified dashboard payloads
 - exposes an overview dashboard API at `GET /api/dashboard/overview`
+- exposes a repo-scoped pre-audit relevance decisions API at `GET /api/repos/{owner/repo}/relevance-decisions`
 - exposes local dashboard pages at `/dashboard` and `/dashboard/{owner/repo}`
 - includes `scripts/repo_ops.py` for local operator workflows and read-side inspection
 - prepares structured semantic review context for the LLM
