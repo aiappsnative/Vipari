@@ -79,6 +79,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0007_add_high_risk_proposal_tables",
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
+        "0010_ensure_relevance_decision_tables",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions

@@ -265,13 +265,49 @@ function matchedRiskItem(repo) {
     return repo._matchedRiskItem || null;
 }
 
-function repoDetailUrl(repo) {
-    const url = new URL(`/dashboard/${encodeURIComponent(repo.repo_full)}`, window.location.origin);
-    const artifactPath = repo.highest_insight_artifact_path || matchedRiskItem(repo)?.artifact_path || "";
+function reviewScopeContext(repoLike) {
+    const prNumber = repoLike?.highest_review_pr_number || repoLike?.review_pr_number || matchedRiskItem(repoLike)?.review_pr_number || "";
+    const headSha = repoLike?.highest_review_head_sha || repoLike?.review_head_sha || matchedRiskItem(repoLike)?.review_head_sha || "";
+    return {
+        prNumber: prNumber ? String(prNumber) : "",
+        headSha: headSha ? String(headSha) : "",
+    };
+}
+
+function reviewScopeLabel(repoLike) {
+    const { prNumber, headSha } = reviewScopeContext(repoLike);
+    if (!prNumber && !headSha) {
+        return "";
+    }
+    const shortHeadSha = headSha ? headSha.slice(0, 7) : "";
+    if (prNumber && shortHeadSha) {
+        return `PR #${prNumber} · ${shortHeadSha}`;
+    }
+    if (prNumber) {
+        return `PR #${prNumber}`;
+    }
+    return `Commit ${shortHeadSha}`;
+}
+
+function repoScopedDashboardUrl(repoLike) {
+    const repoFull = String(repoLike?.repo_full || "").trim();
+    const url = new URL(`/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
+    const artifactPath = repoLike?.highest_insight_artifact_path || repoLike?.artifact_path || matchedRiskItem(repoLike)?.artifact_path || "";
     if (artifactPath) {
         url.searchParams.set("artifact", artifactPath);
     }
+    const { prNumber, headSha } = reviewScopeContext(repoLike);
+    if (prNumber) {
+        url.searchParams.set("pr", String(prNumber));
+    }
+    if (headSha) {
+        url.searchParams.set("head_sha", String(headSha));
+    }
     return `${url.pathname}${url.search}`;
+}
+
+function repoDetailUrl(repo) {
+    return repoScopedDashboardUrl(repo);
 }
 
 function reviewContext(repo) {
@@ -521,6 +557,7 @@ function renderRepoAtlasCard(repo, index) {
     const checkpointCount = Number(repo.historical_version_count || 0);
     const summary = repo.highest_insight_title || triageSummary(repo) || "Repository posture available";
     const recentSignal = repo.highest_evidence_summary || repo.highest_change_summary || repo.highest_flag_summary || repo.highest_rationale || "Recent signal summary will appear here as audits accumulate.";
+    const scopedReviewLabel = reviewScopeLabel(repo);
     return `
         <button type="button" class="repo-atlas-card-button" data-repo-atlas-index="${index}" data-repo-full="${escapeHtml(repo.repo_full)}">
             <div class="repo-atlas-topline">
@@ -537,6 +574,7 @@ function renderRepoAtlasCard(repo, index) {
             <div class="repo-atlas-signal">${escapeHtml(recentSignal)}</div>
             <div class="repo-atlas-footer">
                 <span class="repo-atlas-baseline">${escapeHtml(repo.highest_baseline_label || baselineLabelForRepo(repo))}</span>
+                ${scopedReviewLabel ? `<span class="repo-atlas-context">Scoped ${escapeHtml(scopedReviewLabel)}</span>` : ""}
                 <span class="repo-atlas-open">Preview</span>
             </div>
         </button>
@@ -966,6 +1004,8 @@ function buildSelectionItems(repos, attentionRepos, highestRiskItems) {
             highest_baseline_label: attention?.highest_baseline_label || matchedRiskItem?.baseline_label || baselineLabelForRepo(repo),
             highest_review_target: attention?.highest_review_target || matchedRiskItem?.review_target || null,
             highest_review_url: attention?.highest_review_url || matchedRiskItem?.review_url || null,
+            highest_review_pr_number: attention?.highest_review_pr_number || matchedRiskItem?.review_pr_number || null,
+            highest_review_head_sha: attention?.highest_review_head_sha || matchedRiskItem?.review_head_sha || null,
             insight_count: Number(attention?.insight_count || 0),
             lower_confidence_count: Number(attention?.lower_confidence_count || 0),
             review_now_count: Number(attention?.review_now_count || 0),
@@ -1315,7 +1355,8 @@ function renderEscalationQueueRow(item, index) {
     `).join("");
     const artifactName = String(item.artifact_path || "").split("/").pop() || item.artifact_path || "artifact";
     const repoName = String(item.repo_full || "");
-    const reviewHref = item.review_url || `/dashboard/${encodeURIComponent(repoName)}?artifact=${encodeURIComponent(item.artifact_path || "")}`;
+    const reviewHref = repoScopedDashboardUrl(item);
+    const scopedReviewLabel = reviewScopeLabel(item);
 
     return `
         <div class="escalation-row" role="row" data-escalation-index="${index}" data-escalation-priority="${escapeHtml(item.priority)}">
@@ -1333,6 +1374,7 @@ function renderEscalationQueueRow(item, index) {
             <div class="escalation-row-meta" role="cell">
                 <span class="escalation-meta-label">${escapeHtml(item.evidence_label || "")}</span>
                 <span class="escalation-meta-baseline">${escapeHtml(item.baseline_label || "")}</span>
+                ${scopedReviewLabel ? `<span class="escalation-meta-context">Scoped ${escapeHtml(scopedReviewLabel)}</span>` : ""}
             </div>
             <div class="escalation-row-action" role="cell">
                 <a class="escalation-action-btn" href="${escapeHtml(reviewHref)}" aria-label="Review ${escapeHtml(artifactName)}">${escapeHtml(item.recommended_action || "Review")}</a>

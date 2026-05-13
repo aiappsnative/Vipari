@@ -10,10 +10,12 @@ from unittest.mock import PropertyMock, patch
 
 import main
 from services.audit_jobs import init_db
-from services.audit_records import record_audit_result
+from services.audit_records import record_audit_result, record_pre_audit_relevance_decision
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
 from engine.analysis import analyze_diff
+from engine.diff_parser import extract_changed_files
+from engine.relevance import classify_changed_file, resolve_relevance_with_micro_classifier
 from services.onboarding_records import list_baseline_audit_log_for_onboarding, record_baseline_audit_log
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.entitlements import derive_entitlement_payload
@@ -94,6 +96,24 @@ def _record_pr_profile(db_path: str):
         comment_mode=None,
         semantic_review_completed=True,
         artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
+    )
+
+
+def _record_pre_audit_relevance(db_path: str, *, repo_full: str, pr_number: int, head_sha: str):
+    diff_text = "diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n"
+    changed_file = extract_changed_files(diff_text)[0]
+    relevance = resolve_relevance_with_micro_classifier(
+        classify_changed_file(changed_file),
+        is_relevant=False,
+        reason="General routing code; not an AI control surface.",
+        status="completed",
+    )
+    record_pre_audit_relevance_decision(
+        db_path,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        relevance=relevance,
     )
 
 
@@ -242,6 +262,8 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["highest_evidence_summary"] == "Only merged-history evidence is available right now; start with commit sha-2."
     assert overview_payload["attention_repos"][0]["highest_baseline_label"].startswith("Baseline: Approved")
     assert overview_payload["attention_repos"][0]["highest_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert overview_payload["attention_repos"][0]["highest_review_pr_number"] is None
+    assert overview_payload["attention_repos"][0]["highest_review_head_sha"] is None
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
     assert overview_payload["repos"][0]["historical_version_count"] >= 1
@@ -534,6 +556,48 @@ def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
     assert "ai_tool_surface" in provenance_kinds
     assert "model_behavior_surface" in provenance_kinds
     assert "human_governance_surface" in provenance_kinds
+
+
+def test_repo_dashboard_api_includes_scoped_pre_audit_relevance_for_pr_deep_link(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-pre-audit-relevance.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
+
+    session = _create_dashboard_owner_session(db_path)
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_pre_audit_relevance(db_path, repo_full="doria90/dummyAI", pr_number=21, head_sha="sha-relevance-21")
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?pr=21&head_sha=sha-relevance-21",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["pre_audit_relevance"]["pr_number"] == 21
+    assert payload["pre_audit_relevance"]["head_sha"] == "sha-relevance-21"
+    assert payload["pre_audit_relevance"]["decision_count"] == 1
+    assert payload["pre_audit_relevance"]["decisions"][0]["artifact_path"] == "src/assistant_router.py"
+    assert payload["pre_audit_relevance"]["decisions"][0]["classifier_is_relevant"] is False
 
 
 def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):
@@ -1858,6 +1922,69 @@ def test_pending_proposals_api_scopes_to_workspace_and_preserves_agent_origin(tm
     assert payload["proposals"][0]["artifact_path"] == "prompts/refund.txt"
 
 
+def test_repo_relevance_decisions_api_returns_repo_scoped_decisions(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-relevance-decisions.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
+
+    session = _create_dashboard_owner_session(db_path, repo_full="doria90/dummyAI", installation_id=123)
+    _record_pre_audit_relevance(db_path, repo_full="doria90/dummyAI", pr_number=21, head_sha="sha-relevance-21")
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/dummyAI/relevance-decisions?pr_number=21&head_sha=sha-relevance-21",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["pr_number"] == 21
+    assert payload["head_sha"] == "sha-relevance-21"
+    assert payload["decision_count"] == 1
+    assert payload["decisions"][0]["artifact_path"] == "src/assistant_router.py"
+    assert payload["decisions"][0]["confidence_tier"] == "uncertain"
+    assert payload["decisions"][0]["classifier_is_relevant"] is False
+    assert payload["decisions"][0]["matched_signals"][0]["source"] == "path"
+
+
+def test_repo_relevance_decisions_api_is_repo_scoped(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-relevance-scope.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_app_base_url = main.settings.app_base_url
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.app_base_url = "https://app.promptdrift.test"
+    main.settings.local_debug_disable_login = False
+
+    session = _create_dashboard_owner_session(db_path, repo_full="doria90/visible-repo", installation_id=222)
+    _record_pre_audit_relevance(db_path, repo_full="doria90/hidden-repo", pr_number=22, head_sha="sha-hidden-22")
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/hidden-repo/relevance-decisions?pr_number=22&head_sha=sha-hidden-22",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_base_url = original_app_base_url
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert response.status_code == 404
+
+
 def test_dashboard_api_promotes_landed_history_over_pr_snapshots(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
@@ -1935,10 +2062,31 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     _record_pr_profile(db_path)
 
     with TestClient(main.app) as client:
+        overview_response = client.get(
+            "/api/dashboard/overview",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        escalation_response = client.get(
+            "/api/dashboard/escalation-queue?include_watch=true",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
         repo_response = client.get(
             "/api/repos/doria90/dummyAI/dashboard",
             cookies={main.settings.session_cookie_name: session.session_id},
         )
+
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.json()
+    assert overview_payload["attention_repos"][0]["highest_review_target"] == "PR #42"
+    assert overview_payload["attention_repos"][0]["highest_review_pr_number"] == 42
+    assert overview_payload["attention_repos"][0]["highest_review_head_sha"] == "sha-current"
+    assert overview_payload["highest_risk_items"][0]["review_pr_number"] == 42
+    assert overview_payload["highest_risk_items"][0]["review_head_sha"] == "sha-current"
+
+    assert escalation_response.status_code == 200
+    escalation_payload = escalation_response.json()
+    assert escalation_payload["items"][0]["review_pr_number"] == 42
+    assert escalation_payload["items"][0]["review_head_sha"] == "sha-current"
 
     assert repo_response.status_code == 200
     payload = repo_response.json()
@@ -1946,6 +2094,7 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     assert payload["insights"][0]["evidence_summary"] == "PR proposal evidence is available right now; start with PR #42, then compare against merged history from commit sha-2."
     assert payload["insights"][0]["review_target"] == "PR #42"
     assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert payload["insights"][0]["review_pr_number"] == 42
     assert payload["insights"][0]["review_head_sha"] == "sha-current"
     assert payload["insights"][0]["supporting_review_target"] == "commit sha-2"
     assert payload["insights"][0]["supporting_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
