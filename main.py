@@ -1276,6 +1276,7 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
     allocations = {
         allocation.repo_full: allocation
         for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace_id)
+        if allocation.allocation_status in {"active", "onboarded"}
     }
     rows: list[dict[str, object]] = []
     seen_repo_fulls: set[str] = set()
