@@ -34,10 +34,10 @@ from .control_plane_records import (
     list_machine_principals_for_workspace,
     revoke_machine_principal,
 )
-from .dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
+from .dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from .dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from .dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_workspace_escalation_queue, list_repo_dashboard_index
-from .github_integration import fetch_file_content, generate_jwt, get_installation_token
+from .github_integration import fetch_file_content, generate_jwt, get_installation_token, list_repository_files
 from .internal_auth import (
     ALL_SCOPES,
     PRINCIPAL_KIND_HUMAN_OPERATOR,
@@ -63,7 +63,7 @@ from .proposals_records import (
     reject_onboarding_proposal,
 )
 from .observability import configure_logging, instrument_fastapi
-from .onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from .onboarding import add_repo_artifact_to_onboarding, execute_repository_history_backfill, infer_artifact_type_from_path, onboard_repository, plan_repository_history_backfill, remove_repo_artifact_from_onboarding, tracked_artifact_type_options, update_repo_artifact_type
 from .baseline_approval_service import (
     approve_repo_baseline,
     approve_repo_baseline_artifact,
@@ -89,7 +89,7 @@ from .audit_feedback_records import (
     add_audit_feedback,
     add_audit_triage,
 )
-from .audit_records import get_pull_request_audit_by_id
+from .audit_records import get_pull_request_audit_by_id, list_pre_audit_relevance_decisions
 
 # Module-level constant to avoid allocating a new frozenset on every approve request.
 _HUMAN_ONLY_KINDS: frozenset[str] = frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR})
@@ -310,6 +310,8 @@ def create_api_app() -> FastAPI:
             authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings) or {},
             resolve_db_path_fn=lambda: db_path,
             build_repo_dashboard_view_with_timings_fn=lambda active_db_path, repo_full: (build_repo_dashboard_view(active_db_path, repo_full), []),
+            build_pre_audit_relevance_payload_fn=None,
+            list_pre_audit_relevance_decisions_fn=None,
             list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
             export_job_payload_fn=lambda job: job,
             record_server_timing_metric_fn=lambda metrics, name, started: None,
@@ -335,6 +337,7 @@ def create_api_app() -> FastAPI:
 
     app.include_router(
         create_repo_onboarding_router(
+            authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings) or {},
             authorize_repo_mutation_fn=lambda request, _repo_full: _require_admin_token(request, settings),
             resolve_installation_id_fn=lambda _auth_context, installation_id: installation_id,
             resolve_db_path_fn=lambda: db_path,
@@ -342,7 +345,13 @@ def create_api_app() -> FastAPI:
             github_private_key_path=settings.github_private_key_path,
             generate_jwt_fn=lambda app_id, private_key_path: generate_jwt(app_id, private_key_path, settings.resolved_github_private_key),
             get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
+            list_repository_files_fn=lambda repo_full, token, ref=None: list_repository_files(repo_full, token, ref=ref),
             onboard_repository_fn=lambda active_db_path, **kwargs: onboard_repository(active_db_path, **kwargs),
+            add_repo_artifact_to_onboarding_fn=lambda active_db_path, **kwargs: add_repo_artifact_to_onboarding(active_db_path, **kwargs),
+            remove_repo_artifact_from_onboarding_fn=lambda active_db_path, **kwargs: remove_repo_artifact_from_onboarding(active_db_path, **kwargs),
+            update_repo_artifact_type_fn=lambda active_db_path, **kwargs: update_repo_artifact_type(active_db_path, **kwargs),
+            infer_artifact_type_from_path_fn=infer_artifact_type_from_path,
+            tracked_artifact_type_options_fn=tracked_artifact_type_options,
             plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
             execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
             build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
