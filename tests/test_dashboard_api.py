@@ -10,7 +10,7 @@ from unittest.mock import PropertyMock, patch
 
 import main
 from services.audit_jobs import init_db
-from services.audit_records import record_audit_result, record_pre_audit_relevance_decision
+from services.audit_records import record_audit_feedback_event, record_audit_result, record_pre_audit_relevance_decision
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
 from engine.analysis import analyze_diff
@@ -630,6 +630,113 @@ def test_repo_dashboard_api_includes_scoped_pre_audit_relevance_for_pr_deep_link
     assert payload["pre_audit_relevance"]["decisions"][0]["classifier_is_relevant"] is False
 
 
+def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-routes.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    older_audit = record_audit_result(
+        db_path,
+        job_id=101,
+        repo_full="doria90/dummyAI",
+        pr_number=20,
+        installation_id=123,
+        head_sha="sha-older-20",
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ✅ Vipari: Review complete\nSummary: This earlier route stayed within the approved operating lane.",
+        comment_mode="review",
+        semantic_review_completed=True,
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=older_audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json='{"sentiment":"helpful","notes":"Useful"}',
+    )
+
+    selected_audit = record_audit_result(
+        db_path,
+        job_id=102,
+        repo_full="doria90/dummyAI",
+        pr_number=21,
+        installation_id=123,
+        head_sha="sha-relevance-21",
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ❌ Vipari: Escalate before merge\nSummary: This PR expands direct refund authority and needs human review.\nRisk Level: High",
+        comment_mode="review",
+        semantic_review_completed=True,
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=selected_audit.id,
+        kind="reaction",
+        source="github_reaction",
+        payload_json='{"content":"+1","target_kind":"review"}',
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=selected_audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json='{"sentiment":"helpful","notes":"Accurate callout."}',
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=selected_audit.id,
+        kind="pr_outcome",
+        source="lifecycle",
+        payload_json='{"outcome":"merged_despite_warning","recommendation_lane":"escalate_before_merge"}',
+    )
+
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?pr=21&head_sha=sha-relevance-21",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["pr_review_routes"]["route_count"] == 2
+    assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 21
+    assert payload["pr_review_routes"]["selected_route"]["head_sha"] == "sha-relevance-21"
+    assert payload["pr_review_routes"]["selected_route"]["summary"] == "This PR expands direct refund authority and needs human review."
+    assert payload["pr_review_routes"]["selected_route"]["review_body"].startswith("## ❌ Vipari: Escalate before merge")
+    assert payload["pr_review_routes"]["selected_route"]["review_excerpt"] == "This PR expands direct refund authority and needs human review."
+    assert payload["pr_review_routes"]["selected_route"]["finding_count"] == len(payload["pr_review_routes"]["selected_route"]["top_findings"])
+    assert payload["pr_review_routes"]["selected_route"]["feedback"]["reaction_count"] == 1
+    assert payload["pr_review_routes"]["selected_route"]["feedback"]["helpful_count"] == 1
+    assert payload["pr_review_routes"]["selected_route"]["feedback"]["outcome_count"] == 1
+    assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][0]["title"] == "PR outcome: merged despite warning"
+    assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][1]["title"] == "Marked helpful"
+    assert payload["pr_review_routes"]["routes"][0]["selected"] is True
+    assert payload["pr_review_routes"]["routes"][0]["dashboard_url"].endswith("/dashboard/doria90%2FdummyAI/audit?pr=21&head_sha=sha-relevance-21")
+
+
 def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
@@ -721,6 +828,62 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert approved_rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
     assert approved_rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is False
     assert approved_rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
+
+
+def test_repo_dashboard_api_keeps_selected_older_pr_route_when_outside_recent_limit(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-routes-older-selection.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    for offset in range(10):
+        record_audit_result(
+            db_path,
+            job_id=200 + offset,
+            repo_full="doria90/dummyAI",
+            pr_number=50 + offset,
+            installation_id=123,
+            head_sha=f"sha-route-{offset}",
+            deterministic_analysis=analyze_diff(PROMPT_DIFF),
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_semantic_review",
+            comment_body=f"## Review {offset}\nSummary: Route {offset} review.",
+            comment_mode="review",
+            semantic_review_completed=True,
+        )
+
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?pr=50&head_sha=sha-route-0",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["pr_review_routes"]["route_count"] == 10
+    assert len(payload["pr_review_routes"]["routes"]) == 8
+    assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 50
+    assert payload["pr_review_routes"]["selected_route"]["head_sha"] == "sha-route-0"
+    assert payload["pr_review_routes"]["routes"][0]["selected"] is True
+    assert payload["pr_review_routes"]["routes"][0]["pr_number"] == 50
 
 
 def test_dashboard_api_local_debug_still_requires_session_for_mutations(tmp_path):

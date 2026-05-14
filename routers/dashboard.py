@@ -112,6 +112,7 @@ def create_repo_dashboard_router(
 	resolve_db_path_fn: Callable[[], str],
 	build_repo_dashboard_view_with_timings_fn: Callable,
 	build_pre_audit_relevance_payload_fn: Callable | None,
+	build_pr_review_routes_payload_fn: Callable | None,
 	list_pre_audit_relevance_decisions_fn: Callable | None,
 	list_export_jobs_for_requester_fn: Callable,
 	export_job_payload_fn: Callable,
@@ -153,6 +154,12 @@ def create_repo_dashboard_router(
 			)
 		else:
 			payload["pre_audit_relevance"] = None
+		payload["pr_review_routes"] = build_pr_review_routes_payload_fn(
+			resolve_db_path_fn(),
+			repo_full,
+			pr_number=int(raw_pr_number) if raw_pr_number.isdigit() else None,
+			head_sha=raw_head_sha or None,
+		) if build_pr_review_routes_payload_fn is not None else None
 		response = JSONResponse(payload)
 		record_server_timing_metric_fn(timing_metrics, "json", json_started)
 		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))

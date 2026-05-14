@@ -2206,6 +2206,102 @@ function renderDecisionSection(insights, payload) {
     `);
 }
 
+function prReviewRouteSeverity(route) {
+    const riskLevel = String(route?.risk_level || "unknown").toLowerCase();
+    if (riskLevel === "high") {
+        return { label: "High risk", className: "severity-high" };
+    }
+    if (riskLevel === "medium") {
+        return { label: "Medium risk", className: "severity-medium" };
+    }
+    if (riskLevel === "low") {
+        return { label: "Low risk", className: "severity-low" };
+    }
+    return { label: "Tracked", className: "severity-medium" };
+}
+
+function renderPrReviewRoutesSection(routePayload) {
+    const routes = asArray(routePayload?.routes);
+    const selectedRoute = routePayload?.selected_route || routes[0] || null;
+
+    if (!selectedRoute) {
+        setSectionHtml("repo-pr-review-selected", '<div class="muted">Vipari has not recorded a PR review episode for this repository yet.</div>');
+        setSectionHtml("repo-pr-review-list", '<div class="muted">Recent PR review routes will appear here after the next PR review is posted.</div>');
+        return;
+    }
+
+    const selectedSeverity = prReviewRouteSeverity(selectedRoute);
+    const selectedAuditUrl = repoTabUrl("audit", {
+        prNumber: selectedRoute.pr_number,
+        headSha: selectedRoute.head_sha,
+        hash: "repo-pr-review-routes-section",
+    });
+    const selectedFeedback = selectedRoute.feedback || {};
+    const topFindings = asArray(selectedRoute.top_findings);
+    const recentFeedback = asArray(selectedRoute.recent_feedback);
+    const selectedTags = [
+        selectedRoute.short_head_sha ? `head ${selectedRoute.short_head_sha}` : "",
+        selectedRoute.output_mode ? String(selectedRoute.output_mode).replaceAll("_", " ") : "",
+        selectedRoute.semantic_review_completed ? "semantic review complete" : "fallback review",
+        selectedRoute.finding_count ? `${selectedRoute.finding_count} stored findings` : "",
+        selectedFeedback.helpful_count ? `${selectedFeedback.helpful_count} helpful` : "",
+        selectedFeedback.noisy_count ? `${selectedFeedback.noisy_count} noisy` : "",
+        selectedFeedback.strongly_disagree_count ? `${selectedFeedback.strongly_disagree_count} strongly disagree` : "",
+        selectedFeedback.reaction_count ? `${selectedFeedback.reaction_count} GitHub reactions` : "",
+        selectedFeedback.outcome_count ? `${selectedFeedback.outcome_count} recorded outcomes` : "",
+    ].filter(Boolean);
+
+    setSectionHtml("repo-pr-review-selected", `
+        <div class="stack compact-stack">
+            <div class="repo-decision-title-row">
+                <strong>PR #${escapeHtml(selectedRoute.pr_number)}</strong>
+                <span class="severity-badge ${selectedSeverity.className}">${escapeHtml(selectedSeverity.label)}</span>
+            </div>
+            <div class="muted">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · reviewed ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
+            <div>${escapeHtml(selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
+            ${selectedRoute.review_excerpt ? `<div class="artifact-card-reason">${escapeHtml(selectedRoute.review_excerpt)}</div>` : ""}
+            ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+            ${selectedRoute.review_body ? `<details class="artifact-card"><summary><strong>Full review note</strong></summary><pre class="artifact-card-reason" style="white-space: pre-wrap; margin-top: 0.75rem;">${escapeHtml(selectedRoute.review_body)}</pre></details>` : ""}
+            ${topFindings.length ? `<div class="stack compact-stack"><div class="repo-decision-label">Top review findings</div>${topFindings.map((finding) => `<div class="artifact-card"><strong>${escapeHtml(finding.title || "Recorded finding")}</strong><div class="artifact-card-reason">${escapeHtml(finding.rationale || "Vipari stored a review finding for this episode.")}</div></div>`).join("")}</div>` : ""}
+            ${recentFeedback.length ? `<div class="stack compact-stack"><div class="repo-decision-label">Feedback loop</div>${recentFeedback.map((event) => `<div class="artifact-card"><strong>${escapeHtml(event.title || "Recorded feedback")}</strong><div class="artifact-card-reason">${escapeHtml(event.summary || "Vipari stored feedback for this review episode.")}</div></div>`).join("")}</div>` : ""}
+            <div class="export-actions repo-actions-row audit-step-actions">
+                <a href="${escapeHtml(selectedAuditUrl)}" class="cue-action-button">Open selected route</a>
+                <a href="${escapeHtml(selectedRoute.pull_request_url || "#")}" class="cue-action-button">Open GitHub PR</a>
+            </div>
+        </div>
+    `);
+
+    setSectionHtml("repo-pr-review-list", routes.map((route) => {
+        const severity = prReviewRouteSeverity(route);
+        const auditUrl = repoTabUrl("audit", {
+            prNumber: route.pr_number,
+            headSha: route.head_sha,
+            hash: "repo-pr-review-routes-section",
+        });
+        const feedback = route.feedback || {};
+        const detailBits = [
+            route.short_head_sha ? `head ${route.short_head_sha}` : "",
+            route.output_mode ? String(route.output_mode).replaceAll("_", " ") : "",
+            feedback.helpful_count ? `${feedback.helpful_count} helpful` : "",
+            feedback.reaction_count ? `${feedback.reaction_count} reactions` : "",
+        ].filter(Boolean);
+        return `
+            <article class="artifact-card${route.selected ? " artifact-card-selected" : ""}">
+                <div class="repo-decision-title-row">
+                    <strong>PR #${escapeHtml(route.pr_number)}</strong>
+                    <span class="severity-badge ${severity.className}">${escapeHtml(severity.label)}</span>
+                </div>
+                <div class="artifact-card-reason">${escapeHtml(route.summary || "Vipari recorded this PR review episode.")}</div>
+                ${detailBits.length ? `<div class="tag-row">${detailBits.map((bit) => `<span class="drift-chip chip-baseline">${escapeHtml(bit)}</span>`).join("")}</div>` : ""}
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(auditUrl)}" class="cue-action-button">Open route</a>
+                    <a href="${escapeHtml(route.pull_request_url || "#")}" class="cue-action-button">GitHub PR</a>
+                </div>
+            </article>
+        `;
+    }).join("") || '<div class="muted">No PR review routes have been recorded for this repository yet.</div>');
+}
+
 function renderRepoActionsSection(insights) {
     const topInsight = asArray(insights)[0] || null;
     const reviewUrl = topInsight?.review_url || "";
@@ -2401,6 +2497,7 @@ function applyDashboardPayload(payload) {
     window.__journeySnapshots = journeySnapshots;
     const comparison = payload.journey_comparison || null;
     renderAuditBrief(payload.audit_brief || null);
+    renderPrReviewRoutesSection(payload.pr_review_routes || null);
 
     setText("repo-stat-artifacts", String(onboarding ? onboarding.discovered_artifact_count : artifacts.length));
     setText("repo-stat-review", String(insights.length));
