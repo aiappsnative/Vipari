@@ -1693,6 +1693,7 @@ index 1..2
             id=1,
             audit_id=11,
             github_comment_id=101,
+            github_review_id=None,
             comment_mode="full_review",
             comment_body="### Recommended next step\nRestore explicit safety wording before merge.\n",
             posted_at=1_700_000_000,
