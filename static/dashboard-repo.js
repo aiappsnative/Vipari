@@ -13,6 +13,7 @@ function resolveRepoFull() {
     const encodedRepoFull = pathname
         .slice(prefix.length)
         .replace(/^\/+|\/+$/g, "")
+        .replace(/\/audit\/pr-reviews$/i, "")
         .replace(/\/audit$/i, "");
     if (!encodedRepoFull) {
         return "";
@@ -26,8 +27,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
-const VALID_REPO_TABS = new Set(["audit", "drift", "version-control", "baseline", "compliance", "reports"]);
-const VALID_AUDIT_SUBTABS = new Set(["overview", "pr-reviews"]);
+const VALID_REPO_TABS = new Set(["audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -64,20 +64,6 @@ function resolveRepoTab() {
 
 const activeRepoTab = resolveRepoTab();
 window.__activeRepoTab = activeRepoTab;
-
-function resolveAuditSubtab() {
-    const params = new URLSearchParams(window.location.search);
-    const requestedSubtab = (params.get("audit_view") || "").trim().toLowerCase();
-    if (VALID_AUDIT_SUBTABS.has(requestedSubtab)) {
-        return requestedSubtab;
-    }
-    if (activeRepoTab === "audit" && (deepLinkPullRequestNumber() || deepLinkHeadSha())) {
-        return "pr-reviews";
-    }
-    return "overview";
-}
-
-window.__activeAuditSubtab = resolveAuditSubtab();
 
 function storylinePanelCopy() {
     if (activeRepoTab === "audit") {
@@ -190,56 +176,6 @@ function applyRepoTabVisibility() {
     });
 }
 
-function applyAuditSubtabVisibility() {
-    const activeAuditSubtab = window.__activeAuditSubtab || "overview";
-    document.body.dataset.activeAuditSubtab = activeAuditSubtab;
-
-    document.querySelectorAll("[data-audit-subtab-panel]").forEach((element) => {
-        const supportedSubtabs = String(element.getAttribute("data-audit-subtab-panel") || "")
-            .split(/\s+/)
-            .filter(Boolean);
-        element.hidden = activeRepoTab !== "audit" || (supportedSubtabs.length > 0 && !supportedSubtabs.includes(activeAuditSubtab));
-    });
-
-    document.querySelectorAll("[data-audit-subtab-link]").forEach((element) => {
-        const subtab = element.getAttribute("data-audit-subtab-link") || "";
-        if (subtab === activeAuditSubtab) {
-            element.setAttribute("aria-current", "page");
-            return;
-        }
-        element.removeAttribute("aria-current");
-    });
-}
-
-function setActiveAuditSubtab(nextSubtab) {
-    const normalizedSubtab = String(nextSubtab || "").trim().toLowerCase();
-    if (!VALID_AUDIT_SUBTABS.has(normalizedSubtab)) {
-        return;
-    }
-    window.__activeAuditSubtab = normalizedSubtab;
-    applyAuditSubtabVisibility();
-
-    const url = new URL(window.location.href);
-    if (normalizedSubtab === "overview") {
-        url.searchParams.delete("audit_view");
-    } else {
-        url.searchParams.set("audit_view", normalizedSubtab);
-    }
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
-function bindAuditSubtabControls() {
-    document.querySelectorAll("[data-audit-subtab-link]").forEach((element) => {
-        if (element.dataset.boundAuditSubtab === "true") {
-            return;
-        }
-        element.dataset.boundAuditSubtab = "true";
-        element.addEventListener("click", () => {
-            setActiveAuditSubtab(element.getAttribute("data-audit-subtab-link") || "overview");
-        });
-    });
-}
-
 function setText(elementId, value) {
     const element = document.getElementById(elementId);
     if (element) {
@@ -300,8 +236,16 @@ function repoDetailUrl(repo) {
 function repoTabUrl(tab, options = {}) {
     const normalizedTab = String(tab || "").trim().toLowerCase();
     const isAuditTab = normalizedTab === "audit";
-    const url = new URL(isAuditTab ? `/dashboard/${encodeURIComponent(repoFull)}/audit` : `/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
-    if (normalizedTab && !isAuditTab) {
+    const isPrReviewsTab = normalizedTab === "pr-reviews";
+    const url = new URL(
+        isAuditTab
+            ? `/dashboard/${encodeURIComponent(repoFull)}/audit`
+            : isPrReviewsTab
+                ? `/dashboard/${encodeURIComponent(repoFull)}/audit/pr-reviews`
+                : `/dashboard/${encodeURIComponent(repoFull)}`,
+        window.location.origin,
+    );
+    if (normalizedTab && !isAuditTab && !isPrReviewsTab) {
         url.searchParams.set("tab", tab);
     }
     const artifactPath = options.artifactPath || requestedArtifactPath();
@@ -2297,7 +2241,7 @@ function renderPrReviewRoutesSection(routePayload) {
     }
 
     const selectedSeverity = prReviewRouteSeverity(selectedRoute);
-    const selectedAuditUrl = repoTabUrl("audit", {
+    const selectedAuditUrl = repoTabUrl("pr-reviews", {
         prNumber: selectedRoute.pr_number,
         headSha: selectedRoute.head_sha,
         hash: "repo-pr-review-routes-section",
@@ -2339,7 +2283,7 @@ function renderPrReviewRoutesSection(routePayload) {
 
     setSectionHtml("repo-pr-review-list", routes.map((route) => {
         const severity = prReviewRouteSeverity(route);
-        const auditUrl = repoTabUrl("audit", {
+        const auditUrl = repoTabUrl("pr-reviews", {
             prNumber: route.pr_number,
             headSha: route.head_sha,
             hash: "repo-pr-review-routes-section",

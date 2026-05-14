@@ -4301,6 +4301,10 @@ async def dashboard_repo_audit_page(request: Request, repo_full: str, artifact: 
     return await _render_dashboard_repo_page(request, repo_full, requested_tab="audit", artifact=artifact, pr=pr, head_sha=head_sha)
 
 
+async def dashboard_repo_pr_reviews_page(request: Request, repo_full: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
+    return await _render_dashboard_repo_page(request, repo_full, requested_tab="pr-reviews", artifact=artifact, pr=pr, head_sha=head_sha)
+
+
 async def _render_dashboard_repo_page(request: Request, repo_full: str, *, requested_tab: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -4343,7 +4347,7 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
         return _attach_server_timing(response, timing_metrics)
     render_started = time.perf_counter()
     active_tab = requested_tab.strip().lower() if requested_tab else "audit"
-    if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
+    if active_tab not in {"audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"}:
         active_tab = "audit"
     blocked_free_tier_tab = _is_active_comments_only_workspace(access_context) and active_tab in {"compliance", "reports"}
     shell_state = "active"
@@ -4458,6 +4462,7 @@ app.include_router(
         dashboard_index_handler=dashboard_index_page,
         dashboard_repo_handler=dashboard_repo_page,
         dashboard_repo_audit_handler=dashboard_repo_audit_page,
+        dashboard_repo_pr_reviews_handler=dashboard_repo_pr_reviews_page,
     )
 )
 

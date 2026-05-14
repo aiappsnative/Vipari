@@ -839,8 +839,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "audit page" in repo_text
     assert "audit brief" in repo_text
     assert "pr review routes" in repo_text
-    assert "overview" in repo_text
-    assert "pr reviews" in repo_text
     assert "governance attention" in repo_text
     assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
     assert "attribute profile" in repo_text
@@ -851,7 +849,9 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
     assert 'data-repo-tab-link="audit"' in repo_response.text
+    assert 'data-repo-tab-link="pr-reviews"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
+    assert 'href="/dashboard/doria90%2FdummyAI/audit/pr-reviews"' in repo_response.text
     assert 'id="artifact-add-controls"' in repo_response.text
     assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
@@ -869,8 +869,6 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "renderRepoAtlasCard" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "function repoTabUrl" in repo_js_response.text
-    assert "function applyAuditSubtabVisibility" in repo_js_response.text
-    assert "function bindAuditSubtabControls" in repo_js_response.text
     assert "function renderPrReviewRoutesSection" in repo_js_response.text
     assert "Feedback loop" in repo_js_response.text
     assert "Full review note" in repo_js_response.text
@@ -901,6 +899,19 @@ def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):
     assert 'data-active-repo-tab="audit"' in response.text
     assert 'data-repo-tab-link="audit"' in response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in response.text
+
+
+def test_dashboard_repo_pr_reviews_route_renders_active_tab(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-pr-reviews.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI/audit/pr-reviews")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="pr-reviews"' in response.text
+    assert 'data-repo-tab-link="pr-reviews"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI/audit/pr-reviews"' in response.text
 
 
 def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):

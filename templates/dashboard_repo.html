@@ -84,6 +84,7 @@
                     <span class="posture-title">{{REPO_FULL}}</span>
                     <section class="repo-audit-anchor-bar" aria-label="Repository tabs">
                         <a class="repo-audit-anchor" data-repo-tab-link="audit" href="{{REPO_TAB_AUDIT_URL}}">Audit</a>
+                        <a class="repo-audit-anchor" data-repo-tab-link="pr-reviews" href="{{REPO_TAB_PR_REVIEWS_URL}}">PR reviews</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="drift" href="{{REPO_TAB_DRIFT_URL}}">Drift</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="version-control" href="{{REPO_TAB_VERSION_CONTROL_URL}}">Version control</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Artifacts</a>
@@ -110,14 +111,7 @@
                 </div>
             </section>
             <main class="page-scroll" id="top">
-                <section class="card-shell repo-tab-panel" id="repo-audit-subtab-section" aria-label="Audit section navigation" data-repo-tab-panel="audit">
-                    <section class="repo-audit-anchor-bar" aria-label="Audit sections">
-                        <button type="button" class="repo-audit-anchor" data-audit-subtab-link="overview">Overview</button>
-                        <button type="button" class="repo-audit-anchor" data-audit-subtab-link="pr-reviews">PR reviews</button>
-                    </section>
-                </section>
-
-                <section class="card-shell repo-tab-panel repo-audit-brief-shell" id="repo-audit-brief-section" aria-label="Audit brief" data-repo-tab-panel="audit" data-audit-subtab-panel="overview">
+                <section class="card-shell repo-tab-panel repo-audit-brief-shell" id="repo-audit-brief-section" aria-label="Audit brief" data-repo-tab-panel="audit">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Audit brief</span>
@@ -150,7 +144,7 @@
                     </div>
                 </section>
 
-                <section class="card-shell repo-tab-panel repo-decision-shell" id="repo-pr-review-routes-section" aria-label="PR review routes" data-repo-tab-panel="audit" data-audit-subtab-panel="pr-reviews">
+                <section class="card-shell repo-tab-panel repo-decision-shell" id="repo-pr-review-routes-section" aria-label="PR review routes" data-repo-tab-panel="pr-reviews">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">PR review routes</span>
@@ -175,7 +169,7 @@
                     </div>
                 </section>
 
-                <section class="repo-decision-section card-shell repo-tab-panel repo-decision-shell" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="audit" data-audit-subtab-panel="overview">
+                <section class="repo-decision-section card-shell repo-tab-panel repo-decision-shell" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="audit">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Decision</span>
