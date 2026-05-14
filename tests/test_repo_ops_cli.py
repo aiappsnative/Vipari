@@ -185,6 +185,145 @@ def test_repo_ops_feedback_events_cli_outputs_repo_feedback(tmp_path):
     assert payload["feedback_events"][0]["kind"] == "explicit_feedback"
 
 
+def test_repo_ops_refresh_feedback_reactions_for_audit_outputs_recorded_events(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cli-refresh-audit.db")
+    init_db(db_path)
+
+    from services.audit_jobs import create_audit_job
+    from engine.analysis import analyze_diff
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=90,
+        installation_id=123,
+        head_sha="sha-refresh-audit",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=90,
+        installation_id=123,
+        head_sha="sha-refresh-audit",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+        github_comment_id=901,
+    )
+
+    monkeypatch.setattr(repo_ops, "_require_installation_token", lambda installation_id: "token")
+    monkeypatch.setattr(
+        repo_ops,
+        "refresh_audit_reaction_feedback_for_audit",
+        lambda db_path, audit_id, token: [
+            record_audit_feedback_event(
+                db_path,
+                audit_id=audit_id,
+                kind="reaction",
+                source="github_reaction",
+                actor_github_login="doria90",
+                event_key=f"reaction:{audit_id}:cli-audit",
+                payload_json=json.dumps({"content": "+1"}),
+            )
+        ],
+    )
+
+    output = StringIO()
+    with redirect_stdout(output):
+        exit_code = repo_ops.cmd_refresh_feedback_reactions(
+            SimpleNamespace(
+                db=db_path,
+                repo_full="doria90/dummyAI",
+                installation_id=123,
+                audit_id=audit.id,
+                pr_number=None,
+                head_sha=None,
+            )
+        )
+
+    payload = json.loads(output.getvalue())
+    assert exit_code == 0
+    assert payload["audit_id"] == audit.id
+    assert payload["recorded_count"] == 1
+    assert payload["feedback_events"][0]["kind"] == "reaction"
+
+
+def test_repo_ops_refresh_feedback_reactions_for_pr_outputs_recorded_events(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cli-refresh-pr.db")
+    init_db(db_path)
+
+    from services.audit_jobs import create_audit_job
+    from engine.analysis import analyze_diff
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=91,
+        installation_id=123,
+        head_sha="sha-refresh-pr",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=91,
+        installation_id=123,
+        head_sha="sha-refresh-pr",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+        github_comment_id=902,
+    )
+
+    monkeypatch.setattr(repo_ops, "_require_installation_token", lambda installation_id: "token")
+    monkeypatch.setattr(
+        repo_ops,
+        "refresh_audit_reaction_feedback_for_pr",
+        lambda db_path, repo_full, pr_number, head_sha, token: [
+            record_audit_feedback_event(
+                db_path,
+                audit_id=audit.id,
+                kind="reaction",
+                source="github_reaction",
+                actor_github_login="doria90",
+                event_key=f"reaction:{audit.id}:cli-pr",
+                payload_json=json.dumps({"content": "eyes"}),
+            )
+        ],
+    )
+
+    output = StringIO()
+    with redirect_stdout(output):
+        exit_code = repo_ops.cmd_refresh_feedback_reactions(
+            SimpleNamespace(
+                db=db_path,
+                repo_full="doria90/dummyAI",
+                installation_id=123,
+                audit_id=None,
+                pr_number=91,
+                head_sha="sha-refresh-pr",
+            )
+        )
+
+    payload = json.loads(output.getvalue())
+    assert exit_code == 0
+    assert payload["pr_number"] == 91
+    assert payload["head_sha"] == "sha-refresh-pr"
+    assert payload["recorded_count"] == 1
+    assert payload["feedback_events"][0]["repo_full"] == "doria90/dummyAI"
+
+
 def test_repo_ops_list_eval_candidates_cli_outputs_curated_candidates(tmp_path):
     result = subprocess.run(
         [sys.executable, "scripts/repo_ops.py", "list-eval-candidates"],

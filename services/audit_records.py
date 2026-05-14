@@ -1124,7 +1124,8 @@ def record_pr_outcome_feedback_events(
     recorded: list[AuditFeedbackEventRecord] = []
     for row in rows:
         audit = _row_to_pull_request_audit(row)
-        outcome = _derive_pr_outcome_kind(audit, pr_merged=pr_merged)
+        recommendation_lane = _derive_audit_recommendation_lane(db_path, audit.id)
+        outcome = _derive_pr_outcome_kind(audit, pr_merged=pr_merged, recommendation_lane=recommendation_lane)
         recorded.append(
             record_audit_feedback_event(
                 db_path,
@@ -1141,6 +1142,7 @@ def record_pr_outcome_feedback_events(
                         "pr_state": pr_state,
                         "pr_merged": bool(pr_merged),
                         "suggested_risk_level": audit.suggested_risk_level,
+                        "recommendation_lane": recommendation_lane,
                     }
                 ),
             )
@@ -1640,13 +1642,28 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     )
 
 
-def _derive_pr_outcome_kind(audit: PullRequestAuditRecord, *, pr_merged: bool | None) -> str:
-    is_escalated = normalize_risk_level(audit.suggested_risk_level) == "High"
-    if is_escalated and pr_merged:
+def _derive_audit_recommendation_lane(db_path: str, audit_id: int) -> str | None:
+    audit_comment = get_audit_comment_for_audit(db_path, audit_id)
+    if audit_comment is None:
+        return None
+    if audit_comment.comment_mode == "review_request_changes":
+        return "escalated"
+    if audit_comment.comment_mode in {"review_comment", "full_review"}:
+        return "normal"
+    return None
+
+
+def _derive_pr_outcome_kind(
+    audit: PullRequestAuditRecord,
+    *,
+    pr_merged: bool | None,
+    recommendation_lane: str | None,
+) -> str:
+    if recommendation_lane == "escalated" and pr_merged:
         return "recommendation_ignored"
-    if is_escalated and pr_merged is False:
+    if recommendation_lane == "escalated" and pr_merged is False:
         return "aligned_reject"
-    if not is_escalated and pr_merged:
+    if recommendation_lane == "normal" and pr_merged:
         return "aligned_merge"
     return "unknown"
 

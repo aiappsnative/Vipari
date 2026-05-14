@@ -632,6 +632,52 @@ def test_record_pr_outcome_feedback_events_classifies_high_risk_merge_as_ignored
     assert saved[0].event_key == f"pr_outcome:{audit.id}:merged"
 
 
+def test_record_pr_outcome_feedback_events_without_posted_recommendation_is_unknown(tmp_path):
+    db_path = str(tmp_path / "feedback-outcome-unknown.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=309,
+        installation_id=123,
+        head_sha="sha-309",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=309,
+        installation_id=123,
+        head_sha="sha-309",
+        deterministic_analysis=analyze_diff(created.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    recorded = record_pr_outcome_feedback_events(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=309,
+        head_sha="sha-309",
+        pr_state="closed",
+        pr_merged=True,
+    )
+
+    assert len(recorded) == 1
+    payload = json.loads(recorded[0].payload_json)
+    assert payload["outcome"] == "unknown"
+    assert payload["recommendation_lane"] is None
+
+    saved = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(saved) == 1
+    assert json.loads(saved[0].payload_json)["outcome"] == "unknown"
+
+
 def test_refresh_audit_reaction_feedback_for_audit_records_deduped_reactions(tmp_path, monkeypatch):
     db_path = str(tmp_path / "feedback-reactions.db")
     init_db(db_path)
