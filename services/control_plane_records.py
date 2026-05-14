@@ -422,6 +422,7 @@ def _row_to_webhook_event_receipt(row: sqlite3.Row) -> WebhookEventReceiptRecord
 
 
 def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
+    pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else PR_FEEDBACK_MODE_COMMENTS
     return WorkspaceRecord(
         id=row["id"],
         slug=row["slug"],
@@ -430,7 +431,7 @@ def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
         billing_owner_user_id=row["billing_owner_user_id"],
         setup_state=row["setup_state"],
         pr_comments_setting_enabled=bool(row["pr_comments_setting_enabled"]),
-        pr_feedback_mode=normalize_pr_feedback_mode(row["pr_feedback_mode"]),
+        pr_feedback_mode=normalize_pr_feedback_mode(pr_feedback_mode),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -562,6 +563,7 @@ def _row_to_repo_connection(row: sqlite3.Row) -> RepoConnectionRecord:
 
 
 def _row_to_repo_allocation(row: sqlite3.Row) -> RepoAllocationRecord:
+    pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else None
     return RepoAllocationRecord(
         id=row["id"],
         workspace_id=row["workspace_id"],
@@ -570,7 +572,7 @@ def _row_to_repo_allocation(row: sqlite3.Row) -> RepoAllocationRecord:
         repo_full=row["repo_full"],
         allocation_status=row["allocation_status"],
         baseline_mode=row["baseline_mode"],
-        pr_feedback_mode=(normalize_pr_feedback_mode(row["pr_feedback_mode"]) if row["pr_feedback_mode"] is not None else None),
+        pr_feedback_mode=(normalize_pr_feedback_mode(pr_feedback_mode) if pr_feedback_mode is not None else None),
         activated_by_user_id=row["activated_by_user_id"],
         activated_at=row["activated_at"],
         deactivated_at=row["deactivated_at"],

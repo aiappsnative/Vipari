@@ -1401,6 +1401,7 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
 
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     fused_confidence = row["fused_confidence"] if "fused_confidence" in row.keys() else None
+    pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else PR_FEEDBACK_MODE_COMMENTS
     return PullRequestAuditRecord(
         id=row["id"],
         job_id=row["job_id"],
@@ -1417,7 +1418,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         status=row["status"],
         completion_mode=row["completion_mode"],
         output_mode=row["output_mode"],
-        pr_feedback_mode=normalize_pr_feedback_mode(row["pr_feedback_mode"]),
+        pr_feedback_mode=normalize_pr_feedback_mode(pr_feedback_mode),
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=fused_confidence,
@@ -1575,11 +1576,12 @@ def _row_to_finding(row: sqlite3.Row) -> FindingRecord:
 
 
 def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
+    github_review_id = row["github_review_id"] if "github_review_id" in row.keys() else None
     return AuditCommentRecord(
         id=row["id"],
         audit_id=row["audit_id"],
         github_comment_id=row["github_comment_id"],
-        github_review_id=row["github_review_id"],
+        github_review_id=github_review_id,
         comment_mode=row["comment_mode"],
         comment_body=row["comment_body"],
         posted_at=row["posted_at"],

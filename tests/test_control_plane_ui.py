@@ -21,6 +21,7 @@ from engine.drift_profile import build_attribute_profile
 from services.billing_service import build_stripe_signature
 from services.auth_service import GithubOAuthToken, GithubUserProfile
 from services.secure_store import decrypt_text, encrypt_text
+from services.persistence import DatabaseRow
 
 
 class CookieCompatTestClient(TestClient):
@@ -73,6 +74,19 @@ def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path)
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Repository is not allocated to this workspace."
     main.AUDIT_DB_PATH = original_db_path
+
+
+def test_workspace_row_mapper_defaults_feedback_mode_when_column_missing():
+    from services.control_plane_records import _row_to_workspace
+
+    row = DatabaseRow(
+        ["id", "slug", "display_name", "status", "billing_owner_user_id", "setup_state", "pr_comments_setting_enabled", "created_at", "updated_at"],
+        [1, "legacy", "Legacy Workspace", "active", None, "workspace_no_subscription", 1, 1.0, 2.0],
+    )
+
+    workspace = _row_to_workspace(row)
+
+    assert workspace.pr_feedback_mode == "comments"
 
 
 def test_dashboard_actor_login_uses_authenticated_identity_context():
