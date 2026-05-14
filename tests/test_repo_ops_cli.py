@@ -185,6 +185,135 @@ def test_repo_ops_feedback_events_cli_outputs_repo_feedback(tmp_path):
     assert payload["feedback_events"][0]["kind"] == "explicit_feedback"
 
 
+def test_repo_ops_feedback_events_cli_filters_by_kind(tmp_path):
+    db_path = str(tmp_path / "cli-feedback-kind.db")
+    init_db(db_path)
+
+    from services.audit_jobs import create_audit_job
+    from engine.analysis import analyze_diff
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=89,
+        installation_id=123,
+        head_sha="sha-feedback-kind",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=89,
+        installation_id=123,
+        head_sha="sha-feedback-kind",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json=json.dumps({"sentiment": "helpful"}),
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=audit.id,
+        kind="pr_outcome",
+        source="lifecycle",
+        payload_json=json.dumps({"outcome": "recommendation_ignored"}),
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/repo_ops.py",
+            "feedback-events",
+            "doria90/dummyAI",
+            "--db",
+            db_path,
+            "--kind",
+            "pr_outcome",
+        ],
+        cwd=os.path.abspath(os.path.dirname(os.path.dirname(__file__))),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert len(payload["feedback_events"]) == 1
+    assert payload["feedback_events"][0]["kind"] == "pr_outcome"
+
+
+def test_repo_ops_feedback_events_cli_writes_output_file(tmp_path):
+    db_path = str(tmp_path / "cli-feedback-output.db")
+    output_path = tmp_path / "feedback-events.json"
+    init_db(db_path)
+
+    from services.audit_jobs import create_audit_job
+    from engine.analysis import analyze_diff
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=92,
+        installation_id=123,
+        head_sha="sha-feedback-output",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=92,
+        installation_id=123,
+        head_sha="sha-feedback-output",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json=json.dumps({"sentiment": "helpful"}),
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/repo_ops.py",
+            "feedback-events",
+            "doria90/dummyAI",
+            "--db",
+            db_path,
+            "--output",
+            str(output_path),
+        ],
+        cwd=os.path.abspath(os.path.dirname(os.path.dirname(__file__))),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stdout_payload = json.loads(result.stdout)
+    file_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert stdout_payload == file_payload
+    assert len(file_payload["feedback_events"]) == 1
+
+
 def test_repo_ops_refresh_feedback_reactions_for_audit_outputs_recorded_events(tmp_path, monkeypatch):
     db_path = str(tmp_path / "cli-refresh-audit.db")
     init_db(db_path)

@@ -59,6 +59,15 @@ def _write_json(payload: object) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _write_json_output(payload: object, output_path: str | None) -> None:
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if output_path:
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered, encoding="utf-8")
+    print(rendered)
+
+
 def _default_eval_output_root() -> str:
     return str(PROJECT_ROOT / "artifacts" / "eval-runs")
 
@@ -110,7 +119,9 @@ def cmd_feedback_events(args: argparse.Namespace) -> int:
         events = list_audit_feedback_events_for_audit(db_path, int(args.audit_id))
     else:
         events = list_audit_feedback_events_for_repo(db_path, args.repo_full, limit=args.limit)
-    _write_json({"feedback_events": [asdict(event) for event in events]})
+    if args.kind:
+        events = [event for event in events if event.kind == args.kind]
+    _write_json_output({"feedback_events": [asdict(event) for event in events]}, args.output)
     return 0
 
 
@@ -321,7 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
     feedback_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
     feedback_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     feedback_parser.add_argument("--audit-id", type=int, help="Optional audit id filter")
+    feedback_parser.add_argument("--kind", choices=["reaction", "explicit_feedback", "pr_outcome"], help="Optional feedback kind filter")
     feedback_parser.add_argument("--limit", type=int, default=100, help="Max events to return when listing by repo")
+    feedback_parser.add_argument("--output", help="Optional path for saving the feedback events JSON")
     feedback_parser.set_defaults(func=cmd_feedback_events)
 
     refresh_feedback_parser = subparsers.add_parser(
