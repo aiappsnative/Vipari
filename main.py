@@ -4966,7 +4966,9 @@ async def webhook(request: Request):
     repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
     pull_request = payload.get("pull_request", {})
-    base_sha = pull_request.get("base", {}).get("sha")
+    base_info = pull_request.get("base", {})
+    base_sha = base_info.get("sha")
+    base_ref = base_info.get("ref")
     head_sha = pull_request.get("head", {}).get("sha")
     pr_state = pull_request.get("state")
     pr_merged = pull_request.get("merged")
@@ -5016,7 +5018,24 @@ async def webhook(request: Request):
             pr_merge_commit_sha=pr_merge_commit_sha,
             pr_updated_at=pr_updated_at,
         )
-        return JSONResponse({"message": "pr state updated"})
+        branch_scan_job_id = None
+        if action == "closed" and pr_merged and pr_merge_commit_sha:
+            onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
+            if onboarding is not None:
+                branch_ref = f"refs/heads/{base_ref}" if base_ref else f"refs/heads/{onboarding.default_branch}"
+                branch_scan_job = create_branch_scan_job(
+                    AUDIT_DB_PATH,
+                    repo_full=str(repo_full),
+                    installation_id=int(installation_id),
+                    commit_sha=str(pr_merge_commit_sha),
+                    branch_ref=branch_ref,
+                    triggered_by="pr_merged_webhook",
+                )
+                branch_scan_job_id = branch_scan_job.id
+        payload = {"message": "pr state updated"}
+        if branch_scan_job_id is not None:
+            payload["branch_scan_job_id"] = branch_scan_job_id
+        return JSONResponse(payload)
 
     if not head_sha:
         raise HTTPException(status_code=400, detail="Missing payload data")

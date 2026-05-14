@@ -143,6 +143,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - includes a dashboard deep link in managed PR comments when the configured app base URL is publicly reachable, and carries the exact `head_sha` episode through to the repo dashboard selector
 - persists audit, finding, artifact, and comment history for later analysis
 - updates stored PR lifecycle state on `opened`, `synchronize`, `closed`, and `reopened` webhook flows without leaving stale close/merge timestamps behind
+- queues a repo branch scan when a tracked PR closes as merged so current artifact state, history, and Version Journey advance from the merge commit even if a separate push delivery is absent or delayed
 - marks jobs failed instead of pretending success when comment posting or durable persistence breaks
 - provides a customer-facing self-service API key management UI at `/app/settings/api-keys` where workspace owners and admins can create scope-gated machine principals, receive the one-time `client_secret` on creation, and revoke keys
 - exchanges client credentials for short-lived JWTs at `/cp/auth/token` with sliding-window rate limiting, constant-time secret verification, production entitlement gating, and per-exchange audit log entries
@@ -574,6 +575,8 @@ Useful JSON endpoints:
 - `POST /api/repos/{owner/repo}/artifacts/{artifact_path}/baseline`
 
 Repo onboarding now plans and executes history backfill by default for the onboarded repo, using a bounded window of 5 commits per tracked artifact unless the caller explicitly overrides or disables that behavior.
+
+Merged PR close events now also queue an incremental branch scan against the merge commit for onboarded repositories, so repo posture and Version Journey can advance from normal merge traffic without requiring a full history rerun.
 
 When using the split API service, these dashboard and JSON routes require the configured `API_ADMIN_TOKEN` via `Authorization: Bearer ...` or `X-Admin-Token`.
 

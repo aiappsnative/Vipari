@@ -640,6 +640,52 @@ def test_webhook_push_is_idempotent_for_same_commit(tmp_path):
     assert first.json()["job_id"] == second.json()["job_id"]
 
 
+def test_webhook_merged_pull_request_queues_branch_scan_job():
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+    payload = {
+        "action": "closed",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {
+            "number": 11,
+            "state": "closed",
+            "merged": True,
+            "merged_at": "2026-05-14T12:00:00Z",
+            "merge_commit_sha": "mergesha123",
+            "base": {"sha": "base123", "ref": "main"},
+            "head": {"sha": "head123"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "pull_request",
+        "Content-Type": "application/json",
+    }
+
+    with patch("main.update_job_pr_state") as update_job_pr_state, patch(
+        "main.update_pull_request_audit_state"
+    ) as update_pull_request_audit_state, patch(
+        "main.get_latest_repository_onboarding",
+        return_value=type("Onboarding", (), {"id": 1, "default_branch": "main"})(),
+    ), patch("main.create_branch_scan_job") as create_branch_scan_job:
+        create_branch_scan_job.return_value = type("BranchScanJob", (), {"id": 91})()
+        response = client.post("/webhook", content=body, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "pr state updated", "branch_scan_job_id": 91}
+    update_job_pr_state.assert_called_once()
+    update_pull_request_audit_state.assert_called_once()
+    create_branch_scan_job.assert_called_once_with(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="mergesha123",
+        branch_ref="refs/heads/main",
+        triggered_by="pr_merged_webhook",
+    )
+
+
 def test_webhook_ignores_unallocated_repo_for_managed_installation(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "managed-installation-webhook.db")
