@@ -149,6 +149,87 @@ def test_feedback_form_persists_explicit_feedback_event(tmp_path):
         main.AUDIT_DB_PATH = original_db_path
 
 
+def test_feedback_form_rejects_audit_id_for_different_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "feedback-form-cross-repo.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="other-owner/other-repo",
+            pr_number=78,
+            installation_id=123,
+            head_sha="sha-other",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="other-owner/other-repo",
+            pr_number=78,
+            installation_id=123,
+            head_sha="sha-other",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        get_response = client.get(f"/feedback/pr/doria90/dummyAI/77?audit_id={audit.id}")
+        assert get_response.status_code == 404
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+
+def test_feedback_form_rejects_notes_above_bound(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "feedback-form-notes-bound.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=79,
+            installation_id=123,
+            head_sha="sha-feedback-bound",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=79,
+            installation_id=123,
+            head_sha="sha-feedback-bound",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        post_response = client.post(
+            "/feedback/pr/doria90/dummyAI/79",
+            data={
+                "audit_id": str(audit.id),
+                "head_sha": "sha-feedback-bound",
+                "sentiment": "helpful",
+                "notes": "x" * 2001,
+            },
+        )
+        assert post_response.status_code == 400
+        assert post_response.json()["detail"] == "Feedback notes must be 2000 characters or fewer."
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+
 def test_webhook_marks_installation_inactive_on_delete(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "webhook-install-delete.db")

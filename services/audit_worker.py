@@ -1414,7 +1414,7 @@ def _handle_fallback(
             combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
 
         try:
-            _persist_audit_result(
+            audit = _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,

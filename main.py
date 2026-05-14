@@ -4968,6 +4968,10 @@ async def pr_feedback_form(owner: str, repo: str, pr_number: int, head_sha: str 
 
     if resolved_audit is None:
         raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+    if resolved_audit.repo_full != f"{owner}/{repo}" or resolved_audit.pr_number != pr_number:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+    if head_sha and resolved_audit.head_sha != head_sha:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
 
     escaped_repo_full = html.escape(resolved_audit.repo_full)
     escaped_head_sha = html.escape(resolved_audit.head_sha)
@@ -5007,8 +5011,11 @@ async def pr_feedback_submit(
     notes: str | None = Form(default=None),
     head_sha: str | None = Form(default=None),
 ):
+    bounded_notes = (notes or "").strip()
     if sentiment not in {"helpful", "noisy", "strongly_disagree"}:
         raise HTTPException(status_code=400, detail="Invalid feedback sentiment.")
+    if len(bounded_notes) > 2000:
+        raise HTTPException(status_code=400, detail="Feedback notes must be 2000 characters or fewer.")
 
     audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
     if audit is None:
@@ -5026,7 +5033,7 @@ async def pr_feedback_submit(
         payload_json=json.dumps(
             {
                 "sentiment": sentiment,
-                "notes": (notes or "").strip(),
+                "notes": bounded_notes,
                 "repo_full": audit.repo_full,
                 "pr_number": audit.pr_number,
             }

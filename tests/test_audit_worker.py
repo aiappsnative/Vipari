@@ -779,6 +779,64 @@ def test_worker_records_reaction_feedback_after_comment_post(tmp_path, monkeypat
     assert feedback_events[0].kind == "reaction"
 
 
+def test_worker_records_reaction_feedback_after_fallback_review_post(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "fallback-review-reactions.db")
+    init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=309,
+        installation_id=123,
+        head_sha="sha-309-fallback",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: 9309)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(FakeRateLimitError("quota exceeded")))
+    monkeypatch.setattr(
+        "services.audit_worker.refresh_audit_reaction_feedback_for_audit",
+        lambda db_path, audit_id, token: [
+            record_audit_feedback_event(
+                db_path,
+                audit_id=audit_id,
+                kind="reaction",
+                source="github_reaction",
+                actor_github_login="doria90",
+                event_key=f"reaction:{audit_id}:fallback-review",
+                payload_json=json.dumps({"content": "+1"}),
+            )
+        ],
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        max_attempts=2,
+        max_retry_window_seconds=3600,
+    )
+
+    assert process_next_job_once(settings) is True
+    first_attempt = get_job(db_path, job.id)
+    assert first_attempt is not None
+    monkeypatch.setattr("services.audit_jobs.time.time", lambda: first_attempt.next_attempt_at + 1)
+
+    assert process_next_job_once(settings) is True
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(feedback_events) == 1
+    assert feedback_events[0].kind == "reaction"
+
+
 def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
