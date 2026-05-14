@@ -118,21 +118,51 @@ def init_audit_feedback_db(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS audit_feedback_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id INTEGER NOT NULL,
-                workspace_id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL DEFAULT 0,
+                repo_full TEXT NOT NULL DEFAULT '',
+                pr_number INTEGER NOT NULL DEFAULT 0,
+                head_sha TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL,
                 kind TEXT NOT NULL,
+                actor_github_id TEXT,
+                actor_github_login TEXT,
+                event_key TEXT,
                 comment TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at REAL NOT NULL,
                 FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE
             )
             """
         )
+        feedback_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_feedback_events)").fetchall()}
+        if "workspace_id" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN workspace_id INTEGER NOT NULL DEFAULT 0")
+        if "repo_full" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN repo_full TEXT NOT NULL DEFAULT ''")
+        if "pr_number" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN pr_number INTEGER NOT NULL DEFAULT 0")
+        if "head_sha" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''")
+        if "actor_github_id" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN actor_github_id TEXT")
+        if "actor_github_login" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN actor_github_login TEXT")
+        if "event_key" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN event_key TEXT")
+        if "payload_json" not in feedback_columns:
+            conn.execute("ALTER TABLE audit_feedback_events ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}' ")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_feedback_audit_id ON audit_feedback_events(audit_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_feedback_workspace_id ON audit_feedback_events(workspace_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedback_repo_pr_sha ON audit_feedback_events(repo_full, pr_number, head_sha, created_at, id)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_event_key ON audit_feedback_events(event_key) WHERE event_key IS NOT NULL"
         )
         conn.execute(
             """

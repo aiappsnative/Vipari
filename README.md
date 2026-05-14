@@ -149,8 +149,16 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - exchanges client credentials for short-lived JWTs at `/cp/auth/token` with sliding-window rate limiting, constant-time secret verification, production entitlement gating, and per-exchange audit log entries
 - provides a customer MCP integration flow: `/app/integrations/mcp` for setup and download, `POST /api/agent-integrations/mcp/token` for short-lived broker tokens, `GET /api/agent-integrations/mcp/tools` for workspace-scoped tool discovery, and `POST /api/agent-integrations/mcp/invoke` for brokered read-first tool execution
 - accepts structured feedback on PR audits at `POST /cp/audits/{audit_id}/feedback` (`drift.write.low`): append-only events with validated `kind` (six values), optional bounded `comment`, and bounded `metadata`; workspace isolation enforced via 404-masking
+- captures PR-review feedback signals for audit episodes through three v1 paths: explicit reviewer submissions on managed feedback links, coarse PR close/merge lifecycle outcomes, and GitHub reactions refreshed against Vipari-managed comments/reviews
 - records triage state transitions on PR audits at `POST /cp/audits/{audit_id}/triage` (`drift.write.low`): append-only events with validated `state` (three values) and optional bounded `reason`; never mutates `pull_request_audits`
 - returns export job status (without `result_blob`) at `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`)
+
+Local operator workflows for that feedback loop now include:
+
+- `python scripts/repo_ops.py feedback-events owner/repo --db path/to/db.sqlite` to list persisted feedback events
+- `python scripts/repo_ops.py feedback-events owner/repo --db path/to/db.sqlite --kind pr_outcome --output feedback-events.json` to filter by event kind and write the same JSON payload to a file
+- `python scripts/repo_ops.py refresh-feedback-reactions owner/repo INSTALLATION_ID --audit-id 123 --db path/to/db.sqlite` to force-refresh GitHub reactions for one persisted audit episode
+- `python scripts/repo_ops.py refresh-feedback-reactions owner/repo INSTALLATION_ID --pr-number 88 --head-sha abc123 --db path/to/db.sqlite` to refresh all matching audits for a specific PR/head
 
 ## High-level architecture
 

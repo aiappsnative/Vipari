@@ -27,7 +27,14 @@ from config import get_settings
 from engine.relevance import needs_audit as engine_needs_audit
 from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_access_state
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
-from services.audit_records import update_pull_request_audit_state
+from services.audit_records import (
+    get_audit_comment_episode_for_pr_head_sha,
+    get_pull_request_audit_by_id,
+    record_pr_outcome_feedback_events,
+    record_audit_feedback_event,
+    refresh_audit_reaction_feedback_for_pr,
+    update_pull_request_audit_state,
+)
 from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.audit_records import list_pre_audit_relevance_decisions
@@ -4949,6 +4956,92 @@ async def stripe_webhook(request: Request):
         raise
 
 
+@app.get("/feedback/pr/{owner}/{repo}/{pr_number}", response_class=HTMLResponse)
+async def pr_feedback_form(owner: str, repo: str, pr_number: int, head_sha: str | None = None, audit_id: int | None = None):
+    resolved_audit = None
+    if audit_id is not None:
+        resolved_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
+    elif head_sha:
+        episode = get_audit_comment_episode_for_pr_head_sha(AUDIT_DB_PATH, f"{owner}/{repo}", pr_number, head_sha)
+        if episode is not None:
+            resolved_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, episode.audit_comment.audit_id)
+
+    if resolved_audit is None:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+    if resolved_audit.repo_full != f"{owner}/{repo}" or resolved_audit.pr_number != pr_number:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+    if head_sha and resolved_audit.head_sha != head_sha:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+
+    escaped_repo_full = html.escape(resolved_audit.repo_full)
+    escaped_head_sha = html.escape(resolved_audit.head_sha)
+    return HTMLResponse(
+        f"""
+        <!DOCTYPE html>
+        <html lang=\"en\">
+        <head><meta charset=\"utf-8\"><title>Vipari Feedback</title></head>
+        <body>
+        <main>
+        <h1>Vipari review feedback</h1>
+        <p>PR #{resolved_audit.pr_number} for {escaped_repo_full}</p>
+        <form method=\"post\" action=\"/feedback/pr/{html.escape(owner)}/{html.escape(repo)}/{resolved_audit.pr_number}\">
+            <input type=\"hidden\" name=\"audit_id\" value=\"{resolved_audit.id}\">
+            <input type=\"hidden\" name=\"head_sha\" value=\"{escaped_head_sha}\">
+            <label><input type=\"radio\" name=\"sentiment\" value=\"helpful\" checked> This was helpful</label><br>
+            <label><input type=\"radio\" name=\"sentiment\" value=\"noisy\"> This was noisy</label><br>
+            <label><input type=\"radio\" name=\"sentiment\" value=\"strongly_disagree\"> We strongly disagree</label><br>
+            <label for=\"notes\">Notes</label><br>
+            <textarea id=\"notes\" name=\"notes\" rows=\"5\" cols=\"60\"></textarea><br>
+            <button type=\"submit\">Send feedback</button>
+        </form>
+        </main>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.post("/feedback/pr/{owner}/{repo}/{pr_number}")
+async def pr_feedback_submit(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    audit_id: int = Form(...),
+    sentiment: str = Form(...),
+    notes: str | None = Form(default=None),
+    head_sha: str | None = Form(default=None),
+):
+    bounded_notes = (notes or "").strip()
+    if sentiment not in {"helpful", "noisy", "strongly_disagree"}:
+        raise HTTPException(status_code=400, detail="Invalid feedback sentiment.")
+    if len(bounded_notes) > 2000:
+        raise HTTPException(status_code=400, detail="Feedback notes must be 2000 characters or fewer.")
+
+    audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
+    if audit is None:
+        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
+    if audit.repo_full != f"{owner}/{repo}" or audit.pr_number != pr_number:
+        raise HTTPException(status_code=400, detail="Audit feedback target did not match the requested PR.")
+    if head_sha and audit.head_sha != head_sha:
+        raise HTTPException(status_code=400, detail="Audit feedback target did not match the requested head SHA.")
+
+    record_audit_feedback_event(
+        AUDIT_DB_PATH,
+        audit_id=audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json=json.dumps(
+            {
+                "sentiment": sentiment,
+                "notes": bounded_notes,
+                "repo_full": audit.repo_full,
+                "pr_number": audit.pr_number,
+            }
+        ),
+    )
+    return HTMLResponse("<html><body><p>Thanks. Your feedback was recorded.</p></body></html>")
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     if settings.service_role == "api":
@@ -5092,6 +5185,26 @@ async def webhook(request: Request):
             pr_merge_commit_sha=pr_merge_commit_sha,
             pr_updated_at=pr_updated_at,
         )
+        record_pr_outcome_feedback_events(
+            AUDIT_DB_PATH,
+            repo_full=repo_full,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+        )
+        try:
+            jwt_token = generate_jwt(GITHUB_APP_ID, GITHUB_PRIVATE_KEY_PATH, settings.resolved_github_private_key)
+            token = get_installation_token(jwt_token, installation_id)
+            refresh_audit_reaction_feedback_for_pr(
+                AUDIT_DB_PATH,
+                repo_full=repo_full,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                token=token,
+            )
+        except Exception:
+            pass
         branch_scan_job_id = None
         if action == "closed" and pr_merged and pr_merge_commit_sha:
             onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
