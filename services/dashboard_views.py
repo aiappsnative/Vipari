@@ -289,6 +289,7 @@ def build_repo_pr_review_routes_payload(
                     audit.suggested_risk_level,
                     audit.status,
                 ),
+                "review_body": str(comment.comment_body or "").strip() if comment is not None else None,
                 "review_excerpt": _extract_pr_review_excerpt(comment.comment_body if comment is not None else None),
                 "finding_count": len(findings),
                 "top_findings": [

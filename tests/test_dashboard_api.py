@@ -725,6 +725,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 21
     assert payload["pr_review_routes"]["selected_route"]["head_sha"] == "sha-relevance-21"
     assert payload["pr_review_routes"]["selected_route"]["summary"] == "This PR expands direct refund authority and needs human review."
+    assert payload["pr_review_routes"]["selected_route"]["review_body"].startswith("## ❌ Vipari: Escalate before merge")
     assert payload["pr_review_routes"]["selected_route"]["review_excerpt"] == "This PR expands direct refund authority and needs human review."
     assert payload["pr_review_routes"]["selected_route"]["finding_count"] == len(payload["pr_review_routes"]["selected_route"]["top_findings"])
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["reaction_count"] == 1

@@ -869,6 +869,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "function repoTabUrl" in repo_js_response.text
     assert "function renderPrReviewRoutesSection" in repo_js_response.text
     assert "Feedback loop" in repo_js_response.text
+    assert "Full review note" in repo_js_response.text
     assert "Top review findings" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
     assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
