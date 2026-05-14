@@ -34,6 +34,16 @@ from services.audit_records import (
     record_audit_result,
     update_pull_request_audit_state,
 )
+from services.control_plane_records import (
+    allocate_repo_to_workspace,
+    create_user,
+    create_workspace,
+    get_workspace_by_id,
+    update_repo_allocation_pr_feedback_mode,
+    update_workspace_pr_feedback_mode,
+    upsert_github_installation,
+    upsert_entitlement,
+)
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
 from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
@@ -41,6 +51,40 @@ from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileD
 
 class FakeRateLimitError(Exception):
     pass
+
+
+def _bind_repo_to_workspace(
+    db_path: str,
+    *,
+    workspace_mode: str,
+    repo_mode: str | None = None,
+    installation_id: int = 123,
+    repo_full: str = "doria90/dummyAI",
+):
+    owner = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug=f"ws-{installation_id}", display_name="Worker Workspace", billing_owner_user_id=owner.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=f"acct-{installation_id}",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id=f"repo-{installation_id}",
+        repo_full=repo_full,
+        baseline_mode="default_branch",
+        activated_by_user_id=owner.id,
+    )
+    update_workspace_pr_feedback_mode(db_path, workspace.id, pr_feedback_mode=workspace_mode)
+    if repo_mode is not None:
+        update_repo_allocation_pr_feedback_mode(db_path, allocation.id, pr_feedback_mode=repo_mode)
+    return owner, workspace, allocation
 
 
 def test_build_signal_fusion_assessment_escalates_on_medium_medium_agreement():
@@ -512,6 +556,154 @@ def test_worker_comment_omits_static_drift_metrics_when_approved_baseline_exists
     assert "approved baseline (onboarding)" not in posted[0]
 
 
+def test_worker_posts_request_changes_review_when_feedback_mode_reviews_and_risk_high(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=11,
+        installation_id=123,
+        head_sha="sha-11",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    reviews = []
+    labels = []
+
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "Summary: Guardrails weakened.\nRisk Level: High\nConfidence: High\nRecommendation: Escalate before merge.",
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda repo, pr, token, body, event: reviews.append((body, event)) or 1111)
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("comment path should not run")))
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(kwargs.get("should_have_label")))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+    assert len(reviews) == 1
+    assert reviews[0][1] == "REQUEST_CHANGES"
+    assert labels == [True]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.output_mode == "formal_review"
+    assert audit.pr_feedback_mode == "reviews"
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is not None
+    assert comment.github_comment_id is None
+    assert comment.github_review_id == 1111
+    assert comment.comment_mode == "review_request_changes"
+
+
+def test_worker_posts_comment_review_when_feedback_mode_reviews_and_risk_medium(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=12,
+        installation_id=123,
+        head_sha="sha-12",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+Keep explanations concise and cite the approved workflow.\n",
+    )
+    reviews = []
+
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "Summary: Control surface expanded.\nRisk Level: Medium\nConfidence: High\nRecommendation: Review before merge.",
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda repo, pr, token, body, event: reviews.append((body, event)) or 1212)
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("comment path should not run")))
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(reviews) == 1
+    assert reviews[0][1] == "COMMENT"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.output_mode == "formal_review"
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is not None
+    assert comment.github_review_id == 1212
+    assert comment.comment_mode == "review_comment"
+
+
+def test_worker_suppresses_low_risk_review_writeback_when_feedback_mode_reviews(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=13,
+        installation_id=123,
+        head_sha="sha-13",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+    )
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    reviews = []
+    labels = []
+
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "Summary: Minor cleanup.\nRisk Level: Low\nConfidence: High\nRecommendation: Safe to merge after normal review.",
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: reviews.append(args) or 1313)
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("comment path should not run")))
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(kwargs.get("should_have_label")))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert reviews == []
+    assert labels == [False]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "reviews"
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is None
+
+
 def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
@@ -636,6 +828,278 @@ def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
     assert audit.status == "fallback_posted"
+
+
+def test_worker_suppresses_github_output_when_feedback_mode_off(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    owner = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug="ws-off", display_name="Workspace Off", billing_owner_user_id=owner.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="repo-123",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=owner.id,
+    )
+    update_workspace_pr_feedback_mode(db_path, workspace.id, pr_feedback_mode="off")
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=31,
+        installation_id=123,
+        head_sha="sha-31",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    posted = []
+    labels = []
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: posted.append(args) or 3100)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+    assert posted == []
+    assert labels == []
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is True
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is None
+
+
+def test_worker_silent_off_mode_persists_fallback_without_github_output(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    owner = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug="ws-off-fallback", display_name="Workspace Off Fallback", billing_owner_user_id=owner.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="repo-123",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=owner.id,
+    )
+    update_workspace_pr_feedback_mode(db_path, workspace.id, pr_feedback_mode="comments")
+    update_repo_allocation_pr_feedback_mode(db_path, allocation.id, pr_feedback_mode="off")
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=32,
+        installation_id=123,
+        head_sha="sha-32",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    posted = []
+    labels = []
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: posted.append(args) or 3200)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("model unavailable")))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        max_attempts=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+    assert posted == []
+    assert labels == []
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is False
+    assert audit.error_message == "RuntimeError: model unavailable"
+
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is None
+
+
+def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_reviews(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    owner, workspace, _allocation = _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": False,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=33,
+        installation_id=123,
+        head_sha="sha-33",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    reviews = []
+    comments = []
+    labels = []
+
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "Summary: Guardrails weakened.\nRisk Level: High\nConfidence: High\nRecommendation: Escalate before merge.",
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: reviews.append(args) or 3300)
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: comments.append(args) or 3301)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert reviews == []
+    assert comments == []
+    assert labels == []
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "off"
+
+
+def test_worker_reuses_existing_review_for_requeued_failed_same_sha_job(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=34,
+        installation_id=123,
+        head_sha="sha-34",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    reviews = []
+    persisted_once = {"done": False}
+    original_record_audit_result = record_audit_result
+
+    monkeypatch.setattr(
+        "services.audit_worker.build_llm_comment",
+        lambda *args, **kwargs: "Summary: Guardrails weakened.\nRisk Level: High\nConfidence: High\nRecommendation: Escalate before merge.",
+    )
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda repo, pr, token, body, event: reviews.append((body, event)) or 3400)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    def flaky_record(*args, **kwargs):
+        result = original_record_audit_result(*args, **kwargs)
+        if not persisted_once["done"] and kwargs.get("github_review_id") == 3400:
+            persisted_once["done"] = True
+            raise RuntimeError("db write failed after review record")
+        return result
+
+    monkeypatch.setattr("services.audit_worker.record_audit_result", flaky_record)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    failed_job = get_job(db_path, job.id)
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert len(reviews) == 1
+
+    requeued = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=34,
+        installation_id=123,
+        head_sha="sha-34",
+        diff_text=job.diff_text,
+    )
+    assert requeued.id == job.id
+    assert process_next_job_once(settings) is True
+    assert len(reviews) == 1
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    comment = get_audit_comment_for_audit(db_path, audit.id)
+    assert comment is not None
+    assert comment.github_review_id == 3400
 
 
 def test_worker_uses_provider_retry_hint(tmp_path, monkeypatch):

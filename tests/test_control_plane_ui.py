@@ -1506,11 +1506,15 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     main.init_db(main.AUDIT_DB_PATH)
 
     from services.control_plane_records import (
+        allocate_repo_to_workspace,
         create_user_session,
         create_workspace,
         get_workspace_by_id,
+        get_repo_allocation_for_workspace,
+        replace_repo_connections,
         upsert_entitlement,
         upsert_github_identity,
+        upsert_github_installation,
         upsert_subscription,
     )
 
@@ -1568,18 +1572,46 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
             "feature_flags_json": "{}",
         },
     )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/settings-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="1",
+        repo_full="doria90/settings-repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
 
     get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
     assert get_response.status_code == 200
     assert "Workspace settings" in get_response.text
     assert 'value="Settings Workspace"' in get_response.text
-    assert "PR comments" in get_response.text
-    assert "Effective status" in get_response.text
+    assert "PR feedback mode" in get_response.text
+    assert "Effective mode" in get_response.text
     assert "Allowed users and permissions" in get_response.text
     assert 'aria-label="Add user"' in get_response.text
     assert "Onboarded and allocated repositories" in get_response.text
+    assert "Inherit workspace default" in get_response.text
+    assert "doria90/settings-repo" in get_response.text
     assert 'data-theme-toggle' in get_response.text
-    assert 'value="on" checked' in get_response.text
+    assert 'value="comments" checked' in get_response.text
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
     assert 'aria-label="Settings"' in get_response.text
@@ -1595,7 +1627,7 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
             "workspace_name": "Renamed Settings Workspace",
-            "pr_comments_setting": "off",
+            "pr_feedback_mode": "off",
             "csrf_token": session.csrf_secret,
         },
         follow_redirects=False,
@@ -1605,13 +1637,181 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert post_response.headers["location"] == "/settings?updated=1"
     updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id)
     assert updated_workspace.pr_comments_setting_enabled is False
+    assert updated_workspace.pr_feedback_mode == "off"
     assert updated_workspace.display_name == "Renamed Settings Workspace"
+
+    allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/settings-repo")
+    assert allocation is not None
+
+    repo_override_response = client.post(
+        "/settings/repositories/feedback-mode",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "allocation_id": str(allocation.id),
+            "pr_feedback_mode": "reviews",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert repo_override_response.status_code == 303
+    assert repo_override_response.headers["location"] == "/settings?updated=1"
+    allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/settings-repo")
+    assert allocation is not None
+    assert allocation.pr_feedback_mode == "reviews"
 
     updated_get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
     assert updated_get_response.status_code == 200
     assert 'value="off" checked' in updated_get_response.text
     assert 'value="Renamed Settings Workspace"' in updated_get_response.text
     assert "Paused" in updated_get_response.text
+    assert 'value="reviews" selected' in updated_get_response.text
+    assert "Effective: Reviews." in updated_get_response.text
+
+    reviews_post_response = client.post(
+        "/settings",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "workspace_name": "Renamed Settings Workspace",
+            "pr_feedback_mode": "reviews",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert reviews_post_response.status_code == 303
+    updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id)
+    assert updated_workspace.pr_feedback_mode == "reviews"
+    assert updated_workspace.pr_comments_setting_enabled is True
+
+    reviews_get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert reviews_get_response.status_code == 200
+    assert 'value="reviews" checked' in reviews_get_response.text
+    assert "Formal reviews" in reviews_get_response.text
+
+    repo_inherit_response = client.post(
+        "/settings/repositories/feedback-mode",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "allocation_id": str(allocation.id),
+            "pr_feedback_mode": "inherit",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert repo_inherit_response.status_code == 303
+    allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/settings-repo")
+    assert allocation is not None
+    assert allocation.pr_feedback_mode is None
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_settings_page_repo_effective_mode_reflects_plan_gating(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-plan-gating.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_workspace_pr_feedback_mode,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="933",
+        github_login="settings-plan-gated-owner",
+        display_name="Settings Plan Gated Owner",
+        primary_email="settings@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-plan-gated-workspace",
+        display_name="Settings Plan Gated Workspace",
+        billing_owner_user_id=user.id,
+    )
+    update_workspace_pr_feedback_mode(main.AUDIT_DB_PATH, workspace.id, pr_feedback_mode="reviews")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-plan-gated-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-plan-gated",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:settings-plan-gated-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": False,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        account_id="78",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        repositories=[
+            {"repo_github_id": "2", "repo_full": "doria90/settings-plan-gated-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        repo_github_id="2",
+        repo_full="doria90/settings-plan-gated-repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+
+    response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Unavailable" in response.text
+    assert "Off (plan gated)" in response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

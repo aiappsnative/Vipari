@@ -208,6 +208,15 @@ def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, 
     return created_comment.id
 
 
+def create_pr_review(repo_full: str, pr_number: int, token: str, body: str, *, event: str) -> int:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    pr = repo.get_pull(pr_number)
+    managed_body = _build_managed_comment_body(body)
+    created_review = pr.create_review(body=managed_body, event=event)
+    return created_review.id
+
+
 def ensure_pr_label(
     repo_full: str,
     pr_number: int,

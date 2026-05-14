@@ -154,6 +154,8 @@ from services.control_plane_records import (
     update_user_profile_preferences,
     update_workspace_admin_fields,
     update_workspace_display_name,
+    update_repo_allocation_pr_feedback_mode,
+    update_workspace_pr_feedback_mode,
     update_workspace_pr_comments_setting,
     upsert_workspace_membership,
     upsert_workspace_invite,
@@ -164,6 +166,7 @@ from services.control_plane_records import (
     upsert_subscription,
     write_session_flash,
 )
+from services.pr_feedback_mode import resolve_pr_feedback_mode
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
@@ -1271,7 +1274,9 @@ def _sidebar_profile_initial(*, display_name: str | None = None, github_login: s
     return "V"
 
 
-def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
+def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True) -> list[dict[str, object]]:
+    workspace = get_workspace_by_id(AUDIT_DB_PATH, workspace_id)
+    workspace_mode = workspace.pr_feedback_mode if workspace is not None else "comments"
     connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace_id)
     allocations = {
         allocation.repo_full: allocation
@@ -1285,6 +1290,13 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
         status = "Available"
         if allocation is not None:
             status = "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated"
+        effective_mode_label = {
+            "comments": "Comments",
+            "reviews": "Reviews",
+            "off": "Off",
+        }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode if allocation is not None else None), "Comments")
+        if not pr_feedback_allowed:
+            effective_mode_label = "Off (plan gated)"
         rows.append(
             {
                 "repo_full": connection.repo_full,
@@ -1292,6 +1304,14 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
                 "branch": connection.default_branch or "unknown",
                 "visibility": "Private" if connection.is_private else "Public",
                 "href": f"/dashboard/{quote(connection.repo_full, safe='')}",
+                "allocation_id": allocation.id if allocation is not None else None,
+                "repo_feedback_mode_override": allocation.pr_feedback_mode if allocation is not None else None,
+                "repo_feedback_mode_override_label": (
+                    {"comments": "Comments only", "reviews": "Formal reviews", "off": "Off"}.get(allocation.pr_feedback_mode, "Inherit workspace default")
+                    if allocation is not None
+                    else "Not allocated"
+                ),
+                "effective_feedback_mode_label": effective_mode_label,
             }
         )
         seen_repo_fulls.add(connection.repo_full)
@@ -1299,6 +1319,13 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
     for repo_full, allocation in allocations.items():
         if repo_full in seen_repo_fulls:
             continue
+        effective_mode_label = {
+            "comments": "Comments",
+            "reviews": "Reviews",
+            "off": "Off",
+        }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode), "Comments")
+        if not pr_feedback_allowed:
+            effective_mode_label = "Off (plan gated)"
         rows.append(
             {
                 "repo_full": repo_full,
@@ -1306,6 +1333,10 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
                 "branch": "unknown",
                 "visibility": "Unknown",
                 "href": f"/dashboard/{quote(repo_full, safe='')}",
+                "allocation_id": allocation.id,
+                "repo_feedback_mode_override": allocation.pr_feedback_mode,
+                "repo_feedback_mode_override_label": {"comments": "Comments only", "reviews": "Formal reviews", "off": "Off"}.get(allocation.pr_feedback_mode, "Inherit workspace default"),
+                "effective_feedback_mode_label": effective_mode_label,
             }
         )
 
@@ -2495,6 +2526,7 @@ async def settings_page(request: Request):
     membership = access_context["membership"]
     installation = access_context["installation"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    pr_feedback_allowed = _workspace_pr_comments_allowed_by_plan(access_context)
     return HTMLResponse(
         render_control_plane_settings_page(
             workspace_name=workspace.display_name,
@@ -2505,12 +2537,12 @@ async def settings_page(request: Request):
             ),
             resolution=access_context["resolution"],
             csrf_token=access_context["session"].csrf_secret,
-            pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
-            pr_comments_setting_enabled=bool(workspace.pr_comments_setting_enabled),
+            pr_comments_allowed_by_plan=pr_feedback_allowed,
+            pr_feedback_mode=workspace.pr_feedback_mode,
             can_manage=bool(membership and membership.role in {"owner", "admin"}),
             workspace_role=membership.role if membership else "viewer",
             workspace_members=_workspace_member_rows(workspace.id),
-            repo_rows=_workspace_repo_rows(workspace.id),
+            repo_rows=_workspace_repo_rows(workspace.id, pr_feedback_allowed=pr_feedback_allowed),
             next_payment_at=subscription.next_payment_at if subscription else None,
             subscription_status=subscription.status if subscription else None,
             setup_state=workspace.setup_state,
@@ -2530,7 +2562,7 @@ async def settings_page(request: Request):
 @app.post("/app/settings")
 async def settings_update(
     request: Request,
-    pr_comments_setting: str = Form(...),
+    pr_feedback_mode: str = Form(...),
     workspace_name: str | None = Form(default=None),
     csrf_token: str | None = Form(None),
 ):
@@ -2540,9 +2572,9 @@ async def settings_update(
     _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
     _require_workspace_role(access_context, "owner", "admin")
 
-    normalized_setting = (pr_comments_setting or "").strip().lower()
-    if normalized_setting not in {"on", "off"}:
-        raise HTTPException(status_code=400, detail="PR comments setting must be on or off.")
+    normalized_feedback_mode = (pr_feedback_mode or "").strip().lower()
+    if normalized_feedback_mode not in {"comments", "reviews", "off"}:
+        raise HTTPException(status_code=400, detail="PR feedback mode must be comments, reviews, or off.")
 
     normalized_workspace_name = (workspace_name or "").strip()
     if not normalized_workspace_name:
@@ -2550,15 +2582,57 @@ async def settings_update(
     if len(normalized_workspace_name) > 120:
         raise HTTPException(status_code=400, detail="Workspace name must be 120 characters or fewer.")
 
+    update_workspace_pr_feedback_mode(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        pr_feedback_mode=normalized_feedback_mode,
+    )
     update_workspace_pr_comments_setting(
         AUDIT_DB_PATH,
         access_context["workspace"].id,
-        enabled=normalized_setting == "on",
+        enabled=normalized_feedback_mode != "off",
     )
     update_workspace_display_name(
         AUDIT_DB_PATH,
         access_context["workspace"].id,
         display_name=normalized_workspace_name,
+    )
+    return RedirectResponse("/settings?updated=1", status_code=303)
+
+
+@app.post("/settings/repositories/feedback-mode")
+@app.post("/app/settings/repositories/feedback-mode")
+async def settings_update_repo_feedback_mode(
+    request: Request,
+    allocation_id: int = Form(...),
+    pr_feedback_mode: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+
+    allocation = next(
+        (candidate for candidate in list_repo_allocations_for_workspace(AUDIT_DB_PATH, access_context["workspace"].id) if candidate.id == allocation_id),
+        None,
+    )
+    if allocation is None:
+        raise HTTPException(status_code=404, detail="Repository allocation was not found for this workspace.")
+
+    normalized_feedback_mode = (pr_feedback_mode or "").strip().lower()
+    if normalized_feedback_mode in {"", "inherit"}:
+        override_mode = None
+    elif normalized_feedback_mode in {"comments", "reviews", "off"}:
+        override_mode = normalized_feedback_mode
+    else:
+        raise HTTPException(status_code=400, detail="Repository feedback mode must be inherit, comments, reviews, or off.")
+
+    update_repo_allocation_pr_feedback_mode(
+        AUDIT_DB_PATH,
+        allocation.id,
+        pr_feedback_mode=override_mode,
     )
     return RedirectResponse("/settings?updated=1", status_code=303)
 

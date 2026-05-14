@@ -21,6 +21,7 @@ from .baseline_provenance import (
     previous_pr_fallback_provenance,
 )
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
+from .pr_feedback_mode import PR_FEEDBACK_MODE_COMMENTS, normalize_pr_feedback_mode
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class PullRequestAuditRecord:
     status: str
     completion_mode: str
     output_mode: str
+    pr_feedback_mode: str
     deterministic_score: int
     suggested_risk_level: str
     fused_confidence: str | None
@@ -105,6 +107,7 @@ class AuditCommentRecord:
     id: int
     audit_id: int
     github_comment_id: int | None
+    github_review_id: int | None
     comment_mode: str
     comment_body: str
     posted_at: float
@@ -251,6 +254,7 @@ def init_audit_record_db(db_path: str) -> None:
                 status TEXT NOT NULL,
                 completion_mode TEXT NOT NULL,
                 output_mode TEXT NOT NULL,
+                pr_feedback_mode TEXT NOT NULL DEFAULT 'comments',
                 deterministic_score INTEGER NOT NULL,
                 suggested_risk_level TEXT NOT NULL,
                 fused_confidence TEXT,
@@ -277,6 +281,8 @@ def init_audit_record_db(db_path: str) -> None:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
         if "fused_confidence" not in audit_columns:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
+        if "pr_feedback_mode" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_feedback_mode TEXT NOT NULL DEFAULT 'comments'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS changed_artifacts (
@@ -318,6 +324,7 @@ def init_audit_record_db(db_path: str) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 audit_id INTEGER NOT NULL UNIQUE,
                 github_comment_id INTEGER,
+                github_review_id INTEGER,
                 comment_mode TEXT NOT NULL,
                 comment_body TEXT NOT NULL,
                 posted_at REAL NOT NULL,
@@ -327,6 +334,9 @@ def init_audit_record_db(db_path: str) -> None:
             )
             """
         )
+        audit_comment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()}
+        if "github_review_id" not in audit_comment_columns:
+            conn.execute("ALTER TABLE audit_comments ADD COLUMN github_review_id INTEGER")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -477,6 +487,7 @@ def record_audit_result(
     status: str,
     completion_mode: str,
     output_mode: str,
+    pr_feedback_mode: str = PR_FEEDBACK_MODE_COMMENTS,
     comment_body: str | None,
     comment_mode: str | None,
     semantic_review_completed: bool,
@@ -485,6 +496,7 @@ def record_audit_result(
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
+    github_review_id: int | None = None,
 ) -> PullRequestAuditRecord:
     now = time.time()
     artifact_snapshots = artifact_snapshots or {}
@@ -504,6 +516,7 @@ def record_audit_result(
         pr_merge_commit_sha=pr_merge_commit_sha,
         pr_updated_at=pr_updated_at,
     )
+    persisted_feedback_mode = normalize_pr_feedback_mode(pr_feedback_mode)
     with _connect(db_path) as conn:
         existing = conn.execute(
             """
@@ -520,10 +533,10 @@ def record_audit_result(
                 INSERT INTO pull_request_audits (
                     job_id, repo_full, pr_number, installation_id, head_sha,
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
-                    status, completion_mode, output_mode,
+                    status, completion_mode, output_mode, pr_feedback_mode,
                     deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -540,6 +553,7 @@ def record_audit_result(
                     status,
                     completion_mode,
                     output_mode,
+                    persisted_feedback_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
                     fused_confidence,
@@ -568,6 +582,7 @@ def record_audit_result(
                     status = ?,
                     completion_mode = ?,
                     output_mode = ?,
+                    pr_feedback_mode = ?,
                     deterministic_score = ?,
                     suggested_risk_level = ?,
                     fused_confidence = ?,
@@ -590,6 +605,7 @@ def record_audit_result(
                     status,
                     completion_mode,
                     output_mode,
+                    persisted_feedback_mode,
                     deterministic_analysis.deterministic_score,
                     persisted_risk_level,
                     fused_confidence,
@@ -788,23 +804,24 @@ def record_audit_result(
                 conn.execute(
                     """
                     INSERT INTO audit_comments (
-                        audit_id, github_comment_id, comment_mode, comment_body, posted_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        audit_id, github_comment_id, github_review_id, comment_mode, comment_body, posted_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (audit_id, github_comment_id, comment_mode, comment_body, now, now, now),
+                    (audit_id, github_comment_id, github_review_id, comment_mode, comment_body, now, now, now),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE audit_comments
                     SET github_comment_id = ?,
+                        github_review_id = ?,
                         comment_mode = ?,
                         comment_body = ?,
                         posted_at = ?,
                         updated_at = ?
                     WHERE audit_id = ?
                     """,
-                    (github_comment_id, comment_mode, comment_body, now, now, audit_id),
+                    (github_comment_id, github_review_id, comment_mode, comment_body, now, now, audit_id),
                 )
         else:
             conn.execute("DELETE FROM audit_comments WHERE audit_id = ?", (audit_id,))
@@ -1400,6 +1417,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         status=row["status"],
         completion_mode=row["completion_mode"],
         output_mode=row["output_mode"],
+        pr_feedback_mode=normalize_pr_feedback_mode(row["pr_feedback_mode"]),
         deterministic_score=row["deterministic_score"],
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=fused_confidence,
@@ -1561,6 +1579,7 @@ def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
         id=row["id"],
         audit_id=row["audit_id"],
         github_comment_id=row["github_comment_id"],
+        github_review_id=row["github_review_id"],
         comment_mode=row["comment_mode"],
         comment_body=row["comment_body"],
         posted_at=row["posted_at"],

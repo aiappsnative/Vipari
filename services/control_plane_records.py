@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 from .persistence import connect_sqlite, is_postgres_locator, resolve_db_path
+from .pr_feedback_mode import PR_FEEDBACK_MODE_COMMENTS, normalize_pr_feedback_mode
 
 
 CONTROL_PLANE_TABLES = (
@@ -88,6 +89,7 @@ class WorkspaceRecord:
     billing_owner_user_id: int | None
     setup_state: str
     pr_comments_setting_enabled: bool
+    pr_feedback_mode: str
     created_at: float
     updated_at: float
 
@@ -218,6 +220,7 @@ class RepoAllocationRecord:
     repo_full: str
     allocation_status: str
     baseline_mode: str
+    pr_feedback_mode: str | None
     activated_by_user_id: int | None
     activated_at: float | None
     deactivated_at: float | None
@@ -427,6 +430,7 @@ def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
         billing_owner_user_id=row["billing_owner_user_id"],
         setup_state=row["setup_state"],
         pr_comments_setting_enabled=bool(row["pr_comments_setting_enabled"]),
+        pr_feedback_mode=normalize_pr_feedback_mode(row["pr_feedback_mode"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -566,6 +570,7 @@ def _row_to_repo_allocation(row: sqlite3.Row) -> RepoAllocationRecord:
         repo_full=row["repo_full"],
         allocation_status=row["allocation_status"],
         baseline_mode=row["baseline_mode"],
+        pr_feedback_mode=(normalize_pr_feedback_mode(row["pr_feedback_mode"]) if row["pr_feedback_mode"] is not None else None),
         activated_by_user_id=row["activated_by_user_id"],
         activated_at=row["activated_at"],
         deactivated_at=row["deactivated_at"],
@@ -826,6 +831,7 @@ def init_control_plane_db(db_path: str) -> None:
                 billing_owner_user_id INTEGER,
                 setup_state TEXT NOT NULL DEFAULT 'workspace_no_subscription',
                 pr_comments_setting_enabled INTEGER NOT NULL DEFAULT 1,
+                pr_feedback_mode TEXT NOT NULL DEFAULT 'comments',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY(billing_owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -1015,6 +1021,7 @@ def init_control_plane_db(db_path: str) -> None:
                 repo_full TEXT NOT NULL,
                 allocation_status TEXT NOT NULL,
                 baseline_mode TEXT NOT NULL DEFAULT 'default_branch',
+                pr_feedback_mode TEXT,
                 activated_by_user_id INTEGER,
                 activated_at REAL,
                 deactivated_at REAL,
@@ -1112,6 +1119,7 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "users", "theme_preference", "TEXT NOT NULL DEFAULT 'dark'")
         _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
         _ensure_column(conn, "workspaces", "pr_comments_setting_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "workspaces", "pr_feedback_mode", "TEXT NOT NULL DEFAULT 'comments'")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
         _ensure_column(conn, "user_sessions", "flash_json", "TEXT")
@@ -1141,6 +1149,7 @@ def init_control_plane_db(db_path: str) -> None:
         if not uses_postgres and _repo_connections_needs_rebuild(conn):
             _rebuild_repo_connections_table(conn)
         _ensure_column(conn, "repo_allocations", "baseline_mode", "TEXT NOT NULL DEFAULT 'default_branch'")
+        _ensure_column(conn, "repo_allocations", "pr_feedback_mode", "TEXT")
         _ensure_column(conn, "repo_allocations", "activated_by_user_id", "INTEGER")
         _ensure_column(conn, "repo_allocations", "activated_at", "REAL")
         _ensure_column(conn, "repo_allocations", "deactivated_at", "REAL")
@@ -1409,6 +1418,18 @@ def update_workspace_pr_comments_setting(db_path: str, workspace_id: int, *, ena
         conn.execute(
             "UPDATE workspaces SET pr_comments_setting_enabled = ?, updated_at = ? WHERE id = ?",
             (int(bool(enabled)), now, workspace_id),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    return _row_to_workspace(row)
+
+
+def update_workspace_pr_feedback_mode(db_path: str, workspace_id: int, *, pr_feedback_mode: str) -> WorkspaceRecord:
+    now = time.time()
+    normalized_mode = normalize_pr_feedback_mode(pr_feedback_mode)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE workspaces SET pr_feedback_mode = ?, updated_at = ? WHERE id = ?",
+            (normalized_mode, now, workspace_id),
         )
         row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
     return _row_to_workspace(row)
@@ -2528,14 +2549,15 @@ def allocate_repo_to_workspace(
         conn.execute(
             """
             INSERT INTO repo_allocations (
-                workspace_id, installation_id, repo_github_id, repo_full, allocation_status, baseline_mode,
+                workspace_id, installation_id, repo_github_id, repo_full, allocation_status, baseline_mode, pr_feedback_mode,
                 activated_by_user_id, activated_at, deactivated_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?, NULL, ?, ?)
             ON CONFLICT(workspace_id, repo_github_id) DO UPDATE SET
                 installation_id = excluded.installation_id,
                 repo_full = excluded.repo_full,
                 allocation_status = 'active',
                 baseline_mode = excluded.baseline_mode,
+                pr_feedback_mode = COALESCE(repo_allocations.pr_feedback_mode, excluded.pr_feedback_mode),
                 activated_by_user_id = excluded.activated_by_user_id,
                 activated_at = excluded.activated_at,
                 deactivated_at = NULL,
@@ -2557,6 +2579,25 @@ def update_repo_allocation_status(db_path: str, allocation_id: int, allocation_s
         conn.execute(
             "UPDATE repo_allocations SET allocation_status = ?, deactivated_at = ?, updated_at = ? WHERE id = ?",
             (allocation_status, deactivated_at, now, allocation_id),
+        )
+        row = conn.execute("SELECT * FROM repo_allocations WHERE id = ?", (allocation_id,)).fetchone()
+        if row is not None:
+            _refresh_workspace_setup_state(conn, row["workspace_id"])
+    return _row_to_repo_allocation(row)
+
+
+def update_repo_allocation_pr_feedback_mode(
+    db_path: str,
+    allocation_id: int,
+    *,
+    pr_feedback_mode: str | None,
+) -> RepoAllocationRecord:
+    now = time.time()
+    normalized_mode = None if pr_feedback_mode is None else normalize_pr_feedback_mode(pr_feedback_mode)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE repo_allocations SET pr_feedback_mode = ?, updated_at = ? WHERE id = ?",
+            (normalized_mode, now, allocation_id),
         )
         row = conn.execute("SELECT * FROM repo_allocations WHERE id = ?", (allocation_id,)).fetchone()
         if row is not None:
