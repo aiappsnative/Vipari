@@ -29,6 +29,7 @@ from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_acc
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
 from services.audit_records import (
     get_audit_comment_episode_for_pr_head_sha,
+    get_latest_audit_comment_for_pr,
     get_pull_request_audit_by_id,
     record_pr_outcome_feedback_events,
     record_audit_feedback_event,
@@ -4958,19 +4959,8 @@ async def stripe_webhook(request: Request):
 
 @app.get("/feedback/pr/{owner}/{repo}/{pr_number}", response_class=HTMLResponse)
 async def pr_feedback_form(owner: str, repo: str, pr_number: int, head_sha: str | None = None, audit_id: int | None = None):
-    resolved_audit = None
-    if audit_id is not None:
-        resolved_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
-    elif head_sha:
-        episode = get_audit_comment_episode_for_pr_head_sha(AUDIT_DB_PATH, f"{owner}/{repo}", pr_number, head_sha)
-        if episode is not None:
-            resolved_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, episode.audit_comment.audit_id)
-
+    resolved_audit = _resolve_feedback_target_audit(owner, repo, pr_number, audit_id=audit_id, head_sha=head_sha)
     if resolved_audit is None:
-        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
-    if resolved_audit.repo_full != f"{owner}/{repo}" or resolved_audit.pr_number != pr_number:
-        raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
-    if head_sha and resolved_audit.head_sha != head_sha:
         raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
 
     escaped_repo_full = html.escape(resolved_audit.repo_full)
@@ -5017,13 +5007,9 @@ async def pr_feedback_submit(
     if len(bounded_notes) > 2000:
         raise HTTPException(status_code=400, detail="Feedback notes must be 2000 characters or fewer.")
 
-    audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
+    audit = _resolve_feedback_target_audit(owner, repo, pr_number, audit_id=audit_id, head_sha=head_sha)
     if audit is None:
         raise HTTPException(status_code=404, detail="Audit feedback target was not found.")
-    if audit.repo_full != f"{owner}/{repo}" or audit.pr_number != pr_number:
-        raise HTTPException(status_code=400, detail="Audit feedback target did not match the requested PR.")
-    if head_sha and audit.head_sha != head_sha:
-        raise HTTPException(status_code=400, detail="Audit feedback target did not match the requested head SHA.")
 
     record_audit_feedback_event(
         AUDIT_DB_PATH,
@@ -5040,6 +5026,37 @@ async def pr_feedback_submit(
         ),
     )
     return HTMLResponse("<html><body><p>Thanks. Your feedback was recorded.</p></body></html>")
+
+
+def _resolve_feedback_target_audit(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    *,
+    audit_id: int | None,
+    head_sha: str | None,
+):
+    repo_full = f"{owner}/{repo}"
+    resolved_audit = None
+    if audit_id is not None:
+        candidate_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, audit_id)
+        if candidate_audit is not None and candidate_audit.repo_full == repo_full and candidate_audit.pr_number == pr_number:
+            if not head_sha or candidate_audit.head_sha == head_sha:
+                resolved_audit = candidate_audit
+
+    if resolved_audit is None and head_sha:
+        episode = get_audit_comment_episode_for_pr_head_sha(AUDIT_DB_PATH, repo_full, pr_number, head_sha)
+        if episode is not None:
+            resolved_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, episode.audit_comment.audit_id)
+
+    if resolved_audit is None:
+        latest_comment = get_latest_audit_comment_for_pr(AUDIT_DB_PATH, repo_full, pr_number)
+        if latest_comment is not None:
+            candidate_audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, latest_comment.audit_id)
+            if candidate_audit is not None and (not head_sha or candidate_audit.head_sha == head_sha):
+                resolved_audit = candidate_audit
+
+    return resolved_audit
 
 
 @app.post("/webhook")

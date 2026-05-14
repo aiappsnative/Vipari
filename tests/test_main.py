@@ -149,6 +149,59 @@ def test_feedback_form_persists_explicit_feedback_event(tmp_path):
         main.AUDIT_DB_PATH = original_db_path
 
 
+def test_feedback_form_persists_explicit_feedback_event_without_head_sha(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "feedback-form-no-head-sha.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=177,
+            installation_id=123,
+            head_sha="sha-feedback-legacy",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=177,
+            installation_id=123,
+            head_sha="sha-feedback-legacy",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        get_response = client.get("/feedback/pr/doria90/dummyAI/177")
+        assert get_response.status_code == 200
+        assert "Vipari review feedback" in get_response.text
+
+        post_response = client.post(
+            "/feedback/pr/doria90/dummyAI/177",
+            data={
+                "audit_id": str(audit.id),
+                "sentiment": "helpful",
+                "notes": "legacy link still works",
+            },
+        )
+        assert post_response.status_code == 200
+        assert "Thanks. Your feedback was recorded." in post_response.text
+
+        feedback_events = list_audit_feedback_events_for_audit(main.AUDIT_DB_PATH, audit.id)
+        assert len(feedback_events) == 1
+        payload = json.loads(feedback_events[0].payload_json)
+        assert payload["notes"] == "legacy link still works"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+
 def test_feedback_form_rejects_audit_id_for_different_repo(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "feedback-form-cross-repo.db")
