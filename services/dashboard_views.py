@@ -264,9 +264,24 @@ def build_repo_pr_review_routes_payload(
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 20))
     normalized_head_sha = str(head_sha or "").strip()
+    audits = list_pull_request_audits_for_repo(db_path, repo_full)
+    reversed_audits = list(reversed(audits))
+    selected_audit = None
+    if pr_number is not None and pr_number > 0 and normalized_head_sha:
+        selected_audit = next(
+            (audit for audit in reversed_audits if audit.pr_number == pr_number and audit.head_sha == normalized_head_sha),
+            None,
+        )
+    if selected_audit is None and pr_number is not None and pr_number > 0:
+        selected_audit = next((audit for audit in reversed_audits if audit.pr_number == pr_number), None)
+
+    candidate_audits = list(reversed_audits[:safe_limit])
+    if selected_audit is not None and all(audit.id != selected_audit.id for audit in candidate_audits):
+        candidate_audits.insert(0, selected_audit)
+
     route_entries: list[dict[str, Any]] = []
 
-    for audit in reversed(list_pull_request_audits_for_repo(db_path, repo_full)):
+    for audit in candidate_audits:
         comment = get_audit_comment_for_audit(db_path, audit.id)
         feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
         findings = list_findings_for_audit(db_path, audit.id)
@@ -308,7 +323,9 @@ def build_repo_pr_review_routes_payload(
         )
 
     selected_route = None
-    if pr_number is not None and pr_number > 0 and normalized_head_sha:
+    if selected_audit is not None:
+        selected_route = next((entry for entry in route_entries if entry["audit_id"] == selected_audit.id), None)
+    elif pr_number is not None and pr_number > 0 and normalized_head_sha:
         selected_route = next(
             (entry for entry in route_entries if entry["pr_number"] == pr_number and entry["head_sha"] == normalized_head_sha),
             None,
@@ -332,7 +349,7 @@ def build_repo_pr_review_routes_payload(
         "repo_full": repo_full,
         "selected_pr_number": pr_number,
         "selected_head_sha": normalized_head_sha or None,
-        "route_count": len(route_entries),
+        "route_count": len(audits),
         "selected_route": selected_route,
         "routes": trimmed_routes,
     }

@@ -830,6 +830,62 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert approved_rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
 
 
+def test_repo_dashboard_api_keeps_selected_older_pr_route_when_outside_recent_limit(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-routes-older-selection.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    for offset in range(10):
+        record_audit_result(
+            db_path,
+            job_id=200 + offset,
+            repo_full="doria90/dummyAI",
+            pr_number=50 + offset,
+            installation_id=123,
+            head_sha=f"sha-route-{offset}",
+            deterministic_analysis=analyze_diff(PROMPT_DIFF),
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_semantic_review",
+            comment_body=f"## Review {offset}\nSummary: Route {offset} review.",
+            comment_mode="review",
+            semantic_review_completed=True,
+        )
+
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?pr=50&head_sha=sha-route-0",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["pr_review_routes"]["route_count"] == 10
+    assert len(payload["pr_review_routes"]["routes"]) == 8
+    assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 50
+    assert payload["pr_review_routes"]["selected_route"]["head_sha"] == "sha-route-0"
+    assert payload["pr_review_routes"]["routes"][0]["selected"] is True
+    assert payload["pr_review_routes"]["routes"][0]["pr_number"] == 50
+
+
 def test_dashboard_api_local_debug_still_requires_session_for_mutations(tmp_path):
     db_path = str(tmp_path / "api-dashboard-local-debug-mutations.db")
     init_db(db_path)
