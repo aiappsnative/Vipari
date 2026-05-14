@@ -662,6 +662,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         comment_body="## ✅ Vipari: Review complete\nSummary: This earlier route stayed within the approved operating lane.",
         comment_mode="review",
         semantic_review_completed=True,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_MEDIUM},
     )
     record_audit_feedback_event(
         db_path,
@@ -685,6 +686,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         comment_body="## ❌ Vipari: Escalate before merge\nSummary: This PR expands direct refund authority and needs human review.\nRisk Level: High",
         comment_mode="review",
         semantic_review_completed=True,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
     )
     record_audit_feedback_event(
         db_path,
@@ -727,14 +729,22 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["summary"] == "This PR expands direct refund authority and needs human review."
     assert payload["pr_review_routes"]["selected_route"]["review_body"].startswith("## ❌ Vipari: Escalate before merge")
     assert payload["pr_review_routes"]["selected_route"]["review_excerpt"] == "This PR expands direct refund authority and needs human review."
+    assert payload["pr_review_routes"]["selected_route"]["changed_artifact_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["finding_count"] == len(payload["pr_review_routes"]["selected_route"]["top_findings"])
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["reaction_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["helpful_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["outcome_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][0]["title"] == "PR outcome: merged despite warning"
     assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][1]["title"] == "Marked helpful"
+    comparison_summary = payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["summary"]
+    assert comparison_summary["touched_artifact_count"] == 1
+    assert comparison_summary["flagged_artifact_count"] == payload["pr_review_routes"]["selected_route"]["finding_count"]
+    assert comparison_summary["authoritative_baseline_count"] + comparison_summary["fallback_reference_count"] + comparison_summary["missing_baseline_count"] == comparison_summary["touched_artifact_count"]
+    assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["findings_count"] == payload["pr_review_routes"]["selected_route"]["finding_count"]
+    assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["comparison"]["dominant_shifts"]
     assert payload["pr_review_routes"]["routes"][0]["selected"] is True
-    assert payload["pr_review_routes"]["routes"][0]["dashboard_url"].endswith("/dashboard/doria90%2FdummyAI/audit?pr=21&head_sha=sha-relevance-21")
+    assert payload["pr_review_routes"]["routes"][0]["dashboard_url"].endswith("/dashboard/doria90%2FdummyAI?tab=pr-reviews&pr=21&head_sha=sha-relevance-21")
 
 
 def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):

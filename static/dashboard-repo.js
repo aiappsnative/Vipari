@@ -2221,6 +2221,88 @@ function prReviewRouteSeverity(route) {
     return { label: "Tracked", className: "severity-medium" };
 }
 
+function formatSignedDelta(value) {
+    const numeric = Number(value || 0);
+    const sign = numeric > 0 ? "+" : "";
+    return `${sign}${numeric.toFixed(2)}`;
+}
+
+function formatMetricValue(value, digits = 2) {
+    const numeric = Number(value || 0);
+    return Number.isFinite(numeric) ? numeric.toFixed(digits) : "0.00";
+}
+
+function prReviewBaselineStateBadge(baseline) {
+    const state = String(baseline?.state || "none").toLowerCase();
+    const label = baseline?.label || "No baseline yet";
+    let className = "pr-review-baseline-none";
+    if (state === "approved") {
+        className = "pr-review-baseline-approved";
+    } else if (state === "pending") {
+        className = "pr-review-baseline-pending";
+    } else if (state === "rejected") {
+        className = "pr-review-baseline-rejected";
+    }
+    return `<span class="pr-review-baseline-badge ${className}">${escapeHtml(label)}</span>`;
+}
+
+function prReviewMetricCard(label, value, detail, accentClass = "") {
+    return `
+        <article class="pr-review-metric-card ${accentClass}">
+            <div class="pr-review-metric-label">${escapeHtml(label)}</div>
+            <div class="pr-review-metric-value">${escapeHtml(value)}</div>
+            <div class="pr-review-metric-detail">${escapeHtml(detail)}</div>
+        </article>
+    `;
+}
+
+function renderPrReviewArtifactRows(rows) {
+    return asArray(rows).map((row) => {
+        const baseline = row?.baseline || {};
+        const comparison = row?.comparison || {};
+        const dominantShifts = asArray(comparison.dominant_shifts);
+        const narrative = asArray(comparison.narrative);
+        const findingsCount = Number(row?.findings_count || 0);
+        const severityClass = findingsCount
+            ? prReviewRouteSeverity({ risk_level: row?.highest_severity }).className
+            : "severity-low";
+        const severityLabel = findingsCount
+            ? `${findingsCount} finding${findingsCount === 1 ? "" : "s"}`
+            : "No stored findings";
+        return `
+            <tr>
+                <td>
+                    <div class="pr-review-artifact-name">${escapeHtml(row?.artifact_path || "Artifact")}</div>
+                    <div class="pr-review-artifact-meta">${escapeHtml(row?.artifact_family_label || row?.artifact_type || "tracked artifact")}</div>
+                </td>
+                <td>
+                    <div class="stack compact-stack">
+                        ${prReviewBaselineStateBadge(baseline)}
+                        <div class="pr-review-table-subcopy">${escapeHtml(baseline?.provenance_label || "No comparison anchor recorded")}${baseline?.line_count ? ` · ${escapeHtml(String(baseline.line_count))} lines` : ""}</div>
+                    </div>
+                </td>
+                <td>
+                    <div class="pr-review-table-metric">${escapeHtml(formatMetricValue(comparison?.semantic_distance || 0, 2))}</div>
+                    <div class="pr-review-table-subcopy">distance · similarity ${escapeHtml(formatMetricValue(comparison?.semantic_similarity || 0, 2))}</div>
+                </td>
+                <td>
+                    <div class="tag-row">
+                        ${dominantShifts.length ? dominantShifts.map((shift) => `<span class="pr-review-delta-chip">${escapeHtml(shift.label)} ${escapeHtml(formatSignedDelta(shift.delta))}</span>`).join("") : '<span class="pr-review-delta-chip">No strong dimension shift</span>'}
+                    </div>
+                    ${narrative.length ? `<div class="pr-review-table-subcopy">${escapeHtml(narrative[0])}</div>` : ""}
+                </td>
+                <td>
+                    <div class="pr-review-table-metric">+${escapeHtml(String(row?.change_stats?.added_count || 0))} / -${escapeHtml(String(row?.change_stats?.removed_count || 0))}</div>
+                    <div class="pr-review-table-subcopy">${escapeHtml(String(row?.change_stats?.changed_hunks || 0))} diff hunks</div>
+                </td>
+                <td>
+                    <span class="severity-badge ${severityClass}">${escapeHtml(severityLabel)}</span>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
 function renderPrReviewRoutesSection(routePayload) {
     const routes = asArray(routePayload?.routes);
     const selectedRoute = routePayload?.selected_route || routes[0] || null;
@@ -2240,10 +2322,16 @@ function renderPrReviewRoutesSection(routePayload) {
     const selectedFeedback = selectedRoute.feedback || {};
     const topFindings = asArray(selectedRoute.top_findings);
     const recentFeedback = asArray(selectedRoute.recent_feedback);
+    const baselineComparison = selectedRoute.baseline_comparison || {};
+    const comparisonSummary = baselineComparison.summary || {};
+    const comparisonShifts = asArray(baselineComparison.top_dimension_shifts);
+    const artifactRows = asArray(baselineComparison.artifact_rows);
+    const reviewNarrative = [selectedRoute.summary || "", selectedRoute.review_excerpt || ""].filter(Boolean);
     const selectedTags = [
         selectedRoute.short_head_sha ? `head ${selectedRoute.short_head_sha}` : "",
         selectedRoute.output_mode ? String(selectedRoute.output_mode).replaceAll("_", " ") : "",
         selectedRoute.semantic_review_completed ? "semantic review complete" : "fallback review",
+        selectedRoute.changed_artifact_count ? `${selectedRoute.changed_artifact_count} touched artifacts` : "",
         selectedRoute.finding_count ? `${selectedRoute.finding_count} stored findings` : "",
         selectedFeedback.helpful_count ? `${selectedFeedback.helpful_count} helpful` : "",
         selectedFeedback.noisy_count ? `${selectedFeedback.noisy_count} noisy` : "",
@@ -2253,18 +2341,89 @@ function renderPrReviewRoutesSection(routePayload) {
     ].filter(Boolean);
 
     setSectionHtml("repo-pr-review-selected", `
-        <div class="stack compact-stack">
-            <div class="repo-decision-title-row">
-                <strong>PR #${escapeHtml(selectedRoute.pr_number)}</strong>
-                <span class="severity-badge ${selectedSeverity.className}">${escapeHtml(selectedSeverity.label)}</span>
+        <div class="pr-review-layout">
+            <section class="pr-review-hero">
+                <div class="pr-review-hero-kicker">PR intelligence</div>
+                <div class="repo-decision-title-row">
+                    <strong>PR #${escapeHtml(selectedRoute.pr_number)}</strong>
+                    <span class="severity-badge ${selectedSeverity.className}">${escapeHtml(selectedSeverity.label)}</span>
+                </div>
+                <div class="pr-review-hero-meta">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · reviewed ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
+                <div class="pr-review-hero-copy">${escapeHtml(baselineComparison.headline || selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
+                ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+                <div class="pr-review-metric-grid">
+                    ${prReviewMetricCard("Touched artifacts", String(comparisonSummary.touched_artifact_count || selectedRoute.changed_artifact_count || 0), `${comparisonSummary.authoritative_baseline_count || 0} baseline-linked`, "pr-review-metric-strong")}
+                    ${prReviewMetricCard("Line churn", `+${comparisonSummary.total_added_lines || 0} / -${comparisonSummary.total_removed_lines || 0}`, `${comparisonSummary.max_semantic_distance ? `max drift ${formatMetricValue(comparisonSummary.max_semantic_distance, 2)}` : "tracked diff volume"}`)}
+                    ${prReviewMetricCard("Average drift", formatMetricValue(comparisonSummary.avg_semantic_distance || 0, 2), "semantic distance from current anchor")}
+                    ${prReviewMetricCard("Coverage gaps", String(comparisonSummary.missing_baseline_count || 0), `${comparisonSummary.fallback_reference_count || 0} fallback anchors`, comparisonSummary.missing_baseline_count ? "pr-review-metric-warning" : "")}
+                    ${prReviewMetricCard("Flagged artifacts", String(comparisonSummary.flagged_artifact_count || 0), `${selectedFeedback.outcome_count || 0} recorded outcomes`)}
+                </div>
+            </section>
+
+            ${comparisonShifts.length ? `
+                <section class="pr-review-panel">
+                    <div class="pr-review-panel-head">
+                        <div>
+                            <div class="repo-decision-label">Strongest movement</div>
+                            <div class="pr-review-panel-copy">These dimensions moved the furthest relative to the current comparison anchor.</div>
+                        </div>
+                    </div>
+                    <div class="pr-review-shift-grid">
+                        ${comparisonShifts.map((shift) => `
+                            <article class="pr-review-shift-card">
+                                <div class="pr-review-shift-label">${escapeHtml(shift.label)}</div>
+                                <div class="pr-review-shift-value">${escapeHtml(formatSignedDelta(shift.delta))}</div>
+                                <div class="pr-review-shift-copy">${escapeHtml(shift.direction === "increase" ? "moved upward from baseline" : "moved downward from baseline")}</div>
+                            </article>
+                        `).join("")}
+                    </div>
+                </section>
+            ` : ""}
+
+            ${artifactRows.length ? `
+                <section class="pr-review-panel">
+                    <div class="pr-review-panel-head">
+                        <div>
+                            <div class="repo-decision-label">Touched artifacts vs baseline</div>
+                            <div class="pr-review-panel-copy">Read the PR as a set of control-surface changes instead of a single comment body.</div>
+                        </div>
+                    </div>
+                    <div class="pr-review-table-scroll">
+                        <table class="pr-review-table">
+                            <thead>
+                                <tr>
+                                    <th>Artifact</th>
+                                    <th>Baseline anchor</th>
+                                    <th>Drift</th>
+                                    <th>Key shifts</th>
+                                    <th>Change</th>
+                                    <th>Findings</th>
+                                </tr>
+                            </thead>
+                            <tbody>${renderPrReviewArtifactRows(artifactRows)}</tbody>
+                        </table>
+                    </div>
+                </section>
+            ` : ""}
+
+            <div class="pr-review-detail-grid">
+                <section class="pr-review-panel">
+                    <div class="repo-decision-label">Review storyline</div>
+                    <div class="stack compact-stack">
+                        ${reviewNarrative.length ? reviewNarrative.map((note) => `<div class="artifact-card-reason">${escapeHtml(note)}</div>`).join("") : '<div class="muted">Vipari recorded this review episode.</div>'}
+                        ${selectedRoute.review_body ? `<details class="artifact-card"><summary><strong>Full review note</strong></summary><pre class="artifact-card-reason" style="white-space: pre-wrap; margin-top: 0.75rem;">${escapeHtml(selectedRoute.review_body)}</pre></details>` : ""}
+                    </div>
+                </section>
+
+                <section class="pr-review-panel">
+                    <div class="repo-decision-label">Top findings and feedback</div>
+                    <div class="stack compact-stack">
+                        ${topFindings.length ? topFindings.map((finding) => `<div class="artifact-card"><strong>${escapeHtml(finding.title || "Recorded finding")}</strong><div class="artifact-card-reason">${escapeHtml(finding.rationale || "Vipari stored a review finding for this episode.")}</div></div>`).join("") : '<div class="muted">No stored findings were attached to this review episode.</div>'}
+                        ${recentFeedback.length ? `<div class="stack compact-stack pr-review-feedback-stack">${recentFeedback.map((event) => `<div class="artifact-card"><strong>${escapeHtml(event.title || "Recorded feedback")}</strong><div class="artifact-card-reason">${escapeHtml(event.summary || "Vipari stored feedback for this review episode.")}</div></div>`).join("")}</div>` : ""}
+                    </div>
+                </section>
             </div>
-            <div class="muted">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · reviewed ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
-            <div>${escapeHtml(selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
-            ${selectedRoute.review_excerpt ? `<div class="artifact-card-reason">${escapeHtml(selectedRoute.review_excerpt)}</div>` : ""}
-            ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
-            ${selectedRoute.review_body ? `<details class="artifact-card"><summary><strong>Full review note</strong></summary><pre class="artifact-card-reason" style="white-space: pre-wrap; margin-top: 0.75rem;">${escapeHtml(selectedRoute.review_body)}</pre></details>` : ""}
-            ${topFindings.length ? `<div class="stack compact-stack"><div class="repo-decision-label">Top review findings</div>${topFindings.map((finding) => `<div class="artifact-card"><strong>${escapeHtml(finding.title || "Recorded finding")}</strong><div class="artifact-card-reason">${escapeHtml(finding.rationale || "Vipari stored a review finding for this episode.")}</div></div>`).join("")}</div>` : ""}
-            ${recentFeedback.length ? `<div class="stack compact-stack"><div class="repo-decision-label">Feedback loop</div>${recentFeedback.map((event) => `<div class="artifact-card"><strong>${escapeHtml(event.title || "Recorded feedback")}</strong><div class="artifact-card-reason">${escapeHtml(event.summary || "Vipari stored feedback for this review episode.")}</div></div>`).join("")}</div>` : ""}
+
             <div class="export-actions repo-actions-row audit-step-actions">
                 <a href="${escapeHtml(selectedAuditUrl)}" class="cue-action-button">Open selected route</a>
                 <a href="${escapeHtml(selectedRoute.pull_request_url || "#")}" class="cue-action-button">Open GitHub PR</a>
@@ -2283,6 +2442,7 @@ function renderPrReviewRoutesSection(routePayload) {
         const detailBits = [
             route.short_head_sha ? `head ${route.short_head_sha}` : "",
             route.output_mode ? String(route.output_mode).replaceAll("_", " ") : "",
+            route.changed_artifact_count ? `${route.changed_artifact_count} touched` : "",
             feedback.helpful_count ? `${feedback.helpful_count} helpful` : "",
             feedback.reaction_count ? `${feedback.reaction_count} reactions` : "",
         ].filter(Boolean);

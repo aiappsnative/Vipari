@@ -7662,6 +7662,232 @@ body.control-page.compliance-page .compliance-shell-section {
     border-right: none;
 }
 
+#repo-pr-review-routes-section .repo-decision-body {
+    grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
+}
+
+.pr-review-layout {
+    display: grid;
+    gap: 16px;
+}
+
+.pr-review-hero,
+.pr-review-panel {
+    position: relative;
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid rgba(196, 163, 90, 0.18);
+    border-radius: 16px;
+    background:
+        radial-gradient(circle at top left, rgba(196, 163, 90, 0.18), transparent 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.pr-review-hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(135deg, rgba(79, 152, 163, 0.09), transparent 42%, rgba(196, 163, 90, 0.06));
+}
+
+.pr-review-hero > *,
+.pr-review-panel > * {
+    position: relative;
+    z-index: 1;
+}
+
+.pr-review-hero-kicker {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(196, 163, 90, 0.92);
+}
+
+.pr-review-hero-meta,
+.pr-review-panel-copy,
+.pr-review-table-subcopy,
+.pr-review-shift-copy,
+.pr-review-metric-detail {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.pr-review-hero-copy {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    max-width: 70ch;
+}
+
+.pr-review-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.pr-review-metric-card {
+    display: grid;
+    gap: 6px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(5, 11, 16, 0.46);
+    min-height: 112px;
+}
+
+.pr-review-metric-strong {
+    border-color: rgba(79, 152, 163, 0.28);
+    background: linear-gradient(180deg, rgba(79, 152, 163, 0.16), rgba(5, 11, 16, 0.42));
+}
+
+.pr-review-metric-warning {
+    border-color: rgba(196, 163, 90, 0.3);
+    background: linear-gradient(180deg, rgba(196, 163, 90, 0.14), rgba(5, 11, 16, 0.42));
+}
+
+.pr-review-metric-label,
+.pr-review-shift-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.pr-review-metric-value,
+.pr-review-shift-value,
+.pr-review-table-metric {
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+}
+
+.pr-review-panel-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+}
+
+.pr-review-shift-grid,
+.pr-review-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.pr-review-shift-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pr-review-shift-card {
+    display: grid;
+    gap: 6px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.pr-review-table-scroll {
+    overflow-x: auto;
+}
+
+.pr-review-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 940px;
+}
+
+.pr-review-table th,
+.pr-review-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    vertical-align: top;
+    text-align: left;
+}
+
+.pr-review-table th {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.pr-review-artifact-name {
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.pr-review-artifact-meta {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+.pr-review-baseline-badge,
+.pr-review-delta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.pr-review-baseline-approved {
+    border-color: rgba(109, 170, 69, 0.28);
+    color: #8fd062;
+}
+
+.pr-review-baseline-pending {
+    border-color: rgba(196, 163, 90, 0.28);
+    color: #d6b366;
+}
+
+.pr-review-baseline-rejected {
+    border-color: rgba(214, 94, 94, 0.32);
+    color: #f08f8f;
+}
+
+.pr-review-baseline-none {
+    border-color: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+}
+
+.pr-review-feedback-stack {
+    margin-top: 4px;
+}
+
+.repo-audit-page[data-theme="light"] .pr-review-hero,
+.repo-audit-page[data-theme="light"] .pr-review-panel {
+    background:
+        radial-gradient(circle at top left, rgba(196, 163, 90, 0.12), transparent 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 248, 252, 0.92));
+    border-color: rgba(196, 163, 90, 0.18);
+}
+
+.repo-audit-page[data-theme="light"] .pr-review-metric-card,
+.repo-audit-page[data-theme="light"] .pr-review-shift-card,
+.repo-audit-page[data-theme="light"] .pr-review-baseline-badge,
+.repo-audit-page[data-theme="light"] .pr-review-delta-chip {
+    background: rgba(255, 255, 255, 0.78);
+}
+
 .repo-decision-label {
     font-size: 0.72rem;
     font-weight: 600;
@@ -7711,6 +7937,18 @@ body.control-page.compliance-page .compliance-shell-section {
     .repo-decision-body {
         grid-template-columns: 1fr;
     }
+
+    #repo-pr-review-routes-section .repo-decision-body,
+    .pr-review-metric-grid,
+    .pr-review-shift-grid,
+    .pr-review-detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .pr-review-table {
+        min-width: 720px;
+    }
+
     .repo-decision-col {
         border-right: none;
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);

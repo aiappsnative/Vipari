@@ -663,6 +663,7 @@ def _build_pr_comment_dashboard_deep_link(
     artifact_path = (primary_profile.artifact_path if primary_profile is not None else "").strip()
     if artifact_path:
         query_params.append(("artifact", artifact_path))
+    query_params.append(("tab", "pr-reviews"))
     if pr_number is not None and pr_number > 0:
         query_params.append(("pr", str(pr_number)))
     episode_head_sha = (episode_context.head_sha if episode_context is not None else "").strip()

@@ -26,9 +26,11 @@ from .audit_records import (
     RepoStaticDriftSummary,
     get_audit_comment_for_audit,
     get_repo_static_drift_summary,
+    list_changed_artifacts_for_audit,
     list_audit_feedback_events_for_audit,
     list_findings_for_audit,
     list_pull_request_audits_for_repo,
+    list_static_profiles_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
 from .governance_signals import GovernanceAttentionSummary, RepoGovernancePosture, build_overview_governance_attention, build_repo_governance_posture
@@ -56,6 +58,22 @@ _DASHBOARD_CACHE_LOCK = threading.RLock()
 _DASHBOARD_CACHE_MAX_ENTRIES = 128
 _OVERVIEW_VIEW_CACHE: dict[tuple[Any, ...], DashboardOverviewView] = {}
 _REPO_VIEW_CACHE: dict[tuple[Any, ...], RepoDashboardView] = {}
+_PR_REVIEW_DIMENSION_LABELS = {
+    "guardrail_robustness": "Guardrails",
+    "capability_risk": "Capability",
+    "autonomy_level": "Autonomy",
+    "stability_vs_creativity": "Creativity",
+    "governance_strength": "Governance",
+    "change_frequency": "Change pace",
+    "semantic_density": "Semantic density",
+}
+_PR_REVIEW_SEVERITY_RANK = {
+    "critical": 4,
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+    "info": 0,
+}
 
 
 def _db_cache_signature(db_path: str) -> tuple[int, int]:
@@ -107,8 +125,166 @@ def invalidate_dashboard_caches() -> None:
 
 
 def _dashboard_pr_route_url(repo_full: str, pr_number: int, head_sha: str) -> str:
-    query = urlencode({"pr": str(pr_number), "head_sha": head_sha})
-    return f"/dashboard/{quote(repo_full, safe='')}/audit?{query}"
+    query = urlencode({"tab": "pr-reviews", "pr": str(pr_number), "head_sha": head_sha})
+    return f"/dashboard/{quote(repo_full, safe='')}?{query}"
+
+
+def _pr_review_dimension_shift_payload(attribute_deltas: dict[str, float], *, limit: int = 3) -> list[dict[str, Any]]:
+    sorted_dimensions = sorted(
+        ((key, float(value)) for key, value in attribute_deltas.items() if abs(float(value)) >= 0.01),
+        key=lambda item: (-abs(item[1]), item[0]),
+    )
+    payload: list[dict[str, Any]] = []
+    for key, value in sorted_dimensions[:limit]:
+        payload.append(
+            {
+                "key": key,
+                "label": _PR_REVIEW_DIMENSION_LABELS.get(key, key.replace("_", " ").title()),
+                "delta": round(value, 3),
+                "magnitude": round(abs(value), 3),
+                "direction": "increase" if value > 0 else "decrease",
+            }
+        )
+    return payload
+
+
+def _build_pr_review_comparison_headline(*, flagged_artifact_count: int, missing_baseline_count: int, authoritative_count: int) -> str:
+    if missing_baseline_count and authoritative_count == 0:
+        return "Vipari detected meaningful PR movement, but this review is only lightly anchored because the touched artifacts do not have an approved baseline yet."
+    if flagged_artifact_count:
+        return "Vipari found baseline-linked changes that materially moved the operating posture, with flagged artifacts concentrated in the touched control surface."
+    if authoritative_count:
+        return "This PR stays mostly inside the approved baseline lane, with the remaining drift concentrated in a small number of touched artifacts."
+    return "Vipari recorded the touched artifacts and posture shifts for this PR, but baseline coverage is still limited."
+
+
+def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id: int) -> dict[str, Any]:
+    changed_artifacts = list_changed_artifacts_for_audit(db_path, audit_id)
+    findings = list_findings_for_audit(db_path, audit_id)
+    profile_by_changed_artifact_id = {
+        profile.changed_artifact_id: profile
+        for profile in list_static_profiles_for_repo(db_path, repo_full)
+        if profile.audit_id == audit_id
+    }
+    findings_by_changed_artifact_id: dict[int, list[Any]] = {}
+    for finding in findings:
+        if finding.changed_artifact_id is None:
+            continue
+        findings_by_changed_artifact_id.setdefault(finding.changed_artifact_id, []).append(finding)
+
+    onboarding = get_latest_repository_onboarding(db_path, repo_full)
+    latest_baselines_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    approved_baselines_by_path: dict[str, OnboardingBaselineVersionRecord] = {}
+    if onboarding is not None:
+        latest_baselines = select_latest_onboarding_baseline_versions(
+            list_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+        )
+        approved_baselines = select_latest_approved_onboarding_baseline_versions(latest_baselines)
+        latest_baselines_by_path = {baseline.artifact_path: baseline for baseline in latest_baselines}
+        approved_baselines_by_path = {baseline.artifact_path: baseline for baseline in approved_baselines}
+
+    artifact_rows: list[dict[str, Any]] = []
+    semantic_distances: list[float] = []
+    authoritative_count = 0
+    fallback_count = 0
+    missing_baseline_count = 0
+    flagged_artifact_count = 0
+    total_added_lines = 0
+    total_removed_lines = 0
+    aggregate_dimension_deltas = {key: [] for key in _PR_REVIEW_DIMENSION_LABELS}
+
+    for artifact in changed_artifacts:
+        profile = profile_by_changed_artifact_id.get(artifact.id)
+        artifact_findings = findings_by_changed_artifact_id.get(artifact.id, [])
+        approved_baseline = approved_baselines_by_path.get(artifact.artifact_path)
+        latest_baseline = latest_baselines_by_path.get(artifact.artifact_path)
+        provenance = profile.baseline_provenance if profile is not None and profile.baseline_provenance is not None else no_baseline_provenance()
+        if provenance.is_authoritative:
+            authoritative_count += 1
+        elif provenance.source_type != "none":
+            fallback_count += 1
+        else:
+            missing_baseline_count += 1
+
+        findings_count = len(artifact_findings)
+        if findings_count:
+            flagged_artifact_count += 1
+
+        total_added_lines += int(artifact.added_count)
+        total_removed_lines += int(artifact.removed_count)
+        if profile is not None:
+            semantic_distances.append(float(profile.semantic_distance))
+            for key in aggregate_dimension_deltas:
+                aggregate_dimension_deltas[key].append(float(profile.attribute_deltas.get(key, 0.0)))
+
+        highest_severity = max(
+            (str(finding.severity or "info").lower() for finding in artifact_findings),
+            key=lambda item: _PR_REVIEW_SEVERITY_RANK.get(item, -1),
+            default="info",
+        )
+        dominant_shifts = _pr_review_dimension_shift_payload(profile.attribute_deltas if profile is not None else {})
+        baseline_state = approved_baseline.approval_status if approved_baseline is not None else latest_baseline.approval_status if latest_baseline is not None else "none"
+        baseline_label = (
+            "Approved baseline"
+            if approved_baseline is not None
+            else f"{latest_baseline.approval_status.title()} baseline candidate"
+            if latest_baseline is not None
+            else "No baseline yet"
+        )
+        artifact_rows.append(
+            {
+                "artifact_path": artifact.artifact_path,
+                "artifact_type": artifact.artifact_type,
+                "artifact_family_label": artifact_provenance_label(artifact.artifact_type).label,
+                "change_stats": {
+                    "changed_hunks": int(artifact.changed_hunks),
+                    "added_count": int(artifact.added_count),
+                    "removed_count": int(artifact.removed_count),
+                },
+                "findings_count": findings_count,
+                "highest_severity": highest_severity,
+                "baseline": {
+                    "state": baseline_state,
+                    "label": baseline_label,
+                    "is_authoritative": bool(provenance.is_authoritative),
+                    "provenance_label": provenance.label,
+                    "line_count": approved_baseline.line_count if approved_baseline is not None else latest_baseline.line_count if latest_baseline is not None else None,
+                },
+                "comparison": {
+                    "semantic_distance": round(float(profile.semantic_distance), 3) if profile is not None else 0.0,
+                    "semantic_similarity": round(float(profile.semantic_similarity), 3) if profile is not None else 0.0,
+                    "dominant_shifts": dominant_shifts,
+                    "narrative": list(profile.narrative[:2]) if profile is not None else [],
+                },
+            }
+        )
+
+    top_dimension_shifts = _pr_review_dimension_shift_payload(
+        {key: _average(values) for key, values in aggregate_dimension_deltas.items() if values},
+        limit=4,
+    )
+
+    return {
+        "headline": _build_pr_review_comparison_headline(
+            flagged_artifact_count=flagged_artifact_count,
+            missing_baseline_count=missing_baseline_count,
+            authoritative_count=authoritative_count,
+        ),
+        "summary": {
+            "touched_artifact_count": len(artifact_rows),
+            "flagged_artifact_count": flagged_artifact_count,
+            "authoritative_baseline_count": authoritative_count,
+            "fallback_reference_count": fallback_count,
+            "missing_baseline_count": missing_baseline_count,
+            "total_added_lines": total_added_lines,
+            "total_removed_lines": total_removed_lines,
+            "avg_semantic_distance": _average(semantic_distances),
+            "max_semantic_distance": round(max(semantic_distances), 4) if semantic_distances else 0.0,
+            "approved_baseline_artifact_count": len(approved_baselines_by_path),
+        },
+        "top_dimension_shifts": top_dimension_shifts,
+        "artifact_rows": artifact_rows,
+    }
 
 
 def _extract_pr_review_summary(comment_body: str | None, risk_level: str | None, status: str) -> str:
@@ -285,6 +461,7 @@ def build_repo_pr_review_routes_payload(
         comment = get_audit_comment_for_audit(db_path, audit.id)
         feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
         findings = list_findings_for_audit(db_path, audit.id)
+        changed_artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
         route_entries.append(
             {
                 "audit_id": audit.id,
@@ -306,6 +483,7 @@ def build_repo_pr_review_routes_payload(
                 ),
                 "review_body": str(comment.comment_body or "").strip() if comment is not None else None,
                 "review_excerpt": _extract_pr_review_excerpt(comment.comment_body if comment is not None else None),
+                "changed_artifact_count": len(changed_artifacts),
                 "finding_count": len(findings),
                 "top_findings": [
                     {
@@ -344,6 +522,8 @@ def build_repo_pr_review_routes_payload(
     trimmed_routes = prioritized_routes[:safe_limit]
     for entry in trimmed_routes:
         entry["selected"] = bool(selected_route is not None and entry["audit_id"] == selected_route["audit_id"])
+        if selected_route is not None and entry["audit_id"] == selected_route["audit_id"]:
+            entry["baseline_comparison"] = _build_pr_review_baseline_comparison(db_path, repo_full, entry["audit_id"])
 
     return {
         "repo_full": repo_full,
