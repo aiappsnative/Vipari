@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict
 import time
+from urllib.error import HTTPError, URLError
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -199,18 +200,27 @@ def create_repo_onboarding_router(
 		installation_id = auth_context.get("repo_installation_id")
 		if installation_id is None:
 			raise HTTPException(status_code=404, detail="Repository installation was not found.")
-		jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
-		token = get_installation_token_fn(jwt_token, int(installation_id))
 		db_path = resolve_db_path_fn()
 		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 		tracked_paths = {item.artifact_path for item in dashboard.artifacts}
 		onboarding = dashboard.onboarding
 		ref = onboarding.default_branch if onboarding is not None else None
-		file_paths = list_repository_files_fn(repo_full, token, ref=ref)
+		file_paths: list[str] = []
+		inventory_available = False
+		inventory_error = None
+		try:
+			jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+			token = get_installation_token_fn(jwt_token, int(installation_id))
+			file_paths = list_repository_files_fn(repo_full, token, ref=ref)
+			inventory_available = True
+		except (HTTPError, URLError, OSError, ValueError) as exc:
+			inventory_error = str(exc)
 		return JSONResponse(
 			{
 				"repo_full": repo_full,
 				"default_branch": ref,
+				"inventory_available": inventory_available,
+				"inventory_error": inventory_error,
 				"tracked_paths": sorted(tracked_paths),
 				"artifact_type_options": tracked_artifact_type_options_fn(),
 				"files": [

@@ -1277,6 +1277,21 @@ function formatDateLabel(timestamp) {
     }
 }
 
+function journeyCardTimestamp(snapshot, isSelectedBaseline = false) {
+    const approvedAt = Number(snapshot?.input_summary?.approved_at || 0);
+    const lastBaselineAt = Number(snapshot?.input_summary?.last_baseline_at || 0);
+    const createdAt = Number(snapshot?.created_at || 0);
+    if (isSelectedBaseline || snapshot?.snapshot_type === "baseline_approved") {
+        if (Number.isFinite(approvedAt) && approvedAt > 0) {
+            return approvedAt;
+        }
+        if (Number.isFinite(lastBaselineAt) && lastBaselineAt > 0) {
+            return lastBaselineAt;
+        }
+    }
+    return createdAt;
+}
+
 function storylineRiskClass(episode) {
     if (episode?.episode_type === "baseline_milestone" || episode?.source_type === "baseline_promotion") {
         return "storyline-risk-baseline";
@@ -1430,10 +1445,10 @@ function renderCueCards(items = []) {
         <div class="artifact-card">
             <div class="artifact-card-head">
                 <strong>${escapeHtml(item.label)}</strong>
-                <span class="tag tag-muted">${asArray(item.artifact_paths).length}</span>
+                ${asArray(item.artifact_paths).length ? `<span class="tag tag-muted">${asArray(item.artifact_paths).length}</span>` : ""}
             </div>
             <div class="artifact-card-reason">${escapeHtml(item.summary)}</div>
-            <div class="tag-row">${asArray(item.artifact_paths).map((artifactPath) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifactPath)}">${escapeHtml(artifactPath)}</button>`).join("")}</div>
+            ${asArray(item.artifact_paths).length ? `<div class="tag-row">${asArray(item.artifact_paths).map((artifactPath) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifactPath)}">${escapeHtml(artifactPath)}</button>`).join("")}</div>` : ""}
         </div>
     `).join("")}</div>`;
 }
@@ -2038,6 +2053,7 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
 function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null) {
     const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
     const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
+    const displayTimestamp = journeyCardTimestamp(snapshot, isSelectedBaseline);
     const source = snapshot.source_url
         ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
         : escapeHtml(snapshot.source_ref || "Stored checkpoint");
@@ -2055,7 +2071,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             <div class="artifact-card-head">
                 <div>
                     <strong>${escapeHtml(isSelectedBaseline ? "Approved baseline" : snapshotTypeLabel(snapshot.snapshot_type))}</strong>
-                    <div class="artifact-card-type">${escapeHtml(formatDateLabel(snapshot.created_at))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+                    <div class="artifact-card-type">${escapeHtml(formatDateLabel(displayTimestamp))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
                 </div>
                 <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
             </div>

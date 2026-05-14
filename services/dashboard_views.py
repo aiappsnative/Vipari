@@ -4086,6 +4086,16 @@ def _build_repo_history_cues(
     if not artifacts:
         return []
 
+    if not any(artifact.historical_profile_count > 0 or artifact.pr_profile_count > 0 for artifact in artifacts):
+        return [
+            RepoHistoryCue(
+                cue_key="history_bootstrap_pending",
+                label="History bootstrap pending",
+                summary="Version Journey is currently showing only the approved baseline and current posture because no historical backfill or merged PR evidence has been materialized yet.",
+                artifact_paths=[],
+            )
+        ]
+
     repeated_candidates = sorted(
         [artifact for artifact in artifacts if artifact.historical_profile_count >= 2],
         key=lambda artifact: (-artifact.historical_profile_count, -artifact.latest_historical_drift_magnitude, artifact.artifact_path),

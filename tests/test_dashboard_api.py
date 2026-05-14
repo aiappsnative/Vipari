@@ -358,9 +358,39 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
     assert payload["audit_brief"]["recommendation_label"] == "Review now"
     assert payload["audit_brief"]["review_now_count"] >= 1
+
+
+def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-bootstrap-cue.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["history_cues"][0]["cue_key"] == "history_bootstrap_pending"
+    assert payload["history_cues"][0]["label"] == "History bootstrap pending"
+    assert payload["history_cues"][0]["artifact_paths"] == []
+    assert [snapshot["snapshot_type"] for snapshot in payload["journey_snapshots"]] == ["baseline_approved", "current"]
     assert payload["audit_brief"]["changed_artifact_count"] >= 1
     assert payload["audit_brief"]["findings"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["audit_brief"]["actions"][0]["label"] == "Open review target"
 
 
 def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path):

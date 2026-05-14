@@ -4,11 +4,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .audit_records import list_pull_request_audits_for_repo, list_static_profiles_for_repo
-from .baseline_provenance import BaselineProvenance, approved_onboarding_provenance
+from .baseline_provenance import BaselineProvenance, approved_onboarding_provenance, baseline_provenance_from_json
 from .onboarding_records import (
     OnboardingBaselineVersionRecord,
     get_latest_repository_onboarding,
     list_effective_onboarding_baseline_versions_for_onboarding,
+    list_baseline_audit_log_for_onboarding,
     list_historical_static_profiles_for_repo,
     list_latest_approved_onboarding_baseline_versions_for_onboarding,
     list_latest_onboarding_baseline_versions_for_onboarding,
@@ -27,7 +28,7 @@ from .repo_journey_records import (
 )
 
 
-REPO_JOURNEY_MATERIALIZER_VERSION = 2
+REPO_JOURNEY_MATERIALIZER_VERSION = 6
 
 
 def _repo_snapshot_key(repo_full: str, snapshot_key: str) -> str:
@@ -95,6 +96,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     latest_baseline_versions = list_latest_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
     effective_baseline_versions = list_effective_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
     latest_approved_baseline_versions = list_latest_approved_onboarding_baseline_versions_for_onboarding(db_path, onboarding.id)
+    baseline_audit_logs = list_baseline_audit_log_for_onboarding(db_path, onboarding.id)
     baseline_by_path = {baseline.artifact_path: baseline for baseline in effective_baseline_versions}
 
     merged_audits = {
@@ -132,6 +134,15 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     pending_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "pending")
     rejected_latest_count = sum(1 for baseline in latest_baseline_versions if baseline.approval_status == "rejected")
     baseline_verified = bool(latest_paths) and approved_latest_count == len(latest_paths) and onboarding.status == "baseline_approved"
+    baseline_anchor_at = _resolve_baseline_snapshot_anchor_timestamp(
+        onboarding,
+        effective_baseline_versions,
+    )
+    baseline_approved_at = _resolve_baseline_snapshot_timestamp(
+        onboarding,
+        latest_approved_baseline_versions,
+        effective_baseline_versions,
+    )
     tracked_count = len(latest_paths)
     # classify critical artifacts by artifact_type hints
     def _is_critical_type(artifact_type: str) -> bool:
@@ -159,7 +170,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             repo_full=repo_full,
             snapshot_key=_repo_snapshot_key(repo_full, "baseline-approved"),
             snapshot_type="baseline_approved",
-            created_at=0.0,
+            created_at=baseline_anchor_at,
             commit_sha=None,
             pr_number=None,
             author=None,
@@ -178,14 +189,14 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                     "pending_baseline_count": pending_latest_count,
                     "rejected_baseline_count": rejected_latest_count,
                     "approved_by": onboarding.approved_by,
-                    "approved_at": onboarding.approved_at,
+                    "approved_at": baseline_approved_at,
                     "tracked_count": tracked_count,
                     "coverage_percent": coverage_percent,
                     "critical_artifact_count": critical_artifact_count,
                     "approved_critical_count": approved_critical_count,
                     "critical_coverage_percent": critical_coverage_percent,
                     "drifting_artifact_count": 0,
-                    "last_baseline_at": onboarding.approved_at,
+                    "last_baseline_at": baseline_approved_at,
                 },
         )
         snapshot_keys.add(baseline_snapshot.snapshot_key)
@@ -275,17 +286,55 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             )
 
     current_state = dict(baseline_state)
-    for bucket in sorted(events_by_key.values(), key=lambda item: (item["created_at"], item["snapshot_key"])):
-        for event in sorted(bucket["events"], key=lambda item: (item.artifact_path, item.created_at)):
-            current_state[event.artifact_path] = _ArtifactState(
-                artifact_path=event.artifact_path,
-                artifact_type=event.artifact_type,
-                profile=event.profile,
-                source_type=event.snapshot_type,
-                source_ref=event.source_ref,
-                source_url=event.source_url,
-                baseline_provenance=event.baseline_provenance,
-            )
+    timeline_buckets: list[dict[str, Any]] = list(events_by_key.values())
+    for audit_log in baseline_audit_logs:
+        if audit_log.action != "approve_repo_baseline" or audit_log.snapshot_id is None:
+            continue
+        source_snapshot = get_repo_posture_snapshot(db_path, audit_log.snapshot_id)
+        if source_snapshot is not None and source_snapshot.repo_full != repo_full:
+            source_snapshot = None
+        timeline_buckets.append(
+            {
+                "snapshot_key": _repo_snapshot_key(repo_full, f"baseline-promotion:{audit_log.id}"),
+                "snapshot_type": "baseline_promotion",
+                "created_at": float(audit_log.created_at),
+                "commit_sha": source_snapshot.commit_sha if source_snapshot is not None else None,
+                "pr_number": source_snapshot.pr_number if source_snapshot is not None else None,
+                "author": audit_log.actor_login or (source_snapshot.author if source_snapshot is not None else None),
+                "source_ref": (
+                    f"Baseline approved by @{audit_log.actor_login}"
+                    if audit_log.actor_login
+                    else "Baseline approved"
+                ),
+                "source_url": source_snapshot.source_url if source_snapshot is not None else None,
+                "events": [],
+                "historical_event_count": 0,
+                "merged_event_count": 0,
+                "artifact_state": (
+                    _artifact_state_from_snapshot_payload(source_snapshot.artifact_state)
+                    if source_snapshot is not None
+                    else dict(baseline_state)
+                ),
+                "approved_by": audit_log.actor_login or onboarding.approved_by,
+                "approved_at": float(audit_log.created_at),
+                "last_baseline_at": float(audit_log.created_at),
+            }
+        )
+
+    for bucket in sorted(timeline_buckets, key=lambda item: (item["created_at"], item["snapshot_key"])):
+        artifact_state = bucket.get("artifact_state")
+        if artifact_state is None:
+            for event in sorted(bucket["events"], key=lambda item: (item.artifact_path, item.created_at)):
+                current_state[event.artifact_path] = _ArtifactState(
+                    artifact_path=event.artifact_path,
+                    artifact_type=event.artifact_type,
+                    profile=event.profile,
+                    source_type=event.snapshot_type,
+                    source_ref=event.source_ref,
+                    source_url=event.source_url,
+                    baseline_provenance=event.baseline_provenance,
+                )
+            artifact_state = current_state
 
         snapshot = _persist_snapshot(
             db_path,
@@ -299,7 +348,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
             default_branch=onboarding.default_branch,
             source_ref=bucket["source_ref"],
             source_url=bucket["source_url"],
-            artifact_state=current_state,
+            artifact_state=artifact_state,
             previous_snapshot=previous_snapshot,
             baseline_snapshot=baseline_snapshot,
             input_summary={
@@ -310,15 +359,15 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 "approved_baseline_count": approved_latest_count,
                 "pending_baseline_count": pending_latest_count,
                 "rejected_baseline_count": rejected_latest_count,
-                "approved_by": onboarding.approved_by,
-                "approved_at": onboarding.approved_at,
+                "approved_by": bucket.get("approved_by", onboarding.approved_by),
+                "approved_at": bucket.get("approved_at", baseline_approved_at),
                 "tracked_count": tracked_count,
                 "coverage_percent": coverage_percent,
                 "critical_artifact_count": critical_artifact_count,
                 "approved_critical_count": approved_critical_count,
                 "critical_coverage_percent": critical_coverage_percent,
                 "drifting_artifact_count": 0,
-                "last_baseline_at": onboarding.approved_at,
+                "last_baseline_at": bucket.get("last_baseline_at", baseline_approved_at),
             },
         )
         snapshot_keys.add(snapshot.snapshot_key)
@@ -354,14 +403,14 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                     "pending_baseline_count": pending_latest_count,
                     "rejected_baseline_count": rejected_latest_count,
                     "approved_by": onboarding.approved_by,
-                    "approved_at": onboarding.approved_at,
+                    "approved_at": baseline_approved_at,
                     "tracked_count": tracked_count,
                     "coverage_percent": coverage_percent,
                     "critical_artifact_count": critical_artifact_count,
                     "approved_critical_count": approved_critical_count,
                     "critical_coverage_percent": critical_coverage_percent,
                     "drifting_artifact_count": 0,
-                    "last_baseline_at": onboarding.approved_at,
+                    "last_baseline_at": baseline_approved_at,
                 },
             )
             snapshot_keys.add(current_snapshot.snapshot_key)
@@ -374,6 +423,42 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
 
 def build_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSnapshotRecord]:
     return materialize_repo_journey(db_path, repo_full)
+
+
+def _resolve_baseline_snapshot_timestamp(
+    onboarding,
+    latest_approved_baseline_versions: list[OnboardingBaselineVersionRecord],
+    effective_baseline_versions: list[OnboardingBaselineVersionRecord],
+) -> float:
+    candidates: list[float] = []
+    if onboarding.approved_at is not None and onboarding.approved_at > 0:
+        candidates.append(float(onboarding.approved_at))
+    for baseline in latest_approved_baseline_versions:
+        if baseline.approved_at is not None and baseline.approved_at > 0:
+            candidates.append(float(baseline.approved_at))
+    for baseline in effective_baseline_versions:
+        if baseline.approval_status == "approved" and baseline.created_at > 0:
+            candidates.append(float(baseline.created_at))
+    if onboarding.updated_at > 0:
+        candidates.append(float(onboarding.updated_at))
+    if onboarding.created_at > 0:
+        candidates.append(float(onboarding.created_at))
+    return max(candidates) if candidates else 1.0
+
+
+def _resolve_baseline_snapshot_anchor_timestamp(
+    onboarding,
+    effective_baseline_versions: list[OnboardingBaselineVersionRecord],
+) -> float:
+    candidates: list[float] = []
+    for baseline in effective_baseline_versions:
+        if baseline.created_at > 0:
+            candidates.append(float(baseline.created_at))
+    if onboarding.created_at > 0:
+        candidates.append(float(onboarding.created_at))
+    if onboarding.updated_at > 0:
+        candidates.append(float(onboarding.updated_at))
+    return min(candidates) if candidates else 1.0
 
 
 def _latest_repo_journey_source_timestamp(
@@ -389,6 +474,10 @@ def _latest_repo_journey_source_timestamp(
             "SELECT MAX(created_at) AS max_created_at FROM onboarding_baseline_versions WHERE onboarding_id = ?",
             (onboarding_id,),
         ).fetchone()
+        baseline_log_row = conn.execute(
+            "SELECT MAX(created_at) AS max_created_at FROM baseline_audit_log WHERE onboarding_id = ?",
+            (onboarding_id,),
+        ).fetchone()
         historical_row = conn.execute(
             "SELECT MAX(created_at) AS max_created_at FROM historical_static_profiles WHERE normalized_artifact_id LIKE ?",
             (normalized_id_prefix,),
@@ -402,7 +491,7 @@ def _latest_repo_journey_source_timestamp(
             """,
             (repo_full,),
         ).fetchone()
-    for row in (baseline_row, historical_row, pr_row):
+    for row in (baseline_row, baseline_log_row, historical_row, pr_row):
         if row is None or row["max_created_at"] is None:
             continue
         latest_source_update = max(latest_source_update, float(row["max_created_at"]))
@@ -500,7 +589,7 @@ def _persist_snapshot(
     change_summary = _build_change_summary(previous_state, _artifact_state_payload(artifact_state))
     change_breakdown = _build_change_breakdown(previous_state, _artifact_state_payload(artifact_state))
     baseline_state = baseline_snapshot.artifact_state if baseline_snapshot is not None else {}
-    distance_from_baseline = 0.0 if snapshot_type == "baseline_approved" else _vector_distance(
+    distance_from_baseline = 0.0 if snapshot_type in {"baseline_approved", "baseline_promotion"} else _vector_distance(
         baseline_snapshot.attribute_vector if baseline_snapshot is not None else {},
         vector,
     )
@@ -518,7 +607,7 @@ def _persist_snapshot(
         "distance_from_baseline": distance_from_baseline,
         "changed_since_baseline": (
             _build_change_breakdown(baseline_state, _artifact_state_payload(artifact_state))
-            if snapshot_type != "baseline_approved"
+            if snapshot_type not in {"baseline_approved", "baseline_promotion"}
             else _build_change_breakdown(_artifact_state_payload(artifact_state), _artifact_state_payload(artifact_state))
         ),
     }
@@ -611,6 +700,24 @@ def _artifact_state_payload(artifact_state: dict[str, _ArtifactState]) -> dict[s
             "baseline_provenance": asdict(state.baseline_provenance) if state.baseline_provenance is not None else None,
         }
     return payload
+
+
+def _artifact_state_from_snapshot_payload(artifact_state: dict[str, dict[str, object]]) -> dict[str, _ArtifactState]:
+    restored: dict[str, _ArtifactState] = {}
+    for artifact_path, state in sorted((artifact_state or {}).items()):
+        profile = state.get("profile") if isinstance(state, dict) else {}
+        restored[artifact_path] = _ArtifactState(
+            artifact_path=artifact_path,
+            artifact_type=str((state or {}).get("artifact_type") or "unknown"),
+            profile={key: float(value) for key, value in dict(profile or {}).items()},
+            source_type=str((state or {}).get("source_type") or "checkpoint"),
+            source_ref=((state or {}).get("source_ref") if isinstance(state, dict) else None),
+            source_url=((state or {}).get("source_url") if isinstance(state, dict) else None),
+            baseline_provenance=baseline_provenance_from_json((state or {}).get("baseline_provenance")) if isinstance((state or {}).get("baseline_provenance"), str) else (
+                BaselineProvenance(**(state or {}).get("baseline_provenance")) if isinstance((state or {}).get("baseline_provenance"), dict) else None
+            ),
+        )
+    return restored
 
 
 def _build_attribute_vector(artifact_state: dict[str, _ArtifactState]) -> dict[str, float]:

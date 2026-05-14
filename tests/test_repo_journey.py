@@ -8,7 +8,13 @@ from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
-from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail
+from services.onboarding_records import record_baseline_audit_log
+from services.repo_journey import (
+    REPO_JOURNEY_MATERIALIZER_VERSION,
+    build_repo_journey,
+    compare_repo_snapshots,
+    get_repo_snapshot_detail,
+)
 from services.repo_journey_records import list_repo_posture_snapshots_for_repo
 
 
@@ -117,8 +123,68 @@ def test_build_repo_journey_materializes_meaningful_snapshots(tmp_path):
     assert any(snapshot.snapshot_type == "historical_commit" for snapshot in snapshots)
     assert any(snapshot.snapshot_type == "merge" for snapshot in snapshots)
     assert snapshots[0].artifact_coverage["artifact_count"] == 1
+    assert snapshots[0].created_at > 0
+    assert snapshots[-1].commit_sha is not None
     assert snapshots[-1].distance_from_baseline >= snapshots[1].distance_from_baseline
     assert snapshots[-1].drift_summary["changed_since_baseline"]["critical_surfaces_changed"] >= 1
+
+
+def test_build_repo_journey_uses_positive_timestamps_for_baseline_only_timeline(tmp_path):
+    db_path = str(tmp_path / "journey-baseline-timestamps.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+
+    assert [snapshot.snapshot_type for snapshot in snapshots] == ["baseline_approved", "current"]
+    assert snapshots[0].created_at > 0
+    assert snapshots[0].input_summary["approved_at"] > 0
+    assert snapshots[-1].created_at > snapshots[0].created_at
+
+
+def test_build_repo_journey_materializes_approved_baseline_promotions_as_checkpoints(tmp_path):
+    db_path = str(tmp_path / "journey-baseline-promotion.db")
+    init_db(db_path)
+
+    onboarding_result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    initial_snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+    current_snapshot = next(snapshot for snapshot in initial_snapshots if snapshot.snapshot_type == "current")
+
+    record_baseline_audit_log(
+        db_path,
+        repo_full="doria90/dummyAI",
+        onboarding_id=onboarding_result.onboarding.id,
+        artifact_path=None,
+        action="approve_repo_baseline",
+        decision_type="human_review_approved",
+        actor_login="owner",
+        note="Approve the selected checkpoint.",
+        snapshot_id=current_snapshot.id,
+    )
+
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+
+    assert [snapshot.snapshot_type for snapshot in snapshots] == ["baseline_approved", "baseline_promotion", "current"]
+    assert snapshots[1].created_at > snapshots[0].created_at
+    assert snapshots[1].commit_sha == current_snapshot.commit_sha
+    assert snapshots[1].input_summary["approved_by"] == "owner"
 
 
 def test_repo_journey_init_skips_sqlite_rebuild_logic_for_postgres(monkeypatch):
@@ -211,7 +277,7 @@ def test_build_repo_journey_reuses_current_persisted_snapshots(tmp_path):
     build_repo_journey(db_path, "doria90/dummyAI")
     persisted_snapshots = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
     assert persisted_snapshots
-    assert all(snapshot.materializer_version == 2 for snapshot in persisted_snapshots)
+    assert all(snapshot.materializer_version == REPO_JOURNEY_MATERIALIZER_VERSION for snapshot in persisted_snapshots)
 
     with patch(
         "services.repo_journey.list_onboarded_artifacts_for_onboarding",

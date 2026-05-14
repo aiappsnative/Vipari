@@ -573,6 +573,8 @@ Useful JSON endpoints:
 - `POST /api/repos/{owner/repo}/backfill`
 - `POST /api/repos/{owner/repo}/artifacts/{artifact_path}/baseline`
 
+Repo onboarding now plans and executes history backfill by default for the onboarded repo, using a bounded window of 5 commits per tracked artifact unless the caller explicitly overrides or disables that behavior.
+
 When using the split API service, these dashboard and JSON routes require the configured `API_ADMIN_TOKEN` via `Authorization: Bearer ...` or `X-Admin-Token`.
 
 Operational note:

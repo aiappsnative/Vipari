@@ -5,9 +5,9 @@ from pydantic import BaseModel
 
 class RepositoryOnboardingRequest(BaseModel):
 	installation_id: int
-	commit_limit_per_artifact: int = 10
+	commit_limit_per_artifact: int = 5
 	plan_backfill: bool = True
-	execute_backfill: bool = False
+	execute_backfill: bool = True
 
 
 class RepositoryBackfillRequest(BaseModel):

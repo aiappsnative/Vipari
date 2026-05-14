@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -574,6 +575,85 @@ def test_onboard_api_rejects_installation_mismatch(tmp_path):
     assert response.json()["detail"] == "Installation mismatch for workspace access."
 
 
+def test_onboard_api_executes_backfill_by_default(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-default-onboard.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    session = _seed_repo_dashboard_access(tmp_path, session_id="operator-default-onboard-session")
+    onboarding_result = RepositoryOnboardingResult(
+        onboarding=RepositoryOnboardingRecord(
+            id=1,
+            repo_full="doria90/dummyAI",
+            installation_id=123,
+            default_branch="main",
+            status="baseline_approved",
+            discovered_artifact_count=1,
+            approved_by=None,
+            approved_at=None,
+            created_at=1.0,
+            updated_at=1.0,
+        ),
+        artifacts=[
+            OnboardedArtifactRecord(
+                id=1,
+                onboarding_id=1,
+                repo_full="doria90/dummyAI",
+                artifact_path="prompts/system.txt",
+                artifact_type="prompt",
+                discovery_reason="Detected",
+                confidence=0.9,
+                created_at=1.0,
+            )
+        ],
+        baseline_versions=[],
+    )
+    backfill_job = HistoricalBackfillJobRecord(
+        id=1,
+        onboarding_id=1,
+        onboarded_artifact_id=1,
+        repo_full="doria90/dummyAI",
+        artifact_path="prompts/system.txt",
+        artifact_type="prompt",
+        job_kind="history_backfill",
+        status="completed",
+        commit_count=2,
+        completed_commit_count=2,
+        commit_shas=["sha-2", "sha-1"],
+        last_error=None,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.onboard_repository", return_value=onboarding_result), patch(
+        "main.plan_repository_history_backfill", return_value=[backfill_job]
+    ) as plan_backfill_mock, patch(
+        "main.execute_repository_history_backfill",
+        return_value=[HistoricalBackfillExecutionResult(job=backfill_job, versions=[], profiles=[])],
+    ), patch("main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")):
+        with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
+            response = client.post(
+                "/api/repos/doria90/dummyAI/onboard",
+                json={
+                    "installation_id": 123,
+                },
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["planned_backfill_job_count"] == 1
+    assert payload["executed_backfill_job_count"] == 1
+    plan_backfill_mock.assert_called_once_with(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        token="installation-token",
+        commit_limit_per_artifact=5,
+    )
+
+
 def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-options.db")
@@ -601,6 +681,39 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     assert "policies/usage.md" in file_paths
     assert inferred_types["policies/usage.md"] == "policy"
     assert "prompt" in payload["artifact_type_options"]
+
+
+def test_repo_artifact_options_api_returns_empty_inventory_when_installation_lookup_fails(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-options-missing-installation.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    session = _seed_repo_dashboard_access(tmp_path, session_id="artifact-options-fallback-session")
+    installation_error = HTTPError(
+        url="https://api.github.com/app/installations/123/access_tokens",
+        code=404,
+        msg="Not Found",
+        hdrs=None,
+        fp=None,
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", side_effect=installation_error
+    ), patch(
+        "main.list_repository_files"
+    ) as list_repository_files_mock, patch(
+        "main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")
+    ):
+        with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
+            response = client.get("/api/repos/doria90%2FdummyAI/artifacts/options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["inventory_available"] is False
+    assert payload["inventory_error"] == "HTTP Error 404: Not Found"
+    assert payload["files"] == []
+    list_repository_files_mock.assert_not_called()
 
 
 def test_repo_artifact_mutation_apis_return_refreshed_dashboard(tmp_path):
