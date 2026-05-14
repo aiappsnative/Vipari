@@ -13,7 +13,6 @@ function resolveRepoFull() {
     const encodedRepoFull = pathname
         .slice(prefix.length)
         .replace(/^\/+|\/+$/g, "")
-        .replace(/\/audit\/pr-reviews$/i, "")
         .replace(/\/audit$/i, "");
     if (!encodedRepoFull) {
         return "";
@@ -236,16 +235,8 @@ function repoDetailUrl(repo) {
 function repoTabUrl(tab, options = {}) {
     const normalizedTab = String(tab || "").trim().toLowerCase();
     const isAuditTab = normalizedTab === "audit";
-    const isPrReviewsTab = normalizedTab === "pr-reviews";
-    const url = new URL(
-        isAuditTab
-            ? `/dashboard/${encodeURIComponent(repoFull)}/audit`
-            : isPrReviewsTab
-                ? `/dashboard/${encodeURIComponent(repoFull)}/audit/pr-reviews`
-                : `/dashboard/${encodeURIComponent(repoFull)}`,
-        window.location.origin,
-    );
-    if (normalizedTab && !isAuditTab && !isPrReviewsTab) {
+    const url = new URL(isAuditTab ? `/dashboard/${encodeURIComponent(repoFull)}/audit` : `/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
+    if (normalizedTab && !isAuditTab) {
         url.searchParams.set("tab", tab);
     }
     const artifactPath = options.artifactPath || requestedArtifactPath();

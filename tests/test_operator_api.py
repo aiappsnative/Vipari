@@ -851,7 +851,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert 'data-repo-tab-link="audit"' in repo_response.text
     assert 'data-repo-tab-link="pr-reviews"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
-    assert 'href="/dashboard/doria90%2FdummyAI/audit/pr-reviews"' in repo_response.text
+    assert 'href="/dashboard/doria90%2FdummyAI?tab=pr-reviews"' in repo_response.text
     assert 'id="artifact-add-controls"' in repo_response.text
     assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
@@ -901,17 +901,17 @@ def test_dashboard_repo_audit_route_renders_active_tab(tmp_path):
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in response.text
 
 
-def test_dashboard_repo_pr_reviews_route_renders_active_tab(tmp_path):
+def test_dashboard_repo_pr_reviews_tab_renders_active_tab(tmp_path):
     main.AUDIT_WORKER_ENABLED = False
     main.AUDIT_DB_PATH = str(tmp_path / "operator-pr-reviews.db")
 
     with TestClient(main.app) as client:
-        response = client.get("/dashboard/doria90/dummyAI/audit/pr-reviews")
+        response = client.get("/dashboard/doria90/dummyAI?tab=pr-reviews")
 
     assert response.status_code == 200
     assert 'data-active-repo-tab="pr-reviews"' in response.text
     assert 'data-repo-tab-link="pr-reviews"' in response.text
-    assert 'href="/dashboard/doria90%2FdummyAI/audit/pr-reviews"' in response.text
+    assert 'href="/dashboard/doria90%2FdummyAI?tab=pr-reviews"' in response.text
 
 
 def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):

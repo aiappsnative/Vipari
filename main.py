@@ -4301,10 +4301,6 @@ async def dashboard_repo_audit_page(request: Request, repo_full: str, artifact: 
     return await _render_dashboard_repo_page(request, repo_full, requested_tab="audit", artifact=artifact, pr=pr, head_sha=head_sha)
 
 
-async def dashboard_repo_pr_reviews_page(request: Request, repo_full: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
-    return await _render_dashboard_repo_page(request, repo_full, requested_tab="pr-reviews", artifact=artifact, pr=pr, head_sha=head_sha)
-
-
 async def _render_dashboard_repo_page(request: Request, repo_full: str, *, requested_tab: str, artifact: str | None = None, pr: str | None = None, head_sha: str | None = None):
     request_started = time.perf_counter()
     timing_metrics: list[tuple[str, float]] = []
@@ -4462,7 +4458,6 @@ app.include_router(
         dashboard_index_handler=dashboard_index_page,
         dashboard_repo_handler=dashboard_repo_page,
         dashboard_repo_audit_handler=dashboard_repo_audit_page,
-        dashboard_repo_pr_reviews_handler=dashboard_repo_pr_reviews_page,
     )
 )
 
