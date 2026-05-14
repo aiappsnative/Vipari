@@ -1274,7 +1274,7 @@ def _sidebar_profile_initial(*, display_name: str | None = None, github_login: s
     return "V"
 
 
-def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
+def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True) -> list[dict[str, object]]:
     workspace = get_workspace_by_id(AUDIT_DB_PATH, workspace_id)
     workspace_mode = workspace.pr_feedback_mode if workspace is not None else "comments"
     connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace_id)
@@ -1290,6 +1290,13 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
         status = "Available"
         if allocation is not None:
             status = "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated"
+        effective_mode_label = {
+            "comments": "Comments",
+            "reviews": "Reviews",
+            "off": "Off",
+        }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode if allocation is not None else None), "Comments")
+        if not pr_feedback_allowed:
+            effective_mode_label = "Off (plan gated)"
         rows.append(
             {
                 "repo_full": connection.repo_full,
@@ -1304,11 +1311,7 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
                     if allocation is not None
                     else "Not allocated"
                 ),
-                "effective_feedback_mode_label": {
-                    "comments": "Comments",
-                    "reviews": "Reviews",
-                    "off": "Off",
-                }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode if allocation is not None else None), "Comments"),
+                "effective_feedback_mode_label": effective_mode_label,
             }
         )
         seen_repo_fulls.add(connection.repo_full)
@@ -1316,6 +1319,13 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
     for repo_full, allocation in allocations.items():
         if repo_full in seen_repo_fulls:
             continue
+        effective_mode_label = {
+            "comments": "Comments",
+            "reviews": "Reviews",
+            "off": "Off",
+        }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode), "Comments")
+        if not pr_feedback_allowed:
+            effective_mode_label = "Off (plan gated)"
         rows.append(
             {
                 "repo_full": repo_full,
@@ -1326,11 +1336,7 @@ def _workspace_repo_rows(workspace_id: int) -> list[dict[str, object]]:
                 "allocation_id": allocation.id,
                 "repo_feedback_mode_override": allocation.pr_feedback_mode,
                 "repo_feedback_mode_override_label": {"comments": "Comments only", "reviews": "Formal reviews", "off": "Off"}.get(allocation.pr_feedback_mode, "Inherit workspace default"),
-                "effective_feedback_mode_label": {
-                    "comments": "Comments",
-                    "reviews": "Reviews",
-                    "off": "Off",
-                }.get(resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode), "Comments"),
+                "effective_feedback_mode_label": effective_mode_label,
             }
         )
 
@@ -2520,6 +2526,7 @@ async def settings_page(request: Request):
     membership = access_context["membership"]
     installation = access_context["installation"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
+    pr_feedback_allowed = _workspace_pr_comments_allowed_by_plan(access_context)
     return HTMLResponse(
         render_control_plane_settings_page(
             workspace_name=workspace.display_name,
@@ -2530,12 +2537,12 @@ async def settings_page(request: Request):
             ),
             resolution=access_context["resolution"],
             csrf_token=access_context["session"].csrf_secret,
-            pr_comments_allowed_by_plan=_workspace_pr_comments_allowed_by_plan(access_context),
+            pr_comments_allowed_by_plan=pr_feedback_allowed,
             pr_feedback_mode=workspace.pr_feedback_mode,
             can_manage=bool(membership and membership.role in {"owner", "admin"}),
             workspace_role=membership.role if membership else "viewer",
             workspace_members=_workspace_member_rows(workspace.id),
-            repo_rows=_workspace_repo_rows(workspace.id),
+            repo_rows=_workspace_repo_rows(workspace.id, pr_feedback_allowed=pr_feedback_allowed),
             next_payment_at=subscription.next_payment_at if subscription else None,
             subscription_status=subscription.status if subscription else None,
             setup_state=workspace.setup_state,

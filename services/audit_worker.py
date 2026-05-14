@@ -32,7 +32,7 @@ from .audit_records import (
     get_previous_audit_comment_episode_for_pr,
     record_audit_result,
 )
-from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id
+from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
 from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
@@ -1136,6 +1136,14 @@ def _post_review_for_job(
     installation_token: str | None = None,
 ) -> int:
     token = installation_token or _get_installation_token_for_job(job, settings)
+    existing_comment = get_audit_comment_episode_for_pr_head_sha(
+        settings.db_path,
+        job.repo_full,
+        job.pr_number,
+        job.head_sha,
+    )
+    if existing_comment is not None and existing_comment.audit_comment.github_review_id is not None:
+        return existing_comment.audit_comment.github_review_id
     return create_pr_review(
         job.repo_full,
         job.pr_number,
@@ -1239,6 +1247,11 @@ def _resolve_job_pr_feedback_mode(job: AuditJob, settings: WorkerSettings) -> st
     if allocation is None:
         return resolve_pr_feedback_mode(None, None)
     workspace = get_workspace_by_id(settings.db_path, allocation.workspace_id)
+    if workspace is not None and not workspace.pr_comments_setting_enabled:
+        return PR_FEEDBACK_MODE_OFF
+    entitlement = get_workspace_entitlement(settings.db_path, allocation.workspace_id)
+    if entitlement is not None and not entitlement.pr_comments_enabled:
+        return PR_FEEDBACK_MODE_OFF
     workspace_mode = workspace.pr_feedback_mode if workspace is not None else None
     return resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode)
 

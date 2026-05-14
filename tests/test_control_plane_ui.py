@@ -1708,6 +1708,114 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_settings_page_repo_effective_mode_reflects_plan_gating(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-plan-gating.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+        update_workspace_pr_feedback_mode,
+    )
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="933",
+        github_login="settings-plan-gated-owner",
+        display_name="Settings Plan Gated Owner",
+        primary_email="settings@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-plan-gated-workspace",
+        display_name="Settings Plan Gated Workspace",
+        billing_owner_user_id=user.id,
+    )
+    update_workspace_pr_feedback_mode(main.AUDIT_DB_PATH, workspace.id, pr_feedback_mode="reviews")
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-plan-gated-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-plan-gated",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="base44:subscription:settings-plan-gated-owner",
+        stripe_price_id="base44:plan:starter",
+        plan_code="starter",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "starter",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": False,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        account_id="78",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        repositories=[
+            {"repo_github_id": "2", "repo_full": "doria90/settings-plan-gated-repo", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12346,
+        repo_github_id="2",
+        repo_full="doria90/settings-plan-gated-repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+
+    response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Unavailable" in response.text
+    assert "Off (plan gated)" in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_settings_page_can_queue_github_login_invite(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "settings-invite.db")
