@@ -839,6 +839,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "audit page" in repo_text
     assert "audit brief" in repo_text
     assert "pr review routes" in repo_text
+    assert "overview" in repo_text
+    assert "pr reviews" in repo_text
     assert "governance attention" in repo_text
     assert "loading eu ai act, soc 2, and iso 27001 governance guidance" in repo_text
     assert "attribute profile" in repo_text
@@ -867,6 +869,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "renderRepoAtlasCard" in index_js_response.text
     assert repo_js_response.status_code == 200
     assert "function repoTabUrl" in repo_js_response.text
+    assert "function applyAuditSubtabVisibility" in repo_js_response.text
+    assert "function bindAuditSubtabControls" in repo_js_response.text
     assert "function renderPrReviewRoutesSection" in repo_js_response.text
     assert "Feedback loop" in repo_js_response.text
     assert "Full review note" in repo_js_response.text

@@ -27,6 +27,7 @@ function resolveRepoFull() {
 
 const repoFull = resolveRepoFull();
 const VALID_REPO_TABS = new Set(["audit", "drift", "version-control", "baseline", "compliance", "reports"]);
+const VALID_AUDIT_SUBTABS = new Set(["overview", "pr-reviews"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -63,6 +64,20 @@ function resolveRepoTab() {
 
 const activeRepoTab = resolveRepoTab();
 window.__activeRepoTab = activeRepoTab;
+
+function resolveAuditSubtab() {
+    const params = new URLSearchParams(window.location.search);
+    const requestedSubtab = (params.get("audit_view") || "").trim().toLowerCase();
+    if (VALID_AUDIT_SUBTABS.has(requestedSubtab)) {
+        return requestedSubtab;
+    }
+    if (activeRepoTab === "audit" && (deepLinkPullRequestNumber() || deepLinkHeadSha())) {
+        return "pr-reviews";
+    }
+    return "overview";
+}
+
+window.__activeAuditSubtab = resolveAuditSubtab();
 
 function storylinePanelCopy() {
     if (activeRepoTab === "audit") {
@@ -172,6 +187,56 @@ function applyRepoTabVisibility() {
             return;
         }
         element.removeAttribute("aria-current");
+    });
+}
+
+function applyAuditSubtabVisibility() {
+    const activeAuditSubtab = window.__activeAuditSubtab || "overview";
+    document.body.dataset.activeAuditSubtab = activeAuditSubtab;
+
+    document.querySelectorAll("[data-audit-subtab-panel]").forEach((element) => {
+        const supportedSubtabs = String(element.getAttribute("data-audit-subtab-panel") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+        element.hidden = activeRepoTab !== "audit" || (supportedSubtabs.length > 0 && !supportedSubtabs.includes(activeAuditSubtab));
+    });
+
+    document.querySelectorAll("[data-audit-subtab-link]").forEach((element) => {
+        const subtab = element.getAttribute("data-audit-subtab-link") || "";
+        if (subtab === activeAuditSubtab) {
+            element.setAttribute("aria-current", "page");
+            return;
+        }
+        element.removeAttribute("aria-current");
+    });
+}
+
+function setActiveAuditSubtab(nextSubtab) {
+    const normalizedSubtab = String(nextSubtab || "").trim().toLowerCase();
+    if (!VALID_AUDIT_SUBTABS.has(normalizedSubtab)) {
+        return;
+    }
+    window.__activeAuditSubtab = normalizedSubtab;
+    applyAuditSubtabVisibility();
+
+    const url = new URL(window.location.href);
+    if (normalizedSubtab === "overview") {
+        url.searchParams.delete("audit_view");
+    } else {
+        url.searchParams.set("audit_view", normalizedSubtab);
+    }
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function bindAuditSubtabControls() {
+    document.querySelectorAll("[data-audit-subtab-link]").forEach((element) => {
+        if (element.dataset.boundAuditSubtab === "true") {
+            return;
+        }
+        element.dataset.boundAuditSubtab = "true";
+        element.addEventListener("click", () => {
+            setActiveAuditSubtab(element.getAttribute("data-audit-subtab-link") || "overview");
+        });
     });
 }
 
@@ -297,11 +362,12 @@ function renderAuditBrief(brief) {
             </div>
         </div>
     `);
-    setSectionHtml("repo-audit-brief-actions", `
+    const briefActions = asArray(brief.actions).filter((action) => !String(action?.label || "").toLowerCase().includes("open audit"));
+    setSectionHtml("repo-audit-brief-actions", briefActions.length ? `
         <div class="export-actions repo-actions-row">
-            ${asArray(brief.actions).map((action) => `<a href="${escapeHtml(action.href || "#")}" class="${action.style === "primary" ? "export-submit-button" : "cue-action-button"}">${escapeHtml(action.label || "Open")}</a>`).join("")}
+            ${briefActions.map((action) => `<a href="${escapeHtml(action.href || "#")}" class="${action.style === "primary" ? "export-submit-button" : "cue-action-button"}">${escapeHtml(action.label || "Open")}</a>`).join("")}
         </div>
-    `);
+    ` : '<div class="muted">—</div>');
     setSectionHtml("repo-audit-brief-findings", asArray(brief.findings).length ? asArray(brief.findings).map((finding) => `
         <div class="artifact-card">
             <strong>${escapeHtml(finding.title || finding.artifact_path || "Finding")}</strong>

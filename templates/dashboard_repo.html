@@ -110,7 +110,14 @@
                 </div>
             </section>
             <main class="page-scroll" id="top">
-                <section class="card-shell repo-tab-panel repo-audit-brief-shell" id="repo-audit-brief-section" aria-label="Audit brief" data-repo-tab-panel="audit">
+                <section class="card-shell repo-tab-panel" id="repo-audit-subtab-section" aria-label="Audit section navigation" data-repo-tab-panel="audit">
+                    <section class="repo-audit-anchor-bar" aria-label="Audit sections">
+                        <button type="button" class="repo-audit-anchor" data-audit-subtab-link="overview">Overview</button>
+                        <button type="button" class="repo-audit-anchor" data-audit-subtab-link="pr-reviews">PR reviews</button>
+                    </section>
+                </section>
+
+                <section class="card-shell repo-tab-panel repo-audit-brief-shell" id="repo-audit-brief-section" aria-label="Audit brief" data-repo-tab-panel="audit" data-audit-subtab-panel="overview">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Audit brief</span>
@@ -143,7 +150,7 @@
                     </div>
                 </section>
 
-                <section class="card-shell repo-tab-panel repo-decision-shell" id="repo-pr-review-routes-section" aria-label="PR review routes" data-repo-tab-panel="audit">
+                <section class="card-shell repo-tab-panel repo-decision-shell" id="repo-pr-review-routes-section" aria-label="PR review routes" data-repo-tab-panel="audit" data-audit-subtab-panel="pr-reviews">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">PR review routes</span>
@@ -168,7 +175,7 @@
                     </div>
                 </section>
 
-                <section class="repo-decision-section card-shell repo-tab-panel repo-decision-shell" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="audit">
+                <section class="repo-decision-section card-shell repo-tab-panel repo-decision-shell" id="repo-decision-section" aria-label="Decision summary" data-repo-tab-panel="audit" data-audit-subtab-panel="overview">
                     <div class="repo-decision-header">
                         <div class="repo-decision-title-row">
                             <span class="repo-decision-title">Decision</span>
