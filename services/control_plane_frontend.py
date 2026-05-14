@@ -375,17 +375,45 @@ def _render_workspace_member_invite_form(*, csrf_token: str, invite_enabled: boo
     '''
 
 
-def _render_workspace_repos_table(repo_rows: list[dict[str, object]]) -> str:
+def _render_workspace_repos_table(repo_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
     rows = [
         [
             f'<a class="link" href="{html_escape(str(repo.get("href") or "#"))}">{html_escape(str(repo.get("repo_full") or "Unknown"))}</a>',
             html_escape(str(repo.get("status") or "Unknown")),
             html_escape(str(repo.get("branch") or "unknown")),
             html_escape(str(repo.get("visibility") or "Private")),
+            html_escape(str(repo.get("effective_feedback_mode_label") or "Comments")),
+            _render_repo_feedback_mode_control(repo, csrf_token=csrf_token, can_manage=can_manage),
         ]
         for repo in repo_rows
     ]
-    return _render_table(["Repository", "Status", "Default branch", "Visibility"], rows)
+    return _render_table(["Repository", "Status", "Default branch", "Visibility", "Effective mode", "Repo override"], rows)
+
+
+def _render_repo_feedback_mode_control(repo: dict[str, object], *, csrf_token: str, can_manage: bool) -> str:
+    allocation_id = repo.get("allocation_id")
+    if allocation_id in {None, ""}:
+        return '<span class="member-toolbar-note">Override available after allocation.</span>'
+
+    selected_override = str(repo.get("repo_feedback_mode_override") or "").strip().lower()
+    effective_label = html_escape(str(repo.get("effective_feedback_mode_label") or "Comments"))
+    override_summary = html_escape(str(repo.get("repo_feedback_mode_override_label") or "Inherit workspace default"))
+    disabled = "disabled" if not can_manage else ""
+    manage_note = "Only workspace owners and admins can change this override." if not can_manage else f"Currently {override_summary}. Effective: {effective_label}."
+    return f'''
+        <form method="post" action="/settings/repositories/feedback-mode" class="member-toolbar-form">
+            {_csrf_input(csrf_token)}
+            <input type="hidden" name="allocation_id" value="{html_escape(str(allocation_id))}" />
+            <select class="control-page-select member-toolbar-select" name="pr_feedback_mode" {disabled}>
+                <option value="inherit" {"selected" if not selected_override else ""}>Inherit workspace default</option>
+                <option value="comments" {"selected" if selected_override == "comments" else ""}>Comments only</option>
+                <option value="reviews" {"selected" if selected_override == "reviews" else ""}>Formal reviews</option>
+                <option value="off" {"selected" if selected_override == "off" else ""}>Off</option>
+            </select>
+            <button type="submit" class="control-page-button" {disabled}>Save</button>
+            <span class="member-toolbar-note">{manage_note}</span>
+        </form>
+    '''
 
 
 def _admin_sidebar_item(admin_url: str | None) -> str:
@@ -959,7 +987,7 @@ def render_control_plane_settings_page(
     resolution: WorkspaceAccessResolution,
     csrf_token: str,
     pr_comments_allowed_by_plan: bool,
-    pr_comments_setting_enabled: bool,
+    pr_feedback_mode: str,
     can_manage: bool,
     workspace_role: str,
     workspace_members: list[dict[str, object]],
@@ -974,12 +1002,18 @@ def render_control_plane_settings_page(
     sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_settings.html")
-    effective_status = pr_comments_allowed_by_plan and pr_comments_setting_enabled
-    status_copy = status_note or "Manage workspace-wide comment behavior for pull requests."
+    effective_status = pr_comments_allowed_by_plan and pr_feedback_mode != "off"
+    status_copy = status_note or "Manage workspace-wide PR feedback behavior for pull requests."
     if not pr_comments_allowed_by_plan:
-        status_copy = "Your current plan does not permit PR comments, so this setting will not take effect until comments are included in the workspace entitlement."
+        status_copy = "Your current plan does not permit PR feedback on GitHub pull requests, so this setting will not take effect until that entitlement is available."
     manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
     billing_link = '<a class="control-page-button" href="/billing">Open billing</a>'
+    workspace_mode_label = {
+        "comments": "Comments",
+        "reviews": "Reviews",
+        "off": "Off",
+    }.get(pr_feedback_mode, "Comments")
+    effective_mode_label = workspace_mode_label if effective_status else "Off"
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
@@ -988,17 +1022,18 @@ def render_control_plane_settings_page(
         .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{STATUS_NOTE}}", html_escape(status_copy))
         .replace("{{WORKSPACE_NAME_INPUT}}", html_escape(workspace_name))
-        .replace("{{PR_COMMENTS_ON_CHECKED}}", "checked" if pr_comments_setting_enabled else "")
-        .replace("{{PR_COMMENTS_OFF_CHECKED}}", "checked" if not pr_comments_setting_enabled else "")
+        .replace("{{PR_FEEDBACK_MODE_COMMENTS_CHECKED}}", "checked" if pr_feedback_mode == "comments" else "")
+        .replace("{{PR_FEEDBACK_MODE_REVIEWS_CHECKED}}", "checked" if pr_feedback_mode == "reviews" else "")
+        .replace("{{PR_FEEDBACK_MODE_OFF_CHECKED}}", "checked" if pr_feedback_mode == "off" else "")
         .replace("{{PR_COMMENTS_DISABLED}}", "disabled" if not can_manage else "")
         .replace("{{PLAN_PR_COMMENTS_STATUS}}", "Included" if pr_comments_allowed_by_plan else "Unavailable")
-        .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", "On" if pr_comments_setting_enabled else "Off")
-        .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", "Active" if effective_status else "Paused")
+        .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", html_escape(workspace_mode_label))
+        .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", html_escape(effective_mode_label if effective_status else "Paused"))
         .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
         .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
         .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
         .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_list(workspace_members))
-        .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows))
+        .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows, csrf_token=csrf_token, can_manage=can_manage))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))
         .replace("{{SETUP_STATE}}", html_escape(_setup_state_label(setup_state)))

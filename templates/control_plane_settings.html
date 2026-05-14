@@ -77,34 +77,42 @@
                         <div class="secondary-panel-title">Workspace identity</div>
                         <h2 class="control-page-section-title">Workspace settings</h2>
                         <p class="control-page-copy">{{STATUS_NOTE}}</p>
-                        <p class="control-page-copy">{{WORKSPACE_PERMISSION}} access. Current plan: {{PLAN_LABEL}}. Owners and edit users can rename the workspace and manage repository comment behavior from one place.</p>
+                        <p class="control-page-copy">{{WORKSPACE_PERMISSION}} access. Current plan: {{PLAN_LABEL}}. Owners and edit users can rename the workspace and manage repository PR feedback behavior from one place.</p>
                         <form method="post" action="/settings" class="control-page-form">
                             {{CSRF_INPUT}}
                             <label class="control-page-label" for="workspace-name">Workspace name</label>
                             <input class="control-page-input" id="workspace-name" name="workspace_name" value="{{WORKSPACE_NAME_INPUT}}" maxlength="120" />
                             <div class="control-page-form-divider"></div>
                             <div class="secondary-panel-title">Workspace controls</div>
-                            <h2 class="control-page-section-title">PR comments</h2>
-                            <p class="control-page-copy">Control whether Vipari posts PR review comments for repositories allocated to this workspace. Turning this off pauses new PR comment activity without changing your billing plan.</p>
+                            <h2 class="control-page-section-title">PR feedback mode</h2>
+                            <p class="control-page-copy">Control how Vipari writes back to GitHub pull requests for repositories allocated to this workspace. Audits and dashboards continue to run even when output is configured differently.</p>
                             <fieldset class="control-page-choice-group" aria-labelledby="pr-comments-picker-title">
-                                <legend class="control-page-label" id="pr-comments-picker-title">PR comments</legend>
+                                <legend class="control-page-label" id="pr-comments-picker-title">PR feedback mode</legend>
                                 <div class="control-page-choice-grid">
                                     <label class="control-page-choice">
-                                        <input type="radio" name="pr_comments_setting" value="on" {{PR_COMMENTS_ON_CHECKED}} {{PR_COMMENTS_DISABLED}} />
+                                        <input type="radio" name="pr_feedback_mode" value="comments" {{PR_FEEDBACK_MODE_COMMENTS_CHECKED}} {{PR_COMMENTS_DISABLED}} />
                                         <span class="control-page-choice-card">
-                                            <span class="control-page-choice-title">On</span>
-                                            <span class="control-page-choice-copy">New pull requests can receive Vipari review comments when the workspace entitlement allows it.</span>
+                                            <span class="control-page-choice-title">Comments only</span>
+                                            <span class="control-page-choice-copy">Vipari posts managed advisory PR comments when the workspace entitlement allows it.</span>
                                         </span>
                                     </label>
                                     <label class="control-page-choice">
-                                        <input type="radio" name="pr_comments_setting" value="off" {{PR_COMMENTS_OFF_CHECKED}} {{PR_COMMENTS_DISABLED}} />
+                                        <input type="radio" name="pr_feedback_mode" value="reviews" {{PR_FEEDBACK_MODE_REVIEWS_CHECKED}} {{PR_COMMENTS_DISABLED}} />
+                                        <span class="control-page-choice-card">
+                                            <span class="control-page-choice-title">Formal reviews</span>
+                                            <span class="control-page-choice-copy">Vipari participates as a GitHub reviewer and can request changes or leave a formal review comment.</span>
+                                        </span>
+                                    </label>
+                                    <label class="control-page-choice">
+                                        <input type="radio" name="pr_feedback_mode" value="off" {{PR_FEEDBACK_MODE_OFF_CHECKED}} {{PR_COMMENTS_DISABLED}} />
                                         <span class="control-page-choice-card">
                                             <span class="control-page-choice-title">Off</span>
-                                            <span class="control-page-choice-copy">Pause new PR comments for this workspace. Existing records and dashboards stay available.</span>
+                                            <span class="control-page-choice-copy">Pause new PR output from Vipari for this workspace. Existing records and dashboards stay available.</span>
                                         </span>
                                     </label>
                                 </div>
                             </fieldset>
+                            <p class="control-page-copy">Formal reviews can be combined with GitHub branch protection rules when you want Vipari to participate as a required reviewer.</p>
                             <p class="control-page-copy">{{MANAGE_NOTE}}</p>
                             <button type="submit" class="control-page-button" {{PR_COMMENTS_DISABLED}}>Save settings</button>
                         </form>
@@ -118,11 +126,11 @@
                                 <strong>{{PLAN_PR_COMMENTS_STATUS}}</strong>
                             </div>
                             <div class="control-page-meta-card">
-                                <span class="control-page-meta-label">Workspace toggle</span>
+                                <span class="control-page-meta-label">Workspace mode</span>
                                 <strong>{{WORKSPACE_PR_COMMENTS_STATUS}}</strong>
                             </div>
                             <div class="control-page-meta-card">
-                                <span class="control-page-meta-label">Effective status</span>
+                                <span class="control-page-meta-label">Effective mode</span>
                                 <strong>{{EFFECTIVE_PR_COMMENTS_STATUS}}</strong>
                             </div>
                             <div class="control-page-meta-card">

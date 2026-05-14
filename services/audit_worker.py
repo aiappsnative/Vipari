@@ -32,8 +32,10 @@ from .audit_records import (
     get_previous_audit_comment_episode_for_pr,
     record_audit_result,
 )
-from .github_integration import fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
+from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id
+from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
+from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
 
 
 @dataclass(frozen=True)
@@ -1125,6 +1127,24 @@ def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *,
     )
 
 
+def _post_review_for_job(
+    job: AuditJob,
+    body: str,
+    event: str,
+    settings: WorkerSettings,
+    *,
+    installation_token: str | None = None,
+) -> int:
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    return create_pr_review(
+        job.repo_full,
+        job.pr_number,
+        token,
+        body,
+        event=event,
+    )
+
+
 def _apply_escalation_label_for_job(
     job: AuditJob,
     recommendation: EscalationRecommendation,
@@ -1180,7 +1200,9 @@ def _persist_audit_result(
     fused_confidence: str | None = None,
     error_message: str | None = None,
     github_comment_id: int | None = None,
+    github_review_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
+    pr_feedback_mode: str | None = None,
 ) -> None:
     record_audit_result(
         settings.db_path,
@@ -1199,6 +1221,7 @@ def _persist_audit_result(
         status=status,
         completion_mode=completion_mode,
         output_mode=output_mode,
+        pr_feedback_mode=pr_feedback_mode,
         comment_body=comment_body,
         comment_mode=comment_mode,
         semantic_review_completed=semantic_review_completed,
@@ -1207,7 +1230,30 @@ def _persist_audit_result(
         error_message=error_message,
         artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
+        github_review_id=github_review_id,
     )
+
+
+def _resolve_job_pr_feedback_mode(job: AuditJob, settings: WorkerSettings) -> str:
+    allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+    if allocation is None:
+        return resolve_pr_feedback_mode(None, None)
+    workspace = get_workspace_by_id(settings.db_path, allocation.workspace_id)
+    workspace_mode = workspace.pr_feedback_mode if workspace is not None else None
+    return resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode)
+
+
+def _review_event_for_risk_level(risk_level: str) -> str | None:
+    normalized_risk = _normalize_risk_level(risk_level)
+    if normalized_risk == "High":
+        return "REQUEST_CHANGES"
+    if normalized_risk == "Medium":
+        return "COMMENT"
+    return None
+
+
+def _review_comment_mode(event: str) -> str:
+    return "review_request_changes" if event == "REQUEST_CHANGES" else "review_comment"
 
 
 def _handle_fallback(
@@ -1218,7 +1264,9 @@ def _handle_fallback(
     error_message: str,
     artifact_snapshots: dict[str, str] | None = None,
     escalation_recommendation: EscalationRecommendation | None = None,
+    pr_feedback_mode: str | None = None,
 ) -> str:
+    effective_feedback_mode = pr_feedback_mode or _resolve_job_pr_feedback_mode(job, settings)
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
     comment_attribute_profiles = _build_comment_attribute_profiles(
@@ -1236,6 +1284,109 @@ def _handle_fallback(
         repo_full=job.repo_full,
         pr_number=job.pr_number,
     )
+    if effective_feedback_mode == PR_FEEDBACK_MODE_OFF:
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="completed",
+                completion_mode="completed",
+                output_mode="suppressed",
+                comment_body=None,
+                comment_mode=None,
+                semantic_review_completed=False,
+                error_message=error_message,
+                artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=effective_feedback_mode,
+            )
+        except Exception as persist_exc:
+            combined_error = f"{error_message}; persistence failed during silent fallback: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+            return "failed"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=None)
+        return "completed"
+    if effective_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
+        review_event = _review_event_for_risk_level(deterministic_analysis.suggested_risk_level.value)
+        github_review_id = None
+        combined_error_message = error_message
+        if review_event is not None:
+            try:
+                installation_token = _get_installation_token_for_job(job, settings)
+                github_review_id = _post_review_for_job(
+                    job,
+                    fallback_comment,
+                    review_event,
+                    settings,
+                    installation_token=installation_token,
+                )
+            except Exception as fallback_exc:
+                combined_error = f"{error_message}; fallback review failed: {type(fallback_exc).__name__}: {fallback_exc}"
+                try:
+                    _persist_audit_result(
+                        job,
+                        deterministic_analysis,
+                        settings,
+                        status="failed",
+                        completion_mode="failed",
+                        output_mode="no_comment",
+                        comment_body=None,
+                        comment_mode=None,
+                        semantic_review_completed=False,
+                        error_message=combined_error,
+                        artifact_snapshots=artifact_snapshots,
+                        pr_feedback_mode=effective_feedback_mode,
+                    )
+                except Exception as persist_exc:
+                    combined_error = f"{combined_error}; persistence failed: {type(persist_exc).__name__}: {persist_exc}"
+                mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+                return "failed"
+        else:
+            installation_token = _get_installation_token_for_job(job, settings)
+
+        try:
+            _apply_escalation_label_for_job(
+                job,
+                recommendation,
+                settings,
+                installation_token=installation_token,
+            )
+        except Exception as label_exc:
+            combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="fallback_posted" if review_event is not None else "completed",
+                completion_mode="fallback_posted" if review_event is not None else "completed",
+                output_mode="preliminary_review_fallback" if review_event is not None else "suppressed",
+                comment_body=fallback_comment if review_event is not None else None,
+                comment_mode=_review_comment_mode(review_event) if review_event is not None else None,
+                semantic_review_completed=False,
+                error_message=combined_error_message,
+                github_review_id=github_review_id,
+                artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=effective_feedback_mode,
+            )
+        except Exception as persist_exc:
+            combined_error = f"{combined_error_message}; persistence failed after fallback review path: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+            return "failed"
+
+        if review_event is not None:
+            mark_job_fallback_posted(
+                settings.db_path,
+                job.id,
+                comment_body=fallback_comment,
+                error_message=combined_error_message,
+            )
+            return "fallback_posted"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=None)
+        return "completed"
     try:
         installation_token = _get_installation_token_for_job(job, settings)
         github_comment_id = _post_comment_for_job(job, fallback_comment, settings, installation_token=installation_token)
@@ -1254,6 +1405,7 @@ def _handle_fallback(
                 semantic_review_completed=False,
                 error_message=combined_error,
                 artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=effective_feedback_mode,
             )
         except Exception as persist_exc:
             combined_error = (
@@ -1287,6 +1439,7 @@ def _handle_fallback(
             error_message=combined_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
+            pr_feedback_mode=effective_feedback_mode,
         )
     except Exception as persist_exc:
         combined_error = (
@@ -1310,6 +1463,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
+    pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
     try:
         comment_body = build_llm_comment(
             job.diff_text,
@@ -1339,7 +1493,96 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
             escalation_recommendation=escalation_recommendation,
+            pr_feedback_mode=pr_feedback_mode,
         )
+
+    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="completed",
+                completion_mode="completed",
+                output_mode="suppressed",
+                comment_body=None,
+                comment_mode=None,
+                semantic_review_completed=True,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                error_message=None,
+                artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=pr_feedback_mode,
+            )
+        except Exception as persist_exc:
+            error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=error_message)
+            return "failed"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=None)
+        return "completed"
+    if pr_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
+        review_event = _review_event_for_risk_level(fusion_assessment.risk_level)
+        github_review_id = None
+        installation_token = _get_installation_token_for_job(job, settings)
+
+        if review_event is not None:
+            try:
+                github_review_id = _post_review_for_job(
+                    job,
+                    comment_body,
+                    review_event,
+                    settings,
+                    installation_token=installation_token,
+                )
+            except Exception as exc:
+                error_message = f"{type(exc).__name__}: {exc}"
+                return _handle_fallback(
+                    job,
+                    settings,
+                    deterministic_analysis,
+                    error_message=error_message,
+                    artifact_snapshots=artifact_snapshots,
+                    escalation_recommendation=escalation_recommendation,
+                    pr_feedback_mode=pr_feedback_mode,
+                )
+
+        audit_error_message = None
+        try:
+            _apply_escalation_label_for_job(
+                job,
+                fusion_assessment.escalation_recommendation,
+                settings,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
+
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="completed",
+                completion_mode="completed",
+                output_mode="formal_review" if review_event is not None else "suppressed",
+                comment_body=comment_body if review_event is not None else None,
+                comment_mode=_review_comment_mode(review_event) if review_event is not None else None,
+                semantic_review_completed=True,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                error_message=audit_error_message,
+                github_review_id=github_review_id,
+                artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=pr_feedback_mode,
+            )
+        except Exception as persist_exc:
+            error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=error_message)
+            return "failed"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=comment_body if review_event is not None else None)
+        return "completed"
 
     try:
         installation_token = _get_installation_token_for_job(job, settings)
@@ -1353,6 +1596,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             error_message=error_message,
             artifact_snapshots=artifact_snapshots,
             escalation_recommendation=escalation_recommendation,
+            pr_feedback_mode=pr_feedback_mode,
         )
 
     audit_error_message = None
@@ -1382,6 +1626,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             error_message=audit_error_message,
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
+            pr_feedback_mode=pr_feedback_mode,
         )
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"

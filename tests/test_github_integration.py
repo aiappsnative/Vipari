@@ -8,7 +8,7 @@ from urllib.request import Request
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services import github_integration
-from services.github_integration import _resolve_private_key_path, ensure_pr_label, generate_jwt, remove_pr_label, sync_pr_label
+from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, generate_jwt, remove_pr_label, sync_pr_label
 
 
 def test_resolve_private_key_path_prefers_cwd_when_relative_file_exists(tmp_path, monkeypatch):
@@ -309,6 +309,48 @@ def test_upsert_pr_comment_normalizes_legacy_promptdrift_marker(monkeypatch):
 
     assert comment_id == 101
     assert edited == [(101, "<!-- driftguard:managed-comment -->\nNew audit")]
+
+
+def test_create_pr_review_wraps_body_with_managed_marker(monkeypatch):
+    created_reviews = []
+
+    class FakeReview:
+        def __init__(self, review_id):
+            self.id = review_id
+
+    class FakePullRequest:
+        def create_review(self, *, body, event):
+            created_reviews.append((body, event))
+            return FakeReview(404)
+
+    class FakeRepo:
+        def __init__(self):
+            self.pull = FakePullRequest()
+
+        def get_pull(self, pr_number):
+            assert pr_number == 21
+            return self.pull
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    review_id = create_pr_review(
+        "doria90/dummyAI",
+        21,
+        "installation-token",
+        "Review body",
+        event="REQUEST_CHANGES",
+    )
+
+    assert review_id == 404
+    assert created_reviews == [("<!-- driftguard:managed-comment -->\nReview body", "REQUEST_CHANGES")]
 
 
 def test_ensure_pr_label_creates_missing_repo_label_and_applies_it(monkeypatch):
