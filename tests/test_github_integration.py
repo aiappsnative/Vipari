@@ -1,6 +1,7 @@
 import os
 import sys
 import base64
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.request import Request
@@ -8,7 +9,7 @@ from urllib.request import Request
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services import github_integration
-from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, generate_jwt, remove_pr_label, sync_pr_label
+from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, generate_jwt, list_pr_comment_reactions, list_pr_review_reactions, remove_pr_label, sync_pr_label
 
 
 def test_resolve_private_key_path_prefers_cwd_when_relative_file_exists(tmp_path, monkeypatch):
@@ -351,6 +352,94 @@ def test_create_pr_review_wraps_body_with_managed_marker(monkeypatch):
 
     assert review_id == 404
     assert created_reviews == [("<!-- driftguard:managed-comment -->\nReview body", "REQUEST_CHANGES")]
+
+
+def test_list_pr_comment_reactions_returns_serialized_reactions(monkeypatch):
+    class FakeReaction:
+        def __init__(self):
+            self.id = 41
+            self.content = "+1"
+            self.user = SimpleNamespace(id=7, login="doria90")
+            self.created_at = datetime(2026, 5, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+    class FakeComment:
+        def __init__(self, comment_id):
+            self.id = comment_id
+
+        def get_reactions(self):
+            return [FakeReaction()]
+
+    class FakePullRequest:
+        def get_issue_comments(self):
+            return [FakeComment(301)]
+
+    class FakeRepo:
+        def get_pull(self, pr_number):
+            assert pr_number == 55
+            return FakePullRequest()
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    reactions = list_pr_comment_reactions("doria90/dummyAI", 55, "installation-token", comment_id=301)
+
+    assert len(reactions) == 1
+    assert reactions[0].reaction_id == "41"
+    assert reactions[0].content == "+1"
+    assert reactions[0].user_login == "doria90"
+    assert reactions[0].target_kind == "issue_comment"
+    assert reactions[0].target_id == 301
+
+
+def test_list_pr_review_reactions_returns_serialized_reactions(monkeypatch):
+    class FakeReaction:
+        def __init__(self):
+            self.id = 51
+            self.content = "heart"
+            self.user = SimpleNamespace(id=8, login="octocat")
+            self.created_at = datetime(2026, 5, 14, 12, 30, 0, tzinfo=timezone.utc)
+
+    class FakeReview:
+        def __init__(self, review_id):
+            self.id = review_id
+
+        def get_reactions(self):
+            return [FakeReaction()]
+
+    class FakePullRequest:
+        def get_reviews(self):
+            return [FakeReview(401)]
+
+    class FakeRepo:
+        def get_pull(self, pr_number):
+            assert pr_number == 56
+            return FakePullRequest()
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    reactions = list_pr_review_reactions("doria90/dummyAI", 56, "installation-token", review_id=401)
+
+    assert len(reactions) == 1
+    assert reactions[0].reaction_id == "51"
+    assert reactions[0].content == "heart"
+    assert reactions[0].user_login == "octocat"
+    assert reactions[0].target_kind == "review"
+    assert reactions[0].target_id == 401
 
 
 def test_ensure_pr_label_creates_missing_repo_label_and_applies_it(monkeypatch):

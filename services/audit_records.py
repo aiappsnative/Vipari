@@ -20,8 +20,10 @@ from .baseline_provenance import (
     no_baseline_provenance,
     previous_pr_fallback_provenance,
 )
+from .github_integration import list_pr_comment_reactions, list_pr_review_reactions
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 from .pr_feedback_mode import PR_FEEDBACK_MODE_COMMENTS, normalize_pr_feedback_mode
+from .signal_fusion import normalize_risk_level
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,22 @@ class AuditCommentRecord:
     posted_at: float
     created_at: float
     updated_at: float
+
+
+@dataclass(frozen=True)
+class AuditFeedbackEventRecord:
+    id: int
+    audit_id: int
+    repo_full: str
+    pr_number: int
+    head_sha: str
+    kind: str
+    source: str
+    actor_github_id: str | None
+    actor_github_login: str | None
+    event_key: str | None
+    payload_json: str
+    created_at: float
 
 
 @dataclass(frozen=True)
@@ -991,6 +1009,199 @@ def get_audit_comment_for_audit(db_path: str, audit_id: int) -> Optional[AuditCo
     return _row_to_audit_comment(row) if row is not None else None
 
 
+def record_audit_feedback_event(
+    db_path: str,
+    *,
+    audit_id: int,
+    kind: str,
+    source: str,
+    payload_json: str,
+    actor_github_id: str | None = None,
+    actor_github_login: str | None = None,
+    event_key: str | None = None,
+    created_at: float | None = None,
+) -> AuditFeedbackEventRecord:
+    timestamp = time.time() if created_at is None else created_at
+    with _connect(db_path) as conn:
+        audit_row = conn.execute(
+            "SELECT id, repo_full, pr_number, head_sha FROM pull_request_audits WHERE id = ?",
+            (audit_id,),
+        ).fetchone()
+        if audit_row is None:
+            raise ValueError(f"Audit {audit_id} does not exist.")
+
+        if event_key:
+            existing = conn.execute(
+                "SELECT * FROM audit_feedback_events WHERE event_key = ?",
+                (event_key,),
+            ).fetchone()
+            if existing is not None:
+                return _row_to_audit_feedback_event(existing)
+
+        cursor = conn.execute(
+            """
+            INSERT INTO audit_feedback_events (
+                audit_id, workspace_id, repo_full, pr_number, head_sha, kind, source,
+                actor_github_id, actor_github_login, event_key, payload_json, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                audit_id,
+                0,
+                audit_row["repo_full"],
+                audit_row["pr_number"],
+                audit_row["head_sha"],
+                kind,
+                source,
+                actor_github_id,
+                actor_github_login,
+                event_key,
+                payload_json,
+                payload_json,
+                timestamp,
+            ),
+        )
+        row = conn.execute("SELECT * FROM audit_feedback_events WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+
+    if row is None:
+        raise RuntimeError("Failed to store or reload audit feedback event.")
+    return _row_to_audit_feedback_event(row)
+
+
+def list_audit_feedback_events_for_audit(db_path: str, audit_id: int) -> list[AuditFeedbackEventRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_feedback_events WHERE audit_id = ? ORDER BY created_at ASC, id ASC",
+            (audit_id,),
+        ).fetchall()
+    return [_row_to_audit_feedback_event(row) for row in rows]
+
+
+def list_audit_feedback_events_for_repo(
+    db_path: str,
+    repo_full: str,
+    *,
+    limit: int = 100,
+) -> list[AuditFeedbackEventRecord]:
+    safe_limit = max(1, min(int(limit), 1000))
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM audit_feedback_events
+            WHERE repo_full = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (repo_full, safe_limit),
+        ).fetchall()
+    return [_row_to_audit_feedback_event(row) for row in rows]
+
+
+def record_pr_outcome_feedback_events(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str | None,
+    pr_state: str | None,
+    pr_merged: bool | None,
+) -> list[AuditFeedbackEventRecord]:
+    if pr_state != "closed":
+        return []
+
+    with _connect(db_path) as conn:
+        if head_sha:
+            rows = conn.execute(
+                "SELECT * FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? AND head_sha = ? ORDER BY id ASC",
+                (repo_full, pr_number, head_sha),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? ORDER BY id ASC",
+                (repo_full, pr_number),
+            ).fetchall()
+
+    recorded: list[AuditFeedbackEventRecord] = []
+    for row in rows:
+        audit = _row_to_pull_request_audit(row)
+        outcome = _derive_pr_outcome_kind(audit, pr_merged=pr_merged)
+        recorded.append(
+            record_audit_feedback_event(
+                db_path,
+                audit_id=audit.id,
+                kind="pr_outcome",
+                source="lifecycle",
+                event_key=f"pr_outcome:{audit.id}:{'merged' if pr_merged else 'closed'}",
+                payload_json=json.dumps(
+                    {
+                        "outcome": outcome,
+                        "repo_full": audit.repo_full,
+                        "pr_number": audit.pr_number,
+                        "head_sha": audit.head_sha,
+                        "pr_state": pr_state,
+                        "pr_merged": bool(pr_merged),
+                        "suggested_risk_level": audit.suggested_risk_level,
+                    }
+                ),
+            )
+        )
+    return recorded
+
+
+def refresh_audit_reaction_feedback_for_audit(db_path: str, *, audit_id: int, token: str) -> list[AuditFeedbackEventRecord]:
+    audit = get_pull_request_audit_by_id(db_path, audit_id)
+    if audit is None:
+        return []
+    audit_comment = get_audit_comment_for_audit(db_path, audit_id)
+    if audit_comment is None:
+        return []
+
+    recorded: list[AuditFeedbackEventRecord] = []
+    if audit_comment.github_comment_id is not None:
+        for reaction in list_pr_comment_reactions(
+            audit.repo_full,
+            audit.pr_number,
+            token,
+            comment_id=audit_comment.github_comment_id,
+        ):
+            recorded.append(_record_github_reaction_feedback_event(db_path, audit.id, reaction))
+    if audit_comment.github_review_id is not None:
+        for reaction in list_pr_review_reactions(
+            audit.repo_full,
+            audit.pr_number,
+            token,
+            review_id=audit_comment.github_review_id,
+        ):
+            recorded.append(_record_github_reaction_feedback_event(db_path, audit.id, reaction))
+    return recorded
+
+
+def refresh_audit_reaction_feedback_for_pr(
+    db_path: str,
+    *,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str | None,
+    token: str,
+) -> list[AuditFeedbackEventRecord]:
+    with _connect(db_path) as conn:
+        if head_sha:
+            rows = conn.execute(
+                "SELECT id FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? AND head_sha = ? ORDER BY id ASC",
+                (repo_full, pr_number, head_sha),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? ORDER BY id ASC",
+                (repo_full, pr_number),
+            ).fetchall()
+
+    recorded: list[AuditFeedbackEventRecord] = []
+    for row in rows:
+        recorded.extend(refresh_audit_reaction_feedback_for_audit(db_path, audit_id=row["id"], token=token))
+    return recorded
+
+
 def get_audit_comment_episode_for_pr_head_sha(
     db_path: str,
     repo_full: str,
@@ -1429,6 +1640,54 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     )
 
 
+def _derive_pr_outcome_kind(audit: PullRequestAuditRecord, *, pr_merged: bool | None) -> str:
+    is_escalated = normalize_risk_level(audit.suggested_risk_level) == "High"
+    if is_escalated and pr_merged:
+        return "recommendation_ignored"
+    if is_escalated and pr_merged is False:
+        return "aligned_reject"
+    if not is_escalated and pr_merged:
+        return "aligned_merge"
+    return "unknown"
+
+
+def _record_github_reaction_feedback_event(db_path: str, audit_id: int, reaction: object) -> AuditFeedbackEventRecord:
+    return record_audit_feedback_event(
+        db_path,
+        audit_id=audit_id,
+        kind="reaction",
+        source="github_reaction",
+        actor_github_id=getattr(reaction, "user_id", None),
+        actor_github_login=getattr(reaction, "user_login", None),
+        event_key=_reaction_event_key(audit_id, reaction),
+        payload_json=json.dumps(
+            {
+                "reaction_id": getattr(reaction, "reaction_id", None),
+                "content": getattr(reaction, "content", None),
+                "target_kind": getattr(reaction, "target_kind", None),
+                "target_id": getattr(reaction, "target_id", None),
+            }
+        ),
+        created_at=getattr(reaction, "created_at", None),
+    )
+
+
+def _reaction_event_key(audit_id: int, reaction: object) -> str:
+    reaction_id = getattr(reaction, "reaction_id", None)
+    if reaction_id:
+        return f"reaction:{audit_id}:{reaction_id}"
+    return ":".join(
+        [
+            "reaction",
+            str(audit_id),
+            str(getattr(reaction, "target_kind", "unknown")),
+            str(getattr(reaction, "target_id", "0")),
+            str(getattr(reaction, "user_id", "unknown")),
+            str(getattr(reaction, "content", "unknown")),
+        ]
+    )
+
+
 def _normalize_pr_lifecycle_fields(
     *,
     pr_state: str | None,
@@ -1587,6 +1846,23 @@ def _row_to_audit_comment(row: sqlite3.Row) -> AuditCommentRecord:
         posted_at=row["posted_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_audit_feedback_event(row: sqlite3.Row) -> AuditFeedbackEventRecord:
+    return AuditFeedbackEventRecord(
+        id=row["id"],
+        audit_id=row["audit_id"],
+        repo_full=row["repo_full"],
+        pr_number=row["pr_number"],
+        head_sha=row["head_sha"],
+        kind=row["kind"],
+        source=row["source"],
+        actor_github_id=row["actor_github_id"],
+        actor_github_login=row["actor_github_login"],
+        event_key=row["event_key"],
+        payload_json=row["payload_json"],
+        created_at=row["created_at"],
     )
 
 

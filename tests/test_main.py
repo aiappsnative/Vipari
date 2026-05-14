@@ -12,9 +12,12 @@ from urllib.error import HTTPError
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from fastapi.testclient import TestClient
+from engine.analysis import analyze_diff
 from engine.drift_profile import build_attribute_profile
 
 import main
+from services.audit_jobs import create_audit_job
+from services.audit_records import list_audit_feedback_events_for_audit, record_audit_result
 from services.control_plane_records import allocate_repo_to_workspace, create_workspace, get_repo_allocation_for_workspace, get_repo_connection_for_workspace, upsert_github_identity, upsert_github_installation
 
 client = TestClient(main.app)
@@ -87,6 +90,63 @@ def test_webhook_invalid_signature():
     payload = {"action": "opened"}
     response = client.post("/webhook", json=payload, headers={"X-Hub-Signature-256": "bad"})
     assert response.status_code == 400
+
+
+def test_feedback_form_persists_explicit_feedback_event(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "feedback-form.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=77,
+            installation_id=123,
+            head_sha="sha-feedback",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=77,
+            installation_id=123,
+            head_sha="sha-feedback",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        get_response = client.get("/feedback/pr/doria90/dummyAI/77?head_sha=sha-feedback")
+        assert get_response.status_code == 200
+        assert "Vipari review feedback" in get_response.text
+
+        post_response = client.post(
+            "/feedback/pr/doria90/dummyAI/77",
+            data={
+                "audit_id": str(audit.id),
+                "head_sha": "sha-feedback",
+                "sentiment": "helpful",
+                "notes": "useful callout",
+            },
+        )
+        assert post_response.status_code == 200
+        assert "Thanks. Your feedback was recorded." in post_response.text
+
+        feedback_events = list_audit_feedback_events_for_audit(main.AUDIT_DB_PATH, audit.id)
+        assert len(feedback_events) == 1
+        payload = json.loads(feedback_events[0].payload_json)
+        assert feedback_events[0].kind == "explicit_feedback"
+        assert feedback_events[0].source == "feedback_link"
+        assert payload["sentiment"] == "helpful"
+        assert payload["notes"] == "useful callout"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
 
 
 def test_webhook_marks_installation_inactive_on_delete(tmp_path):
@@ -684,6 +744,83 @@ def test_webhook_merged_pull_request_queues_branch_scan_job():
         branch_ref="refs/heads/main",
         triggered_by="pr_merged_webhook",
     )
+
+
+def test_webhook_closed_pull_request_records_pr_outcome_feedback_event(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-pr-outcome.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=78,
+            installation_id=123,
+            head_sha="head-outcome",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=78,
+            installation_id=123,
+            head_sha="head-outcome",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        payload = {
+            "action": "closed",
+            "installation": {"id": 123},
+            "repository": {"full_name": "doria90/dummyAI"},
+            "pull_request": {
+                "number": 78,
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-05-14T12:00:00Z",
+                "merge_commit_sha": "mergesha789",
+                "base": {"sha": "base789", "ref": "main"},
+                "head": {"sha": "head-outcome"},
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "X-Hub-Signature-256": sign_payload(body, "secret"),
+            "X-GitHub-Event": "pull_request",
+            "Content-Type": "application/json",
+        }
+
+        with patch(
+            "main.get_latest_repository_onboarding",
+            return_value=type("Onboarding", (), {"id": 1, "default_branch": "main"})(),
+        ), patch("main.create_branch_scan_job") as create_branch_scan_job, patch(
+            "main.generate_jwt",
+            return_value="jwt",
+        ), patch(
+            "main.get_installation_token",
+            return_value="token",
+        ), patch(
+            "main.refresh_audit_reaction_feedback_for_pr"
+        ) as refresh_audit_reaction_feedback_for_pr:
+            create_branch_scan_job.return_value = type("BranchScanJob", (), {"id": 92})()
+            response = client.post("/webhook", content=body, headers=headers)
+
+        assert response.status_code == 200
+        refresh_audit_reaction_feedback_for_pr.assert_called_once()
+        feedback_events = list_audit_feedback_events_for_audit(main.AUDIT_DB_PATH, audit.id)
+        assert len(feedback_events) == 1
+        payload_json = json.loads(feedback_events[0].payload_json)
+        assert payload_json["outcome"] == "recommendation_ignored"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
 
 
 def test_webhook_ignores_unallocated_repo_for_managed_installation(tmp_path):

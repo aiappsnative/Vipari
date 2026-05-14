@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from services.audit_jobs import init_db
+from services.audit_records import list_audit_feedback_events_for_audit, list_audit_feedback_events_for_repo
 from services.dashboard_views import build_repo_dashboard_view, list_repo_dashboard_index
 from services.github_integration import generate_jwt, get_installation_token
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -94,6 +95,17 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db)
     migrate_database(db_path)
     _write_json(asdict(build_repo_dashboard_view(db_path, args.repo_full)))
+    return 0
+
+
+def cmd_feedback_events(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args.db)
+    migrate_database(db_path)
+    if args.audit_id is not None:
+        events = list_audit_feedback_events_for_audit(db_path, int(args.audit_id))
+    else:
+        events = list_audit_feedback_events_for_repo(db_path, args.repo_full, limit=args.limit)
+    _write_json({"feedback_events": [asdict(event) for event in events]})
     return 0
 
 
@@ -261,6 +273,13 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
     dashboard_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
     dashboard_parser.set_defaults(func=cmd_dashboard)
+
+    feedback_parser = subparsers.add_parser("feedback-events", help="List persisted feedback events for a repo or audit id")
+    feedback_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")
+    feedback_parser.add_argument("--db", help="Path to the DriftGuard SQLite database")
+    feedback_parser.add_argument("--audit-id", type=int, help="Optional audit id filter")
+    feedback_parser.add_argument("--limit", type=int, default=100, help="Max events to return when listing by repo")
+    feedback_parser.set_defaults(func=cmd_feedback_events)
 
     onboard_parser = subparsers.add_parser("onboard", help="Run onboarding and optional backfill planning/execution")
     onboard_parser.add_argument("repo_full", help="Repository full name, for example owner/repo")

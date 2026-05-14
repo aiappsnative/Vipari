@@ -30,6 +30,7 @@ from .audit_records import (
     PrCommentEpisodeRecord,
     get_audit_comment_episode_for_pr_head_sha,
     get_previous_audit_comment_episode_for_pr,
+    refresh_audit_reaction_feedback_for_audit,
     record_audit_result,
 )
 from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
@@ -117,6 +118,7 @@ class PrCommentReview:
     recommended_next_step: str
     episode_context: PrCommentEpisodeContext
     dashboard_deep_link: str | None = None
+    feedback_link: str | None = None
 
 
 def build_llm_comment(
@@ -263,6 +265,7 @@ def _build_pr_comment_review(
         ),
         episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
         dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles, episode_context),
+        feedback_link=_build_pr_comment_feedback_link(repo_full, pr_number, episode_context),
     )
 
 
@@ -318,6 +321,12 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
             [
                 "",
                 f"[Open this review in Vipari dashboard]({review.dashboard_deep_link})",
+            ]
+        )
+    if review.feedback_link:
+        lines.extend(
+            [
+                f"[Send feedback on this Vipari review]({review.feedback_link})",
             ]
         )
     return "\n".join(lines)
@@ -661,6 +670,31 @@ def _build_pr_comment_dashboard_deep_link(
         query_params.append(("head_sha", episode_head_sha))
 
     path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
+    if not query_params:
+        return urljoin(app_base_url.rstrip('/') + '/', path.lstrip('/'))
+    return urljoin(app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
+
+
+def _build_pr_comment_feedback_link(
+    repo_full: str | None,
+    pr_number: int | None,
+    episode_context: PrCommentEpisodeContext | None = None,
+) -> str | None:
+    normalized_repo_full = (repo_full or "").strip()
+    if not normalized_repo_full or "/" not in normalized_repo_full or pr_number is None or pr_number <= 0:
+        return None
+
+    app_base_url = _public_dashboard_base_url()
+    if app_base_url is None:
+        return None
+
+    owner, repo = normalized_repo_full.split("/", 1)
+    query_params: list[tuple[str, str]] = []
+    episode_head_sha = (episode_context.head_sha if episode_context is not None else "").strip()
+    if episode_head_sha:
+        query_params.append(("head_sha", episode_head_sha))
+
+    path = f"/feedback/pr/{quote(owner, safe='')}/{quote(repo, safe='')}/{pr_number}"
     if not query_params:
         return urljoin(app_base_url.rstrip('/') + '/', path.lstrip('/'))
     return urljoin(app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
@@ -1211,8 +1245,8 @@ def _persist_audit_result(
     github_review_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     pr_feedback_mode: str | None = None,
-) -> None:
-    record_audit_result(
+) :
+    return record_audit_result(
         settings.db_path,
         job_id=job.id,
         repo_full=job.repo_full,
@@ -1240,6 +1274,17 @@ def _persist_audit_result(
         github_comment_id=github_comment_id,
         github_review_id=github_review_id,
     )
+
+
+def _refresh_reaction_feedback_for_audit(
+    audit_id: int,
+    job: AuditJob,
+    settings: WorkerSettings,
+    *,
+    installation_token: str | None = None,
+) -> None:
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    refresh_audit_reaction_feedback_for_audit(settings.db_path, audit_id=audit_id, token=token)
 
 
 def _resolve_job_pr_feedback_mode(job: AuditJob, settings: WorkerSettings) -> str:
@@ -1299,7 +1344,7 @@ def _handle_fallback(
     )
     if effective_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
-            _persist_audit_result(
+            audit = _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,
@@ -1390,6 +1435,12 @@ def _handle_fallback(
             return "failed"
 
         if review_event is not None:
+            try:
+                _refresh_reaction_feedback_for_audit(audit.id, job, settings, installation_token=installation_token)
+            except Exception:
+                pass
+
+        if review_event is not None:
             mark_job_fallback_posted(
                 settings.db_path,
                 job.id,
@@ -1439,7 +1490,7 @@ def _handle_fallback(
         combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
 
     try:
-        _persist_audit_result(
+        audit = _persist_audit_result(
             job,
             deterministic_analysis,
             settings,
@@ -1460,6 +1511,11 @@ def _handle_fallback(
         )
         mark_job_failed(settings.db_path, job.id, error_message=combined_error)
         return "failed"
+
+    try:
+        _refresh_reaction_feedback_for_audit(audit.id, job, settings, installation_token=installation_token)
+    except Exception:
+        pass
 
     mark_job_fallback_posted(
         settings.db_path,
@@ -1511,7 +1567,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
 
     if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
-            _persist_audit_result(
+            audit = _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,
@@ -1594,6 +1650,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             mark_job_failed(settings.db_path, job.id, error_message=error_message)
             return "failed"
 
+        if review_event is not None:
+            try:
+                _refresh_reaction_feedback_for_audit(audit.id, job, settings, installation_token=installation_token)
+            except Exception:
+                pass
+
         mark_job_completed(settings.db_path, job.id, comment_body=comment_body if review_event is not None else None)
         return "completed"
 
@@ -1624,7 +1686,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
 
     try:
-        _persist_audit_result(
+        audit = _persist_audit_result(
             job,
             deterministic_analysis,
             settings,
@@ -1645,6 +1707,11 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
         mark_job_failed(settings.db_path, job.id, error_message=error_message)
         return "failed"
+
+    try:
+        _refresh_reaction_feedback_for_audit(audit.id, job, settings, installation_token=installation_token)
+    except Exception:
+        pass
 
     mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
     return "completed"

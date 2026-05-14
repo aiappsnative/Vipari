@@ -6,6 +6,8 @@ import json
 import time
 import urllib.request
 import urllib.parse
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import jwt
@@ -22,6 +24,17 @@ DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "Vipari recommends escalation before m
 LEGACY_ESCALATION_LABELS = (PROMPTDRIFT_ESCALATION_LABEL, LEGACY_DRIFTGUARD_ESCALATION_LABEL)
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
+
+
+@dataclass(frozen=True)
+class GithubReactionRecord:
+    reaction_id: str
+    content: str
+    user_id: str | None
+    user_login: str | None
+    created_at: float | None
+    target_kind: str
+    target_id: int
 
 
 def _resolve_private_key_path(private_key_path: str) -> Path:
@@ -219,6 +232,28 @@ def create_pr_review(repo_full: str, pr_number: int, token: str, body: str, *, e
     return created_review.id
 
 
+def list_pr_comment_reactions(repo_full: str, pr_number: int, token: str, *, comment_id: int) -> list[GithubReactionRecord]:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    pr = repo.get_pull(pr_number)
+    for comment in pr.get_issue_comments():
+        if comment.id != comment_id:
+            continue
+        return [_reaction_record_from_github(reaction, target_kind="issue_comment", target_id=comment_id) for reaction in comment.get_reactions()]
+    return []
+
+
+def list_pr_review_reactions(repo_full: str, pr_number: int, token: str, *, review_id: int) -> list[GithubReactionRecord]:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    pr = repo.get_pull(pr_number)
+    for review in pr.get_reviews():
+        if review.id != review_id:
+            continue
+        return [_reaction_record_from_github(reaction, target_kind="review", target_id=review_id) for reaction in review.get_reactions()]
+    return []
+
+
 def ensure_pr_label(
     repo_full: str,
     pr_number: int,
@@ -300,3 +335,23 @@ def _build_managed_comment_body(body: str) -> str:
         if body.startswith(marker):
             return body.replace(marker, DRIFTGUARD_MANAGED_MARKER, 1)
     return f"{DRIFTGUARD_MANAGED_MARKER}\n{body}"
+
+
+def _reaction_record_from_github(reaction: object, *, target_kind: str, target_id: int) -> GithubReactionRecord:
+    user = getattr(reaction, "user", None)
+    created_at = getattr(reaction, "created_at", None)
+    if isinstance(created_at, datetime):
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at_value = created_at.timestamp()
+    else:
+        created_at_value = None
+    return GithubReactionRecord(
+        reaction_id=str(getattr(reaction, "id", "")),
+        content=str(getattr(reaction, "content", "")),
+        user_id=(str(getattr(user, "id", "")) or None),
+        user_login=(str(getattr(user, "login", "")) or None),
+        created_at=created_at_value,
+        target_kind=target_kind,
+        target_id=target_id,
+    )

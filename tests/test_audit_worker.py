@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import time
 from types import SimpleNamespace
@@ -22,14 +23,20 @@ from services.audit_jobs import (
 )
 from services.audit_records import (
     AuditCommentRecord,
+    AuditFeedbackEventRecord,
     PrCommentEpisodeRecord,
+    refresh_audit_reaction_feedback_for_audit,
     get_audit_comment_for_audit,
     get_latest_artifact_version_for_repo_artifact,
     get_pull_request_audit_for_job,
+    list_audit_feedback_events_for_audit,
+    list_audit_feedback_events_for_repo,
     list_artifact_versions_for_repo_artifact,
     list_changed_artifacts_for_audit,
     list_findings_for_audit,
     list_pre_audit_relevance_decisions,
+    record_pr_outcome_feedback_events,
+    record_audit_feedback_event,
     record_pre_audit_relevance_decision,
     record_audit_result,
     update_pull_request_audit_state,
@@ -437,6 +444,293 @@ def test_update_pull_request_audit_state_clears_closed_timestamp_when_pr_reopens
     assert saved.pr_merged_at is None
     assert saved.pr_merge_commit_sha == "merge-sha-2"
     assert saved.pr_updated_at == 222.0
+
+
+def test_record_audit_feedback_event_persists_and_dedupes_by_event_key(tmp_path):
+    db_path = str(tmp_path / "feedback-events.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=305,
+        installation_id=123,
+        head_sha="sha-305",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=305,
+        installation_id=123,
+        head_sha="sha-305",
+        deterministic_analysis=analyze_diff(created.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+
+    first = record_audit_feedback_event(
+        db_path,
+        audit_id=audit.id,
+        kind="reaction",
+        source="github_reaction",
+        actor_github_id="12345",
+        actor_github_login="doria90",
+        event_key="reaction:305:+1:doria90",
+        payload_json=json.dumps({"content": "+1"}),
+        created_at=1234.5,
+    )
+    second = record_audit_feedback_event(
+        db_path,
+        audit_id=audit.id,
+        kind="reaction",
+        source="github_reaction",
+        actor_github_id="12345",
+        actor_github_login="doria90",
+        event_key="reaction:305:+1:doria90",
+        payload_json=json.dumps({"content": "+1", "duplicate": True}),
+        created_at=2234.5,
+    )
+
+    assert isinstance(first, AuditFeedbackEventRecord)
+    assert second.id == first.id
+    assert second.payload_json == first.payload_json
+
+    saved = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(saved) == 1
+    assert saved[0].repo_full == "doria90/dummyAI"
+    assert saved[0].pr_number == 305
+    assert saved[0].head_sha == "sha-305"
+    assert saved[0].kind == "reaction"
+    assert saved[0].source == "github_reaction"
+    assert saved[0].actor_github_login == "doria90"
+    assert json.loads(saved[0].payload_json) == {"content": "+1"}
+
+
+def test_list_audit_feedback_events_for_repo_returns_newest_first(tmp_path):
+    db_path = str(tmp_path / "feedback-events-repo.db")
+    init_db(db_path)
+
+    first_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=401,
+        installation_id=123,
+        head_sha="sha-401",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    second_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=402,
+        installation_id=123,
+        head_sha="sha-402",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+
+    first_audit = record_audit_result(
+        db_path,
+        job_id=first_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=401,
+        installation_id=123,
+        head_sha="sha-401",
+        deterministic_analysis=analyze_diff(first_job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+    second_audit = record_audit_result(
+        db_path,
+        job_id=second_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=402,
+        installation_id=123,
+        head_sha="sha-402",
+        deterministic_analysis=analyze_diff(second_job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+
+    record_audit_feedback_event(
+        db_path,
+        audit_id=first_audit.id,
+        kind="pr_outcome",
+        source="lifecycle",
+        payload_json=json.dumps({"outcome": "aligned_reject"}),
+        created_at=100.0,
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=second_audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json=json.dumps({"sentiment": "helpful"}),
+        created_at=200.0,
+    )
+
+    saved = list_audit_feedback_events_for_repo(db_path, "doria90/dummyAI")
+
+    assert [event.audit_id for event in saved] == [second_audit.id, first_audit.id]
+    assert [event.kind for event in saved] == ["explicit_feedback", "pr_outcome"]
+
+
+def test_record_pr_outcome_feedback_events_classifies_high_risk_merge_as_ignored(tmp_path):
+    db_path = str(tmp_path / "feedback-outcome.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=306,
+        installation_id=123,
+        head_sha="sha-306",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=306,
+        installation_id=123,
+        head_sha="sha-306",
+        deterministic_analysis=analyze_diff(created.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+
+    recorded = record_pr_outcome_feedback_events(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=306,
+        head_sha="sha-306",
+        pr_state="closed",
+        pr_merged=True,
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0].kind == "pr_outcome"
+    payload = json.loads(recorded[0].payload_json)
+    assert payload["outcome"] == "recommendation_ignored"
+
+    saved = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(saved) == 1
+    assert saved[0].event_key == f"pr_outcome:{audit.id}:merged"
+
+
+def test_refresh_audit_reaction_feedback_for_audit_records_deduped_reactions(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "feedback-reactions.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="sha-307",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="sha-307",
+        deterministic_analysis=analyze_diff(created.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="review body",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+        github_comment_id=901,
+    )
+
+    reaction = SimpleNamespace(
+        reaction_id="r-1",
+        content="eyes",
+        user_id="77",
+        user_login="doria90",
+        created_at=1234.0,
+        target_kind="issue_comment",
+        target_id=901,
+    )
+    monkeypatch.setattr("services.audit_records.list_pr_comment_reactions", lambda *args, **kwargs: [reaction])
+    monkeypatch.setattr("services.audit_records.list_pr_review_reactions", lambda *args, **kwargs: [])
+
+    first = refresh_audit_reaction_feedback_for_audit(db_path, audit_id=audit.id, token="installation-token")
+    second = refresh_audit_reaction_feedback_for_audit(db_path, audit_id=audit.id, token="installation-token")
+
+    assert len(first) == 1
+    assert len(second) == 1
+    saved = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(saved) == 1
+    assert saved[0].kind == "reaction"
+    assert saved[0].source == "github_reaction"
+    assert json.loads(saved[0].payload_json)["content"] == "eyes"
+
+
+def test_worker_records_reaction_feedback_after_comment_post(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=308,
+        installation_id=123,
+        head_sha="sha-308",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 8080)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.refresh_audit_reaction_feedback_for_audit",
+        lambda db_path, audit_id, token: [
+            record_audit_feedback_event(
+                db_path,
+                audit_id=audit_id,
+                kind="reaction",
+                source="github_reaction",
+                actor_github_login="doria90",
+                event_key=f"reaction:{audit_id}:worker-test",
+                payload_json=json.dumps({"content": "+1"}),
+            )
+        ],
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
+    assert len(feedback_events) == 1
+    assert feedback_events[0].kind == "reaction"
 
 
 def test_worker_completes_job_with_llm_comment(tmp_path, monkeypatch):
@@ -1161,6 +1455,7 @@ index 1..2
 
     try:
         expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?pr=42&head_sha=abc123456"
+        expected_feedback_link = f"{settings.app_base_url.rstrip('/')}/feedback/pr/doria90/dummyAI/42?head_sha=abc123456"
 
         comment = build_fallback_comment(
             analysis,
@@ -1181,6 +1476,7 @@ index 1..2
         assert "RateLimitError" not in comment
         assert "head `abc1234`" in comment
         assert f"[Open this review in Vipari dashboard]({expected_link})" in comment
+        assert f"[Send feedback on this Vipari review]({expected_feedback_link})" in comment
     finally:
         settings.app_base_url = original_app_base_url
 
