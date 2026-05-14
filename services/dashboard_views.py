@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from .baseline_provenance import (
@@ -24,7 +24,10 @@ from .baseline_approval_service import RepoBaselineReviewPanel, build_repo_basel
 from .audit_records import (
     ArtifactDriftLeaderboardEntry,
     RepoStaticDriftSummary,
+    get_audit_comment_for_audit,
     get_repo_static_drift_summary,
+    list_audit_feedback_events_for_audit,
+    list_findings_for_audit,
     list_pull_request_audits_for_repo,
     list_top_drifting_artifacts_for_repo,
 )
@@ -101,6 +104,237 @@ def invalidate_dashboard_caches() -> None:
     with _DASHBOARD_CACHE_LOCK:
         _OVERVIEW_VIEW_CACHE.clear()
         _REPO_VIEW_CACHE.clear()
+
+
+def _dashboard_pr_route_url(repo_full: str, pr_number: int, head_sha: str) -> str:
+    query = urlencode({"pr": str(pr_number), "head_sha": head_sha})
+    return f"/dashboard/{quote(repo_full, safe='')}/audit?{query}"
+
+
+def _extract_pr_review_summary(comment_body: str | None, risk_level: str | None, status: str) -> str:
+    body = str(comment_body or "").strip()
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("summary:"):
+            summary = line.split(":", 1)[1].strip()
+            if summary:
+                return summary
+        if line.startswith("#") or line.startswith("["):
+            continue
+        if line.lower().startswith(("risk level:", "confidence:", "recommendation:")):
+            continue
+        return line
+
+    normalized_risk = str(risk_level or "unknown").replace("_", " ").strip() or "unknown"
+    normalized_status = str(status or "completed").replace("_", " ").strip() or "completed"
+    return f"Vipari recorded a {normalized_risk} risk review for this PR episode and marked it {normalized_status}."
+
+
+def _extract_pr_review_excerpt(comment_body: str | None) -> str | None:
+    body = str(comment_body or "").strip()
+    excerpt_lines: list[str] = []
+    summary_line: str | None = None
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#") or line.startswith("["):
+            continue
+        if line.lower().startswith("summary:"):
+            summary_candidate = line.split(":", 1)[1].strip()
+            if summary_candidate:
+                summary_line = summary_candidate
+            continue
+        if line.lower().startswith(("risk level:", "confidence:")):
+            continue
+        if line.lower().startswith("recommendation:"):
+            recommendation = line.split(":", 1)[1].strip()
+            if recommendation:
+                excerpt_lines.append(recommendation)
+            continue
+        excerpt_lines.append(line)
+        if len(excerpt_lines) == 2:
+            break
+    if not excerpt_lines and summary_line:
+        excerpt_lines.append(summary_line)
+    if not excerpt_lines:
+        return None
+    return " ".join(excerpt_lines)
+
+
+def _summarize_pr_review_feedback(events: list[Any]) -> dict[str, int]:
+    helpful_count = 0
+    noisy_count = 0
+    strongly_disagree_count = 0
+    reaction_count = 0
+    outcome_count = 0
+
+    for event in events:
+        kind = str(getattr(event, "kind", "") or "").strip().lower()
+        if kind == "explicit_feedback":
+            try:
+                payload = json.loads(getattr(event, "payload_json", "") or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            sentiment = str(payload.get("sentiment") or "").strip().lower()
+            if sentiment == "helpful":
+                helpful_count += 1
+            elif sentiment == "noisy":
+                noisy_count += 1
+            elif sentiment == "strongly_disagree":
+                strongly_disagree_count += 1
+        elif kind in {"github_reaction", "reaction"}:
+            reaction_count += 1
+        elif kind == "pr_outcome":
+            outcome_count += 1
+
+    return {
+        "helpful_count": helpful_count,
+        "noisy_count": noisy_count,
+        "strongly_disagree_count": strongly_disagree_count,
+        "reaction_count": reaction_count,
+        "outcome_count": outcome_count,
+    }
+
+
+def _build_recent_pr_review_feedback(events: list[Any], *, limit: int = 5) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for event in sorted(events, key=lambda item: (float(getattr(item, "created_at", 0) or 0), int(getattr(item, "id", 0) or 0)), reverse=True):
+        kind = str(getattr(event, "kind", "") or "").strip().lower()
+        try:
+            payload = json.loads(getattr(event, "payload_json", "") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+
+        if kind == "explicit_feedback":
+            sentiment = str(payload.get("sentiment") or "feedback").strip().lower() or "feedback"
+            notes = str(payload.get("notes") or "").strip()
+            title = {
+                "helpful": "Marked helpful",
+                "noisy": "Marked noisy",
+                "strongly_disagree": "Marked strongly disagree",
+            }.get(sentiment, "Submitted feedback")
+            normalized.append(
+                {
+                    "kind": kind,
+                    "title": title,
+                    "summary": notes or f"A reviewer submitted {sentiment.replace('_', ' ')} feedback for this PR review.",
+                    "created_at": getattr(event, "created_at", None),
+                }
+            )
+        elif kind in {"reaction", "github_reaction"}:
+            content = str(payload.get("content") or "reaction").strip() or "reaction"
+            target_kind = str(payload.get("target_kind") or "review").strip() or "review"
+            actor = str(getattr(event, "actor_github_login", "") or "").strip()
+            actor_prefix = f"{actor} " if actor else ""
+            normalized.append(
+                {
+                    "kind": kind,
+                    "title": f"GitHub reaction: {content}",
+                    "summary": f"{actor_prefix}reacted on the PR {target_kind}.",
+                    "created_at": getattr(event, "created_at", None),
+                }
+            )
+        elif kind == "pr_outcome":
+            outcome = str(payload.get("outcome") or "unknown").strip().replace("_", " ") or "unknown"
+            recommendation_lane = str(payload.get("recommendation_lane") or "unknown").strip().replace("_", " ") or "unknown"
+            normalized.append(
+                {
+                    "kind": kind,
+                    "title": f"PR outcome: {outcome}",
+                    "summary": f"Vipari recorded the pull request outcome against the {recommendation_lane} recommendation lane.",
+                    "created_at": getattr(event, "created_at", None),
+                }
+            )
+
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def build_repo_pr_review_routes_payload(
+    db_path: str,
+    repo_full: str,
+    *,
+    pr_number: int | None = None,
+    head_sha: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 20))
+    normalized_head_sha = str(head_sha or "").strip()
+    route_entries: list[dict[str, Any]] = []
+
+    for audit in reversed(list_pull_request_audits_for_repo(db_path, repo_full)):
+        comment = get_audit_comment_for_audit(db_path, audit.id)
+        feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
+        findings = list_findings_for_audit(db_path, audit.id)
+        route_entries.append(
+            {
+                "audit_id": audit.id,
+                "pr_number": audit.pr_number,
+                "head_sha": audit.head_sha,
+                "short_head_sha": (audit.head_sha or "")[:7],
+                "status": audit.status,
+                "completion_mode": audit.completion_mode,
+                "output_mode": audit.output_mode,
+                "risk_level": audit.suggested_risk_level,
+                "confidence": audit.fused_confidence,
+                "semantic_review_completed": bool(audit.semantic_review_completed),
+                "review_posted_at": comment.posted_at if comment is not None else audit.updated_at,
+                "updated_at": audit.updated_at,
+                "summary": _extract_pr_review_summary(
+                    comment.comment_body if comment is not None else None,
+                    audit.suggested_risk_level,
+                    audit.status,
+                ),
+                "review_excerpt": _extract_pr_review_excerpt(comment.comment_body if comment is not None else None),
+                "finding_count": len(findings),
+                "top_findings": [
+                    {
+                        "title": finding.title,
+                        "severity": finding.severity,
+                        "rationale": finding.rationale,
+                    }
+                    for finding in findings[:3]
+                ],
+                "feedback": _summarize_pr_review_feedback(feedback_events),
+                "recent_feedback": _build_recent_pr_review_feedback(feedback_events),
+                "dashboard_url": _dashboard_pr_route_url(repo_full, audit.pr_number, audit.head_sha),
+                "pull_request_url": f"https://github.com/{repo_full}/pull/{audit.pr_number}",
+            }
+        )
+
+    selected_route = None
+    if pr_number is not None and pr_number > 0 and normalized_head_sha:
+        selected_route = next(
+            (entry for entry in route_entries if entry["pr_number"] == pr_number and entry["head_sha"] == normalized_head_sha),
+            None,
+        )
+    if selected_route is None and pr_number is not None and pr_number > 0:
+        selected_route = next((entry for entry in route_entries if entry["pr_number"] == pr_number), None)
+    if selected_route is None and route_entries:
+        selected_route = route_entries[0]
+
+    prioritized_routes: list[dict[str, Any]] = []
+    if selected_route is not None:
+        prioritized_routes.append(selected_route)
+    prioritized_routes.extend(
+        entry for entry in route_entries if selected_route is None or entry["audit_id"] != selected_route["audit_id"]
+    )
+    trimmed_routes = prioritized_routes[:safe_limit]
+    for entry in trimmed_routes:
+        entry["selected"] = bool(selected_route is not None and entry["audit_id"] == selected_route["audit_id"])
+
+    return {
+        "repo_full": repo_full,
+        "selected_pr_number": pr_number,
+        "selected_head_sha": normalized_head_sha or None,
+        "route_count": len(route_entries),
+        "selected_route": selected_route,
+        "routes": trimmed_routes,
+    }
 
 
 @dataclass(frozen=True)

@@ -669,7 +669,7 @@ def _build_pr_comment_dashboard_deep_link(
     if episode_head_sha:
         query_params.append(("head_sha", episode_head_sha))
 
-    path = f"/dashboard/{quote(normalized_repo_full, safe='')}"
+    path = f"/dashboard/{quote(normalized_repo_full, safe='')}/audit"
     if not query_params:
         return urljoin(app_base_url.rstrip('/') + '/', path.lstrip('/'))
     return urljoin(app_base_url.rstrip('/') + '/', f"{path.lstrip('/')}?{urlencode(query_params)}")
