@@ -89,6 +89,129 @@ def test_workspace_row_mapper_defaults_feedback_mode_when_column_missing():
     assert workspace.pr_feedback_mode == "comments"
 
 
+def test_update_workspace_feedback_mode_backfills_legacy_schema_column(tmp_path):
+    from services.control_plane_records import _connect, update_workspace_pr_feedback_mode
+
+    db_path = str(tmp_path / "legacy-workspace-feedback.db")
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                billing_owner_user_id INTEGER,
+                setup_state TEXT NOT NULL,
+                pr_comments_setting_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO workspaces (slug, display_name, status, billing_owner_user_id, setup_state, pr_comments_setting_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("legacy", "Legacy Workspace", "active", None, "workspace_no_subscription", 1, 1.0, 1.0),
+        )
+
+    workspace = update_workspace_pr_feedback_mode(db_path, 1, pr_feedback_mode="reviews")
+
+    assert workspace.pr_feedback_mode == "reviews"
+
+
+def test_update_repo_allocation_feedback_mode_backfills_legacy_schema_column(tmp_path):
+    from services.control_plane_records import _connect, update_repo_allocation_pr_feedback_mode
+
+    db_path = str(tmp_path / "legacy-allocation-feedback.db")
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                billing_owner_user_id INTEGER,
+                setup_state TEXT NOT NULL,
+                pr_comments_setting_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE entitlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                plan_code TEXT NOT NULL,
+                subscription_status TEXT NOT NULL,
+                dashboard_enabled INTEGER NOT NULL,
+                pr_comments_enabled INTEGER NOT NULL,
+                repo_limit INTEGER NOT NULL,
+                org_limit INTEGER NOT NULL,
+                seat_limit INTEGER NOT NULL,
+                retention_policy TEXT NOT NULL,
+                support_tier TEXT NOT NULL,
+                feature_flags_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE github_installations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER,
+                installation_id INTEGER NOT NULL,
+                account_id TEXT NOT NULL,
+                account_login TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_synced_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE repo_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                repo_github_id TEXT NOT NULL,
+                repo_full TEXT NOT NULL,
+                allocation_status TEXT NOT NULL,
+                baseline_mode TEXT NOT NULL DEFAULT 'default_branch',
+                activated_by_user_id INTEGER,
+                activated_at REAL,
+                deactivated_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO workspaces (id, slug, display_name, status, billing_owner_user_id, setup_state, pr_comments_setting_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, "legacy", "Legacy Workspace", "active", None, "workspace_no_subscription", 1, 1.0, 1.0),
+        )
+        conn.execute(
+            "INSERT INTO entitlements (workspace_id, plan_code, subscription_status, dashboard_enabled, pr_comments_enabled, repo_limit, org_limit, seat_limit, retention_policy, support_tier, feature_flags_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, "starter", "active", 1, 1, 5, 1, 5, "standard", "email", "{}", 1.0, 1.0),
+        )
+        conn.execute(
+            "INSERT INTO repo_allocations (workspace_id, installation_id, repo_github_id, repo_full, allocation_status, baseline_mode, activated_by_user_id, activated_at, deactivated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, 123, "repo-1", "doria90/dummyAI", "active", "default_branch", None, 1.0, None, 1.0, 1.0),
+        )
+
+    allocation = update_repo_allocation_pr_feedback_mode(db_path, 1, pr_feedback_mode="reviews")
+
+    assert allocation.pr_feedback_mode == "reviews"
+
+
 def test_dashboard_actor_login_uses_authenticated_identity_context():
     request = SimpleNamespace()
     identity = SimpleNamespace(github_login="doria90")

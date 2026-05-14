@@ -1429,6 +1429,7 @@ def update_workspace_pr_feedback_mode(db_path: str, workspace_id: int, *, pr_fee
     now = time.time()
     normalized_mode = normalize_pr_feedback_mode(pr_feedback_mode)
     with _connect(db_path) as conn:
+        _ensure_column(conn, "workspaces", "pr_feedback_mode", "TEXT NOT NULL DEFAULT 'comments'")
         conn.execute(
             "UPDATE workspaces SET pr_feedback_mode = ?, updated_at = ? WHERE id = ?",
             (normalized_mode, now, workspace_id),
@@ -2597,6 +2598,7 @@ def update_repo_allocation_pr_feedback_mode(
     now = time.time()
     normalized_mode = None if pr_feedback_mode is None else normalize_pr_feedback_mode(pr_feedback_mode)
     with _connect(db_path) as conn:
+        _ensure_column(conn, "repo_allocations", "pr_feedback_mode", "TEXT")
         conn.execute(
             "UPDATE repo_allocations SET pr_feedback_mode = ?, updated_at = ? WHERE id = ?",
             (normalized_mode, now, allocation_id),
