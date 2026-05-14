@@ -15,9 +15,11 @@ from github import Auth, Github
 PROMPTDRIFT_MANAGED_MARKER = "<!-- promptdrift:managed-comment -->"
 DRIFTGUARD_MANAGED_MARKER = "<!-- driftguard:managed-comment -->"
 PROMPTDRIFT_ESCALATION_LABEL = "promptdrift: escalate-before-merge"
-DRIFTGUARD_ESCALATION_LABEL = "driftguard: escalate-before-merge"
+LEGACY_DRIFTGUARD_ESCALATION_LABEL = "driftguard: escalate-before-merge"
+DRIFTGUARD_ESCALATION_LABEL = "vipari: escalate-before-merge"
 DRIFTGUARD_ESCALATION_LABEL_COLOR = "B60205"
-DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "DriftGuard recommends escalation before merge"
+DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "Vipari recommends escalation before merge"
+LEGACY_ESCALATION_LABELS = (PROMPTDRIFT_ESCALATION_LABEL, LEGACY_DRIFTGUARD_ESCALATION_LABEL)
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
 
@@ -238,8 +240,9 @@ def ensure_pr_label(
     if label_name in issue_labels:
         return False
 
-    if PROMPTDRIFT_ESCALATION_LABEL in issue_labels:
-        issue.remove_from_labels(PROMPTDRIFT_ESCALATION_LABEL)
+    legacy_issue_labels = [candidate for candidate in LEGACY_ESCALATION_LABELS if candidate in issue_labels]
+    if legacy_issue_labels:
+        issue.remove_from_labels(*legacy_issue_labels)
 
     issue.add_to_labels(label_name)
     return True
@@ -257,7 +260,7 @@ def remove_pr_label(
     issue = repo.get_issue(number=pr_number)
 
     issue_labels = {label.name for label in issue.get_labels()}
-    matching_labels = [candidate for candidate in {label_name, PROMPTDRIFT_ESCALATION_LABEL} if candidate in issue_labels]
+    matching_labels = [candidate for candidate in (label_name, *LEGACY_ESCALATION_LABELS) if candidate in issue_labels]
     if not matching_labels:
         return False
 

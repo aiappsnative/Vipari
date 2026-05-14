@@ -864,7 +864,7 @@ def _build_escalation_recommendation(deterministic_analysis: DiffAnalysis) -> Es
         return EscalationRecommendation(
             decision="escalate_before_merge",
             reasons=tuple(reasons),
-            label_name="driftguard: escalate-before-merge",
+            label_name="vipari: escalate-before-merge",
         )
 
     return EscalationRecommendation(decision="normal_review")
@@ -930,7 +930,7 @@ def _build_signal_fusion_assessment(
         escalation_recommendation = EscalationRecommendation(
             decision="escalate_before_merge",
             reasons=tuple(reasons),
-            label_name="driftguard: escalate-before-merge",
+            label_name="vipari: escalate-before-merge",
         )
     else:
         escalation_recommendation = EscalationRecommendation(decision="normal_review")
@@ -1166,7 +1166,7 @@ def _apply_escalation_label_for_job(
         job.pr_number,
         token,
         should_have_label=recommendation.requires_label,
-        label_name=recommendation.label_name or "driftguard: escalate-before-merge",
+        label_name=recommendation.label_name or "vipari: escalate-before-merge",
     )
 
 

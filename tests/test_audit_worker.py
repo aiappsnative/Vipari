@@ -2348,7 +2348,7 @@ def test_worker_applies_escalation_label_for_high_confidence_changes(tmp_path, m
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 11, "token", True, "driftguard: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 11, "token", True, "vipari: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -2412,7 +2412,7 @@ def test_worker_applies_escalation_label_when_semantic_review_upgrades_low_signa
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert "Recommendation: Revert before merge." in posted[0][0]
-    assert labels == [("doria90/dummyAI", 111, "token", True, "driftguard: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 111, "token", True, "vipari: escalate-before-merge")]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -2458,7 +2458,7 @@ def test_worker_removes_escalation_label_for_normal_review_changes(tmp_path, mon
     assert process_next_job_once(settings) is True
     assert len(posted) == 1
     assert posted[0][0] == "LLM comment"
-    assert labels == [("doria90/dummyAI", 12, "token", False, "driftguard: escalate-before-merge")]
+    assert labels == [("doria90/dummyAI", 12, "token", False, "vipari: escalate-before-merge")]
 
 
 def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tmp_path, monkeypatch):

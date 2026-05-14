@@ -525,6 +525,70 @@ def test_ensure_pr_label_replaces_legacy_promptdrift_issue_label(monkeypatch):
     assert issue_added_labels == [github_integration.DRIFTGUARD_ESCALATION_LABEL]
 
 
+def test_ensure_pr_label_replaces_legacy_driftguard_issue_label(monkeypatch):
+    created_labels = []
+    issue_added_labels = []
+    removed_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.LEGACY_DRIFTGUARD_ESCALATION_LABEL)]
+
+        def get_labels(self):
+            return self.labels
+
+        def add_to_labels(self, label_name):
+            issue_added_labels.append(label_name)
+            self.labels.append(FakeLabel(label_name))
+
+        def remove_from_labels(self, *label_names):
+            removed_labels.extend(label_names)
+            self.labels = [label for label in self.labels if label.name not in label_names]
+
+    class FakeRepo:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.LEGACY_DRIFTGUARD_ESCALATION_LABEL)]
+            self.issue = FakeIssue()
+
+        def get_labels(self):
+            return self.labels
+
+        def create_label(self, name, color, description):
+            created_labels.append((name, color, description))
+            self.labels.append(FakeLabel(name))
+
+        def get_issue(self, number):
+            assert number == 28
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    applied = ensure_pr_label("doria90/dummyAI", 28, "installation-token")
+
+    assert applied is True
+    assert created_labels == [
+        (
+            github_integration.DRIFTGUARD_ESCALATION_LABEL,
+            github_integration.DRIFTGUARD_ESCALATION_LABEL_COLOR,
+            github_integration.DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION,
+        )
+    ]
+    assert removed_labels == [github_integration.LEGACY_DRIFTGUARD_ESCALATION_LABEL]
+    assert issue_added_labels == [github_integration.DRIFTGUARD_ESCALATION_LABEL]
+
+
 def test_remove_pr_label_removes_existing_issue_label(monkeypatch):
     removed_labels = []
 
@@ -607,6 +671,48 @@ def test_remove_pr_label_removes_legacy_promptdrift_issue_label(monkeypatch):
 
     assert removed is True
     assert removed_labels == [github_integration.PROMPTDRIFT_ESCALATION_LABEL]
+
+
+def test_remove_pr_label_removes_legacy_driftguard_issue_label(monkeypatch):
+    removed_labels = []
+
+    class FakeLabel:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeIssue:
+        def __init__(self):
+            self.labels = [FakeLabel(github_integration.LEGACY_DRIFTGUARD_ESCALATION_LABEL), FakeLabel("bug")]
+
+        def get_labels(self):
+            return self.labels
+
+        def remove_from_labels(self, *label_names):
+            removed_labels.extend(label_names)
+            self.labels = [label for label in self.labels if label.name not in label_names]
+
+    class FakeRepo:
+        def __init__(self):
+            self.issue = FakeIssue()
+
+        def get_issue(self, number):
+            assert number == 29
+            return self.issue
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    removed = remove_pr_label("doria90/dummyAI", 29, "installation-token")
+
+    assert removed is True
+    assert removed_labels == [github_integration.LEGACY_DRIFTGUARD_ESCALATION_LABEL]
 
 
 def test_remove_pr_label_is_noop_when_label_absent(monkeypatch):
