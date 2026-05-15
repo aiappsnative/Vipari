@@ -4579,6 +4579,8 @@ app.include_router(
         plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
         execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
         build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
+        record_server_timing_metric_fn=_record_server_timing_metric,
+        attach_server_timing_fn=_attach_server_timing,
     )
 )
 

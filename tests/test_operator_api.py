@@ -686,6 +686,11 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     assert "policies/usage.md" in file_paths
     assert inferred_types["policies/usage.md"] == "policy"
     assert "prompt" in payload["artifact_type_options"]
+    assert "access;dur=" in response.headers["server-timing"]
+    assert "onboarding;dur=" in response.headers["server-timing"]
+    assert "inventory;dur=" in response.headers["server-timing"]
+    assert "json;dur=" in response.headers["server-timing"]
+    assert "total;dur=" in response.headers["server-timing"]
 
 
 def test_repo_artifact_options_api_returns_empty_inventory_when_installation_lookup_fails(tmp_path):

@@ -199,26 +199,35 @@ def create_repo_onboarding_router(
 	plan_repository_history_backfill_fn: Callable,
 	execute_repository_history_backfill_fn: Callable,
 	build_repo_dashboard_view_fn: Callable,
+	record_server_timing_metric_fn: Callable,
+	attach_server_timing_fn: Callable,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 
 	def list_repo_artifact_options(request: Request, repo_full: str):
 		from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding
 
+		request_started = time.perf_counter()
+		timing_metrics: list[tuple[str, float]] = []
+		access_started = time.perf_counter()
 		auth_context = authorize_repo_read_fn(request, repo_full)
+		record_server_timing_metric_fn(timing_metrics, "access", access_started)
 		installation_id = auth_context.get("repo_installation_id")
 		if installation_id is None:
 			raise HTTPException(status_code=404, detail="Repository installation was not found.")
 		db_path = resolve_db_path_fn()
+		onboarding_started = time.perf_counter()
 		onboarding = get_latest_repository_onboarding(db_path, repo_full)
 		tracked_paths = {
 			artifact.artifact_path
 			for artifact in (list_onboarded_artifacts_for_onboarding(db_path, onboarding.id) if onboarding is not None else [])
 		}
+		record_server_timing_metric_fn(timing_metrics, "onboarding", onboarding_started)
 		ref = onboarding.default_branch if onboarding is not None else None
 		file_paths: list[str] = []
 		inventory_available = False
 		inventory_error = None
+		inventory_started = time.perf_counter()
 		try:
 			jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
 			token = get_installation_token_fn(jwt_token, int(installation_id))
@@ -226,7 +235,9 @@ def create_repo_onboarding_router(
 			inventory_available = True
 		except (HTTPError, URLError, OSError, ValueError) as exc:
 			inventory_error = str(exc)
-		return JSONResponse(
+		record_server_timing_metric_fn(timing_metrics, "inventory", inventory_started)
+		json_started = time.perf_counter()
+		response = JSONResponse(
 			{
 				"repo_full": repo_full,
 				"default_branch": ref,
@@ -244,6 +255,9 @@ def create_repo_onboarding_router(
 				],
 			}
 		)
+		record_server_timing_metric_fn(timing_metrics, "json", json_started)
+		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+		return attach_server_timing_fn(response, timing_metrics)
 
 	def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
 		auth_context = authorize_repo_mutation_fn(request, repo_full)
