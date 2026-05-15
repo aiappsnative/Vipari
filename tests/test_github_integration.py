@@ -12,6 +12,72 @@ from services import github_integration
 from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, generate_jwt, list_pr_comment_reactions, list_pr_review_reactions, remove_pr_label, sync_pr_label
 
 
+def test_list_repository_files_reuses_cached_tree_for_same_repo_and_ref(monkeypatch):
+    github_integration._REPOSITORY_FILE_LIST_CACHE.clear()
+    repo_calls = []
+    tree_calls = []
+
+    class FakeRepo:
+        default_branch = "main"
+
+        def get_git_tree(self, sha, recursive=True):
+            tree_calls.append((sha, recursive))
+            return SimpleNamespace(
+                tree=[
+                    SimpleNamespace(path="src/app.py", type="blob"),
+                    SimpleNamespace(path="README.md", type="blob"),
+                    SimpleNamespace(path="docs", type="tree"),
+                ]
+            )
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            repo_calls.append(repo_full)
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    first = github_integration.list_repository_files("doria90/dummyAI", "installation-token", ref="main")
+    second = github_integration.list_repository_files("doria90/dummyAI", "different-token", ref="main")
+
+    assert first == ["README.md", "src/app.py"]
+    assert second == ["README.md", "src/app.py"]
+    assert repo_calls == ["doria90/dummyAI"]
+    assert tree_calls == [("main", True)]
+
+
+def test_list_repository_files_cache_is_keyed_by_ref(monkeypatch):
+    github_integration._REPOSITORY_FILE_LIST_CACHE.clear()
+    tree_calls = []
+
+    class FakeRepo:
+        default_branch = "main"
+
+        def get_git_tree(self, sha, recursive=True):
+            tree_calls.append((sha, recursive))
+            return SimpleNamespace(tree=[SimpleNamespace(path=f"{sha}.md", type="blob")])
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    main_files = github_integration.list_repository_files("doria90/dummyAI", "installation-token", ref="main")
+    release_files = github_integration.list_repository_files("doria90/dummyAI", "installation-token", ref="release")
+
+    assert main_files == ["main.md"]
+    assert release_files == ["release.md"]
+    assert tree_calls == [("main", True), ("release", True)]
+
+
 def test_resolve_private_key_path_prefers_cwd_when_relative_file_exists(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     key_path = tmp_path / "test-key.pem"
@@ -78,6 +144,74 @@ def test_generate_jwt_supports_inline_private_key(monkeypatch):
     assert token == 'encoded-inline-token'
     assert captured['private_key'] == 'line-one\nline-two'
     assert captured['algorithm'] == 'RS256'
+
+
+def test_get_installation_token_reuses_cached_token_until_expiry(monkeypatch):
+    github_integration._INSTALLATION_TOKEN_CACHE.clear()
+    requests = []
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}'
+
+    def fake_urlopen(request: Request):
+        requests.append(request.full_url)
+        return DummyResponse()
+
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    first = github_integration.get_installation_token("jwt-one", 123)
+    second = github_integration.get_installation_token("jwt-two", 123)
+
+    assert first == "installation-token"
+    assert second == "installation-token"
+    assert requests == ["https://api.github.com/app/installations/123/access_tokens"]
+
+
+def test_get_installation_token_refreshes_after_cached_expiry(monkeypatch):
+    github_integration._INSTALLATION_TOKEN_CACHE.clear()
+    requests = []
+    time_values = iter([1_000.0, 1_005.0])
+    payloads = iter([
+        b'{"token":"installation-token-1","expires_at":"1970-01-01T00:17:40Z"}',
+        b'{"token":"installation-token-2","expires_at":"1970-01-01T00:22:20Z"}',
+    ])
+
+    class DummyResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request: Request):
+        requests.append(request.full_url)
+        return DummyResponse(next(payloads))
+
+    monkeypatch.setattr(github_integration.time, "time", lambda: next(time_values))
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    first = github_integration.get_installation_token("jwt-one", 123)
+    second = github_integration.get_installation_token("jwt-two", 123)
+
+    assert first == "installation-token-1"
+    assert second == "installation-token-2"
+    assert requests == [
+        "https://api.github.com/app/installations/123/access_tokens",
+        "https://api.github.com/app/installations/123/access_tokens",
+    ]
 
 
 def test_fetch_compare_diff_uses_compare_endpoint(monkeypatch):
