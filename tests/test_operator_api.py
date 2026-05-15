@@ -907,6 +907,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert 'data-repo-tab-link="pr-reviews"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI?tab=pr-reviews"' in repo_response.text
+    assert repo_response.text.index('data-repo-tab-link="baseline"') < repo_response.text.index('data-repo-tab-link="pr-reviews"') < repo_response.text.index('data-repo-tab-link="compliance"')
     assert 'id="artifact-add-controls"' in repo_response.text
     assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
