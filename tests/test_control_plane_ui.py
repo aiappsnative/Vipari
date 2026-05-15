@@ -3776,7 +3776,7 @@ def test_dashboard_requires_session_when_local_env_uses_non_local_base_url(tmp_p
     main.AUDIT_DB_PATH = original_db_path
 
 
-def test_dashboard_local_debug_disable_login_still_requires_session(tmp_path):
+def test_dashboard_local_debug_disable_login_unlocks_dashboard_reads(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_app_env = main.settings.app_env
     original_app_base_url = main.settings.app_base_url
@@ -3812,10 +3812,10 @@ def test_dashboard_local_debug_disable_login_still_requires_session(tmp_path):
         dashboard_response = local_client.get("/dashboard", follow_redirects=False)
         overview_response = local_client.get("/api/dashboard/overview")
 
-    assert dashboard_response.status_code == 303
-    assert dashboard_response.headers["location"] == "/login"
-    assert overview_response.status_code == 401
-    assert overview_response.json()["detail"] == "Authentication required."
+    assert dashboard_response.status_code == 200
+    assert "Vipari" in dashboard_response.text
+    assert overview_response.status_code == 200
+    assert "attention_repos" in overview_response.json()
 
     main.settings.service_role = original_service_role
     main.settings.local_debug_disable_login = original_local_debug_disable_login

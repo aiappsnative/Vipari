@@ -28,6 +28,7 @@ from services.onboarding_records import (
     OnboardingBaselineVersionRecord,
     RepositoryOnboardingRecord,
 )
+from types import SimpleNamespace
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 
 
@@ -666,7 +667,11 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     ), patch(
         "main.list_repository_files", return_value=["prompts/system.txt", "policies/usage.md", "src/app.py"]
     ), patch(
-        "main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")
+        "services.onboarding_records.get_latest_repository_onboarding",
+        return_value=SimpleNamespace(id=1, default_branch="main"),
+    ), patch(
+        "services.onboarding_records.list_onboarded_artifacts_for_onboarding",
+        return_value=[SimpleNamespace(artifact_path="prompts/system.txt")],
     ):
         with TestClient(main.app) as client:
             client.cookies.set(main.settings.session_cookie_name, session.session_id)
@@ -702,7 +707,11 @@ def test_repo_artifact_options_api_returns_empty_inventory_when_installation_loo
     ), patch(
         "main.list_repository_files"
     ) as list_repository_files_mock, patch(
-        "main.build_repo_dashboard_view", return_value=_dashboard("doria90/dummyAI")
+        "services.onboarding_records.get_latest_repository_onboarding",
+        return_value=SimpleNamespace(id=1, default_branch="main"),
+    ), patch(
+        "services.onboarding_records.list_onboarded_artifacts_for_onboarding",
+        return_value=[SimpleNamespace(artifact_path="prompts/system.txt")],
     ):
         with TestClient(main.app) as client:
             client.cookies.set(main.settings.session_cookie_name, session.session_id)

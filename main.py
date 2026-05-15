@@ -371,6 +371,9 @@ def _dashboard_redirect_for_request(request: Request):
     if not _control_plane_active():
         return None, session, None, False
     if session is None:
+        debug_context = _local_debug_workspace_context()
+        if debug_context is not None:
+            return None, None, debug_context, False
         return RedirectResponse("/login", status_code=303), None, None, False
     access_context = _build_access_context(session)
     is_deep_link = _is_dashboard_deep_link_request(request)
@@ -1258,7 +1261,7 @@ def _require_dashboard_access(request: Request, *, allow_local_debug: bool = Fal
 
 
 def _require_dashboard_read_access(request: Request, *, allow_local_debug: bool = False) -> dict[str, object]:
-    return _require_dashboard_access(request, allow_local_debug=allow_local_debug)
+    return _require_dashboard_access(request, allow_local_debug=(allow_local_debug or _local_debug_dashboard_enabled()))
 
 
 def _current_theme_preference(request: Request) -> str:

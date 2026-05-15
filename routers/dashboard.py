@@ -203,14 +203,18 @@ def create_repo_onboarding_router(
 	router = APIRouter(tags=["dashboard"])
 
 	def list_repo_artifact_options(request: Request, repo_full: str):
+		from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding
+
 		auth_context = authorize_repo_read_fn(request, repo_full)
 		installation_id = auth_context.get("repo_installation_id")
 		if installation_id is None:
 			raise HTTPException(status_code=404, detail="Repository installation was not found.")
 		db_path = resolve_db_path_fn()
-		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
-		tracked_paths = {item.artifact_path for item in dashboard.artifacts}
-		onboarding = dashboard.onboarding
+		onboarding = get_latest_repository_onboarding(db_path, repo_full)
+		tracked_paths = {
+			artifact.artifact_path
+			for artifact in (list_onboarded_artifacts_for_onboarding(db_path, onboarding.id) if onboarding is not None else [])
+		}
 		ref = onboarding.default_branch if onboarding is not None else None
 		file_paths: list[str] = []
 		inventory_available = False

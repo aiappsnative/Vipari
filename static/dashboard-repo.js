@@ -64,6 +64,10 @@ function resolveRepoTab() {
 const activeRepoTab = resolveRepoTab();
 window.__activeRepoTab = activeRepoTab;
 
+function shouldPrefetchArtifactOptions() {
+    return activeRepoTab === "baseline";
+}
+
 function storylinePanelCopy() {
     if (activeRepoTab === "audit") {
         return {
@@ -1767,7 +1771,7 @@ function bindArtifactControls() {
         });
     }
 
-    if (!window.__artifactOptionsLoaded && !window.__artifactOptionsLoading) {
+    if (shouldPrefetchArtifactOptions() && !window.__artifactOptionsLoaded && !window.__artifactOptionsLoading) {
         void loadArtifactOptions();
     }
 }
@@ -2811,7 +2815,9 @@ function applyDashboardPayload(payload) {
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
-    void loadArtifactOptions();
+    if (shouldPrefetchArtifactOptions()) {
+        void loadArtifactOptions();
+    }
 
     renderDecisionSection(insights, payload);
     renderRepoActionsSection(insights);
