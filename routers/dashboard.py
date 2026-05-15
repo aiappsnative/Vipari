@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict
+import threading
 import time
 from urllib.error import HTTPError, URLError
 
@@ -9,6 +10,48 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from services.api_models import BaselineDecisionRequest, RepoArtifactAddRequest, RepoArtifactUpdateRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+
+
+_ARTIFACT_OPTIONS_CACHE_TTL_SECONDS = 30.0
+_ARTIFACT_OPTIONS_CACHE_MAX_ENTRIES = 128
+
+
+def _cache_get(cache: dict[tuple[object, ...], tuple[float, object]], cache_key: tuple[object, ...], *, lock: threading.RLock):
+	now = time.monotonic()
+	with lock:
+		cached = cache.get(cache_key)
+		if cached is None:
+			return None
+		expires_at, value = cached
+		if expires_at <= now:
+			cache.pop(cache_key, None)
+			return None
+		cache.pop(cache_key, None)
+		cache[cache_key] = cached
+		return value
+
+
+def _cache_set(
+	cache: dict[tuple[object, ...], tuple[float, object]],
+	cache_key: tuple[object, ...],
+	value: object,
+	*,
+	ttl_seconds: float,
+	max_entries: int,
+	lock: threading.RLock,
+):
+	with lock:
+		cache[cache_key] = (time.monotonic() + ttl_seconds, value)
+		while len(cache) > max_entries:
+			oldest_key = next(iter(cache))
+			cache.pop(oldest_key, None)
+	return value
+
+
+def _invalidate_cache_entries(cache: dict[tuple[object, ...], tuple[float, object]], *, predicate: Callable[[tuple[object, ...]], bool], lock: threading.RLock) -> None:
+	with lock:
+		for cache_key in [existing_key for existing_key in cache if predicate(existing_key)]:
+			cache.pop(cache_key, None)
 
 
 def create_dashboard_read_router(
@@ -199,47 +242,98 @@ def create_repo_onboarding_router(
 	plan_repository_history_backfill_fn: Callable,
 	execute_repository_history_backfill_fn: Callable,
 	build_repo_dashboard_view_fn: Callable,
+	record_server_timing_metric_fn: Callable,
+	attach_server_timing_fn: Callable,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
+	artifact_options_cache: dict[tuple[object, ...], tuple[float, object]] = {}
+	artifact_options_cache_lock = threading.RLock()
+
+	def invalidate_artifact_options_cache(repo_full: str) -> None:
+		_invalidate_cache_entries(
+			artifact_options_cache,
+			predicate=lambda cache_key: len(cache_key) > 0 and cache_key[0] == repo_full,
+			lock=artifact_options_cache_lock,
+		)
 
 	def list_repo_artifact_options(request: Request, repo_full: str):
+		from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding
+
+		request_started = time.perf_counter()
+		timing_metrics: list[tuple[str, float]] = []
+		access_started = time.perf_counter()
 		auth_context = authorize_repo_read_fn(request, repo_full)
+		record_server_timing_metric_fn(timing_metrics, "access", access_started)
 		installation_id = auth_context.get("repo_installation_id")
 		if installation_id is None:
 			raise HTTPException(status_code=404, detail="Repository installation was not found.")
 		db_path = resolve_db_path_fn()
-		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
-		tracked_paths = {item.artifact_path for item in dashboard.artifacts}
-		onboarding = dashboard.onboarding
+		onboarding_started = time.perf_counter()
+		onboarding = get_latest_repository_onboarding(db_path, repo_full)
+		tracked_paths = {
+			artifact.artifact_path
+			for artifact in (list_onboarded_artifacts_for_onboarding(db_path, onboarding.id) if onboarding is not None else [])
+		}
+		record_server_timing_metric_fn(timing_metrics, "onboarding", onboarding_started)
 		ref = onboarding.default_branch if onboarding is not None else None
+		tracked_paths_sorted = sorted(tracked_paths)
+		cache_key = (repo_full, ref, tuple(tracked_paths_sorted))
+		cached_payload = _cache_get(artifact_options_cache, cache_key, lock=artifact_options_cache_lock)
+		if cached_payload is not None:
+			timing_metrics.append(("options-cache-hit", 0.0))
+			json_started = time.perf_counter()
+			response = JSONResponse(cached_payload)
+			record_server_timing_metric_fn(timing_metrics, "json", json_started)
+			timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+			return attach_server_timing_fn(response, timing_metrics)
 		file_paths: list[str] = []
 		inventory_available = False
 		inventory_error = None
+		inventory_started = time.perf_counter()
 		try:
+			jwt_started = time.perf_counter()
 			jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+			record_server_timing_metric_fn(timing_metrics, "jwt", jwt_started)
+			installation_token_started = time.perf_counter()
 			token = get_installation_token_fn(jwt_token, int(installation_id))
+			record_server_timing_metric_fn(timing_metrics, "installation_token", installation_token_started)
+			tree_started = time.perf_counter()
 			file_paths = list_repository_files_fn(repo_full, token, ref=ref)
+			record_server_timing_metric_fn(timing_metrics, "tree", tree_started)
 			inventory_available = True
 		except (HTTPError, URLError, OSError, ValueError) as exc:
 			inventory_error = str(exc)
-		return JSONResponse(
-			{
-				"repo_full": repo_full,
-				"default_branch": ref,
-				"inventory_available": inventory_available,
-				"inventory_error": inventory_error,
-				"tracked_paths": sorted(tracked_paths),
-				"artifact_type_options": tracked_artifact_type_options_fn(),
-				"files": [
-					{
-						"path": path,
-						"inferred_artifact_type": infer_artifact_type_from_path_fn(path),
-					}
-					for path in file_paths
-					if path not in tracked_paths
-				],
-			}
-		)
+		record_server_timing_metric_fn(timing_metrics, "inventory", inventory_started)
+		json_started = time.perf_counter()
+		payload = {
+			"repo_full": repo_full,
+			"default_branch": ref,
+			"inventory_available": inventory_available,
+			"inventory_error": inventory_error,
+			"tracked_paths": tracked_paths_sorted,
+			"artifact_type_options": tracked_artifact_type_options_fn(),
+			"files": [
+				{
+					"path": path,
+					"inferred_artifact_type": infer_artifact_type_from_path_fn(path),
+				}
+				for path in file_paths
+				if path not in tracked_paths
+			],
+		}
+		if inventory_available:
+			_cache_set(
+				artifact_options_cache,
+				cache_key,
+				payload,
+				ttl_seconds=_ARTIFACT_OPTIONS_CACHE_TTL_SECONDS,
+				max_entries=_ARTIFACT_OPTIONS_CACHE_MAX_ENTRIES,
+				lock=artifact_options_cache_lock,
+			)
+		response = JSONResponse(payload)
+		record_server_timing_metric_fn(timing_metrics, "json", json_started)
+		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+		return attach_server_timing_fn(response, timing_metrics)
 
 	def run_repo_onboarding(request: Request, repo_full: str, payload: RepositoryOnboardingRequest):
 		auth_context = authorize_repo_mutation_fn(request, repo_full)
@@ -254,6 +348,7 @@ def create_repo_onboarding_router(
 			installation_id=installation_id,
 			token=token,
 		)
+		invalidate_artifact_options_cache(repo_full)
 		planned_jobs = []
 		if payload.plan_backfill:
 			planned_jobs = plan_repository_history_backfill_fn(
@@ -323,6 +418,7 @@ def create_repo_onboarding_router(
 			)
 		except ValueError as exc:
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		invalidate_artifact_options_cache(repo_full)
 		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 		return JSONResponse({
 			"repo_full": repo_full,
@@ -338,6 +434,7 @@ def create_repo_onboarding_router(
 			remove_repo_artifact_from_onboarding_fn(db_path, repo_full=repo_full, artifact_path=artifact_path)
 		except ValueError as exc:
 			raise HTTPException(status_code=404, detail=str(exc)) from exc
+		invalidate_artifact_options_cache(repo_full)
 		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 		return JSONResponse({"repo_full": repo_full, "artifact_path": artifact_path, "dashboard": asdict(dashboard)})
 
@@ -353,6 +450,7 @@ def create_repo_onboarding_router(
 			)
 		except ValueError as exc:
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		invalidate_artifact_options_cache(repo_full)
 		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 		return JSONResponse({"repo_full": repo_full, "artifact": asdict(artifact), "dashboard": asdict(dashboard)})
 

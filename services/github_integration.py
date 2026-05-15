@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import difflib
 import json
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -24,6 +25,14 @@ DRIFTGUARD_ESCALATION_LABEL_DESCRIPTION = "Vipari recommends escalation before m
 LEGACY_ESCALATION_LABELS = (PROMPTDRIFT_ESCALATION_LABEL, LEGACY_DRIFTGUARD_ESCALATION_LABEL)
 JWT_ISSUED_AT_SKEW_SECONDS = 60
 JWT_LIFETIME_SECONDS = 9 * 60
+INSTALLATION_TOKEN_EXPIRY_SKEW_SECONDS = 60
+INSTALLATION_TOKEN_FALLBACK_TTL_SECONDS = 55 * 60
+REPOSITORY_FILE_LIST_CACHE_TTL_SECONDS = 60.0
+_REPOSITORY_FILE_LIST_CACHE_MAX_ENTRIES = 128
+_REPOSITORY_FILE_LIST_CACHE_LOCK = threading.RLock()
+_REPOSITORY_FILE_LIST_CACHE: dict[tuple[str, str | None], tuple[float, tuple[str, ...]]] = {}
+_INSTALLATION_TOKEN_CACHE_LOCK = threading.RLock()
+_INSTALLATION_TOKEN_CACHE: dict[int, tuple[str, float]] = {}
 
 
 @dataclass(frozen=True)
@@ -77,7 +86,40 @@ def generate_jwt(app_id: str, private_key_path: str, private_key: str | None = N
     return token.decode("utf-8") if isinstance(token, bytes) else token
 
 
+def _cached_installation_token(installation_id: int) -> str | None:
+    now = time.time()
+    with _INSTALLATION_TOKEN_CACHE_LOCK:
+        cached = _INSTALLATION_TOKEN_CACHE.get(installation_id)
+        if cached is None:
+            return None
+        token, expires_at = cached
+        if expires_at <= now:
+            _INSTALLATION_TOKEN_CACHE.pop(installation_id, None)
+            return None
+        return token
+
+
+def _installation_token_expiry(expires_at_raw: str | None) -> float:
+    if expires_at_raw:
+        try:
+            parsed = datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
+            return parsed.timestamp() - INSTALLATION_TOKEN_EXPIRY_SKEW_SECONDS
+        except ValueError:
+            pass
+    return time.time() + INSTALLATION_TOKEN_FALLBACK_TTL_SECONDS
+
+
+def _cache_installation_token(installation_id: int, token: str, expires_at_raw: str | None) -> str:
+    expires_at = _installation_token_expiry(expires_at_raw)
+    with _INSTALLATION_TOKEN_CACHE_LOCK:
+        _INSTALLATION_TOKEN_CACHE[installation_id] = (token, expires_at)
+    return token
+
+
 def get_installation_token(jwt_token: str, installation_id: int) -> str:
+    cached = _cached_installation_token(installation_id)
+    if cached is not None:
+        return cached
     url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
     req = urllib.request.Request(url, method="POST")
     req.add_header("Authorization", f"Bearer {jwt_token}")
@@ -87,7 +129,7 @@ def get_installation_token(jwt_token: str, installation_id: int) -> str:
     token = data.get("token")
     if not token:
         raise RuntimeError("GitHub installation token response did not include a token.")
-    return token
+    return _cache_installation_token(installation_id, token, data.get("expires_at"))
 
 
 def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
@@ -181,12 +223,43 @@ def get_repo_default_branch(repo_full: str, token: str) -> str:
     return repo.default_branch
 
 
+def _get_cached_repository_files(repo_full: str, ref: str | None) -> list[str] | None:
+    cache_key = (repo_full, ref)
+    now = time.monotonic()
+    with _REPOSITORY_FILE_LIST_CACHE_LOCK:
+        cached = _REPOSITORY_FILE_LIST_CACHE.get(cache_key)
+        if cached is None:
+            return None
+        expires_at, file_paths = cached
+        if expires_at <= now:
+            _REPOSITORY_FILE_LIST_CACHE.pop(cache_key, None)
+            return None
+        _REPOSITORY_FILE_LIST_CACHE.pop(cache_key, None)
+        _REPOSITORY_FILE_LIST_CACHE[cache_key] = cached
+        return list(file_paths)
+
+
+def _cache_repository_files(repo_full: str, ref: str | None, file_paths: list[str]) -> list[str]:
+    cache_key = (repo_full, ref)
+    cached_value = tuple(file_paths)
+    expires_at = time.monotonic() + REPOSITORY_FILE_LIST_CACHE_TTL_SECONDS
+    with _REPOSITORY_FILE_LIST_CACHE_LOCK:
+        _REPOSITORY_FILE_LIST_CACHE[cache_key] = (expires_at, cached_value)
+        while len(_REPOSITORY_FILE_LIST_CACHE) > _REPOSITORY_FILE_LIST_CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(_REPOSITORY_FILE_LIST_CACHE))
+            _REPOSITORY_FILE_LIST_CACHE.pop(oldest_key, None)
+    return list(cached_value)
+
+
 def list_repository_files(repo_full: str, token: str, *, ref: str | None = None) -> list[str]:
+    cached = _get_cached_repository_files(repo_full, ref)
+    if cached is not None:
+        return cached
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
     tree_ref = ref or repo.default_branch
     tree = repo.get_git_tree(tree_ref, recursive=True)
-    return sorted(entry.path for entry in tree.tree if entry.type == "blob")
+    return _cache_repository_files(repo_full, ref, sorted(entry.path for entry in tree.tree if entry.type == "blob"))
 
 
 def list_file_commits(repo_full: str, file_path: str, token: str, *, branch: str | None = None, limit: int = 25) -> list[str]:

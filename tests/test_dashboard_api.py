@@ -937,6 +937,55 @@ def test_dashboard_api_local_debug_still_requires_session_for_mutations(tmp_path
     assert promote_response.json()["detail"] == "Authentication required."
 
 
+def test_dashboard_api_local_debug_allows_read_without_session(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-local-debug-read.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    main.settings.local_debug_disable_login = True
+
+    from services.control_plane_records import create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id="702",
+        github_login="debug-owner",
+        display_name="Debug Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    create_workspace(
+        db_path,
+        slug="debug-workspace",
+        display_name="Debug Workspace",
+        billing_owner_user_id=user.id,
+    )
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    try:
+        with TestClient(main.app) as client:
+            overview_response = client.get("/api/dashboard/overview")
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+        main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert overview_response.status_code == 200
+    assert "attention_repos" in overview_response.json()
+
+
 def test_dashboard_api_rebaseline_skips_artifacts_missing_in_selected_snapshot(tmp_path):
     db_path = str(tmp_path / "api-dashboard-missing-artifact.db")
     init_db(db_path)
