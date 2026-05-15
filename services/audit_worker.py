@@ -1252,6 +1252,7 @@ def _persist_audit_result(
         job_id=job.id,
         repo_full=job.repo_full,
         pr_number=job.pr_number,
+        pr_title=job.pr_title,
         installation_id=job.installation_id,
         head_sha=job.head_sha,
         pr_state=job.pr_state,

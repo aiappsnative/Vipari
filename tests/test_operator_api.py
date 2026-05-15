@@ -870,16 +870,20 @@ def test_dashboard_html_pages_render(tmp_path):
     assert repo_js_response.status_code == 200
     assert "function repoTabUrl" in repo_js_response.text
     assert "function renderPrReviewRoutesSection" in repo_js_response.text
+    assert "function renderPrReviewSearchPicker" in repo_js_response.text
     assert "Touched artifacts vs baseline" in repo_js_response.text
     assert "Top findings and feedback" in repo_js_response.text
     assert "Full review note" in repo_js_response.text
     assert "Review storyline" in repo_js_response.text
+    assert "Search by PR title, PR #, or head SHA" in repo_js_response.text
+    assert "Search across GitHub PR titles" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
     assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
     assert "Open baseline review" in repo_js_response.text
     assert "/artifacts/options" in repo_js_response.text
     assert "data-artifact-edit-path" in repo_js_response.text
+    assert 'id="repo-pr-review-search"' in repo_response.text
     assert "data-artifact-remove-path" in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text

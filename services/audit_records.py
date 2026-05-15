@@ -32,6 +32,7 @@ class PullRequestAuditRecord:
     job_id: int
     repo_full: str
     pr_number: int
+    pr_title: str | None
     installation_id: int
     head_sha: str
     pr_state: str | None
@@ -261,6 +262,7 @@ def init_audit_record_db(db_path: str) -> None:
                 job_id INTEGER NOT NULL UNIQUE,
                 repo_full TEXT NOT NULL,
                 pr_number INTEGER NOT NULL,
+                pr_title TEXT,
                 installation_id INTEGER NOT NULL,
                 head_sha TEXT NOT NULL,
                 pr_state TEXT,
@@ -285,6 +287,8 @@ def init_audit_record_db(db_path: str) -> None:
             """
         )
         audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+        if "pr_title" not in audit_columns:
+            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_title TEXT")
         if "pr_state" not in audit_columns:
             conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_state TEXT")
         if "pr_merged" not in audit_columns:
@@ -493,6 +497,7 @@ def record_audit_result(
     job_id: int,
     repo_full: str,
     pr_number: int,
+    pr_title: str | None = None,
     installation_id: int,
     head_sha: str,
     pr_state: str | None = None,
@@ -549,17 +554,18 @@ def record_audit_result(
             conn.execute(
                 """
                 INSERT INTO pull_request_audits (
-                    job_id, repo_full, pr_number, installation_id, head_sha,
+                    job_id, repo_full, pr_number, pr_title, installation_id, head_sha,
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode, pr_feedback_mode,
                     deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     repo_full,
                     pr_number,
+                    pr_title,
                     installation_id,
                     head_sha,
                     pr_state,
@@ -589,6 +595,7 @@ def record_audit_result(
                 UPDATE pull_request_audits
                 SET repo_full = ?,
                     pr_number = ?,
+                    pr_title = ?,
                     installation_id = ?,
                     head_sha = ?,
                     pr_state = ?,
@@ -612,6 +619,7 @@ def record_audit_result(
                 (
                     repo_full,
                     pr_number,
+                    pr_title,
                     installation_id,
                     head_sha,
                     pr_state,
@@ -1620,6 +1628,7 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         job_id=row["job_id"],
         repo_full=row["repo_full"],
         pr_number=row["pr_number"],
+        pr_title=row["pr_title"] if "pr_title" in row.keys() else None,
         installation_id=row["installation_id"],
         head_sha=row["head_sha"],
         pr_state=row["pr_state"],
@@ -1738,6 +1747,7 @@ def update_pull_request_audit_state(
     repo_full: str,
     pr_number: int,
     head_sha: str | None,
+    pr_title: str | None,
     pr_state: str | None,
     pr_merged: bool | None,
     pr_closed_at: float | None,
@@ -1765,7 +1775,8 @@ def update_pull_request_audit_state(
             conn.execute(
                 """
                 UPDATE pull_request_audits
-                SET pr_state = ?,
+                SET pr_title = ?,
+                    pr_state = ?,
                     pr_merged = ?,
                     pr_closed_at = ?,
                     pr_merged_at = ?,
@@ -1775,6 +1786,7 @@ def update_pull_request_audit_state(
                 WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
                 """,
                 (
+                    pr_title,
                     pr_state,
                     pr_merged_value,
                     pr_closed_at,
@@ -1792,7 +1804,8 @@ def update_pull_request_audit_state(
         conn.execute(
             """
             UPDATE pull_request_audits
-            SET pr_state = ?,
+            SET pr_title = ?,
+                pr_state = ?,
                 pr_merged = ?,
                 pr_closed_at = ?,
                 pr_merged_at = ?,
@@ -1808,6 +1821,7 @@ def update_pull_request_audit_state(
             )
             """,
             (
+                pr_title,
                 pr_state,
                 pr_merged_value,
                 pr_closed_at,

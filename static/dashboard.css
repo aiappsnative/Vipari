@@ -7873,6 +7873,92 @@ body.control-page.compliance-page .compliance-shell-section {
     margin-top: 4px;
 }
 
+.pr-review-search-shell {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pr-review-search-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.pr-review-search-copy,
+.pr-review-search-hint,
+.pr-review-search-result-copy,
+.pr-review-search-result-meta,
+.pr-review-search-empty {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.pr-review-search-input {
+    width: 100%;
+    min-height: 42px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+    padding: 0 14px;
+    outline: none;
+    transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+}
+
+.pr-review-search-input:focus {
+    border-color: rgba(79, 152, 163, 0.48);
+    box-shadow: 0 0 0 3px rgba(79, 152, 163, 0.14);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.pr-review-search-results {
+    display: grid;
+    gap: 8px;
+}
+
+.pr-review-search-result {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.025);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color var(--transition), transform var(--transition), background var(--transition);
+}
+
+.pr-review-search-result:hover {
+    border-color: rgba(196, 163, 90, 0.26);
+    background: rgba(196, 163, 90, 0.06);
+    transform: translateY(-1px);
+}
+
+.pr-review-search-result-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text-primary);
+}
+
+.pr-review-search-sha {
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 0.76rem;
+    color: rgba(196, 163, 90, 0.92);
+}
+
+.repo-audit-page[data-theme="light"] .pr-review-search-input,
+.repo-audit-page[data-theme="light"] .pr-review-search-result {
+    background: rgba(255, 255, 255, 0.84);
+}
+
 .pr-review-empty-state {
     padding: 16px;
     border-radius: 14px;

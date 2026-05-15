@@ -653,6 +653,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         job_id=101,
         repo_full="doria90/dummyAI",
         pr_number=20,
+        pr_title="Stabilize refund policy prompts",
         installation_id=123,
         head_sha="sha-older-20",
         deterministic_analysis=analyze_diff(PROMPT_DIFF),
@@ -677,6 +678,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         job_id=102,
         repo_full="doria90/dummyAI",
         pr_number=21,
+        pr_title="Expand direct refund authority",
         installation_id=123,
         head_sha="sha-relevance-21",
         deterministic_analysis=analyze_diff(PROMPT_DIFF),
@@ -725,6 +727,7 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     payload = repo_response.json()
     assert payload["pr_review_routes"]["route_count"] == 2
     assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 21
+    assert payload["pr_review_routes"]["selected_route"]["pr_title"] == "Expand direct refund authority"
     assert payload["pr_review_routes"]["selected_route"]["head_sha"] == "sha-relevance-21"
     assert payload["pr_review_routes"]["selected_route"]["summary"] == "This PR expands direct refund authority and needs human review."
     assert payload["pr_review_routes"]["selected_route"]["review_body"].startswith("## ❌ Vipari: Escalate before merge")
@@ -743,6 +746,11 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["findings_count"] == payload["pr_review_routes"]["selected_route"]["finding_count"]
     assert payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["artifact_rows"][0]["comparison"]["dominant_shifts"]
+    assert payload["pr_review_routes"]["route_search_entries"][0]["pr_label"] == "PR #21"
+    assert payload["pr_review_routes"]["route_search_entries"][0]["pr_title"] == "Expand direct refund authority"
+    assert payload["pr_review_routes"]["route_search_entries"][0]["short_head_sha"] == "sha-rel"
+    assert payload["pr_review_routes"]["route_search_entries"][1]["pr_label"] == "PR #20"
+    assert payload["pr_review_routes"]["route_search_entries"][1]["pr_title"] == "Stabilize refund policy prompts"
     assert payload["pr_review_routes"]["routes"][0]["selected"] is True
     assert payload["pr_review_routes"]["routes"][0]["dashboard_url"].endswith("/dashboard/doria90%2FdummyAI?tab=pr-reviews&pr=21&head_sha=sha-relevance-21")
 

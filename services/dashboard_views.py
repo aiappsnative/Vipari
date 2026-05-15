@@ -467,6 +467,7 @@ def build_repo_pr_review_routes_payload(
         candidate_audits.insert(0, selected_audit)
 
     route_entries: list[dict[str, Any]] = []
+    route_search_entries: list[dict[str, Any]] = []
 
     for audit in candidate_audits:
         comment = get_audit_comment_for_audit(db_path, audit.id)
@@ -477,6 +478,7 @@ def build_repo_pr_review_routes_payload(
             {
                 "audit_id": audit.id,
                 "pr_number": audit.pr_number,
+                "pr_title": audit.pr_title,
                 "head_sha": audit.head_sha,
                 "short_head_sha": (audit.head_sha or "")[:7],
                 "status": audit.status,
@@ -508,6 +510,24 @@ def build_repo_pr_review_routes_payload(
                 "recent_feedback": _build_recent_pr_review_feedback(feedback_events),
                 "dashboard_url": _dashboard_pr_route_url(repo_full, audit.pr_number, audit.head_sha),
                 "pull_request_url": f"https://github.com/{repo_full}/pull/{audit.pr_number}",
+            }
+        )
+
+    route_entry_by_audit_id = {entry["audit_id"]: entry for entry in route_entries}
+    for audit in reversed_audits:
+        lightweight_entry = route_entry_by_audit_id.get(audit.id)
+        route_search_entries.append(
+            {
+                "audit_id": audit.id,
+                "pr_number": audit.pr_number,
+                "pr_label": f"PR #{audit.pr_number}",
+                "pr_title": audit.pr_title,
+                "head_sha": audit.head_sha,
+                "short_head_sha": (audit.head_sha or "")[:7],
+                "risk_level": audit.suggested_risk_level,
+                "updated_at": audit.updated_at,
+                "summary": lightweight_entry.get("summary") if lightweight_entry is not None else None,
+                "dashboard_url": _dashboard_pr_route_url(repo_full, audit.pr_number, audit.head_sha),
             }
         )
 
@@ -543,6 +563,7 @@ def build_repo_pr_review_routes_payload(
         "route_count": len(audits),
         "selected_route": selected_route,
         "routes": trimmed_routes,
+        "route_search_entries": route_search_entries,
     }
 
 

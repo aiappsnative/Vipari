@@ -14,6 +14,7 @@ class AuditJob:
     id: int
     repo_full: str
     pr_number: int
+    pr_title: str | None
     installation_id: int
     head_sha: str
     diff_text: str
@@ -44,6 +45,7 @@ def bootstrap_application_schema(db_path: str) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 repo_full TEXT NOT NULL,
                 pr_number INTEGER NOT NULL,
+                pr_title TEXT,
                 installation_id INTEGER NOT NULL,
                 head_sha TEXT NOT NULL,
                 diff_text TEXT NOT NULL,
@@ -65,6 +67,8 @@ def bootstrap_application_schema(db_path: str) -> None:
             """
         )
         audit_job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_jobs)").fetchall()}
+        if "pr_title" not in audit_job_columns:
+            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_title TEXT")
         if "pr_state" not in audit_job_columns:
             conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_state TEXT")
         if "pr_merged" not in audit_job_columns:
@@ -103,6 +107,7 @@ def _row_to_job(row: sqlite3.Row) -> AuditJob:
         id=row["id"],
         repo_full=row["repo_full"],
         pr_number=row["pr_number"],
+        pr_title=row["pr_title"] if "pr_title" in row.keys() else None,
         installation_id=row["installation_id"],
         head_sha=row["head_sha"],
         diff_text=row["diff_text"],
@@ -154,6 +159,7 @@ def create_audit_job(
     *,
     repo_full: str,
     pr_number: int,
+    pr_title: str | None = None,
     installation_id: int,
     head_sha: str,
     diff_text: str,
@@ -190,14 +196,15 @@ def create_audit_job(
             conn.execute(
                 """
                 INSERT INTO audit_jobs (
-                    repo_full, pr_number, installation_id, head_sha, diff_text,
+                    repo_full, pr_number, pr_title, installation_id, head_sha, diff_text,
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, attempt_count, next_attempt_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
                 """,
                 (
                     repo_full,
                     pr_number,
+                    pr_title,
                     installation_id,
                     head_sha,
                     diff_text,
@@ -216,7 +223,8 @@ def create_audit_job(
             conn.execute(
                 """
                 UPDATE audit_jobs
-                SET installation_id = ?,
+                SET pr_title = ?,
+                    installation_id = ?,
                     diff_text = ?,
                     pr_state = ?,
                     pr_merged = ?,
@@ -233,6 +241,7 @@ def create_audit_job(
                 WHERE id = ?
                 """,
                 (
+                    pr_title,
                     installation_id,
                     diff_text,
                     pr_state,
@@ -262,6 +271,7 @@ def update_job_pr_state(
     repo_full: str,
     pr_number: int,
     head_sha: str | None,
+    pr_title: str | None,
     pr_state: str | None,
     pr_merged: bool | None,
     pr_closed_at: float | None,
@@ -289,7 +299,8 @@ def update_job_pr_state(
             conn.execute(
                 """
                 UPDATE audit_jobs
-                SET pr_state = ?,
+                SET pr_title = ?,
+                    pr_state = ?,
                     pr_merged = ?,
                     pr_closed_at = ?,
                     pr_merged_at = ?,
@@ -299,6 +310,7 @@ def update_job_pr_state(
                 WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
                 """,
                 (
+                    pr_title,
                     pr_state,
                     pr_merged_value,
                     pr_closed_at,
@@ -316,7 +328,8 @@ def update_job_pr_state(
         conn.execute(
             """
             UPDATE audit_jobs
-            SET pr_state = ?,
+            SET pr_title = ?,
+                pr_state = ?,
                 pr_merged = ?,
                 pr_closed_at = ?,
                 pr_merged_at = ?,
@@ -332,6 +345,7 @@ def update_job_pr_state(
             )
             """,
             (
+                pr_title,
                 pr_state,
                 (int(pr_merged) if pr_merged is not None else None),
                 pr_closed_at,

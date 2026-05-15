@@ -445,6 +445,7 @@ def test_webhook_queues_relevant_audit_job():
         "repository": {"full_name": "doria90/dummyAI"},
         "pull_request": {
             "number": 7,
+            "title": "Tighten refund approval flow",
             "base": {"sha": "base-opened"},
             "head": {"sha": "abc123"},
         },
@@ -469,6 +470,7 @@ def test_webhook_queues_relevant_audit_job():
     fetch_pr_diff.assert_called_once_with("doria90/dummyAI", 7, "installation-token")
     fetch_commit_pair_diff.assert_not_called()
     create_job.assert_called_once()
+    assert create_job.call_args.kwargs["pr_title"] == "Tighten refund approval flow"
 
 
 def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
@@ -479,6 +481,7 @@ def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
         "repository": {"full_name": "doria90/dummyAI"},
         "pull_request": {
             "number": 9,
+            "title": "Refine policy guardrails",
             "base": {"sha": "base123"},
             "head": {"sha": "head456"},
         },
@@ -502,6 +505,7 @@ def test_webhook_prefers_commit_pair_diff_only_for_synchronize():
     fetch_commit_pair_diff.assert_called_once_with("doria90/dummyAI", "base123", "head456", "installation-token")
     fetch_pr_diff.assert_not_called()
     create_job.assert_called_once()
+    assert create_job.call_args.kwargs["pr_title"] == "Refine policy guardrails"
 
 
 def test_webhook_runs_micro_classifier_for_uncertain_diff_and_persists_decision(tmp_path):
@@ -842,6 +846,7 @@ def test_webhook_merged_pull_request_queues_branch_scan_job():
         "repository": {"full_name": "doria90/dummyAI"},
         "pull_request": {
             "number": 11,
+            "title": "Merge refund authority updates",
             "state": "closed",
             "merged": True,
             "merged_at": "2026-05-14T12:00:00Z",
@@ -870,6 +875,8 @@ def test_webhook_merged_pull_request_queues_branch_scan_job():
     assert response.json() == {"message": "pr state updated", "branch_scan_job_id": 91}
     update_job_pr_state.assert_called_once()
     update_pull_request_audit_state.assert_called_once()
+    assert update_job_pr_state.call_args.kwargs["pr_title"] == "Merge refund authority updates"
+    assert update_pull_request_audit_state.call_args.kwargs["pr_title"] == "Merge refund authority updates"
     create_branch_scan_job.assert_called_once_with(
         main.AUDIT_DB_PATH,
         repo_full="doria90/dummyAI",

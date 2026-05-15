@@ -5151,6 +5151,7 @@ async def webhook(request: Request):
     repo_full = payload.get("repository", {}).get("full_name")
     pr_number = payload.get("pull_request", {}).get("number")
     pull_request = payload.get("pull_request", {})
+    pr_title = str(pull_request.get("title") or "").strip() or None
     base_info = pull_request.get("base", {})
     base_sha = base_info.get("sha")
     base_ref = base_info.get("ref")
@@ -5184,6 +5185,7 @@ async def webhook(request: Request):
             repo_full=repo_full,
             pr_number=pr_number,
             head_sha=head_sha,
+            pr_title=pr_title,
             pr_state=pr_state,
             pr_merged=pr_merged,
             pr_closed_at=pr_closed_at,
@@ -5196,6 +5198,7 @@ async def webhook(request: Request):
             repo_full=repo_full,
             pr_number=pr_number,
             head_sha=head_sha,
+            pr_title=pr_title,
             pr_state=pr_state,
             pr_merged=pr_merged,
             pr_closed_at=pr_closed_at,
@@ -5275,6 +5278,7 @@ async def webhook(request: Request):
         AUDIT_DB_PATH,
         repo_full=repo_full,
         pr_number=pr_number,
+        pr_title=pr_title,
         installation_id=installation_id,
         head_sha=head_sha,
         diff_text=diff_text,

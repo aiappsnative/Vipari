@@ -2314,6 +2314,74 @@ function prReviewComparisonNotice(route, comparison) {
     return "Vipari captured the review episode, but the artifact-level comparison rows are not available for this route yet.";
 }
 
+function renderPrReviewSearchPicker(routePayload) {
+    const searchEntries = asArray(routePayload?.route_search_entries);
+    if (!searchEntries.length) {
+        setSectionHtml("repo-pr-review-search", '<div class="pr-review-search-shell"><div class="pr-review-search-copy muted">Search becomes available after the first PR review route is recorded.</div></div>');
+        return;
+    }
+
+    const pickerId = `pr-review-search-${Math.random().toString(36).slice(2, 9)}`;
+    const seedResults = searchEntries.slice(0, 8);
+    setSectionHtml("repo-pr-review-search", `
+        <div class="pr-review-search-shell">
+            <label class="pr-review-search-label" for="${pickerId}">Inspect any PR review</label>
+            <div class="pr-review-search-copy">Search across GitHub PR titles, PR labels like <strong>PR #184</strong>, and short or full head SHA values to reopen older review episodes.</div>
+            <input id="${pickerId}" class="pr-review-search-input" type="search" placeholder="Search by PR title, PR #, or head SHA" autocomplete="off" spellcheck="false" aria-describedby="${pickerId}-hint" />
+            <div id="${pickerId}-hint" class="pr-review-search-hint">Try <strong>refund authority</strong>, <strong>PR #21</strong>, <strong>sha-rel</strong>, or a full head SHA.</div>
+            <div id="${pickerId}-results" class="pr-review-search-results">
+                ${seedResults.map((entry) => renderPrReviewSearchResult(entry)).join("")}
+            </div>
+        </div>
+    `);
+
+    const input = document.getElementById(pickerId);
+    const results = document.getElementById(`${pickerId}-results`);
+    if (!input || !results) {
+        return;
+    }
+
+    const renderMatches = () => {
+        const query = String(input.value || "").trim().toLowerCase();
+        const matched = !query
+            ? searchEntries.slice(0, 8)
+            : searchEntries.filter((entry) => {
+                const prTitle = String(entry?.pr_title || "").toLowerCase();
+                const prLabel = String(entry?.pr_label || "").toLowerCase();
+                const shortSha = String(entry?.short_head_sha || "").toLowerCase();
+                const headSha = String(entry?.head_sha || "").toLowerCase();
+                return prTitle.includes(query) || prLabel.includes(query) || shortSha.includes(query) || headSha.includes(query);
+            }).slice(0, 12);
+        results.innerHTML = matched.length
+            ? matched.map((entry) => renderPrReviewSearchResult(entry)).join("")
+            : '<div class="pr-review-search-empty">No PR review route matched that title, PR label, or SHA.</div>';
+    };
+
+    input.addEventListener("input", renderMatches);
+    input.addEventListener("focus", renderMatches);
+};
+
+function renderPrReviewSearchResult(entry) {
+    const url = entry?.dashboard_url || repoTabUrl("pr-reviews");
+    const prTitle = String(entry?.pr_title || "").trim();
+    const detailBits = [
+        entry?.short_head_sha ? `head ${entry.short_head_sha}` : "",
+        entry?.risk_level ? `${String(entry.risk_level).replaceAll("_", " ")} risk` : "",
+        entry?.updated_at ? `reviewed ${formatDateLabel(entry.updated_at)}` : "",
+    ].filter(Boolean);
+    return `
+        <a class="pr-review-search-result" href="${escapeHtml(url)}">
+            <div class="pr-review-search-result-head">
+                <strong>${escapeHtml(entry?.pr_label || "PR review")}</strong>
+                ${entry?.short_head_sha ? `<span class="pr-review-search-sha">${escapeHtml(entry.short_head_sha)}</span>` : ""}
+            </div>
+            ${prTitle ? `<div class="artifact-card-reason">${escapeHtml(prTitle)}</div>` : ""}
+            <div class="pr-review-search-result-copy">${escapeHtml(entry?.summary || "Open this stored PR review route.")}</div>
+            ${detailBits.length ? `<div class="pr-review-search-result-meta">${escapeHtml(detailBits.join(" · "))}</div>` : ""}
+        </a>
+    `;
+}
+
 function renderPrReviewRoutesSection(routePayload) {
     const routes = asArray(routePayload?.routes);
     const selectedRoute = routePayload?.selected_route || routes[0] || null;
@@ -2321,6 +2389,7 @@ function renderPrReviewRoutesSection(routePayload) {
     if (!selectedRoute) {
         setSectionHtml("repo-pr-review-selected", '<div class="muted">Vipari has not recorded a PR review episode for this repository yet.</div>');
         setSectionHtml("repo-pr-review-list", '<div class="muted">Recent PR review routes will appear here after the next PR review is posted.</div>');
+        renderPrReviewSearchPicker(routePayload);
         return;
     }
 
@@ -2361,6 +2430,7 @@ function renderPrReviewRoutesSection(routePayload) {
                     <strong>PR #${escapeHtml(selectedRoute.pr_number)}</strong>
                     <span class="severity-badge ${selectedSeverity.className}">${escapeHtml(selectedSeverity.label)}</span>
                 </div>
+                ${selectedRoute.pr_title ? `<div class="artifact-card-reason">${escapeHtml(selectedRoute.pr_title)}</div>` : ""}
                 <div class="pr-review-hero-meta">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · reviewed ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
                 <div class="pr-review-hero-copy">${escapeHtml(baselineComparison.headline || selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
                 ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
@@ -2487,6 +2557,7 @@ function renderPrReviewRoutesSection(routePayload) {
                     <strong>PR #${escapeHtml(route.pr_number)}</strong>
                     <span class="severity-badge ${severity.className}">${escapeHtml(severity.label)}</span>
                 </div>
+                ${route.pr_title ? `<div class="artifact-card-reason">${escapeHtml(route.pr_title)}</div>` : ""}
                 <div class="artifact-card-reason">${escapeHtml(route.summary || "Vipari recorded this PR review episode.")}</div>
                 ${detailBits.length ? `<div class="tag-row">${detailBits.map((bit) => `<span class="drift-chip chip-baseline">${escapeHtml(bit)}</span>`).join("")}</div>` : ""}
                 <div class="export-actions repo-actions-row audit-step-actions">
@@ -2496,6 +2567,7 @@ function renderPrReviewRoutesSection(routePayload) {
             </article>
         `;
     }).join("") || '<div class="muted">No PR review routes have been recorded for this repository yet.</div>');
+    renderPrReviewSearchPicker(routePayload);
 }
 
 function renderRepoActionsSection(insights) {
