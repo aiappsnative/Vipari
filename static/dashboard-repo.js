@@ -2322,16 +2322,13 @@ function renderPrReviewSearchPicker(routePayload) {
     }
 
     const pickerId = `pr-review-search-${Math.random().toString(36).slice(2, 9)}`;
-    const seedResults = searchEntries.slice(0, 8);
     setSectionHtml("repo-pr-review-search", `
         <div class="pr-review-search-shell">
             <label class="pr-review-search-label" for="${pickerId}">Inspect any PR review</label>
             <div class="pr-review-search-copy">Search across GitHub PR titles, PR labels like <strong>PR #184</strong>, and short or full head SHA values to reopen older review episodes.</div>
             <input id="${pickerId}" class="pr-review-search-input" type="search" placeholder="Search by PR title, PR #, or head SHA" autocomplete="off" spellcheck="false" aria-describedby="${pickerId}-hint" />
             <div id="${pickerId}-hint" class="pr-review-search-hint">Try <strong>refund authority</strong>, <strong>PR #21</strong>, <strong>sha-rel</strong>, or a full head SHA.</div>
-            <div id="${pickerId}-results" class="pr-review-search-results">
-                ${seedResults.map((entry) => renderPrReviewSearchResult(entry)).join("")}
-            </div>
+            <div id="${pickerId}-results" class="pr-review-search-results"></div>
         </div>
     `);
 
@@ -2343,9 +2340,12 @@ function renderPrReviewSearchPicker(routePayload) {
 
     const renderMatches = () => {
         const query = String(input.value || "").trim().toLowerCase();
-        const matched = !query
-            ? searchEntries.slice(0, 8)
-            : searchEntries.filter((entry) => {
+        if (!query) {
+            results.innerHTML = "";
+            return;
+        }
+
+        const matched = searchEntries.filter((entry) => {
                 const prTitle = String(entry?.pr_title || "").toLowerCase();
                 const prLabel = String(entry?.pr_label || "").toLowerCase();
                 const shortSha = String(entry?.short_head_sha || "").toLowerCase();
