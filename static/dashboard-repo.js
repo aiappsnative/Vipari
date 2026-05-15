@@ -2303,6 +2303,17 @@ function renderPrReviewArtifactRows(rows) {
     }).join("");
 }
 
+function prReviewComparisonNotice(route, comparison) {
+    if (comparison?.comparison_notice) {
+        return comparison.comparison_notice;
+    }
+    const changedArtifactCount = Number(route?.changed_artifact_count || 0);
+    if (!changedArtifactCount) {
+        return "Vipari did not persist touched-artifact data for this historical review episode, so there is no baseline comparison table to render yet.";
+    }
+    return "Vipari captured the review episode, but the artifact-level comparison rows are not available for this route yet.";
+}
+
 function renderPrReviewRoutesSection(routePayload) {
     const routes = asArray(routePayload?.routes);
     const selectedRoute = routePayload?.selected_route || routes[0] || null;
@@ -2326,6 +2337,8 @@ function renderPrReviewRoutesSection(routePayload) {
     const comparisonSummary = baselineComparison.summary || {};
     const comparisonShifts = asArray(baselineComparison.top_dimension_shifts);
     const artifactRows = asArray(baselineComparison.artifact_rows);
+    const comparisonReady = Boolean(baselineComparison.comparison_ready);
+    const comparisonNotice = prReviewComparisonNotice(selectedRoute, baselineComparison);
     const reviewNarrative = [selectedRoute.summary || "", selectedRoute.review_excerpt || ""].filter(Boolean);
     const selectedTags = [
         selectedRoute.short_head_sha ? `head ${selectedRoute.short_head_sha}` : "",
@@ -2378,7 +2391,17 @@ function renderPrReviewRoutesSection(routePayload) {
                         `).join("")}
                     </div>
                 </section>
-            ` : ""}
+            ` : `
+                <section class="pr-review-panel">
+                    <div class="pr-review-panel-head">
+                        <div>
+                            <div class="repo-decision-label">Strongest movement</div>
+                            <div class="pr-review-panel-copy">${escapeHtml(comparisonNotice)}</div>
+                        </div>
+                    </div>
+                    <div class="pr-review-empty-state">No dimension-shift comparison is available for this review episode.</div>
+                </section>
+            `}
 
             ${artifactRows.length ? `
                 <section class="pr-review-panel">
@@ -2404,7 +2427,19 @@ function renderPrReviewRoutesSection(routePayload) {
                         </table>
                     </div>
                 </section>
-            ` : ""}
+            ` : `
+                <section class="pr-review-panel">
+                    <div class="pr-review-panel-head">
+                        <div>
+                            <div class="repo-decision-label">Touched artifacts vs baseline</div>
+                            <div class="pr-review-panel-copy">${escapeHtml(comparisonNotice)}</div>
+                        </div>
+                    </div>
+                    <div class="pr-review-empty-state">
+                        ${comparisonReady ? "Vipari has not materialized any touched-artifact rows for this route yet." : "This route predates artifact-level comparison capture, so the table cannot be reconstructed from the stored review record alone."}
+                    </div>
+                </section>
+            `}
 
             <div class="pr-review-detail-grid">
                 <section class="pr-review-panel">

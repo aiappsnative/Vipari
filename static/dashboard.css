@@ -7873,6 +7873,15 @@ body.control-page.compliance-page .compliance-shell-section {
     margin-top: 4px;
 }
 
+.pr-review-empty-state {
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px dashed rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.025);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
 .repo-audit-page[data-theme="light"] .pr-review-hero,
 .repo-audit-page[data-theme="light"] .pr-review-panel {
     background:

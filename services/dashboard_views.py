@@ -264,12 +264,23 @@ def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id:
         limit=4,
     )
 
+    comparison_ready = bool(artifact_rows)
+    comparison_notice = ""
+    if not comparison_ready:
+        comparison_notice = "Vipari does not have artifact-level comparison data for this review episode yet. This usually means the PR review was recorded before touched-artifact baseline capture was available."
+    elif missing_baseline_count == len(artifact_rows):
+        comparison_notice = "Vipari captured the touched artifacts, but none of them currently have an approved baseline anchor. The table still shows what moved, but the comparison is less authoritative."
+    elif missing_baseline_count:
+        comparison_notice = "Some touched artifacts are still missing an approved baseline anchor. Review the coverage gaps before treating the comparison as authoritative."
+
     return {
         "headline": _build_pr_review_comparison_headline(
             flagged_artifact_count=flagged_artifact_count,
             missing_baseline_count=missing_baseline_count,
             authoritative_count=authoritative_count,
         ),
+        "comparison_ready": comparison_ready,
+        "comparison_notice": comparison_notice,
         "summary": {
             "touched_artifact_count": len(artifact_rows),
             "flagged_artifact_count": flagged_artifact_count,
