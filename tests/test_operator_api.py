@@ -688,9 +688,46 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     assert "prompt" in payload["artifact_type_options"]
     assert "access;dur=" in response.headers["server-timing"]
     assert "onboarding;dur=" in response.headers["server-timing"]
+    assert "jwt;dur=" in response.headers["server-timing"]
+    assert "installation_token;dur=" in response.headers["server-timing"]
+    assert "tree;dur=" in response.headers["server-timing"]
     assert "inventory;dur=" in response.headers["server-timing"]
     assert "json;dur=" in response.headers["server-timing"]
     assert "total;dur=" in response.headers["server-timing"]
+
+
+def test_repo_artifact_options_api_reuses_cached_payload_for_same_repo_and_tracked_paths(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-options-cache.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    session = _seed_repo_dashboard_access(
+        tmp_path,
+        repo_full="doria90/cache-hot-repo",
+        session_id="artifact-options-cache-session",
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch(
+        "main.list_repository_files", return_value=["prompts/system.txt", "policies/usage.md"]
+    ) as list_repository_files_mock, patch(
+        "services.onboarding_records.get_latest_repository_onboarding",
+        return_value=SimpleNamespace(id=1, default_branch="main"),
+    ), patch(
+        "services.onboarding_records.list_onboarded_artifacts_for_onboarding",
+        return_value=[SimpleNamespace(artifact_path="prompts/system.txt")],
+    ):
+        with TestClient(main.app) as client:
+            client.cookies.set(main.settings.session_cookie_name, session.session_id)
+            first_response = client.get("/api/repos/doria90%2Fcache-hot-repo/artifacts/options")
+            second_response = client.get("/api/repos/doria90%2Fcache-hot-repo/artifacts/options")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json() == second_response.json()
+    assert list_repository_files_mock.call_count == 1
+    assert "options-cache-hit;dur=" in second_response.headers["server-timing"]
 
 
 def test_repo_artifact_options_api_returns_empty_inventory_when_installation_lookup_fails(tmp_path):
@@ -698,7 +735,11 @@ def test_repo_artifact_options_api_returns_empty_inventory_when_installation_loo
     main.AUDIT_DB_PATH = str(tmp_path / "operator-artifact-options-missing-installation.db")
     main.init_db(main.AUDIT_DB_PATH)
 
-    session = _seed_repo_dashboard_access(tmp_path, session_id="artifact-options-fallback-session")
+    session = _seed_repo_dashboard_access(
+        tmp_path,
+        repo_full="doria90/cache-fallback-repo",
+        session_id="artifact-options-fallback-session",
+    )
     installation_error = HTTPError(
         url="https://api.github.com/app/installations/123/access_tokens",
         code=404,
@@ -720,7 +761,7 @@ def test_repo_artifact_options_api_returns_empty_inventory_when_installation_loo
     ):
         with TestClient(main.app) as client:
             client.cookies.set(main.settings.session_cookie_name, session.session_id)
-            response = client.get("/api/repos/doria90%2FdummyAI/artifacts/options")
+            response = client.get("/api/repos/doria90%2Fcache-fallback-repo/artifacts/options")
 
     assert response.status_code == 200
     payload = response.json()
