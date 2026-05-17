@@ -373,6 +373,21 @@ def resolve_db_path(explicit_path: str | None = None) -> str:
     return os.getenv("AUDIT_DB_PATH", str(Path(__file__).resolve().parent.parent / "promptdrift.db"))
 
 
+def resolve_activity_db_path(explicit_path: str | None = None) -> str:
+    if explicit_path:
+        return explicit_path
+
+    database_url = os.getenv("ACTIVITY_DATABASE_URL", "").strip()
+    if is_postgres_locator(database_url):
+        return database_url
+    if is_sqlite_locator(database_url) and database_url:
+        sqlite_path = sqlite_path_from_locator(database_url)
+        if sqlite_path:
+            return sqlite_path
+
+    return os.getenv("ACTIVITY_DB_PATH", "").strip()
+
+
 def connect_sqlite(db_path: str, *, foreign_keys: bool = False) -> sqlite3.Connection:
     resolved_locator = resolve_db_path(db_path)
     if is_postgres_locator(resolved_locator):

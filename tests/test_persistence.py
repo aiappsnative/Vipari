@@ -209,6 +209,58 @@ def test_db_migrate_allows_postgres_target_in_production(monkeypatch):
     migrate_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
 
 
+def test_db_migrate_rejects_activity_target_without_config(monkeypatch):
+    monkeypatch.delenv("ACTIVITY_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ACTIVITY_DB_PATH", raising=False)
+    get_settings.cache_clear()
+
+    with patch.object(sys, "argv", ["db_migrate.py", "--target", "activity"]), patch(
+        "scripts.db_migrate.migrate_activity_database"
+    ) as migrate_activity_database_mock:
+        with pytest.raises(RuntimeError) as exc_info:
+            db_migrate_script.main()
+
+    assert "Activity database migrations require ACTIVITY_DATABASE_URL or ACTIVITY_DB_PATH" in str(exc_info.value)
+    migrate_activity_database_mock.assert_not_called()
+
+
+def test_db_migrate_allows_activity_target_when_postgres_is_configured(monkeypatch):
+    @dataclass
+    class _ActivityMigrationRecord:
+        version: str
+        description: str
+        applied_at: float
+
+    @dataclass
+    class _ActivityMigrationResult:
+        backend: str
+        database_locator: str
+        applied_versions: list[str]
+        pending_versions: list[str]
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/activity")
+    get_settings.cache_clear()
+
+    with patch.object(sys, "argv", ["db_migrate.py", "--target", "activity"]), patch(
+        "scripts.db_migrate.migrate_activity_database",
+        return_value=_ActivityMigrationResult(
+            backend="postgresql",
+            database_locator="postgresql://user:pass@db.example.com/activity",
+            applied_versions=["0001_bootstrap_activity_schema"],
+            pending_versions=[],
+        ),
+    ) as migrate_activity_database_mock, patch(
+        "scripts.db_migrate.list_applied_activity_migrations",
+        return_value=[_ActivityMigrationRecord("0001_bootstrap_activity_schema", "bootstrap activity", 123.0)],
+    ):
+        exit_code = db_migrate_script.main()
+
+    assert exit_code == 0
+    migrate_activity_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/activity")
+
+
 def test_postgres_connection_translates_last_insert_lookup():
     fake_connection = _FakePsycopgConnection(
         [

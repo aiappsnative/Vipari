@@ -56,6 +56,8 @@ class Settings(BaseSettings):
 
     database_url: str = f"sqlite:///{DEFAULT_DB_PATH}"
     audit_db_path: str = DEFAULT_DB_PATH
+    activity_database_url: str = ""
+    activity_db_path: str = ""
 
     redis_url: str = ""
     api_admin_token: str = ""
@@ -207,6 +209,20 @@ class Settings(BaseSettings):
             if sqlite_path:
                 return sqlite_path
         return self.audit_db_path
+
+    @property
+    def has_activity_database_config(self) -> bool:
+        return bool(self.activity_database_url.strip() or self.activity_db_path.strip())
+
+    @property
+    def resolved_activity_db_path(self) -> str:
+        if is_postgres_locator(self.activity_database_url):
+            return self.activity_database_url
+        if is_sqlite_locator(self.activity_database_url) and self.activity_database_url:
+            sqlite_path = sqlite_path_from_locator(self.activity_database_url)
+            if sqlite_path:
+                return sqlite_path
+        return self.activity_db_path.strip()
 
 
 @lru_cache(maxsize=1)

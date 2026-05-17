@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from jwt.exceptions import InvalidKeyError
 
 from config import AiProvider, AppEnv, Settings
+from .activity_schema_migrations import ACTIVITY_MIGRATIONS, list_applied_activity_migrations
 from .github_integration import generate_jwt
 from .persistence import is_sqlite_locator
 from .persistence import connect_sqlite
@@ -60,6 +61,21 @@ def validate_migration_configuration(settings: Settings, *, resolved_db_path: st
         raise RuntimeError(" ".join(errors))
 
 
+def validate_activity_migration_configuration(settings: Settings, *, resolved_db_path: str | None = None) -> None:
+    errors: list[str] = []
+    target_locator = resolved_db_path or settings.resolved_activity_db_path
+
+    if not target_locator:
+        errors.append("Activity database migrations require ACTIVITY_DATABASE_URL or ACTIVITY_DB_PATH to be configured.")
+    elif settings.is_production and is_sqlite_locator(target_locator):
+        errors.append(
+            "Production activity database migrations cannot target SQLite persistence; point ACTIVITY_DATABASE_URL at the Railway activity Postgres service."
+        )
+
+    if errors:
+        raise RuntimeError(" ".join(errors))
+
+
 def validate_runtime_configuration(settings: Settings) -> None:
     errors: list[str] = []
     app_base_is_localhost = _is_localhost_host(settings.app_base_url)
@@ -108,6 +124,9 @@ def validate_runtime_configuration(settings: Settings) -> None:
             errors.append("LOCAL_DEBUG_DISABLE_LOGIN is allowed only when APP_ENV=local.")
         if not app_base_is_localhost:
             errors.append("LOCAL_DEBUG_DISABLE_LOGIN requires APP_BASE_URL to resolve to localhost.")
+
+    if settings.has_activity_database_config and settings.is_production and is_sqlite_locator(settings.resolved_activity_db_path):
+        errors.append("Production activity logging must use ACTIVITY_DATABASE_URL pointing to PostgreSQL, not SQLite.")
 
     if settings.is_production:
         if settings.service_role == "monolith":
@@ -181,6 +200,36 @@ async def build_runtime_readiness(settings: Settings, *, queue_backend=None) -> 
             checks.append({"name": "migrations", "status": "ok", "detail": "Schema migrations applied."})
     except Exception as exc:
         checks.append({"name": "migrations", "status": "failed", "detail": str(exc)})
+
+    if settings.has_activity_database_config:
+        try:
+            with connect_sqlite(settings.resolved_activity_db_path) as conn:
+                conn.execute("SELECT 1").fetchone()
+            checks.append(
+                {
+                    "name": "activity_persistence",
+                    "status": "ok",
+                    "detail": "Activity database connectivity verified.",
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "activity_persistence", "status": "failed", "detail": str(exc)})
+
+        try:
+            applied_activity_versions = {item.version for item in list_applied_activity_migrations(settings.resolved_activity_db_path)}
+            pending_activity_versions = [version for version, _description, _handler in ACTIVITY_MIGRATIONS if version not in applied_activity_versions]
+            if pending_activity_versions:
+                checks.append(
+                    {
+                        "name": "activity_migrations",
+                        "status": "failed",
+                        "detail": f"Pending activity schema migrations: {', '.join(pending_activity_versions)}.",
+                    }
+                )
+            else:
+                checks.append({"name": "activity_migrations", "status": "ok", "detail": "Activity schema migrations applied."})
+        except Exception as exc:
+            checks.append({"name": "activity_migrations", "status": "failed", "detail": str(exc)})
 
     if queue_backend is not None:
         try:
