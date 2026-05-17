@@ -2075,7 +2075,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             ? `<div class="detail-note">Approved by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}</div>`
             : "";
     const rebaselineButton = snapshot.commit_sha
-        ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Set as reference baseline</button>`
+        ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Create baseline candidate</button>`
         : "";
     const headingLabel = snapshotTypeLabel(snapshot.snapshot_type);
     return `
@@ -2119,8 +2119,9 @@ function openRebaselineModal(snapshot) {
     window.__pendingRebaselineSnapshot = snapshot;
     summary.innerHTML = `
         <div><strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong> · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
-        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this moves the snapshot DriftGuard compares future changes against.`)}</div>
-        <div class="detail-note">Artifact Sign-off stays separate. If you change the reference baseline, reviewers may need to re-approve the artifacts attached to that newer snapshot.</div>
+        <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this creates a new baseline candidate from this checkpoint for review.`)}</div>
+        <div class="detail-note">This does not replace the approved baseline yet. Vipari will create a pending candidate baseline, then a reviewer must approve it before future comparisons use it.</div>
+        <div class="detail-note">Artifact Sign-off stays separate, so reviewers may still need to re-approve the artifacts attached to that newer candidate.</div>
     `;
     textarea.value = "";
     setRebaselineBusy(false);
@@ -2155,15 +2156,15 @@ function setRebaselineBusy(isBusy) {
     }
     if (progressText) {
         progressText.textContent = isBusy
-            ? "Setting a new reference baseline. This can take a few seconds for large repositories..."
-            : "Preparing the reference baseline update...";
+            ? "Creating a new baseline candidate from this snapshot. This can take a few seconds for large repositories..."
+            : "Preparing the baseline candidate...";
     }
     if (textarea instanceof HTMLTextAreaElement) {
         textarea.disabled = Boolean(isBusy);
     }
     if (confirmButton instanceof HTMLButtonElement) {
         confirmButton.disabled = Boolean(isBusy);
-        confirmButton.textContent = isBusy ? "Working..." : "Confirm";
+        confirmButton.textContent = isBusy ? "Working..." : "Create candidate";
     }
     document.querySelectorAll("[data-close-rebaseline]").forEach((button) => {
         if (button instanceof HTMLButtonElement) {

@@ -558,19 +558,19 @@
         <div class="modal-backdrop" data-close-rebaseline="true"></div>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rebaseline-modal-title">
             <div class="modal-head">
-                <strong id="rebaseline-modal-title">Set as reference baseline</strong>
+                <strong id="rebaseline-modal-title">Create Baseline Candidate</strong>
                 <button type="button" class="modal-close" data-close-rebaseline="true" aria-label="Close">×</button>
             </div>
-            <div id="rebaseline-modal-summary" class="modal-body muted">Select a snapshot to review its delta.</div>
+            <div id="rebaseline-modal-summary" class="modal-body muted">Choose a snapshot to create a pending baseline candidate for review.</div>
             <label class="modal-field" for="rebaseline-rationale">Rationale (optional)</label>
-            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for reviewers if needed."></textarea>
+            <textarea id="rebaseline-rationale" class="modal-textarea" rows="4" placeholder="Add context for reviewers approving this new baseline candidate."></textarea>
             <div id="rebaseline-progress" class="modal-progress" hidden>
                 <span class="modal-spinner" aria-hidden="true"></span>
-                <span id="rebaseline-progress-text">Preparing a new baseline proposal...</span>
+                <span id="rebaseline-progress-text">Preparing a new baseline candidate...</span>
             </div>
             <div class="modal-actions">
                 <button type="button" class="modal-secondary" data-close-rebaseline="true">Cancel</button>
-                <button type="button" class="modal-primary" id="rebaseline-confirm-btn">Confirm</button>
+                <button type="button" class="modal-primary" id="rebaseline-confirm-btn">Create candidate</button>
             </div>
         </div>
     </div>
