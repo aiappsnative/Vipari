@@ -2623,6 +2623,9 @@ async def settings_update(
     normalized_feedback_mode = (pr_feedback_mode or "").strip().lower()
     if normalized_feedback_mode not in {"comments", "reviews", "off"}:
         raise HTTPException(status_code=400, detail="PR feedback mode must be comments, reviews, or off.")
+    normalized_baseline_approval_mode = (baseline_approval_mode or "").strip().lower()
+    if normalized_baseline_approval_mode not in {"manual", "auto"}:
+        raise HTTPException(status_code=400, detail="Baseline approval mode must be manual or auto.")
     normalized_baseline_approval_mode = normalize_baseline_approval_mode(baseline_approval_mode)
 
     normalized_workspace_name = (workspace_name or "").strip()
