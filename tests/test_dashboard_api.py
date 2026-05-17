@@ -792,6 +792,139 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["routes"][0]["dashboard_url"].endswith("/dashboard/doria90%2FdummyAI?tab=pr-reviews&pr=21&head_sha=sha-relevance-21")
 
 
+def test_repo_dashboard_api_scopes_version_control_tab_payload(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-version-control-tab.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?tab=version-control",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
+    assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
+    assert payload["history_timelines"] == []
+    assert payload["featured_storyline"] is None
+    assert payload["history_cues"] == []
+    assert payload["design_profiles"] == []
+    assert payload["pr_review_routes"] is None
+    assert payload["pre_audit_relevance"] is None
+
+
+def test_repo_dashboard_api_scopes_pr_review_tab_payload(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-pr-review-tab.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    record_audit_result(
+        db_path,
+        job_id=201,
+        repo_full="doria90/dummyAI",
+        pr_number=20,
+        pr_title="Stabilize refund policy prompts",
+        installation_id=123,
+        head_sha="sha-older-20",
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ✅ Vipari: Review complete",
+        comment_mode="review",
+        semantic_review_completed=True,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_MEDIUM},
+    )
+    selected_audit = record_audit_result(
+        db_path,
+        job_id=202,
+        repo_full="doria90/dummyAI",
+        pr_number=21,
+        pr_title="Expand direct refund authority",
+        installation_id=123,
+        head_sha="sha-relevance-21",
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ❌ Vipari: Escalate before merge\nSummary: This PR expands direct refund authority and needs human review.",
+        comment_mode="review",
+        semantic_review_completed=True,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
+    )
+    record_audit_feedback_event(
+        db_path,
+        audit_id=selected_audit.id,
+        kind="reaction",
+        source="github_reaction",
+        payload_json='{"content":"+1","target_kind":"review"}',
+    )
+
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?tab=pr-reviews&pr=21&head_sha=sha-relevance-21",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 21
+    assert payload["journey_snapshots"] == []
+    assert payload["journey_comparison"] is None
+    assert payload["history_timelines"] == []
+    assert payload["featured_storyline"] is None
+    assert payload["history_cues"] == []
+    assert payload["design_profiles"] == []
+
+
 def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)

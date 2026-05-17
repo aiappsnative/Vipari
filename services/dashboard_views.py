@@ -1123,7 +1123,7 @@ def build_workspace_escalation_queue(
             db_path,
             repo_entry.repo_full,
             include_journey=False,
-            include_detail_sections=True,
+            include_detail_sections=False,
         )
         for insight in (view.insights or []):
             if insight.priority == "review_now" or (include_watch and insight.priority == "watch"):
@@ -1193,7 +1193,7 @@ def build_workspace_escalation_queue(
             db_path,
             item.repo_full,
             include_journey=False,
-            include_detail_sections=True,
+            include_detail_sections=False,
         )
         for insight in (view.insights or []):
             if insight.artifact_path == item.artifact_path and insight.priority == "review_now":
@@ -1638,7 +1638,17 @@ def build_repo_dashboard_view(
     *,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_featured_storyline: bool | None = None,
+    include_history_timelines: bool | None = None,
+    include_history_cues: bool | None = None,
+    include_design_profiles: bool | None = None,
+    attribute_profile_mode: str | None = None,
 ) -> RepoDashboardView:
+    include_featured_storyline = include_detail_sections if include_featured_storyline is None else include_featured_storyline
+    include_history_timelines = include_detail_sections if include_history_timelines is None else include_history_timelines
+    include_history_cues = include_detail_sections if include_history_cues is None else include_history_cues
+    include_design_profiles = include_detail_sections if include_design_profiles is None else include_design_profiles
+    attribute_profile_mode = ("all" if include_detail_sections else "ranked") if attribute_profile_mode is None else attribute_profile_mode
     cache_key = (
         "repo",
         db_path,
@@ -1646,6 +1656,11 @@ def build_repo_dashboard_view(
         repo_full,
         include_journey,
         include_detail_sections,
+        include_featured_storyline,
+        include_history_timelines,
+        include_history_cues,
+        include_design_profiles,
+        attribute_profile_mode,
     )
     cached = _cache_get(_REPO_VIEW_CACHE, cache_key)
     if cached is not None:
@@ -1656,6 +1671,11 @@ def build_repo_dashboard_view(
         repo_full,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_featured_storyline=include_featured_storyline,
+        include_history_timelines=include_history_timelines,
+        include_history_cues=include_history_cues,
+        include_design_profiles=include_design_profiles,
+        attribute_profile_mode=attribute_profile_mode,
     )
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view)
 
@@ -1666,7 +1686,17 @@ def build_repo_dashboard_view_with_timings(
     *,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_featured_storyline: bool | None = None,
+    include_history_timelines: bool | None = None,
+    include_history_cues: bool | None = None,
+    include_design_profiles: bool | None = None,
+    attribute_profile_mode: str | None = None,
 ) -> tuple[RepoDashboardView, list[tuple[str, float]]]:
+    include_featured_storyline = include_detail_sections if include_featured_storyline is None else include_featured_storyline
+    include_history_timelines = include_detail_sections if include_history_timelines is None else include_history_timelines
+    include_history_cues = include_detail_sections if include_history_cues is None else include_history_cues
+    include_design_profiles = include_detail_sections if include_design_profiles is None else include_design_profiles
+    attribute_profile_mode = ("all" if include_detail_sections else "ranked") if attribute_profile_mode is None else attribute_profile_mode
     cache_key = (
         "repo",
         db_path,
@@ -1674,6 +1704,11 @@ def build_repo_dashboard_view_with_timings(
         repo_full,
         include_journey,
         include_detail_sections,
+        include_featured_storyline,
+        include_history_timelines,
+        include_history_cues,
+        include_design_profiles,
+        attribute_profile_mode,
     )
     cached = _cache_get(_REPO_VIEW_CACHE, cache_key)
     if cached is not None:
@@ -1685,6 +1720,11 @@ def build_repo_dashboard_view_with_timings(
         repo_full,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_featured_storyline=include_featured_storyline,
+        include_history_timelines=include_history_timelines,
+        include_history_cues=include_history_cues,
+        include_design_profiles=include_design_profiles,
+        attribute_profile_mode=attribute_profile_mode,
         stage_timings=stage_timings,
     )
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view), stage_timings
@@ -1881,8 +1921,19 @@ def _build_repo_dashboard_view_uncached(
     *,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_featured_storyline: bool | None = None,
+    include_history_timelines: bool | None = None,
+    include_history_cues: bool | None = None,
+    include_design_profiles: bool | None = None,
+    attribute_profile_mode: str | None = None,
     stage_timings: list[tuple[str, float]] | None = None,
 ) -> RepoDashboardView:
+    include_featured_storyline = include_detail_sections if include_featured_storyline is None else include_featured_storyline
+    include_history_timelines = include_detail_sections if include_history_timelines is None else include_history_timelines
+    include_history_cues = include_detail_sections if include_history_cues is None else include_history_cues
+    include_design_profiles = include_detail_sections if include_design_profiles is None else include_design_profiles
+    attribute_profile_mode = ("all" if include_detail_sections else "ranked") if attribute_profile_mode is None else attribute_profile_mode
+
     def timed_stage(stage_name: str, factory):
         started_at = time.perf_counter()
         result = factory()
@@ -2044,7 +2095,7 @@ def _build_repo_dashboard_view_uncached(
             artifact_entries,
             baseline_by_path,
             profile_context_by_path,
-            attribute_profile_mode=("all" if include_detail_sections else "ranked"),
+            attribute_profile_mode=attribute_profile_mode,
         ),
     )
     control_surface_groups = timed_stage("repo-control-surfaces", lambda: _build_control_surface_groups(artifact_entries))
@@ -2052,11 +2103,12 @@ def _build_repo_dashboard_view_uncached(
     featured_storyline: RepoArtifactStoryline | None = None
     history_cues: list[RepoHistoryCue] = []
     design_profiles: list[RepoArtifactDesignProfile] = []
-    if include_detail_sections:
+    if include_history_timelines:
         history_timelines = timed_stage(
             "repo-history-timelines",
             lambda: _build_repo_history_timelines(db_path, repo_full, artifact_entries),
         )
+    if include_featured_storyline:
         featured_storyline = timed_stage(
             "repo-featured-storyline",
             lambda: _build_featured_storyline(
@@ -2068,10 +2120,12 @@ def _build_repo_dashboard_view_uncached(
                 profile_context_by_path,
             ),
         )
+    if include_history_cues:
         history_cues = timed_stage(
             "repo-history-cues",
             lambda: _build_repo_history_cues(artifact_entries, baseline_by_path, profile_context_by_path),
         )
+    if include_design_profiles:
         design_profiles = timed_stage(
             "repo-design-profiles",
             lambda: _build_repo_design_profiles(artifact_entries, insights, baseline_by_path, profile_context_by_path),

@@ -15,6 +15,7 @@ from services.baseline_approval_service import RebaselineExternalError, Rebaseli
 
 _ARTIFACT_OPTIONS_CACHE_TTL_SECONDS = 30.0
 _ARTIFACT_OPTIONS_CACHE_MAX_ENTRIES = 128
+_REPO_DASHBOARD_TABS = {"audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"}
 
 
 def _cache_get(cache: dict[tuple[object, ...], tuple[float, object]], cache_key: tuple[object, ...], *, lock: threading.RLock):
@@ -53,6 +54,27 @@ def _invalidate_cache_entries(cache: dict[tuple[object, ...], tuple[float, objec
 	with lock:
 		for cache_key in [existing_key for existing_key in cache if predicate(existing_key)]:
 			cache.pop(cache_key, None)
+
+
+def _resolve_repo_dashboard_tab(request: Request) -> str | None:
+	raw_tab = (request.query_params.get("tab") or "").strip().lower()
+	return raw_tab if raw_tab in _REPO_DASHBOARD_TABS else None
+
+
+def _repo_dashboard_build_options(active_tab: str | None) -> dict[str, object]:
+	if active_tab is None:
+		return {}
+	options: dict[str, object] = {
+		"include_journey": active_tab == "version-control",
+		"include_featured_storyline": active_tab == "baseline",
+		"include_history_timelines": False,
+		"include_history_cues": active_tab == "compliance",
+		"include_design_profiles": False,
+		"attribute_profile_mode": "ranked",
+	}
+	if active_tab == "drift":
+		options["attribute_profile_mode"] = "all"
+	return options
 
 
 def create_dashboard_read_router(
@@ -171,8 +193,10 @@ def create_repo_dashboard_router(
 		access_started = time.perf_counter()
 		access_context = authorize_repo_read_fn(request, repo_full)
 		record_server_timing_metric_fn(timing_metrics, "access", access_started)
+		active_tab = _resolve_repo_dashboard_tab(request)
+		build_options = _repo_dashboard_build_options(active_tab)
 		build_started = time.perf_counter()
-		repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings_fn(resolve_db_path_fn(), repo_full)
+		repo_view, repo_stage_timings = build_repo_dashboard_view_with_timings_fn(resolve_db_path_fn(), repo_full, **build_options)
 		record_server_timing_metric_fn(timing_metrics, "build", build_started)
 		timing_metrics.extend(repo_stage_timings)
 		json_started = time.perf_counter()
@@ -188,7 +212,7 @@ def create_repo_dashboard_router(
 			payload["export_jobs"] = []
 		raw_pr_number = (request.query_params.get("pr") or request.query_params.get("pr_number") or "").strip()
 		raw_head_sha = (request.query_params.get("head_sha") or "").strip()
-		if build_pre_audit_relevance_payload_fn is not None and list_pre_audit_relevance_decisions_fn is not None and raw_pr_number.isdigit() and raw_head_sha:
+		if (active_tab is None or active_tab == "compliance") and build_pre_audit_relevance_payload_fn is not None and list_pre_audit_relevance_decisions_fn is not None and raw_pr_number.isdigit() and raw_head_sha:
 			payload["pre_audit_relevance"] = build_pre_audit_relevance_payload_fn(
 				resolve_db_path_fn(),
 				repo_full,
@@ -203,7 +227,7 @@ def create_repo_dashboard_router(
 			repo_full,
 			pr_number=int(raw_pr_number) if raw_pr_number.isdigit() else None,
 			head_sha=raw_head_sha or None,
-		) if build_pr_review_routes_payload_fn is not None else None
+		) if (active_tab is None or active_tab == "pr-reviews") and build_pr_review_routes_payload_fn is not None else None
 		response = JSONResponse(payload)
 		record_server_timing_metric_fn(timing_metrics, "json", json_started)
 		timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))

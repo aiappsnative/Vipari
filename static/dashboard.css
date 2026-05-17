@@ -1019,6 +1019,21 @@ strong {
     margin-bottom: var(--space-2);
 }
 
+.journey-summary-stack {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.journey-summary-lede {
+    padding: 12px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, var(--color-surface-glass-3), rgba(255, 255, 255, 0.04));
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+}
+
 .journey-node {
     position: relative;
     display: grid;
@@ -1081,6 +1096,32 @@ strong {
 
 .journey-card {
     overflow: hidden;
+    display: grid;
+    gap: var(--space-2);
+    padding: 14px;
+    border-color: color-mix(in srgb, var(--color-border) 80%, transparent);
+    background: linear-gradient(180deg, var(--color-surface-2), rgba(255, 255, 255, 0.02));
+}
+
+.journey-card-selected-baseline {
+    border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-primary-soft) 46%, var(--color-surface-2)), var(--color-surface-2));
+}
+
+.journey-card-eyebrow {
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-faint);
+}
+
+.journey-card-summary {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.45;
 }
 
 .journey-metrics-row {
@@ -1089,6 +1130,13 @@ strong {
     gap: var(--space-2);
     font-size: var(--text-sm);
     color: var(--color-text-faint);
+}
+
+.journey-metrics-row span {
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-glass-2);
 }
 
 .journey-compare-grid {
@@ -2517,6 +2565,13 @@ strong {
 .journey-status-note {
     padding: 4px 0 0;
     font-size: var(--text-sm);
+}
+
+.journey-empty-state {
+    display: grid;
+    gap: 12px;
+    border-style: solid;
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface-glass-2));
 }
 
 .visually-hidden {

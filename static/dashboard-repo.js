@@ -2124,30 +2124,36 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
     const checkpointCaption = visibleSnapshots.length
         ? `${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live`
         : "Only the live repository state has been materialized so far";
+    const summaryLead = visibleSnapshots.length
+        ? "Read left to right: real repository checkpoints only. The active reference baseline and the live state are marked directly on the relevant checkpoint cards below."
+        : "Version Journey is ready, but there are not enough real repository checkpoints yet to draw a historical path.";
     return `
-        <div class="journey-strip">
-            <div class="journey-node journey-tone-primary">
-                <span class="journey-node-value">${visibleSnapshots.length}</span>
-                <span class="journey-node-label">Checkpoints</span>
-                <span class="journey-node-caption">${escapeHtml(checkpointCaption)}</span>
-                <span class="journey-node-link" aria-hidden="true"></span>
-            </div>
-            <div class="journey-node journey-tone-gap">
-                <span class="${baselineValueClass}">${escapeHtml(baselineValue)}</span>
-                <span class="journey-node-label">Reference baseline</span>
-                <span class="journey-node-caption">${escapeHtml(baseline?.source_ref || "No reference baseline selected")}</span>
-                <span class="journey-node-link" aria-hidden="true"></span>
-            </div>
-            <div class="journey-node ${journeyToneForRisk(riskLevel)}">
-                <span class="journey-node-value">${escapeHtml(String(riskLevel).toUpperCase())}</span>
-                <span class="journey-node-label">Current risk</span>
-                <span class="journey-node-caption">score ${asNumber(current?.risk_summary?.score).toFixed(3)}</span>
-                <span class="journey-node-link" aria-hidden="true"></span>
-            </div>
-            <div class="journey-node journey-tone-primary">
-                <span class="journey-node-value">${asNumber(current?.distance_from_baseline).toFixed(3)}</span>
-                <span class="journey-node-label">Drift from reference</span>
-                <span class="journey-node-caption">${asNumber(current?.change_breakdown?.critical_surfaces_changed)} critical surfaces changed</span>
+        <div class="journey-summary-stack">
+            <div class="journey-summary-lede">${escapeHtml(summaryLead)}</div>
+            <div class="journey-strip">
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${visibleSnapshots.length}</span>
+                    <span class="journey-node-label">Checkpoints</span>
+                    <span class="journey-node-caption">${escapeHtml(checkpointCaption)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-gap">
+                    <span class="${baselineValueClass}">${escapeHtml(baselineValue)}</span>
+                    <span class="journey-node-label">Reference baseline</span>
+                    <span class="journey-node-caption">${escapeHtml(baseline?.source_ref || "No reference baseline selected")}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node ${journeyToneForRisk(riskLevel)}">
+                    <span class="journey-node-value">${escapeHtml(String(riskLevel).toUpperCase())}</span>
+                    <span class="journey-node-label">Current risk</span>
+                    <span class="journey-node-caption">score ${asNumber(current?.risk_summary?.score).toFixed(3)}</span>
+                    <span class="journey-node-link" aria-hidden="true"></span>
+                </div>
+                <div class="journey-node journey-tone-primary">
+                    <span class="journey-node-value">${asNumber(current?.distance_from_baseline).toFixed(3)}</span>
+                    <span class="journey-node-label">Drift from reference</span>
+                    <span class="journey-node-caption">${asNumber(current?.change_breakdown?.critical_surfaces_changed)} critical surfaces changed</span>
+                </div>
             </div>
         </div>
     `;
@@ -2174,10 +2180,25 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
         : isApprovedBaseline
             ? '<span class="drift-chip chip-baseline">Approved checkpoint</span>'
             : "";
+    const cardEyebrow = isSelectedBaseline
+        ? "Comparison anchor"
+        : isCurrent
+            ? "Live repository state"
+            : snapshot.snapshot_type === "merge"
+                ? "Merged checkpoint"
+                : "Historical checkpoint";
+    const cardSummary = isSelectedBaseline
+        ? "All current comparisons measure drift from this checkpoint."
+        : isCurrent
+            ? "This is the latest live state Vipari is comparing against the reference baseline."
+            : snapshot.snapshot_type === "merge"
+                ? "This merged checkpoint shows what changed before the repository reached its current state."
+                : "This historical checkpoint helps explain how the repository posture evolved over time.";
     return `
         <div class="artifact-card journey-card ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}">
             <div class="artifact-card-head">
                 <div>
+                    <div class="journey-card-eyebrow">${escapeHtml(cardEyebrow)}</div>
                     <strong>${escapeHtml(headingLabel)}</strong>
                     <div class="artifact-card-type">${escapeHtml(formatDateLabel(displayTimestamp))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
                     ${approvalMeta}
@@ -2189,6 +2210,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
             </div>
+            <div class="journey-card-summary">${escapeHtml(cardSummary)}</div>
             <div class="journey-metrics-row">
                 <span>drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)}</span>
                 <span>critical ${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)}</span>
@@ -2215,7 +2237,7 @@ function renderJourneyEmptyState(referenceBaseline = null, currentSnapshot = nul
 
     if (sameCheckpoint) {
         return `
-            <div class="empty-state">
+            <div class="empty-state journey-empty-state">
                 <strong>Version journey will grow once repo history is captured.</strong>
                 <div class="artifact-card-reason">${escapeHtml(currentLabel)} is both the current state and the reference baseline, so there are no earlier checkpoints to plot yet.</div>
                 <div class="detail-note">Approve or review artifact evidence in Artifacts, then let merged changes accumulate. As new repository checkpoints are materialized, they will appear here automatically.</div>
@@ -2227,7 +2249,7 @@ function renderJourneyEmptyState(referenceBaseline = null, currentSnapshot = nul
     }
 
     return `
-        <div class="empty-state">
+        <div class="empty-state journey-empty-state">
             <strong>No historical checkpoints have been materialized yet.</strong>
             <div class="artifact-card-reason">Vipari is currently comparing ${escapeHtml(currentLabel)} against ${escapeHtml(baselineLabel)}, but there is not enough stored repository history to render a journey timeline.</div>
             <div class="detail-note">Once merged changes are captured as real checkpoints, they will appear here with the active reference baseline marked directly on the relevant checkpoint.</div>
@@ -2926,6 +2948,10 @@ async function loadPendingProposals() {
 }
 
 function schedulePendingProposalsLoad() {
+    if (activeRepoTab !== "audit") {
+        setSectionHtml("repo-decision-proposals", '<div class="detail-note">Pending proposals appear in the Audit tab.</div>');
+        return;
+    }
     const loadToken = ++window.__pendingProposalsLoadToken;
     const run = () => {
         if (loadToken !== window.__pendingProposalsLoadToken) {
@@ -3230,7 +3256,12 @@ async function loadDashboard() {
         if (!repoFull) {
             throw new Error("Repository context is missing from this page.");
         }
-        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard${window.location.search || ""}`);
+        const params = new URLSearchParams(window.location.search || "");
+        if (!params.has("tab") && activeRepoTab) {
+            params.set("tab", activeRepoTab);
+        }
+        const query = params.toString();
+        const dashboardResponse = await fetch(`/api/repos/${encodeURIComponent(repoFull)}/dashboard${query ? `?${query}` : ""}`);
         if (!dashboardResponse.ok) {
             throw new Error(`Repo dashboard request failed with ${dashboardResponse.status}`);
         }
