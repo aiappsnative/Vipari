@@ -261,6 +261,45 @@ function repoTabUrl(tab, options = {}) {
     return `${url.pathname}${url.search}${url.hash}`;
 }
 
+function artifactHandoffStorageKey() {
+    return `vipari:artifact-handoff:${repoFull}`;
+}
+
+function persistArtifactHandoffNotice(message, tone = "info") {
+    if (!repoFull || !message || !window.sessionStorage) {
+        return;
+    }
+    try {
+        window.sessionStorage.setItem(artifactHandoffStorageKey(), JSON.stringify({ message, tone }));
+    } catch {
+        // Ignore storage failures and fall back to in-memory messaging.
+    }
+}
+
+function consumeArtifactHandoffNotice() {
+    if (!repoFull || !window.sessionStorage) {
+        return null;
+    }
+    try {
+        const raw = window.sessionStorage.getItem(artifactHandoffStorageKey());
+        if (!raw) {
+            return null;
+        }
+        window.sessionStorage.removeItem(artifactHandoffStorageKey());
+        const parsed = JSON.parse(raw);
+        const message = String(parsed?.message || "").trim();
+        if (!message) {
+            return null;
+        }
+        return {
+            message,
+            tone: String(parsed?.tone || "info").trim() || "info",
+        };
+    } catch {
+        return null;
+    }
+}
+
 function renderAuditBrief(brief) {
     const badgeEl = document.getElementById("repo-audit-brief-posture");
     if (!brief) {
@@ -639,6 +678,15 @@ function bindBaselineReviewActions() {
             button.disabled = true;
             try {
                 const payload = await mutateRepoBaselineDecision(action, note.trim() || null);
+                if (action === "approve") {
+                    const pendingCount = Number(payload?.dashboard?.baseline_review?.pending_count || 0);
+                    const handoffMessage = pendingCount > 0
+                        ? `Baseline approved. ${pendingCount} artifact approval${pendingCount === 1 ? " is" : "s are"} still pending in Artifacts.`
+                        : "Baseline approved. Review the Artifacts tab to confirm the final stored evidence state.";
+                    persistArtifactHandoffNotice(handoffMessage, pendingCount > 0 ? "warning" : "success");
+                    window.location.href = repoTabUrl("baseline", { hash: "artifact-action-status" });
+                    return;
+                }
                 if (payload?.dashboard) {
                     applyDashboardPayload(payload.dashboard);
                     return;
@@ -718,6 +766,10 @@ function repoRadarVectors(repoPayload) {
             },
         ],
     };
+}
+
+function repoRadarReadingHint() {
+    return "Farther out means more of that dimension, not automatically more risk. Higher capability, autonomy, and velocity usually increase risk; higher governance, coverage, and guardrails usually indicate stronger control.";
 }
 
 function drawRepoRadar(repoPayload) {
@@ -2861,9 +2913,10 @@ function applyDashboardPayload(payload) {
     setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
     drawRepoRadar(payload);
+    setText("repo-radar-meta", repoRadarReadingHint());
     const repoRadarCaption = comparison
-        ? `${comparison.left?.snapshot_key || "baseline"} -> ${comparison.right?.snapshot_key || "current"} with drift delta ${formatSigned(comparison.drift_summary?.drift_delta)}.`
-        : "Version-control posture appears once DriftGuard has both an approved baseline snapshot and a current repository snapshot to compare.";
+        ? `${comparison.left?.snapshot_key || "baseline"} -> ${comparison.right?.snapshot_key || "current"} with drift delta ${formatSigned(comparison.drift_summary?.drift_delta)}. ${repoRadarReadingHint()}`
+        : `Version-control posture appears once DriftGuard has both an approved baseline snapshot and a current repository snapshot to compare. ${repoRadarReadingHint()}`;
     setText("repo-radar-caption", repoRadarCaption);
     setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
@@ -2875,6 +2928,10 @@ function applyDashboardPayload(payload) {
     const types = artifactTypeOptions();
     refreshArtifactsSection();
     bindArtifactControls();
+    const artifactHandoffNotice = consumeArtifactHandoffNotice();
+    if (artifactHandoffNotice && activeRepoTab === "baseline") {
+        setArtifactActionStatus(artifactHandoffNotice.message, artifactHandoffNotice.tone);
+    }
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);
     bindOpenSourceChangeLinks(document);
