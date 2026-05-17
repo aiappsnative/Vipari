@@ -2053,9 +2053,39 @@ function severityClassForRisk(riskLevel) {
     return "severity-low";
 }
 
+const SYNTHETIC_JOURNEY_SNAPSHOT_TYPES = new Set(["baseline_approved", "baseline_promotion", "current"]);
+
+function isSyntheticJourneySnapshot(snapshot) {
+    return SYNTHETIC_JOURNEY_SNAPSHOT_TYPES.has(String(snapshot?.snapshot_type || ""));
+}
+
+function meaningfulJourneySnapshots(snapshots = []) {
+    return asArray(snapshots).filter((snapshot) => !isSyntheticJourneySnapshot(snapshot));
+}
+
 function snapshotTypeLabel(snapshotType) {
-    const normalized = String(snapshotType || "checkpoint").replaceAll("_", " ");
-    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    const normalized = String(snapshotType || "checkpoint");
+    if (normalized === "merge") {
+        return "Merged PR";
+    }
+    if (normalized === "historical_commit") {
+        return "Historical commit";
+    }
+    if (normalized === "branch_head") {
+        return "Live branch";
+    }
+    if (normalized === "baseline_approved") {
+        return "Approved baseline";
+    }
+    if (normalized === "baseline_promotion") {
+        return "Baseline approval event";
+    }
+    if (normalized === "current") {
+        return "Current state";
+    }
+    const label = normalized.replaceAll("_", " ");
+    const normalizedLabel = label;
+    return normalizedLabel.charAt(0).toUpperCase() + normalizedLabel.slice(1);
 }
 
 function journeyPullRequestLifecycleLabel(snapshot) {
@@ -2074,24 +2104,32 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
     if (!snapshots.length) {
         return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
     }
-    const current = snapshots.find((item) => item.is_current_anchor) || snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
-    const selectedBaseline = snapshots.find((item) => item.is_reference_baseline)
+    const allSnapshots = asArray(snapshots);
+    const visibleSnapshots = meaningfulJourneySnapshots(allSnapshots);
+    const current = allSnapshots.find((item) => item.is_current_anchor)
+        || allSnapshots.find((item) => item.snapshot_type === "current")
+        || allSnapshots.find((item) => item.snapshot_type === "branch_head")
+        || allSnapshots[allSnapshots.length - 1];
+    const selectedBaseline = allSnapshots.find((item) => item.is_reference_baseline)
         || (selectedBaselineSourceSnapshotId
-            ? snapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
+            ? allSnapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
             : null);
-    const baseline = selectedBaseline || snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
-    const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
-    const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
-    const branchHeadCount = snapshots.filter((item) => item.snapshot_type === "branch_head").length;
+    const baseline = selectedBaseline || allSnapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
+    const mergedCount = visibleSnapshots.filter((item) => item.snapshot_type === "merge").length;
+    const historicalCount = visibleSnapshots.filter((item) => item.snapshot_type === "historical_commit").length;
+    const branchHeadCount = visibleSnapshots.filter((item) => item.snapshot_type === "branch_head").length;
     const riskLevel = current?.risk_summary?.risk_level || "low";
-    const baselineValue = baseline ? snapshotTypeLabel(selectedBaseline ? baseline.snapshot_type : "baseline_approved") : "No";
+    const baselineValue = baseline ? (selectedBaseline ? "Selected" : "Approved") : "No";
     const baselineValueClass = baselineValue.length > 12 ? "journey-node-value journey-node-text" : "journey-node-value";
+    const checkpointCaption = visibleSnapshots.length
+        ? `${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live`
+        : "Only the live repository state has been materialized so far";
     return `
         <div class="journey-strip">
             <div class="journey-node journey-tone-primary">
-                <span class="journey-node-value">${snapshots.length}</span>
-                <span class="journey-node-label">Snapshots</span>
-                <span class="journey-node-caption">${mergedCount} merged, ${historicalCount} historical, ${branchHeadCount} live</span>
+                <span class="journey-node-value">${visibleSnapshots.length}</span>
+                <span class="journey-node-label">Checkpoints</span>
+                <span class="journey-node-caption">${escapeHtml(checkpointCaption)}</span>
                 <span class="journey-node-link" aria-hidden="true"></span>
             </div>
             <div class="journey-node journey-tone-gap">
@@ -2131,6 +2169,11 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
         ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Create baseline candidate</button>`
         : "";
     const headingLabel = snapshotTypeLabel(snapshot.snapshot_type);
+    const baselineChip = isSelectedBaseline
+        ? '<span class="drift-chip chip-baseline">Reference baseline</span>'
+        : isApprovedBaseline
+            ? '<span class="drift-chip chip-baseline">Approved checkpoint</span>'
+            : "";
     return `
         <div class="artifact-card journey-card ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}">
             <div class="artifact-card-head">
@@ -2141,7 +2184,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                 </div>
                 <div class="tag-row">
                     ${isCurrent ? '<span class="drift-chip chip-governance">Current</span>' : ""}
-                    ${isSelectedBaseline ? '<span class="drift-chip chip-baseline">Reference baseline</span>' : isApprovedBaseline ? '<span class="drift-chip chip-baseline">Approved</span>' : ""}
+                    ${baselineChip}
                     ${lifecycleLabel ? `<span class="drift-chip chip-baseline">${escapeHtml(lifecycleLabel)}</span>` : ""}
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
@@ -2158,6 +2201,36 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                 <span>${source}</span>
             </div>
             ${rebaselineButton}
+        </div>
+    `;
+}
+
+function renderJourneyEmptyState(referenceBaseline = null, currentSnapshot = null) {
+    const baselineLabel = referenceBaseline?.source_ref || referenceBaseline?.commit_sha || "the live repository state";
+    const currentLabel = currentSnapshot?.source_ref || currentSnapshot?.commit_sha || "the live repository state";
+    const baselineReviewUrl = repoTabUrl("baseline", { hash: "baseline-review-panel" });
+    const sameCheckpoint = referenceBaseline !== null
+        && currentSnapshot !== null
+        && Number(referenceBaseline.id) === Number(currentSnapshot.id);
+
+    if (sameCheckpoint) {
+        return `
+            <div class="empty-state">
+                <strong>Version journey will grow once repo history is captured.</strong>
+                <div class="artifact-card-reason">${escapeHtml(currentLabel)} is both the current state and the reference baseline, so there are no earlier checkpoints to plot yet.</div>
+                <div class="detail-note">Approve or review artifact evidence in Artifacts, then let merged changes accumulate. As new repository checkpoints are materialized, they will appear here automatically.</div>
+                <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open Artifacts</a>
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="empty-state">
+            <strong>No historical checkpoints have been materialized yet.</strong>
+            <div class="artifact-card-reason">Vipari is currently comparing ${escapeHtml(currentLabel)} against ${escapeHtml(baselineLabel)}, but there is not enough stored repository history to render a journey timeline.</div>
+            <div class="detail-note">Once merged changes are captured as real checkpoints, they will appear here with the active reference baseline marked directly on the relevant checkpoint.</div>
         </div>
     `;
 }
@@ -3020,23 +3093,19 @@ function renderJourneyTimeline(snapshots = [], selectedBaselineSourceSnapshotId 
     if (!snapshots.length) {
         return '<div class="muted">No timeline is available yet.</div>';
     }
-    const syntheticCurrentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current") || null;
-    let displaySnapshots = snapshots.filter((snapshot) => snapshot.snapshot_type !== "current");
-    const hasExplicitApprovedBaseline = displaySnapshots.some((snapshot) => (
-        snapshot.snapshot_type === "baseline_promotion"
-            || (selectedBaselineSourceSnapshotId !== null && Number(snapshot.id) === Number(selectedBaselineSourceSnapshotId))
-    ));
-    if (hasExplicitApprovedBaseline) {
-        displaySnapshots = displaySnapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved");
-    }
+    const allSnapshots = asArray(snapshots);
+    const displaySnapshots = meaningfulJourneySnapshots(allSnapshots);
     if (!displaySnapshots.length) {
-        displaySnapshots = snapshots.slice(-1);
-    }
-    const currentSnapshot = syntheticCurrentSnapshot
-        ? displaySnapshots[displaySnapshots.length - 1] || syntheticCurrentSnapshot
-        : displaySnapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
-            || displaySnapshots[displaySnapshots.length - 1]
+        const referenceBaseline = allSnapshots.find((snapshot) => snapshot.is_reference_baseline) || null;
+        const currentSnapshot = allSnapshots.find((snapshot) => snapshot.is_current_anchor)
+            || allSnapshots.find((snapshot) => snapshot.snapshot_type === "current")
             || null;
+        return renderJourneyEmptyState(referenceBaseline, currentSnapshot);
+    }
+    const currentSnapshot = displaySnapshots.find((snapshot) => snapshot.is_current_anchor)
+        || displaySnapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
+        || displaySnapshots[displaySnapshots.length - 1]
+        || null;
     const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(
         snapshot,
         selectedBaselineSourceSnapshotId,
