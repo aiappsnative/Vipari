@@ -148,6 +148,14 @@ def _invalidate_dashboard_caches() -> None:
     invalidate_dashboard_caches()
 
 
+def _refresh_repo_posture_views_best_effort(db_path: str, repo_full: str) -> None:
+    try:
+        build_repo_journey(db_path, repo_full)
+    except Exception:
+        # Derived snapshot rebuilds should not roll back a baseline mutation that already committed.
+        _invalidate_dashboard_caches()
+
+
 def build_repo_baseline_review_panel(db_path: str, repo_full: str) -> RepoBaselineReviewPanel | None:
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
     if onboarding is None:
@@ -226,7 +234,7 @@ def approve_repo_baseline(
         snapshot_id=approved_snapshot_id,
     )
     _invalidate_dashboard_caches()
-    build_repo_journey(db_path, repo_full)
+    _refresh_repo_posture_views_best_effort(db_path, repo_full)
     return updated_versions
 
 
@@ -285,7 +293,7 @@ def reject_repo_baseline(
         note=approval_note,
     )
     _invalidate_dashboard_caches()
-    build_repo_journey(db_path, repo_full)
+    _refresh_repo_posture_views_best_effort(db_path, repo_full)
     return updated_versions
 
 
@@ -342,7 +350,7 @@ def approve_repo_baseline_artifact(
             approved_at=None,
         )
     _invalidate_dashboard_caches()
-    build_repo_journey(db_path, repo_full)
+    _refresh_repo_posture_views_best_effort(db_path, repo_full)
     return updated
 
 
@@ -388,7 +396,7 @@ def reject_repo_baseline_artifact(
         approved_at=None,
     )
     _invalidate_dashboard_caches()
-    build_repo_journey(db_path, repo_full)
+    _refresh_repo_posture_views_best_effort(db_path, repo_full)
     return updated
 
 
@@ -499,5 +507,5 @@ def rebaseline_repo_from_snapshot(
         snapshot_id=snapshot_id,
     )
     _invalidate_dashboard_caches()
-    build_repo_journey(db_path, repo_full)
+    _refresh_repo_posture_views_best_effort(db_path, repo_full)
     return created

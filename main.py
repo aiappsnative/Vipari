@@ -4738,8 +4738,13 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RebaselineExternalError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
-    return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+    response_payload = {"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": None}
+    try:
+        dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
+        response_payload["dashboard"] = asdict(dashboard)
+    except Exception:
+        pass
+    return JSONResponse(response_payload)
 
 
 app.include_router(

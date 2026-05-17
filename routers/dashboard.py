@@ -655,8 +655,13 @@ def create_repo_baseline_router(
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
 		except RebaselineExternalError as exc:
 			raise HTTPException(status_code=502, detail=str(exc)) from exc
-		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
-		return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
+		response_payload = {"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": None}
+		try:
+			dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
+			response_payload["dashboard"] = asdict(dashboard)
+		except Exception:
+			pass
+		return JSONResponse(response_payload)
 
 	router.add_api_route(
 		"/api/repos/{repo_full:path}/artifacts/{artifact_path:path}/baseline",
