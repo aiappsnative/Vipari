@@ -253,6 +253,33 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path, foreign_keys=True)
 
 
+def _ensure_pull_request_audit_columns(conn: sqlite3.Connection) -> None:
+    audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+    if "pr_title" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_title TEXT")
+    if "pr_state" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_state TEXT")
+    if "pr_merged" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged INTEGER")
+    if "pr_closed_at" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_closed_at REAL")
+    if "pr_merged_at" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged_at REAL")
+    if "pr_merge_commit_sha" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merge_commit_sha TEXT")
+    if "pr_updated_at" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
+    if "fused_confidence" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
+    if "pr_feedback_mode" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_feedback_mode TEXT NOT NULL DEFAULT 'comments'")
+
+
+def ensure_pull_request_audit_schema(db_path: str) -> None:
+    with _connect(db_path) as conn:
+        _ensure_pull_request_audit_columns(conn)
+
+
 def init_audit_record_db(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
@@ -286,25 +313,7 @@ def init_audit_record_db(db_path: str) -> None:
             )
             """
         )
-        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
-        if "pr_title" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_title TEXT")
-        if "pr_state" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_state TEXT")
-        if "pr_merged" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged INTEGER")
-        if "pr_closed_at" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_closed_at REAL")
-        if "pr_merged_at" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merged_at REAL")
-        if "pr_merge_commit_sha" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_merge_commit_sha TEXT")
-        if "pr_updated_at" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_updated_at REAL")
-        if "fused_confidence" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
-        if "pr_feedback_mode" not in audit_columns:
-            conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_feedback_mode TEXT NOT NULL DEFAULT 'comments'")
+        _ensure_pull_request_audit_columns(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS changed_artifacts (

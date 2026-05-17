@@ -150,6 +150,12 @@ def _ensure_audit_jobs_lifecycle_columns(db_path: str) -> None:
     ensure_audit_job_schema(db_path)
 
 
+def _ensure_pull_request_audit_lifecycle_columns(db_path: str) -> None:
+    from .audit_records import ensure_pull_request_audit_schema
+
+    ensure_pull_request_audit_schema(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -206,6 +212,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0011_ensure_audit_jobs_lifecycle_columns",
         "Repair legacy audit_jobs tables so pull-request lifecycle columns like pr_title exist even when the original bootstrap migration was applied before those columns were added.",
         _ensure_audit_jobs_lifecycle_columns,
+    ),
+    (
+        "0012_ensure_pull_request_audit_lifecycle_columns",
+        "Repair legacy pull_request_audits tables so pull-request lifecycle columns like pr_title exist even when earlier repair migrations were recorded before those columns were added.",
+        _ensure_pull_request_audit_lifecycle_columns,
     ),
 )
 
