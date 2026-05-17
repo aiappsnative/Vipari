@@ -77,7 +77,7 @@
                         <div class="secondary-panel-title">Workspace identity</div>
                         <h2 class="control-page-section-title">Workspace settings</h2>
                         <p class="control-page-copy">{{STATUS_NOTE}}</p>
-                        <p class="control-page-copy">{{WORKSPACE_PERMISSION}} access. Current plan: {{PLAN_LABEL}}. Owners and edit users can rename the workspace and manage repository PR feedback behavior from one place.</p>
+                        <p class="control-page-copy">{{WORKSPACE_PERMISSION}} access. Current plan: {{PLAN_LABEL}}. Owners and edit users can rename the workspace and manage repository PR feedback and baseline approval behavior from one place.</p>
                         <form method="post" action="/settings" class="control-page-form">
                             {{CSRF_INPUT}}
                             <label class="control-page-label" for="workspace-name">Workspace name</label>
@@ -113,6 +113,29 @@
                                 </div>
                             </fieldset>
                             <p class="control-page-copy">Formal reviews can be combined with GitHub branch protection rules when you want Vipari to participate as a required reviewer.</p>
+                            <p class="control-page-copy">{{PR_FEEDBACK_STATUS_NOTE}}</p>
+                            <div class="control-page-form-divider"></div>
+                            <h2 class="control-page-section-title">Baseline candidate approval</h2>
+                            <p class="control-page-copy">Choose whether new baseline candidates wait for a reviewer or become the active reference baseline immediately after creation.</p>
+                            <fieldset class="control-page-choice-group" aria-labelledby="baseline-approval-picker-title">
+                                <legend class="control-page-label" id="baseline-approval-picker-title">Baseline candidate approval</legend>
+                                <div class="control-page-choice-grid">
+                                    <label class="control-page-choice">
+                                        <input type="radio" name="baseline_approval_mode" value="manual" {{BASELINE_APPROVAL_MODE_MANUAL_CHECKED}} {{PR_COMMENTS_DISABLED}} />
+                                        <span class="control-page-choice-card">
+                                            <span class="control-page-choice-title">Manual approval</span>
+                                            <span class="control-page-choice-copy">Create pending baseline candidates and keep comparing against the current reference baseline until someone approves them.</span>
+                                        </span>
+                                    </label>
+                                    <label class="control-page-choice">
+                                        <input type="radio" name="baseline_approval_mode" value="auto" {{BASELINE_APPROVAL_MODE_AUTO_CHECKED}} {{PR_COMMENTS_DISABLED}} />
+                                        <span class="control-page-choice-card">
+                                            <span class="control-page-choice-title">Auto-approve</span>
+                                            <span class="control-page-choice-copy">Approve new candidates immediately so the latest created baseline becomes the active comparison reference without an extra review step.</span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </fieldset>
                             <p class="control-page-copy">{{MANAGE_NOTE}}</p>
                             <button type="submit" class="control-page-button" {{PR_COMMENTS_DISABLED}}>Save settings</button>
                         </form>
@@ -136,6 +159,10 @@
                             <div class="control-page-meta-card">
                                 <span class="control-page-meta-label">GitHub installation</span>
                                 <strong>{{INSTALLATION_ACCOUNT_LOGIN}}</strong>
+                            </div>
+                            <div class="control-page-meta-card">
+                                <span class="control-page-meta-label">Baseline approvals</span>
+                                <strong>{{BASELINE_APPROVAL_STATUS}}</strong>
                             </div>
                         </div>
                         <div class="control-page-section-spacer control-page-section-spacer-xl"></div>

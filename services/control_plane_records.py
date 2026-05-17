@@ -5,6 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+from .baseline_approval_mode import BASELINE_APPROVAL_MODE_MANUAL, normalize_baseline_approval_mode
 from .persistence import connect_sqlite, is_postgres_locator, resolve_db_path
 from .pr_feedback_mode import PR_FEEDBACK_MODE_COMMENTS, normalize_pr_feedback_mode
 
@@ -90,6 +91,7 @@ class WorkspaceRecord:
     setup_state: str
     pr_comments_setting_enabled: bool
     pr_feedback_mode: str
+    baseline_approval_mode: str
     created_at: float
     updated_at: float
 
@@ -423,6 +425,7 @@ def _row_to_webhook_event_receipt(row: sqlite3.Row) -> WebhookEventReceiptRecord
 
 def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
     pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else PR_FEEDBACK_MODE_COMMENTS
+    baseline_approval_mode = row["baseline_approval_mode"] if "baseline_approval_mode" in row.keys() else BASELINE_APPROVAL_MODE_MANUAL
     return WorkspaceRecord(
         id=row["id"],
         slug=row["slug"],
@@ -432,6 +435,7 @@ def _row_to_workspace(row: sqlite3.Row) -> WorkspaceRecord:
         setup_state=row["setup_state"],
         pr_comments_setting_enabled=bool(row["pr_comments_setting_enabled"]),
         pr_feedback_mode=normalize_pr_feedback_mode(pr_feedback_mode),
+        baseline_approval_mode=normalize_baseline_approval_mode(baseline_approval_mode),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -834,6 +838,7 @@ def init_control_plane_db(db_path: str) -> None:
                 setup_state TEXT NOT NULL DEFAULT 'workspace_no_subscription',
                 pr_comments_setting_enabled INTEGER NOT NULL DEFAULT 1,
                 pr_feedback_mode TEXT NOT NULL DEFAULT 'comments',
+                baseline_approval_mode TEXT NOT NULL DEFAULT 'manual',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY(billing_owner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -1122,6 +1127,7 @@ def init_control_plane_db(db_path: str) -> None:
         _ensure_column(conn, "workspaces", "setup_state", "TEXT NOT NULL DEFAULT 'workspace_no_subscription'")
         _ensure_column(conn, "workspaces", "pr_comments_setting_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "workspaces", "pr_feedback_mode", "TEXT NOT NULL DEFAULT 'comments'")
+        _ensure_column(conn, "workspaces", "baseline_approval_mode", "TEXT NOT NULL DEFAULT 'manual'")
         _ensure_column(conn, "user_sessions", "workspace_id", "INTEGER")
         _ensure_column(conn, "user_sessions", "last_seen_at", "REAL")
         _ensure_column(conn, "user_sessions", "flash_json", "TEXT")
@@ -1432,6 +1438,19 @@ def update_workspace_pr_feedback_mode(db_path: str, workspace_id: int, *, pr_fee
         _ensure_column(conn, "workspaces", "pr_feedback_mode", "TEXT NOT NULL DEFAULT 'comments'")
         conn.execute(
             "UPDATE workspaces SET pr_feedback_mode = ?, updated_at = ? WHERE id = ?",
+            (normalized_mode, now, workspace_id),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    return _row_to_workspace(row)
+
+
+def update_workspace_baseline_approval_mode(db_path: str, workspace_id: int, *, baseline_approval_mode: str) -> WorkspaceRecord:
+    now = time.time()
+    normalized_mode = normalize_baseline_approval_mode(baseline_approval_mode)
+    with _connect(db_path) as conn:
+        _ensure_column(conn, "workspaces", "baseline_approval_mode", "TEXT NOT NULL DEFAULT 'manual'")
+        conn.execute(
+            "UPDATE workspaces SET baseline_approval_mode = ?, updated_at = ? WHERE id = ?",
             (normalized_mode, now, workspace_id),
         )
         row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()

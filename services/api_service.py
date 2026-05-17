@@ -20,11 +20,13 @@ from typing import Literal
 
 from config import get_settings
 from .api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+from .baseline_approval_mode import BASELINE_APPROVAL_MODE_MANUAL, normalize_baseline_approval_mode
 from .cp_auth import require_cp_principal, require_cp_principal_kind, require_cp_scope, require_cp_workspace_match
 from .control_plane_records import (
     create_control_plane_audit_log,
     create_machine_principal,
     count_machine_principals_for_workspace,
+    get_active_repo_allocation_for_repo,
     get_machine_principal_by_client_id,
     get_machine_principal_by_id,
     get_repo_allocation_for_workspace,
@@ -311,6 +313,7 @@ def create_api_app() -> FastAPI:
             resolve_db_path_fn=lambda: db_path,
             build_repo_dashboard_view_with_timings_fn=lambda active_db_path, repo_full: (build_repo_dashboard_view(active_db_path, repo_full), []),
             build_pre_audit_relevance_payload_fn=None,
+            build_pr_review_routes_payload_fn=None,
             list_pre_audit_relevance_decisions_fn=None,
             list_export_jobs_for_requester_fn=list_export_jobs_for_requester,
             export_job_payload_fn=lambda job: job,
@@ -355,6 +358,8 @@ def create_api_app() -> FastAPI:
             plan_repository_history_backfill_fn=lambda active_db_path, **kwargs: plan_repository_history_backfill(active_db_path, **kwargs),
             execute_repository_history_backfill_fn=lambda active_db_path, **kwargs: execute_repository_history_backfill(active_db_path, **kwargs),
             build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
+            record_server_timing_metric_fn=lambda metrics, name, started: None,
+            attach_server_timing_fn=lambda response, _metrics: response,
         )
     )
 
@@ -362,6 +367,14 @@ def create_api_app() -> FastAPI:
         create_repo_baseline_router(
             authorize_repo_read_fn=lambda request, _repo_full: _require_admin_token(request, settings),
             authorize_repo_mutation_fn=lambda request, _repo_full: _require_admin_token(request, settings),
+            resolve_baseline_approval_mode_fn=lambda _auth_context, active_db_path, repo_full: normalize_baseline_approval_mode(
+                (
+                    get_workspace_by_id(active_db_path, allocation.workspace_id).baseline_approval_mode
+                    if (allocation := get_active_repo_allocation_for_repo(active_db_path, repo_full)) is not None
+                    and get_workspace_by_id(active_db_path, allocation.workspace_id) is not None
+                    else BASELINE_APPROVAL_MODE_MANUAL
+                )
+            ),
             resolve_db_path_fn=lambda: db_path,
             build_repo_dashboard_view_fn=build_repo_dashboard_view,
             build_repo_journey_fn=build_repo_journey,

@@ -1909,6 +1909,7 @@ def _build_repo_dashboard_view_uncached(
             lambda: _build_repo_journey_panel(
                 db_path,
                 repo_full,
+                onboarding_id=onboarding.id,
                 selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
             ),
         )
@@ -2135,6 +2136,7 @@ def _build_repo_journey_panel(
     db_path: str,
     repo_full: str,
     *,
+    onboarding_id: int | None = None,
     selected_baseline_source_snapshot_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     from .repo_journey import _compare_snapshot_records, build_repo_journey, snapshot_to_public_payload
@@ -2142,6 +2144,13 @@ def _build_repo_journey_panel(
     snapshot_records = build_repo_journey(db_path, repo_full)
     snapshots = [snapshot_to_public_payload(snapshot) for snapshot in snapshot_records]
     snapshot_record_by_id = {snapshot.id: snapshot for snapshot in snapshot_records}
+    approved_source_snapshot_ids: set[int] = set()
+    if onboarding_id is not None:
+        approved_source_snapshot_ids = {
+            int(log.snapshot_id)
+            for log in list_baseline_audit_log_for_onboarding(db_path, onboarding_id)
+            if log.action == "approve_repo_baseline" and log.snapshot_id is not None
+        }
     baseline_snapshot = None
     if selected_baseline_source_snapshot_id is not None:
         baseline_snapshot = next(
@@ -2153,6 +2162,22 @@ def _build_repo_journey_panel(
     current_snapshot = next((snapshot for snapshot in snapshots if snapshot["snapshot_type"] == "current"), None)
     if current_snapshot is None:
         current_snapshot = next((snapshot for snapshot in reversed(snapshots) if snapshot["snapshot_type"] == "branch_head"), None)
+    reference_baseline_snapshot_id = int(baseline_snapshot["id"]) if baseline_snapshot is not None else None
+    current_snapshot_id = int(current_snapshot["id"]) if current_snapshot is not None else None
+    for snapshot in snapshots:
+        snapshot_id = int(snapshot["id"])
+        is_reference_baseline = reference_baseline_snapshot_id is not None and snapshot_id == reference_baseline_snapshot_id
+        is_approved_baseline = snapshot.get("snapshot_type") == "baseline_approved" or snapshot_id in approved_source_snapshot_ids
+        snapshot["is_reference_baseline"] = is_reference_baseline
+        snapshot["is_approved_baseline"] = is_approved_baseline
+        snapshot["is_current_anchor"] = current_snapshot_id is not None and snapshot_id == current_snapshot_id
+        snapshot["baseline_marker_label"] = (
+            "Reference baseline"
+            if is_reference_baseline
+            else "Approved baseline"
+            if is_approved_baseline
+            else None
+        )
     comparison = None
     if baseline_snapshot is not None and current_snapshot is not None:
         baseline_record = snapshot_record_by_id.get(int(baseline_snapshot["id"]))

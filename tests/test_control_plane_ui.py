@@ -87,6 +87,7 @@ def test_workspace_row_mapper_defaults_feedback_mode_when_column_missing():
     workspace = _row_to_workspace(row)
 
     assert workspace.pr_feedback_mode == "comments"
+    assert workspace.baseline_approval_mode == "manual"
 
 
 def test_update_workspace_feedback_mode_backfills_legacy_schema_column(tmp_path):
@@ -1765,6 +1766,7 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
         data={
             "workspace_name": "Renamed Settings Workspace",
             "pr_feedback_mode": "off",
+            "baseline_approval_mode": "manual",
             "csrf_token": session.csrf_secret,
         },
         follow_redirects=False,
@@ -1811,6 +1813,7 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
         data={
             "workspace_name": "Renamed Settings Workspace",
             "pr_feedback_mode": "reviews",
+            "baseline_approval_mode": "auto",
             "csrf_token": session.csrf_secret,
         },
         follow_redirects=False,
@@ -1819,11 +1822,13 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert reviews_post_response.status_code == 303
     updated_workspace = get_workspace_by_id(main.AUDIT_DB_PATH, workspace.id)
     assert updated_workspace.pr_feedback_mode == "reviews"
+    assert updated_workspace.baseline_approval_mode == "auto"
     assert updated_workspace.pr_comments_setting_enabled is True
 
     reviews_get_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
     assert reviews_get_response.status_code == 200
     assert 'value="reviews" checked' in reviews_get_response.text
+    assert 'value="auto" checked' in reviews_get_response.text
     assert "Formal reviews" in reviews_get_response.text
 
     repo_inherit_response = client.post(
@@ -1842,6 +1847,55 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert allocation is not None
     assert allocation.pr_feedback_mode is None
 
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_settings_page_rejects_invalid_baseline_approval_mode(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "settings-invalid-baseline-mode.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="933",
+        github_login="settings-invalid-mode-owner",
+        display_name="Settings Invalid Mode Owner",
+        primary_email="settings-invalid-mode@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="settings-invalid-mode-workspace",
+        display_name="Settings Invalid Mode Workspace",
+        billing_owner_user_id=user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="settings-invalid-mode-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf-invalid-mode",
+        expires_at=time.time() + 3600,
+    )
+
+    response = client.post(
+        "/settings",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "workspace_name": "Settings Invalid Mode Workspace",
+            "pr_feedback_mode": "comments",
+            "baseline_approval_mode": "surprise",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Baseline approval mode must be manual or auto."
     main.AUDIT_DB_PATH = original_db_path
 
 

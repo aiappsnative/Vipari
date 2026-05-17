@@ -530,6 +530,7 @@ def create_repo_baseline_router(
 	*,
 	authorize_repo_read_fn: Callable,
 	authorize_repo_mutation_fn: Callable,
+	resolve_baseline_approval_mode_fn: Callable,
 	resolve_db_path_fn: Callable[[], str],
 	build_repo_dashboard_view_fn: Callable,
 	build_repo_journey_fn: Callable,
@@ -636,21 +637,39 @@ def create_repo_baseline_router(
 		return JSONResponse({"repo_full": repo_full, "rejected_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
 
 	def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebaselineRequest):
-		authorize_repo_mutation_fn(request, repo_full)
+		auth_context = authorize_repo_mutation_fn(request, repo_full)
 		db_path = resolve_db_path_fn()
+		baseline_approval_mode = resolve_baseline_approval_mode_fn(auth_context, db_path, repo_full)
+		actor_login = resolve_actor_login_fn(request, payload)
+		membership = auth_context.get("membership") if isinstance(auth_context, dict) else None
+		if baseline_approval_mode == "auto" and (
+			membership is None or getattr(membership, "role", None) not in {"owner", "admin"}
+		):
+			raise HTTPException(
+				status_code=403,
+				detail="Auto-approved baseline creation requires a workspace owner or admin role.",
+			)
 		try:
 			baselines = rebaseline_repo_from_snapshot_fn(
 				db_path,
 				repo_full=repo_full,
 				snapshot_id=payload.snapshot_id,
 				rationale=payload.rationale,
-				actor_login=resolve_actor_login_fn(request, payload),
+				actor_login=actor_login,
 				github_app_id=github_app_id,
 				github_private_key_path=github_private_key_path,
 				generate_jwt_fn=generate_jwt_fn,
 				get_installation_token_fn=get_installation_token_fn,
 				fetch_file_content_fn=fetch_file_content_fn,
 			)
+			auto_approved_baselines = []
+			if baseline_approval_mode == "auto":
+				auto_approved_baselines = approve_repo_baseline_fn(
+					db_path,
+					repo_full=repo_full,
+					actor_login=actor_login,
+					approval_note=payload.rationale,
+				)
 		except ValueError as exc:
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
 		except RebaselineExternalError as exc:
@@ -659,7 +678,16 @@ def create_repo_baseline_router(
 			raise HTTPException(status_code=500, detail=str(exc)) from exc
 		except Exception as exc:
 			raise HTTPException(status_code=500, detail=f"Unexpected rebaseline failure: {type(exc).__name__}") from exc
-		response_payload = {"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": None}
+		response_payload = {
+			"repo_full": repo_full,
+			"snapshot_id": payload.snapshot_id,
+			"created_baseline_count": len(baselines),
+			"baseline_approval_mode": baseline_approval_mode,
+			"auto_approved": baseline_approval_mode == "auto",
+			"approved_baseline_count": len(auto_approved_baselines),
+			"baseline_candidate_status": "approved" if baseline_approval_mode == "auto" else "pending",
+			"dashboard": None,
+		}
 		try:
 			dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 			response_payload["dashboard"] = asdict(dashboard)

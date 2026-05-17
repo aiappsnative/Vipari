@@ -988,6 +988,7 @@ def render_control_plane_settings_page(
     csrf_token: str,
     pr_comments_allowed_by_plan: bool,
     pr_feedback_mode: str,
+    baseline_approval_mode: str,
     can_manage: bool,
     workspace_role: str,
     workspace_members: list[dict[str, object]],
@@ -1004,15 +1005,22 @@ def render_control_plane_settings_page(
     template = _load_template("control_plane_settings.html")
     effective_status = pr_comments_allowed_by_plan and pr_feedback_mode != "off"
     status_copy = status_note or "Manage workspace-wide PR feedback behavior for pull requests."
-    if not pr_comments_allowed_by_plan:
-        status_copy = "Your current plan does not permit PR feedback on GitHub pull requests, so this setting will not take effect until that entitlement is available."
     manage_note = "Owners and admins can change this setting." if can_manage else "Only workspace owners and admins can change this setting."
     billing_link = '<a class="control-page-button" href="/billing">Open billing</a>'
+    pr_feedback_status_note = (
+        "Your current plan does not permit PR feedback on GitHub pull requests, so this setting will not take effect until that entitlement is available."
+        if not pr_comments_allowed_by_plan
+        else ""
+    )
     workspace_mode_label = {
         "comments": "Comments",
         "reviews": "Reviews",
         "off": "Off",
     }.get(pr_feedback_mode, "Comments")
+    baseline_approval_mode_label = {
+        "manual": "Manual approval",
+        "auto": "Auto-approve",
+    }.get(baseline_approval_mode, "Manual approval")
     effective_mode_label = workspace_mode_label if effective_status else "Off"
     return (
         template.replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
@@ -1025,10 +1033,14 @@ def render_control_plane_settings_page(
         .replace("{{PR_FEEDBACK_MODE_COMMENTS_CHECKED}}", "checked" if pr_feedback_mode == "comments" else "")
         .replace("{{PR_FEEDBACK_MODE_REVIEWS_CHECKED}}", "checked" if pr_feedback_mode == "reviews" else "")
         .replace("{{PR_FEEDBACK_MODE_OFF_CHECKED}}", "checked" if pr_feedback_mode == "off" else "")
+        .replace("{{BASELINE_APPROVAL_MODE_MANUAL_CHECKED}}", "checked" if baseline_approval_mode == "manual" else "")
+        .replace("{{BASELINE_APPROVAL_MODE_AUTO_CHECKED}}", "checked" if baseline_approval_mode == "auto" else "")
+        .replace("{{PR_FEEDBACK_STATUS_NOTE}}", html_escape(pr_feedback_status_note))
         .replace("{{PR_COMMENTS_DISABLED}}", "disabled" if not can_manage else "")
         .replace("{{PLAN_PR_COMMENTS_STATUS}}", "Included" if pr_comments_allowed_by_plan else "Unavailable")
         .replace("{{WORKSPACE_PR_COMMENTS_STATUS}}", html_escape(workspace_mode_label))
         .replace("{{EFFECTIVE_PR_COMMENTS_STATUS}}", html_escape(effective_mode_label if effective_status else "Paused"))
+        .replace("{{BASELINE_APPROVAL_STATUS}}", html_escape(baseline_approval_mode_label))
         .replace("{{MANAGE_NOTE}}", html_escape(manage_note))
         .replace("{{WORKSPACE_PERMISSION}}", html_escape(_permission_label(workspace_role)))
         .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
