@@ -2043,6 +2043,23 @@ def record_webhook_event(
             """,
             (provider, event_id, event_type, status, now if status == "processed" else None, error_summary, now),
         )
+    from .activity_records import record_activity_event_if_configured
+
+    details = {"provider": provider, "status": status}
+    if error_summary:
+        details["error_summary"] = error_summary
+    record_activity_event_if_configured(
+        occurred_at=now,
+        source="webhook",
+        event_type=event_type,
+        workspace_id=None,
+        actor_user_id=None,
+        actor_label="System",
+        repo_full=None,
+        subject_type="webhook_event",
+        subject_id=event_id,
+        details=details,
+    )
 
 
 def create_control_plane_audit_log(
@@ -2066,7 +2083,27 @@ def create_control_plane_audit_log(
             (workspace_id, actor_user_id, event_type, subject_type, subject_id, json.dumps(payload or {}, sort_keys=True), now),
         )
         row = conn.execute("SELECT * FROM control_plane_audit_logs WHERE id = last_insert_rowid()").fetchone()
-    return _row_to_control_plane_audit_log(row)
+    record = _row_to_control_plane_audit_log(row)
+
+    from .activity_records import record_activity_event_if_configured
+
+    actor_label = None
+    if actor_user_id is not None:
+        actor = get_user_by_id(db_path, actor_user_id)
+        actor_label = actor.display_name if actor is not None else f"User #{actor_user_id}"
+    record_activity_event_if_configured(
+        occurred_at=record.created_at,
+        source="control_plane",
+        event_type=record.event_type,
+        workspace_id=record.workspace_id,
+        actor_user_id=record.actor_user_id,
+        actor_label=actor_label,
+        repo_full=(str((payload or {}).get("repo_full")) if (payload or {}).get("repo_full") else None),
+        subject_type=record.subject_type,
+        subject_id=record.subject_id,
+        details=(payload or {}),
+    )
+    return record
 
 
 def upsert_github_installation(

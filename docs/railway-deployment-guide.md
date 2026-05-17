@@ -132,6 +132,7 @@ These are starting values only; increase them once real job volume and latency a
 - confirm `worker`, `postgres`, and `redis` are not public
 - run `python scripts/db_migrate.py` against the production `DATABASE_URL` before first traffic; in `APP_ENV=production` the command now fails closed if it resolves to SQLite
 - if the separate activity feed is enabled, run `python scripts/db_migrate.py --target activity` against `ACTIVITY_DATABASE_URL` before enabling the activity page
+- once `ACTIVITY_DATABASE_URL` is enabled, new control-plane audit logs, webhook receipts, feedback events, and triage events are mirrored into the activity store and `/admin?tab=logs` reads from that database
 - run `python scripts/railway_preflight.py --service-role <role> --app-env production` locally against the production env set before deploy
 - confirm GitHub OAuth callback URL matches the API domain exactly
 - confirm GitHub App webhook URL matches the webhook domain exactly

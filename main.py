@@ -37,6 +37,7 @@ from services.audit_records import (
     update_pull_request_audit_state,
 )
 from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
+from services.activity_records import list_recent_activity_events
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.audit_records import list_pre_audit_relevance_decisions
 from services.mcp_broker import (
@@ -998,6 +999,23 @@ def _admin_activity_payload_details(payload_json: str | None) -> str:
 
 
 def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
+    if settings.has_activity_database_config:
+        return [
+            AdminActivityLogEntry(
+                source=row.source,
+                occurred_at=row.occurred_at,
+                event_type=row.event_type,
+                workspace_id=row.workspace_id,
+                actor_user_id=row.actor_user_id,
+                actor_label=row.actor_label or _admin_activity_actor_label(row.actor_user_id, user_labels),
+                subject_type=row.subject_type,
+                subject_id=row.subject_id,
+                details=_admin_activity_payload_details(row.details_json),
+                raw_id=f"activity:{row.id}",
+            )
+            for row in list_recent_activity_events(settings.resolved_activity_db_path, limit=fetch_limit)
+        ]
+
     entries: list[AdminActivityLogEntry] = []
 
     for row in list_recent_control_plane_audit_logs(db_path, limit=fetch_limit):

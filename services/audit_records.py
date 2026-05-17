@@ -1073,7 +1073,34 @@ def record_audit_feedback_event(
 
     if row is None:
         raise RuntimeError("Failed to store or reload audit feedback event.")
-    return _row_to_audit_feedback_event(row)
+    record = _row_to_audit_feedback_event(row)
+
+    from .activity_records import record_activity_event_if_configured
+
+    try:
+        details = json.loads(record.payload_json) if record.payload_json else {}
+    except (TypeError, ValueError):
+        details = {"payload": record.payload_json}
+    if not isinstance(details, dict):
+        details = {"payload": details}
+    details.setdefault("source", record.source)
+    if record.actor_github_login:
+        details.setdefault("actor_github_login", record.actor_github_login)
+    if record.actor_github_id:
+        details.setdefault("actor_github_id", record.actor_github_id)
+    record_activity_event_if_configured(
+        occurred_at=record.created_at,
+        source="audit_feedback",
+        event_type=f"audit.feedback.{record.kind}",
+        workspace_id=None,
+        actor_user_id=None,
+        actor_label=record.actor_github_login or record.source,
+        repo_full=record.repo_full,
+        subject_type="audit",
+        subject_id=str(record.audit_id),
+        details=details,
+    )
+    return record
 
 
 def list_audit_feedback_events_for_audit(db_path: str, audit_id: int) -> list[AuditFeedbackEventRecord]:

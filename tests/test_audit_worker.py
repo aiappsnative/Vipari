@@ -53,6 +53,8 @@ from services.control_plane_records import (
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.activity_records import list_recent_activity_events
+from services.activity_schema_migrations import migrate_activity_database
 from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
 
 
@@ -584,6 +586,66 @@ def test_list_audit_feedback_events_for_repo_returns_newest_first(tmp_path):
 
     assert [event.audit_id for event in saved] == [second_audit.id, first_audit.id]
     assert [event.kind for event in saved] == ["explicit_feedback", "pr_outcome"]
+
+
+def test_record_audit_feedback_event_mirrors_into_activity_database(tmp_path):
+    settings = get_settings()
+    original_activity_db_path = settings.activity_db_path
+    original_activity_database_url = settings.activity_database_url
+
+    db_path = str(tmp_path / "feedback-events-activity.db")
+    activity_db_path = str(tmp_path / "activity-events.db")
+    try:
+        init_db(db_path)
+        settings.activity_database_url = ""
+        settings.activity_db_path = activity_db_path
+        migrate_activity_database(activity_db_path)
+
+        created = create_audit_job(
+            db_path,
+            repo_full="doria90/dummyAI",
+            pr_number=305,
+            installation_id=123,
+            head_sha="sha-305",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            db_path,
+            job_id=created.id,
+            repo_full="doria90/dummyAI",
+            pr_number=305,
+            installation_id=123,
+            head_sha="sha-305",
+            deterministic_analysis=analyze_diff(created.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        record_audit_feedback_event(
+            db_path,
+            audit_id=audit.id,
+            kind="reaction",
+            source="github_reaction",
+            actor_github_id="12345",
+            actor_github_login="doria90",
+            event_key="reaction:305:+1:doria90",
+            payload_json=json.dumps({"content": "+1"}),
+            created_at=1234.5,
+        )
+
+        mirrored = list_recent_activity_events(activity_db_path)
+
+        assert len(mirrored) == 1
+        assert mirrored[0].event_type == "audit.feedback.reaction"
+        assert mirrored[0].repo_full == "doria90/dummyAI"
+        assert mirrored[0].actor_label == "doria90"
+    finally:
+        settings.activity_db_path = original_activity_db_path
+        settings.activity_database_url = original_activity_database_url
 
 
 def test_record_pr_outcome_feedback_events_classifies_high_risk_merge_as_ignored(tmp_path):
