@@ -23,6 +23,18 @@ def _is_localhost_host(value: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
+def _normalized_locator(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _activity_targets_primary_database(settings: Settings, *, activity_locator: str | None = None) -> bool:
+    if not settings.has_activity_database_config:
+        return False
+    normalized_activity = _normalized_locator(activity_locator or settings.resolved_activity_db_path)
+    normalized_primary = _normalized_locator(settings.resolved_db_path)
+    return bool(normalized_activity and normalized_primary and normalized_activity == normalized_primary)
+
+
 def _dev_auth_fallbacks_enabled(settings: Settings) -> list[str]:
     flags: list[str] = []
     if settings.local_debug_disable_login:
@@ -67,6 +79,10 @@ def validate_activity_migration_configuration(settings: Settings, *, resolved_db
 
     if not target_locator:
         errors.append("Activity database migrations require ACTIVITY_DATABASE_URL or ACTIVITY_DB_PATH to be configured.")
+    elif _activity_targets_primary_database(settings, activity_locator=target_locator):
+        errors.append(
+            "Activity database migrations must target a dedicated activity database; ACTIVITY_DATABASE_URL cannot match DATABASE_URL."
+        )
     elif settings.is_production and is_sqlite_locator(target_locator):
         errors.append(
             "Production activity database migrations cannot target SQLite persistence; point ACTIVITY_DATABASE_URL at the Railway activity Postgres service."
@@ -127,6 +143,8 @@ def validate_runtime_configuration(settings: Settings) -> None:
 
     if settings.has_activity_database_config and settings.is_production and is_sqlite_locator(settings.resolved_activity_db_path):
         errors.append("Production activity logging must use ACTIVITY_DATABASE_URL pointing to PostgreSQL, not SQLite.")
+    if _activity_targets_primary_database(settings):
+        errors.append("Activity logging must use a dedicated database; ACTIVITY_DATABASE_URL cannot match DATABASE_URL.")
 
     if settings.is_production:
         if settings.service_role == "monolith":

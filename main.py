@@ -1000,7 +1000,7 @@ def _admin_activity_payload_details(payload_json: str | None) -> str:
 
 def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
     if settings.has_activity_database_config:
-        return [
+        activity_entries = [
             AdminActivityLogEntry(
                 source=row.source,
                 occurred_at=row.occurred_at,
@@ -1011,11 +1011,20 @@ def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], 
                 subject_type=row.subject_type,
                 subject_id=row.subject_id,
                 details=_admin_activity_payload_details(row.details_json),
-                raw_id=f"activity:{row.id}",
+                raw_id=row.external_id or f"activity:{row.id}",
             )
             for row in list_recent_activity_events(settings.resolved_activity_db_path, limit=fetch_limit)
         ]
+        activity_raw_ids = {entry.raw_id for entry in activity_entries}
+        primary_entries = _build_admin_activity_entries_primary(db_path=db_path, user_labels=user_labels, fetch_limit=fetch_limit)
+        merged_entries = activity_entries + [entry for entry in primary_entries if entry.raw_id not in activity_raw_ids]
+        merged_entries.sort(key=lambda item: (item.occurred_at, item.raw_id), reverse=True)
+        return merged_entries
 
+    return _build_admin_activity_entries_primary(db_path=db_path, user_labels=user_labels, fetch_limit=fetch_limit)
+
+
+def _build_admin_activity_entries_primary(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
     entries: list[AdminActivityLogEntry] = []
 
     for row in list_recent_control_plane_audit_logs(db_path, limit=fetch_limit):

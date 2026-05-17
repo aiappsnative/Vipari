@@ -41,6 +41,7 @@ def _bootstrap_activity_schema(db_path: str) -> None:
             """
             CREATE TABLE IF NOT EXISTS activity_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id TEXT,
                 occurred_at REAL NOT NULL,
                 source TEXT NOT NULL,
                 event_type TEXT NOT NULL,
@@ -67,6 +68,19 @@ def _bootstrap_activity_schema(db_path: str) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_activity_events_type_occurred_at ON activity_events(event_type, occurred_at DESC, id DESC)"
         )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_events_external_id ON activity_events(external_id) WHERE external_id IS NOT NULL"
+        )
+
+
+def _ensure_activity_external_id_column(db_path: str) -> None:
+    with connect_sqlite(db_path) as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_events)").fetchall()}
+        if "external_id" not in columns:
+            conn.execute("ALTER TABLE activity_events ADD COLUMN external_id TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_events_external_id ON activity_events(external_id) WHERE external_id IS NOT NULL"
+        )
 
 
 ActivityMigrationHandler = Callable[[str], None]
@@ -75,6 +89,11 @@ ACTIVITY_MIGRATIONS: tuple[tuple[str, str, ActivityMigrationHandler], ...] = (
         "0001_bootstrap_activity_schema",
         "Create the append-only activity_events table and its primary timeline/filter indexes.",
         _bootstrap_activity_schema,
+    ),
+    (
+        "0002_add_activity_external_ids",
+        "Add stable external IDs so mirrored admin activity can be deduplicated against primary historical rows.",
+        _ensure_activity_external_id_column,
     ),
 )
 

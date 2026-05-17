@@ -1030,6 +1030,7 @@ def record_audit_feedback_event(
     created_at: float | None = None,
 ) -> AuditFeedbackEventRecord:
     timestamp = time.time() if created_at is None else created_at
+    workspace_id = 0
     with _connect(db_path) as conn:
         audit_row = conn.execute(
             "SELECT id, repo_full, pr_number, head_sha FROM pull_request_audits WHERE id = ?",
@@ -1037,6 +1038,12 @@ def record_audit_feedback_event(
         ).fetchone()
         if audit_row is None:
             raise ValueError(f"Audit {audit_id} does not exist.")
+
+        from .control_plane_records import get_active_repo_allocation_for_repo
+
+        allocation = get_active_repo_allocation_for_repo(db_path, str(audit_row["repo_full"]))
+        if allocation is not None:
+            workspace_id = allocation.workspace_id
 
         if event_key:
             existing = conn.execute(
@@ -1055,7 +1062,7 @@ def record_audit_feedback_event(
             """,
             (
                 audit_id,
-                0,
+                workspace_id,
                 audit_row["repo_full"],
                 audit_row["pr_number"],
                 audit_row["head_sha"],
@@ -1089,10 +1096,11 @@ def record_audit_feedback_event(
     if record.actor_github_id:
         details.setdefault("actor_github_id", record.actor_github_id)
     record_activity_event_if_configured(
+        external_id=f"audit_feedback:{record.id}",
         occurred_at=record.created_at,
         source="audit_feedback",
         event_type=f"audit.feedback.{record.kind}",
-        workspace_id=None,
+        workspace_id=(workspace_id or None),
         actor_user_id=None,
         actor_label=record.actor_github_login or record.source,
         repo_full=record.repo_full,

@@ -228,6 +228,7 @@ def add_audit_feedback(
     if record.metadata:
         details["metadata"] = record.metadata
     record_activity_event_if_configured(
+        external_id=f"audit_feedback:{record.id}",
         occurred_at=record.created_at,
         source="audit_feedback",
         event_type=f"audit.feedback.{record.kind}",
@@ -275,6 +276,7 @@ def add_audit_triage(
     if record.reason:
         details["reason"] = record.reason
     record_activity_event_if_configured(
+        external_id=f"audit_triage:{record.id}",
         occurred_at=record.created_at,
         source="audit_triage",
         event_type=f"audit.triage.{record.state}",

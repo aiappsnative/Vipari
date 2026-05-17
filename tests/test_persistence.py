@@ -206,6 +206,7 @@ def test_db_migrate_allows_postgres_target_in_production(monkeypatch):
         exit_code = db_migrate_script.main()
 
     assert exit_code == 0
+    migrate_activity_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/activity")
     migrate_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
 
 
@@ -258,7 +259,22 @@ def test_db_migrate_allows_activity_target_when_postgres_is_configured(monkeypat
         exit_code = db_migrate_script.main()
 
     assert exit_code == 0
-    migrate_activity_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/activity")
+
+
+def test_db_migrate_rejects_activity_target_matching_primary_database(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    get_settings.cache_clear()
+
+    with patch.object(sys, "argv", ["db_migrate.py", "--target", "activity"]), patch(
+        "scripts.db_migrate.migrate_activity_database"
+    ) as migrate_activity_database_mock:
+        with pytest.raises(RuntimeError) as exc_info:
+            db_migrate_script.main()
+
+    assert "dedicated activity database" in str(exc_info.value)
+    migrate_activity_database_mock.assert_not_called()
 
 
 def test_postgres_connection_translates_last_insert_lookup():

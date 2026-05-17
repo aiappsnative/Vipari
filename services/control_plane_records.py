@@ -2049,6 +2049,7 @@ def record_webhook_event(
     if error_summary:
         details["error_summary"] = error_summary
     record_activity_event_if_configured(
+        external_id=f"webhook:{provider}:{event_id}",
         occurred_at=now,
         source="webhook",
         event_type=event_type,
@@ -2092,6 +2093,7 @@ def create_control_plane_audit_log(
         actor = get_user_by_id(db_path, actor_user_id)
         actor_label = actor.display_name if actor is not None else f"User #{actor_user_id}"
     record_activity_event_if_configured(
+        external_id=f"control_plane:{record.id}",
         occurred_at=record.created_at,
         source="control_plane",
         event_type=record.event_type,
@@ -2570,6 +2572,15 @@ def get_repo_allocation_for_installation(db_path: str, installation_id: int, rep
         row = conn.execute(
             "SELECT * FROM repo_allocations WHERE installation_id = ? AND repo_full = ? AND allocation_status IN ('active', 'onboarded') ORDER BY updated_at DESC LIMIT 1",
             (installation_id, repo_full),
+        ).fetchone()
+    return _row_to_repo_allocation(row) if row else None
+
+
+def get_active_repo_allocation_for_repo(db_path: str, repo_full: str) -> RepoAllocationRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM repo_allocations WHERE repo_full = ? AND allocation_status IN ('active', 'onboarded') ORDER BY updated_at DESC LIMIT 1",
+            (repo_full,),
         ).fetchone()
     return _row_to_repo_allocation(row) if row else None
 

@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import sys
 import time
 from types import SimpleNamespace
@@ -600,6 +601,11 @@ def test_record_audit_feedback_event_mirrors_into_activity_database(tmp_path):
         settings.activity_database_url = ""
         settings.activity_db_path = activity_db_path
         migrate_activity_database(activity_db_path)
+        _owner, workspace, _allocation = _bind_repo_to_workspace(
+            db_path,
+            workspace_mode="reviews",
+            repo_full="doria90/dummyAI",
+        )
 
         created = create_audit_job(
             db_path,
@@ -643,6 +649,47 @@ def test_record_audit_feedback_event_mirrors_into_activity_database(tmp_path):
         assert mirrored[0].event_type == "audit.feedback.reaction"
         assert mirrored[0].repo_full == "doria90/dummyAI"
         assert mirrored[0].actor_label == "doria90"
+        assert mirrored[0].workspace_id == workspace.id
+    finally:
+        settings.activity_db_path = original_activity_db_path
+        settings.activity_database_url = original_activity_database_url
+
+
+def test_activity_write_failures_are_logged(monkeypatch, caplog):
+    settings = get_settings()
+    original_activity_db_path = settings.activity_db_path
+    original_activity_database_url = settings.activity_database_url
+
+    try:
+        settings.activity_database_url = ""
+        settings.activity_db_path = "activity.db"
+        caplog.set_level(logging.ERROR)
+
+        with monkeypatch.context() as patch_context:
+            patch_context.setattr(
+                "services.activity_records.create_activity_event",
+                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            )
+
+            from services.activity_records import record_activity_event_if_configured
+
+            result = record_activity_event_if_configured(
+                external_id="control_plane:1",
+                occurred_at=123.0,
+                source="control_plane",
+                event_type="admin_user_created",
+                workspace_id=None,
+                actor_user_id=None,
+                actor_label="Admin User",
+                repo_full=None,
+                subject_type="user",
+                subject_id="1",
+                details={"display_name": "Ada"},
+            )
+
+        assert result is None
+        assert "Failed to mirror activity event into the configured activity database." in caplog.text
+        assert "boom" in caplog.text
     finally:
         settings.activity_db_path = original_activity_db_path
         settings.activity_database_url = original_activity_database_url

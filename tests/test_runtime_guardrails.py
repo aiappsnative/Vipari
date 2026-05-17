@@ -133,6 +133,23 @@ def test_production_rejects_sqlite_activity_database_when_configured(monkeypatch
     assert "ACTIVITY_DATABASE_URL" in str(exc_info.value)
 
 
+def test_runtime_configuration_rejects_activity_database_matching_primary(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "dedicated database" in str(exc_info.value)
+
+
 def test_production_rejects_monolith_service_role(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("SERVICE_ROLE", "monolith")
@@ -322,7 +339,10 @@ async def test_readiness_checks_activity_database_when_configured(monkeypatch):
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
     ]]
-    activity_applied = [type("AppliedActivityMigration", (), {"version": "0001_bootstrap_activity_schema"})()]
+    activity_applied = [
+        type("AppliedActivityMigration", (), {"version": "0001_bootstrap_activity_schema"})(),
+        type("AppliedActivityMigration", (), {"version": "0002_add_activity_external_ids"})(),
+    ]
     with patch("services.runtime_guardrails.connect_sqlite") as connect, patch(
         "services.runtime_guardrails.list_applied_migrations",
         return_value=primary_applied,

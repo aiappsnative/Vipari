@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from .persistence import connect_sqlite
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class ActivityEventRecord:
     id: int
+    external_id: str | None
     occurred_at: float
     source: str
     event_type: str
@@ -26,6 +31,7 @@ class ActivityEventRecord:
 def _row_to_activity_event(row: Any) -> ActivityEventRecord:
     return ActivityEventRecord(
         id=int(row["id"]),
+        external_id=(str(row["external_id"]) if row["external_id"] else None),
         occurred_at=float(row["occurred_at"]),
         source=str(row["source"]),
         event_type=str(row["event_type"]),
@@ -90,6 +96,7 @@ def _search_text(
 def create_activity_event(
     db_path: str,
     *,
+    external_id: str | None = None,
     occurred_at: float,
     source: str,
     event_type: str,
@@ -113,9 +120,14 @@ def create_activity_event(
         details=details,
     )
     with connect_sqlite(db_path) as conn:
+        if external_id:
+            existing = conn.execute("SELECT * FROM activity_events WHERE external_id = ?", (external_id,)).fetchone()
+            if existing is not None:
+                return _row_to_activity_event(existing)
         cursor = conn.execute(
             """
             INSERT INTO activity_events (
+                external_id,
                 occurred_at,
                 source,
                 event_type,
@@ -127,9 +139,10 @@ def create_activity_event(
                 subject_id,
                 details_json,
                 search_text
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                external_id,
                 occurred_at,
                 source,
                 event_type,
@@ -151,6 +164,7 @@ def create_activity_event(
 
 def record_activity_event_if_configured(
     *,
+    external_id: str | None = None,
     occurred_at: float,
     source: str,
     event_type: str,
@@ -170,6 +184,7 @@ def record_activity_event_if_configured(
     try:
         return create_activity_event(
             settings.resolved_activity_db_path,
+            external_id=external_id,
             occurred_at=occurred_at,
             source=source,
             event_type=event_type,
@@ -182,6 +197,16 @@ def record_activity_event_if_configured(
             details=details,
         )
     except Exception:
+        logger.exception(
+            "Failed to mirror activity event into the configured activity database.",
+            extra={
+                "activity_external_id": external_id,
+                "activity_source": source,
+                "activity_event_type": event_type,
+                "activity_subject_type": subject_type,
+                "activity_subject_id": subject_id,
+            },
+        )
         return None
 
 
