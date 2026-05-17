@@ -2004,13 +2004,7 @@ function snapshotTypeLabel(snapshotType) {
 }
 
 function journeyPullRequestLifecycleLabel(snapshot) {
-    if (!snapshot || !snapshot.pr_number) {
-        return "";
-    }
-    if (String(snapshot.snapshot_type || "").toLowerCase() === "merge") {
-        return "Merged";
-    }
-    return "Pending merge";
+    return "";
 }
 
 function formatSigned(value, digits = 3) {
@@ -2068,6 +2062,7 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
 function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null, isCurrent = false) {
     const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
     const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
+    const isApprovedBaseline = isSelectedBaseline || snapshot?.snapshot_type === "baseline_promotion" || snapshot?.snapshot_type === "baseline_approved";
     const displayTimestamp = journeyCardTimestamp(snapshot, isSelectedBaseline);
     const lifecycleLabel = journeyPullRequestLifecycleLabel(snapshot);
     const source = snapshot.source_url
@@ -2082,11 +2077,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
     const rebaselineButton = snapshot.commit_sha
         ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Set as reference baseline</button>`
         : "";
-    const headingLabel = isSelectedBaseline
-        ? "Approved baseline"
-        : isCurrent
-            ? "Current posture"
-            : snapshotTypeLabel(snapshot.snapshot_type);
+    const headingLabel = snapshotTypeLabel(snapshot.snapshot_type);
     return `
         <div class="artifact-card journey-card ${baselineVerified ? "" : "journey-card-muted"} ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}" ${baselineVerified ? "" : 'title="Baseline not yet approved — drift scores are estimates."'}>
             <div class="artifact-card-head">
@@ -2096,6 +2087,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                 </div>
                 <div class="tag-row">
                     ${isCurrent ? '<span class="drift-chip chip-governance">Current</span>' : ""}
+                    ${isApprovedBaseline ? '<span class="drift-chip chip-baseline">Approved baseline</span>' : ""}
                     ${lifecycleLabel ? `<span class="drift-chip chip-baseline">${escapeHtml(lifecycleLabel)}</span>` : ""}
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
@@ -2923,13 +2915,23 @@ function renderJourneyTimeline(snapshots = [], selectedBaselineSourceSnapshotId 
     if (!snapshots.length) {
         return '<div class="muted">No timeline is available yet.</div>';
     }
-    const currentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current")
-        || snapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
-        || snapshots[snapshots.length - 1]
-        || null;
-    const displaySnapshots = selectedBaselineSourceSnapshotId
-        ? snapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved")
-        : snapshots;
+    const syntheticCurrentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current") || null;
+    let displaySnapshots = snapshots.filter((snapshot) => snapshot.snapshot_type !== "current");
+    const hasExplicitApprovedBaseline = displaySnapshots.some((snapshot) => (
+        snapshot.snapshot_type === "baseline_promotion"
+            || (selectedBaselineSourceSnapshotId !== null && Number(snapshot.id) === Number(selectedBaselineSourceSnapshotId))
+    ));
+    if (hasExplicitApprovedBaseline) {
+        displaySnapshots = displaySnapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved");
+    }
+    if (!displaySnapshots.length) {
+        displaySnapshots = snapshots.slice(-1);
+    }
+    const currentSnapshot = syntheticCurrentSnapshot
+        ? displaySnapshots[displaySnapshots.length - 1] || syntheticCurrentSnapshot
+        : displaySnapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
+            || displaySnapshots[displaySnapshots.length - 1]
+            || null;
     const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(
         snapshot,
         selectedBaselineSourceSnapshotId,
