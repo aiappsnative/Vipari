@@ -24,6 +24,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from config import get_settings
+from engine.analysis import analyze_diff
 from engine.relevance import needs_audit as engine_needs_audit
 from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_access_state
 from services.audit_jobs import create_audit_job, init_db, update_job_pr_state
@@ -31,6 +32,8 @@ from services.audit_records import (
     get_audit_comment_episode_for_pr_head_sha,
     get_latest_audit_comment_for_pr,
     get_pull_request_audit_by_id,
+    list_pull_request_audits_for_repo,
+    record_audit_result,
     record_pr_outcome_feedback_events,
     record_audit_feedback_event,
     refresh_audit_reaction_feedback_for_pr,
@@ -4841,6 +4844,73 @@ def needs_audit(diff: str) -> bool:
     return engine_needs_audit(diff)
 
 
+def _ensure_lifecycle_only_audit_for_repo(
+    *,
+    repo_full: str,
+    pr_number: int,
+    pr_title: str | None,
+    installation_id: int,
+    head_sha: str | None,
+    pr_state: str | None,
+    pr_merged: bool | None,
+    pr_closed_at: float | None,
+    pr_merged_at: float | None,
+    pr_merge_commit_sha: str | None,
+    pr_updated_at: float | None,
+) -> None:
+    normalized_head_sha = str(head_sha or "").strip()
+    if not normalized_head_sha:
+        return
+
+    existing = [
+        audit
+        for audit in list_pull_request_audits_for_repo(AUDIT_DB_PATH, repo_full)
+        if audit.pr_number == pr_number and audit.head_sha == normalized_head_sha
+    ]
+    if existing:
+        return
+
+    lifecycle_job = create_audit_job(
+        AUDIT_DB_PATH,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        pr_title=pr_title,
+        installation_id=installation_id,
+        head_sha=normalized_head_sha,
+        diff_text="",
+        pr_state=pr_state,
+        pr_merged=pr_merged,
+        pr_closed_at=pr_closed_at,
+        pr_merged_at=pr_merged_at,
+        pr_merge_commit_sha=pr_merge_commit_sha,
+        pr_updated_at=pr_updated_at,
+    )
+    record_audit_result(
+        AUDIT_DB_PATH,
+        job_id=lifecycle_job.id,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        pr_title=pr_title,
+        installation_id=installation_id,
+        head_sha=normalized_head_sha,
+        pr_state=pr_state,
+        pr_merged=pr_merged,
+        pr_closed_at=pr_closed_at,
+        pr_merged_at=pr_merged_at,
+        pr_merge_commit_sha=pr_merge_commit_sha,
+        pr_updated_at=pr_updated_at,
+        deterministic_analysis=analyze_diff(""),
+        status="completed",
+        completion_mode="lifecycle_only",
+        output_mode="lifecycle_tracking",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=False,
+        suggested_risk_level="unknown",
+        fused_confidence=None,
+    )
+
+
 def _get_diff_fetch_error_status_code(exc: Exception) -> int | None:
     if isinstance(exc, HTTPError):
         return exc.code
@@ -5151,17 +5221,18 @@ async def webhook(request: Request):
         if branch_ref != f"refs/heads/{default_branch}":
             return JSONResponse({"message": "ignored"})
 
+        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
         managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
         if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
             allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
-            if allocation is None:
+            if allocation is None and onboarding is None:
                 return JSONResponse({"message": "ignored: repo not allocated"})
 
-            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
+            workspace_id = allocation.workspace_id if allocation is not None else managed_installation.workspace_id
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, int(workspace_id))
             if entitlement is None or not entitlement.dashboard_enabled:
                 return JSONResponse({"message": "ignored: workspace not entitled"})
 
-        onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
         if onboarding is None:
             return JSONResponse({"message": "ignored: repo not onboarded"})
 
@@ -5198,20 +5269,41 @@ async def webhook(request: Request):
     if not all([installation_id, repo_full, pr_number]):
         raise HTTPException(status_code=400, detail="Missing payload data")
 
+    onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
     managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
     if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
         allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
-        if allocation is None:
-            return JSONResponse({"message": "ignored: repo not allocated"})
+        allow_history_only = action in ("closed", "reopened") and allocation is None and onboarding is not None
+        if allow_history_only:
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, managed_installation.workspace_id)
+            if entitlement is None or not entitlement.dashboard_enabled:
+                return JSONResponse({"message": "ignored: workspace not entitled"})
+        else:
+            if allocation is None:
+                return JSONResponse({"message": "ignored: repo not allocated"})
 
-        entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
-        if entitlement is None or not entitlement.pr_comments_enabled:
-            return JSONResponse({"message": "ignored: workspace not entitled"})
-        workspace = get_workspace_by_id(AUDIT_DB_PATH, allocation.workspace_id)
-        if workspace is None or not workspace.pr_comments_setting_enabled:
-            return JSONResponse({"message": "ignored: PR comments disabled in settings"})
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, allocation.workspace_id)
+            if entitlement is None or not entitlement.pr_comments_enabled:
+                return JSONResponse({"message": "ignored: workspace not entitled"})
+            workspace = get_workspace_by_id(AUDIT_DB_PATH, allocation.workspace_id)
+            if workspace is None or not workspace.pr_comments_setting_enabled:
+                return JSONResponse({"message": "ignored: PR comments disabled in settings"})
 
     if action in ("closed", "reopened"):
+        if onboarding is not None and action == "closed" and pr_merged:
+            _ensure_lifecycle_only_audit_for_repo(
+                repo_full=str(repo_full),
+                pr_number=int(pr_number),
+                pr_title=pr_title,
+                installation_id=int(installation_id),
+                head_sha=head_sha,
+                pr_state=pr_state,
+                pr_merged=pr_merged,
+                pr_closed_at=pr_closed_at,
+                pr_merged_at=pr_merged_at,
+                pr_merge_commit_sha=pr_merge_commit_sha,
+                pr_updated_at=pr_updated_at,
+            )
         update_job_pr_state(
             AUDIT_DB_PATH,
             repo_full=repo_full,
@@ -5260,7 +5352,6 @@ async def webhook(request: Request):
             pass
         branch_scan_job_id = None
         if action == "closed" and pr_merged and pr_merge_commit_sha:
-            onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
             if onboarding is not None:
                 branch_ref = f"refs/heads/{base_ref}" if base_ref else f"refs/heads/{onboarding.default_branch}"
                 branch_scan_job = create_branch_scan_job(

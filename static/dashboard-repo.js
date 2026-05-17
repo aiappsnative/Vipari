@@ -2369,6 +2369,7 @@ function renderPrReviewSearchResult(entry) {
     const url = entry?.dashboard_url || repoTabUrl("pr-reviews");
     const prTitle = String(entry?.pr_title || "").trim();
     const detailBits = [
+        entry?.lifecycle_label ? String(entry.lifecycle_label).toLowerCase() : "",
         entry?.short_head_sha ? `head ${entry.short_head_sha}` : "",
         entry?.risk_level ? `${String(entry.risk_level).replaceAll("_", " ")} risk` : "",
         entry?.updated_at ? `reviewed ${formatDateLabel(entry.updated_at)}` : "",
@@ -2384,6 +2385,11 @@ function renderPrReviewSearchResult(entry) {
             ${detailBits.length ? `<div class="pr-review-search-result-meta">${escapeHtml(detailBits.join(" · "))}</div>` : ""}
         </a>
     `;
+}
+
+function prReviewLifecycleChip(route) {
+    const label = String(route?.lifecycle_label || "Tracked").trim() || "Tracked";
+    return `<span class="drift-chip chip-baseline">${escapeHtml(label)}</span>`;
 }
 
 function renderPrReviewRoutesSection(routePayload) {
@@ -2413,7 +2419,9 @@ function renderPrReviewRoutesSection(routePayload) {
     const comparisonReady = Boolean(baselineComparison.comparison_ready);
     const comparisonNotice = prReviewComparisonNotice(selectedRoute, baselineComparison);
     const reviewNarrative = [selectedRoute.summary || "", selectedRoute.review_excerpt || ""].filter(Boolean);
+    const reviewVerb = String(selectedRoute.output_mode || "").toLowerCase() === "lifecycle_tracking" ? "tracked" : "reviewed";
     const selectedTags = [
+        selectedRoute.lifecycle_label || "",
         selectedRoute.short_head_sha ? `head ${selectedRoute.short_head_sha}` : "",
         selectedRoute.output_mode ? String(selectedRoute.output_mode).replaceAll("_", " ") : "",
         selectedRoute.semantic_review_completed ? "semantic review complete" : "fallback review",
@@ -2435,7 +2443,7 @@ function renderPrReviewRoutesSection(routePayload) {
                     <span class="severity-badge ${selectedSeverity.className}">${escapeHtml(selectedSeverity.label)}</span>
                 </div>
                 ${selectedRoute.pr_title ? `<div class="artifact-card-reason">${escapeHtml(selectedRoute.pr_title)}</div>` : ""}
-                <div class="pr-review-hero-meta">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · reviewed ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
+                <div class="pr-review-hero-meta">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · ${reviewVerb} ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
                 <div class="pr-review-hero-copy">${escapeHtml(baselineComparison.headline || selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
                 ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
                 <div class="pr-review-metric-grid">
@@ -2563,7 +2571,7 @@ function renderPrReviewRoutesSection(routePayload) {
                 </div>
                 ${route.pr_title ? `<div class="artifact-card-reason">${escapeHtml(route.pr_title)}</div>` : ""}
                 <div class="artifact-card-reason">${escapeHtml(route.summary || "Vipari recorded this PR review episode.")}</div>
-                ${detailBits.length ? `<div class="tag-row">${detailBits.map((bit) => `<span class="drift-chip chip-baseline">${escapeHtml(bit)}</span>`).join("")}</div>` : ""}
+                ${(route.lifecycle_label || detailBits.length) ? `<div class="tag-row">${[prReviewLifecycleChip(route), ...detailBits.map((bit) => `<span class="drift-chip chip-baseline">${escapeHtml(bit)}</span>`)].join("")}</div>` : ""}
                 <div class="export-actions repo-actions-row audit-step-actions">
                     <a href="${escapeHtml(auditUrl)}" class="cue-action-button">Open route</a>
                     <a href="${escapeHtml(route.pull_request_url || "#")}" class="cue-action-button">GitHub PR</a>

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient as FastAPITestClient
 from unittest.mock import PropertyMock, patch
 
 import main
-from services.audit_jobs import init_db
+from services.audit_jobs import create_audit_job, init_db
 from services.audit_records import record_audit_feedback_event, record_audit_result, record_pre_audit_relevance_decision
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
@@ -22,6 +22,7 @@ from services.entitlements import derive_entitlement_payload
 from services.persistence import connect_sqlite
 from services.repo_journey import build_repo_journey
 from services.repo_journey_records import list_repo_posture_snapshots_for_repo
+from services.dashboard_views import build_repo_pr_review_routes_payload
 
 
 class TestClient(FastAPITestClient):
@@ -846,6 +847,63 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert approved_rebaseline_payload["dashboard"]["onboarding"]["status"] == "baseline_approved"
     assert approved_rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is False
     assert approved_rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] == current_snapshot_id
+
+
+def test_pr_review_routes_payload_marks_lifecycle_only_merged_routes(tmp_path):
+    db_path = str(tmp_path / "dashboard-pr-lifecycle.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    lifecycle_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=77,
+        pr_title="Merge tracked refund update",
+        installation_id=123,
+        head_sha="sha-lifecycle-77",
+        diff_text="",
+        pr_state="closed",
+        pr_merged=True,
+        pr_merged_at=time.time(),
+    )
+    record_audit_result(
+        db_path,
+        job_id=lifecycle_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=77,
+        pr_title="Merge tracked refund update",
+        installation_id=123,
+        head_sha="sha-lifecycle-77",
+        pr_state="closed",
+        pr_merged=True,
+        pr_merged_at=time.time(),
+        deterministic_analysis=analyze_diff(""),
+        status="completed",
+        completion_mode="lifecycle_only",
+        output_mode="lifecycle_tracking",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=False,
+        suggested_risk_level="unknown",
+    )
+
+    payload = build_repo_pr_review_routes_payload(db_path, "doria90/dummyAI")
+
+    assert payload["route_count"] == 1
+    assert payload["selected_route"]["pr_number"] == 77
+    assert payload["selected_route"]["lifecycle_label"] == "Merged"
+    assert payload["selected_route"]["output_mode"] == "lifecycle_tracking"
+    assert payload["selected_route"]["summary"] == "Vipari recorded this PR lifecycle route as merged to keep history and merge tracking visible."
+    assert payload["route_search_entries"][0]["lifecycle_label"] == "Merged"
 
 
 def test_repo_dashboard_api_keeps_selected_older_pr_route_when_outside_recent_limit(tmp_path):

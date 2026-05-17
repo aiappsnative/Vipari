@@ -351,6 +351,23 @@ def _extract_pr_review_excerpt(comment_body: str | None) -> str | None:
     return " ".join(excerpt_lines)
 
 
+def _pr_review_lifecycle_label(pr_state: str | None, pr_merged: bool | None) -> str:
+    if pr_merged:
+        return "Merged"
+    if str(pr_state or "").strip().lower() == "open":
+        return "Pending merge"
+    if str(pr_state or "").strip().lower() == "closed":
+        return "Closed"
+    return "Tracked"
+
+
+def _pr_review_route_summary(audit, comment_body: str | None) -> str:
+    if str(audit.output_mode or "").strip().lower() == "lifecycle_tracking" and not str(comment_body or "").strip():
+        lifecycle_label = _pr_review_lifecycle_label(audit.pr_state, audit.pr_merged).lower()
+        return f"Vipari recorded this PR lifecycle route as {lifecycle_label} to keep history and merge tracking visible."
+    return _extract_pr_review_summary(comment_body, audit.suggested_risk_level, audit.status)
+
+
 def _summarize_pr_review_feedback(events: list[Any]) -> dict[str, int]:
     helpful_count = 0
     noisy_count = 0
@@ -474,6 +491,7 @@ def build_repo_pr_review_routes_payload(
         feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
         findings = list_findings_for_audit(db_path, audit.id)
         changed_artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
+        lifecycle_label = _pr_review_lifecycle_label(audit.pr_state, audit.pr_merged)
         route_entries.append(
             {
                 "audit_id": audit.id,
@@ -482,6 +500,9 @@ def build_repo_pr_review_routes_payload(
                 "head_sha": audit.head_sha,
                 "short_head_sha": (audit.head_sha or "")[:7],
                 "status": audit.status,
+                "pr_state": audit.pr_state,
+                "pr_merged": audit.pr_merged,
+                "lifecycle_label": lifecycle_label,
                 "completion_mode": audit.completion_mode,
                 "output_mode": audit.output_mode,
                 "risk_level": audit.suggested_risk_level,
@@ -489,11 +510,7 @@ def build_repo_pr_review_routes_payload(
                 "semantic_review_completed": bool(audit.semantic_review_completed),
                 "review_posted_at": comment.posted_at if comment is not None else audit.updated_at,
                 "updated_at": audit.updated_at,
-                "summary": _extract_pr_review_summary(
-                    comment.comment_body if comment is not None else None,
-                    audit.suggested_risk_level,
-                    audit.status,
-                ),
+                "summary": _pr_review_route_summary(audit, comment.comment_body if comment is not None else None),
                 "review_body": str(comment.comment_body or "").strip() if comment is not None else None,
                 "review_excerpt": _extract_pr_review_excerpt(comment.comment_body if comment is not None else None),
                 "changed_artifact_count": len(changed_artifacts),
@@ -524,6 +541,7 @@ def build_repo_pr_review_routes_payload(
                 "pr_title": audit.pr_title,
                 "head_sha": audit.head_sha,
                 "short_head_sha": (audit.head_sha or "")[:7],
+                "lifecycle_label": _pr_review_lifecycle_label(audit.pr_state, audit.pr_merged),
                 "risk_level": audit.suggested_risk_level,
                 "updated_at": audit.updated_at,
                 "summary": lightweight_entry.get("summary") if lightweight_entry is not None else None,
