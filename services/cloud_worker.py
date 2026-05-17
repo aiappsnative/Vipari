@@ -29,8 +29,12 @@ from .control_plane_records import (
     get_workspace_by_id,
     get_workspace_entitlement,
 )
-from .github_integration import generate_jwt, get_installation_token as request_installation_token
-from .onboarding_records import get_latest_repository_onboarding
+from .github_integration import (
+    fetch_pull_request_lifecycle,
+    generate_jwt,
+    get_installation_token as request_installation_token,
+)
+from .onboarding_records import get_latest_repository_onboarding, list_latest_repository_onboardings
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import validate_runtime_configuration
@@ -45,6 +49,7 @@ OPENAI_TOKENS = Counter("driftguard_openai_tokens_used_total", "Estimated OpenAI
 BASE_RETRY_DELAY_SECONDS = 5
 MAX_RETRY_DELAY_SECONDS = 300
 CHARS_PER_TOKEN_ESTIMATE = 4
+PULL_REQUEST_LIFECYCLE_RECONCILE_SECONDS = 300
 
 
 def build_queue_backend(settings: Settings) -> QueueBackend:
@@ -190,6 +195,156 @@ def _message_still_authorized(payload: dict[str, object], settings: Settings) ->
     return entitlement is not None and bool(entitlement.pr_comments_enabled)
 
 
+def _queue_merge_branch_scan(
+    *,
+    settings: Settings,
+    repo_full: str,
+    installation_id: int,
+    commit_sha: str | None,
+    base_ref: str | None,
+    default_branch: str,
+    triggered_by: str,
+) -> None:
+    normalized_commit_sha = str(commit_sha or "").strip()
+    if not normalized_commit_sha:
+        return
+    branch_name = str(base_ref or "").strip() or default_branch
+    create_branch_scan_job(
+        settings.resolved_db_path,
+        repo_full=repo_full,
+        installation_id=installation_id,
+        commit_sha=normalized_commit_sha,
+        branch_ref=f"refs/heads/{branch_name}",
+        triggered_by=triggered_by,
+    )
+
+
+async def _reconcile_pull_request_lifecycle_for_repo(
+    repo_full: str,
+    installation_id: int,
+    default_branch: str,
+    settings: Settings,
+) -> int:
+    audits = list_pull_request_audits_for_repo(settings.resolved_db_path, repo_full)
+    if not audits:
+        return 0
+
+    latest_by_pr_number = {}
+    for audit in audits:
+        existing = latest_by_pr_number.get(audit.pr_number)
+        current_timestamp = audit.pr_updated_at or audit.updated_at
+        existing_timestamp = (existing.pr_updated_at or existing.updated_at) if existing is not None else None
+        if existing is None or current_timestamp >= existing_timestamp:
+            latest_by_pr_number[audit.pr_number] = audit
+
+    installation_token = await _get_installation_token_for_worker(installation_id, settings)
+    reconciled_count = 0
+    for audit in latest_by_pr_number.values():
+        if audit.pr_merged and audit.pr_merge_commit_sha:
+            _queue_merge_branch_scan(
+                settings=settings,
+                repo_full=repo_full,
+                installation_id=installation_id,
+                commit_sha=audit.pr_merge_commit_sha,
+                base_ref=None,
+                default_branch=default_branch,
+                triggered_by="pr_lifecycle_reconcile",
+            )
+            if audit.pr_state == "closed":
+                continue
+
+        lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, audit.pr_number, installation_token)
+        if lifecycle.pr_state == audit.pr_state and lifecycle.pr_merged == audit.pr_merged and lifecycle.pr_merge_commit_sha == audit.pr_merge_commit_sha:
+            if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
+                _queue_merge_branch_scan(
+                    settings=settings,
+                    repo_full=repo_full,
+                    installation_id=installation_id,
+                    commit_sha=lifecycle.pr_merge_commit_sha,
+                    base_ref=lifecycle.base_ref,
+                    default_branch=default_branch,
+                    triggered_by="pr_lifecycle_reconcile",
+                )
+            continue
+
+        payload = {
+            "repo_full": repo_full,
+            "pr_number": audit.pr_number,
+            "pr_title": lifecycle.pr_title,
+            "installation_id": installation_id,
+            "head_sha": lifecycle.head_sha,
+            "pr_state": lifecycle.pr_state,
+            "pr_merged": lifecycle.pr_merged,
+            "pr_closed_at": lifecycle.pr_closed_at,
+            "pr_merged_at": lifecycle.pr_merged_at,
+            "pr_merge_commit_sha": lifecycle.pr_merge_commit_sha,
+            "pr_updated_at": lifecycle.pr_updated_at,
+        }
+        if lifecycle.pr_merged:
+            _ensure_lifecycle_only_audit_for_repo(payload, settings)
+        update_job_pr_state(
+            settings.resolved_db_path,
+            repo_full=repo_full,
+            pr_number=audit.pr_number,
+            head_sha=lifecycle.head_sha,
+            pr_title=lifecycle.pr_title,
+            pr_state=lifecycle.pr_state,
+            pr_merged=lifecycle.pr_merged,
+            pr_closed_at=lifecycle.pr_closed_at,
+            pr_merged_at=lifecycle.pr_merged_at,
+            pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
+            pr_updated_at=lifecycle.pr_updated_at,
+        )
+        update_pull_request_audit_state(
+            settings.resolved_db_path,
+            repo_full=repo_full,
+            pr_number=audit.pr_number,
+            head_sha=lifecycle.head_sha,
+            pr_title=lifecycle.pr_title,
+            pr_state=lifecycle.pr_state,
+            pr_merged=lifecycle.pr_merged,
+            pr_closed_at=lifecycle.pr_closed_at,
+            pr_merged_at=lifecycle.pr_merged_at,
+            pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
+            pr_updated_at=lifecycle.pr_updated_at,
+        )
+        record_pr_outcome_feedback_events(
+            settings.resolved_db_path,
+            repo_full=repo_full,
+            pr_number=audit.pr_number,
+            head_sha=lifecycle.head_sha,
+            pr_state=lifecycle.pr_state,
+            pr_merged=lifecycle.pr_merged,
+        )
+        if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
+            _queue_merge_branch_scan(
+                settings=settings,
+                repo_full=repo_full,
+                installation_id=installation_id,
+                commit_sha=lifecycle.pr_merge_commit_sha,
+                base_ref=lifecycle.base_ref,
+                default_branch=default_branch,
+                triggered_by="pr_lifecycle_reconcile",
+            )
+        reconciled_count += 1
+    return reconciled_count
+
+
+async def _reconcile_pull_request_lifecycle(settings: Settings, logger) -> int:
+    total_reconciled = 0
+    for onboarding in list_latest_repository_onboardings(settings.resolved_db_path):
+        try:
+            total_reconciled += await _reconcile_pull_request_lifecycle_for_repo(
+                onboarding.repo_full,
+                onboarding.installation_id,
+                onboarding.default_branch,
+                settings,
+            )
+        except Exception:
+            logger.exception("Failed to reconcile PR lifecycle state", extra={"repo": onboarding.repo_full})
+    return total_reconciled
+
+
 async def _process_message(queue: QueueBackend, message: QueueMessage, settings: Settings, logger, llm_client) -> None:
     payload = message.payload
     if payload.get("event_type") == "push":
@@ -269,12 +424,13 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
             pr_merged=pr_merged,
         )
         if payload["action"] == "closed" and pr_merged and pr_merge_commit_sha and onboarding is not None:
-            create_branch_scan_job(
-                settings.resolved_db_path,
+            _queue_merge_branch_scan(
+                settings=settings,
                 repo_full=str(repo_full),
                 installation_id=int(payload["installation_id"]),
                 commit_sha=pr_merge_commit_sha,
-                branch_ref=f"refs/heads/{onboarding.default_branch}",
+                base_ref=None,
+                default_branch=onboarding.default_branch,
                 triggered_by="pr_merged_webhook",
             )
             JOBS_PROCESSED.labels(status="success").inc()
@@ -442,9 +598,15 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
                 continue
             await asyncio.sleep(settings.audit_worker_poll_seconds)
 
+    async def pr_lifecycle_reconcile_loop() -> None:
+        while True:
+            await _reconcile_pull_request_lifecycle(settings, logger)
+            await asyncio.sleep(PULL_REQUEST_LIFECYCLE_RECONCILE_SECONDS)
+
     workers = [asyncio.create_task(worker_loop()) for _ in range(max(1, settings.worker_concurrency))]
     workers.append(asyncio.create_task(queue_depth_poller()))
     workers.append(asyncio.create_task(branch_scan_loop()))
+    workers.append(asyncio.create_task(pr_lifecycle_reconcile_loop()))
     try:
         await asyncio.gather(*workers)
     finally:

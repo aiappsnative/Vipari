@@ -24,6 +24,7 @@ from services.audit_records import (
     record_audit_result,
 )
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
+from services.cloud_worker import _reconcile_pull_request_lifecycle_for_repo
 from services.observability import configure_logging
 from services.control_plane_records import (
     allocate_repo_to_workspace,
@@ -1033,6 +1034,86 @@ def test_worker_closed_merged_pr_updates_existing_audit_and_queues_branch_scan(t
     assert queue.dlq == []
 
 
+def test_worker_reconciles_stale_merged_pr_and_queues_branch_scan(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-pr-reconcile.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "inline-test-key")
+    monkeypatch.setenv("GITHUB_PRIVATE_KEY_PATH", "")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+
+    created_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="Pending state before reconcile",
+        installation_id=123,
+        head_sha="sha-pr-23-old",
+        diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=created_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="Pending state before reconcile",
+        installation_id=123,
+        head_sha="sha-pr-23-old",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    lifecycle = type(
+        "Lifecycle",
+        (),
+        {
+            "pr_number": 23,
+            "pr_title": "Merged later",
+            "head_sha": "sha-pr-23-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710001000.0,
+            "pr_merged_at": 1710001010.0,
+            "pr_merge_commit_sha": "merge-sha-23",
+            "pr_updated_at": 1710001020.0,
+            "base_ref": "main",
+        },
+    )()
+
+    with patch("services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"), patch(
+        "services.cloud_worker.fetch_pull_request_lifecycle",
+        return_value=lifecycle,
+    ):
+        reconciled = asyncio.run(
+            _reconcile_pull_request_lifecycle_for_repo("doria90/dummyAI", 123, "main", get_settings())
+        )
+
+    audits = list_pull_request_audits_for_repo(db_path, "doria90/dummyAI")
+    assert reconciled == 1
+    assert any(audit.pr_merged is True and audit.pr_merge_commit_sha == "merge-sha-23" for audit in audits)
+    assert any(audit.head_sha == "sha-pr-23-final" and audit.completion_mode == "lifecycle_only" for audit in audits)
+    branch_scan_job = claim_next_branch_scan_job(db_path)
+    assert branch_scan_job is not None
+    assert branch_scan_job.commit_sha == "merge-sha-23"
+    assert branch_scan_job.branch_ref == "refs/heads/main"
+    assert branch_scan_job.triggered_by == "pr_lifecycle_reconcile"
+
+
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
@@ -1790,7 +1871,7 @@ def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):
     init_db_mock.assert_called_once_with(locator)
     cleanup_mock.assert_called_once_with(locator)
     openai_mock.assert_called_once_with(api_key="test-key", base_url=None)
-    assert len(created_tasks) == max(1, get_settings().worker_concurrency) + 2
+    assert len(created_tasks) == max(1, get_settings().worker_concurrency) + 3
     assert queue.closed is True
 
 

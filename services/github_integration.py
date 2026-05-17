@@ -46,6 +46,20 @@ class GithubReactionRecord:
     target_id: int
 
 
+@dataclass(frozen=True)
+class PullRequestLifecycleRecord:
+    pr_number: int
+    pr_title: str | None
+    head_sha: str | None
+    pr_state: str | None
+    pr_merged: bool | None
+    pr_closed_at: float | None
+    pr_merged_at: float | None
+    pr_merge_commit_sha: str | None
+    pr_updated_at: float | None
+    base_ref: str | None
+
+
 def _resolve_private_key_path(private_key_path: str) -> Path:
     candidate = Path(private_key_path).expanduser()
     if candidate.is_absolute():
@@ -130,6 +144,40 @@ def get_installation_token(jwt_token: str, installation_id: int) -> str:
     if not token:
         raise RuntimeError("GitHub installation token response did not include a token.")
     return _cache_installation_token(installation_id, token, data.get("expires_at"))
+
+
+def _parse_github_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def fetch_pull_request_lifecycle(repo_full: str, pr_number: int, token: str) -> PullRequestLifecycleRecord:
+    pr_url = f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}"
+    req = urllib.request.Request(pr_url)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    with urllib.request.urlopen(req) as response:
+        payload = json.load(response)
+
+    pull_request_number = int(payload.get("number") or pr_number)
+    head = payload.get("head") if isinstance(payload.get("head"), dict) else {}
+    base = payload.get("base") if isinstance(payload.get("base"), dict) else {}
+    return PullRequestLifecycleRecord(
+        pr_number=pull_request_number,
+        pr_title=str(payload.get("title") or "") or None,
+        head_sha=str(head.get("sha") or "") or None,
+        pr_state=str(payload.get("state") or "") or None,
+        pr_merged=(bool(payload.get("merged")) if payload.get("merged") is not None else None),
+        pr_closed_at=_parse_github_timestamp(payload.get("closed_at")),
+        pr_merged_at=_parse_github_timestamp(payload.get("merged_at")),
+        pr_merge_commit_sha=str(payload.get("merge_commit_sha") or "") or None,
+        pr_updated_at=_parse_github_timestamp(payload.get("updated_at")),
+        base_ref=str(base.get("ref") or "") or None,
+    )
 
 
 def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
