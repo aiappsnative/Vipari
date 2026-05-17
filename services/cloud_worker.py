@@ -9,14 +9,28 @@ from openai import OpenAI
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 from config import Settings, get_settings
-from .audit_jobs import claim_job_by_id, create_audit_job, get_job, init_db
+from engine.analysis import analyze_diff
+from .audit_jobs import claim_job_by_id, create_audit_job, get_job, init_db, update_job_pr_state
 from .branch_scan_jobs import create_branch_scan_job
 from .branch_scan_worker import BranchScanWorkerSettings, process_next_branch_scan_job_once
-from .audit_records import has_completed_audit
+from .audit_records import (
+    has_completed_audit,
+    list_pull_request_audits_for_repo,
+    record_audit_result,
+    record_pr_outcome_feedback_events,
+    update_pull_request_audit_state,
+)
 from .audit_worker import WorkerSettings, process_job
 from .cloud_common import evaluate_and_persist_audit_decision, fetch_diff_with_retry, is_transient_error
-from .control_plane_records import count_workspaces, get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
+from .control_plane_records import (
+    count_workspaces,
+    get_github_installation_by_installation_id,
+    get_repo_allocation_for_installation,
+    get_workspace_by_id,
+    get_workspace_entitlement,
+)
 from .github_integration import generate_jwt, get_installation_token as request_installation_token
+from .onboarding_records import get_latest_repository_onboarding
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import validate_runtime_configuration
@@ -76,21 +90,100 @@ def _control_plane_active(db_path: str) -> bool:
         return False
 
 
+def _get_latest_onboarding_if_available(db_path: str, repo_full: str):
+    try:
+        return get_latest_repository_onboarding(db_path, repo_full)
+    except Exception:
+        return None
+
+
+def _ensure_lifecycle_only_audit_for_repo(payload: dict[str, object], settings: Settings) -> None:
+    repo_full = str(payload["repo_full"])
+    pr_number = int(payload["pr_number"])
+    normalized_head_sha = str(payload.get("head_sha") or "").strip()
+    if not normalized_head_sha:
+        return
+
+    existing = [
+        audit
+        for audit in list_pull_request_audits_for_repo(settings.resolved_db_path, repo_full)
+        if audit.pr_number == pr_number and audit.head_sha == normalized_head_sha
+    ]
+    if existing:
+        return
+
+    lifecycle_job = create_audit_job(
+        settings.resolved_db_path,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        pr_title=str(payload.get("pr_title") or "") or None,
+        installation_id=int(payload["installation_id"]),
+        head_sha=normalized_head_sha,
+        diff_text="",
+        pr_state=str(payload.get("pr_state") or "") or None,
+        pr_merged=bool(payload.get("pr_merged")) if payload.get("pr_merged") is not None else None,
+        pr_closed_at=payload.get("pr_closed_at"),
+        pr_merged_at=payload.get("pr_merged_at"),
+        pr_merge_commit_sha=str(payload.get("pr_merge_commit_sha") or "") or None,
+        pr_updated_at=payload.get("pr_updated_at"),
+    )
+    record_audit_result(
+        settings.resolved_db_path,
+        job_id=lifecycle_job.id,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        pr_title=str(payload.get("pr_title") or "") or None,
+        installation_id=int(payload["installation_id"]),
+        head_sha=normalized_head_sha,
+        pr_state=str(payload.get("pr_state") or "") or None,
+        pr_merged=bool(payload.get("pr_merged")) if payload.get("pr_merged") is not None else None,
+        pr_closed_at=payload.get("pr_closed_at"),
+        pr_merged_at=payload.get("pr_merged_at"),
+        pr_merge_commit_sha=str(payload.get("pr_merge_commit_sha") or "") or None,
+        pr_updated_at=payload.get("pr_updated_at"),
+        deterministic_analysis=analyze_diff(""),
+        status="completed",
+        completion_mode="lifecycle_only",
+        output_mode="lifecycle_tracking",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=False,
+        suggested_risk_level="unknown",
+        fused_confidence=None,
+    )
+
+
 def _message_still_authorized(payload: dict[str, object], settings: Settings) -> bool:
     if not _control_plane_active(settings.resolved_db_path):
         return False
 
+    event_type = str(payload.get("event_type") or "")
+    action = str(payload.get("action") or "").lower()
     allocation = get_repo_allocation_for_installation(
         settings.resolved_db_path,
         int(payload["installation_id"]),
         str(payload["repo_full"]),
     )
+    onboarding = _get_latest_onboarding_if_available(settings.resolved_db_path, str(payload["repo_full"]))
+    installation = get_github_installation_by_installation_id(settings.resolved_db_path, int(payload["installation_id"]))
+
+    if event_type == "push":
+        if allocation is None:
+            return False
+        entitlement = get_workspace_entitlement(settings.resolved_db_path, allocation.workspace_id)
+        return entitlement is not None and bool(entitlement.dashboard_enabled)
+
+    if action in {"closed", "reopened"}:
+        workspace_id = allocation.workspace_id if allocation is not None else installation.workspace_id if installation is not None else None
+        if workspace_id is None or (allocation is None and onboarding is None):
+            return False
+        entitlement = get_workspace_entitlement(settings.resolved_db_path, workspace_id)
+        return entitlement is not None and bool(entitlement.dashboard_enabled)
+
     if allocation is None:
         return False
 
     entitlement = get_workspace_entitlement(settings.resolved_db_path, allocation.workspace_id)
-    if payload.get("event_type") == "push":
-        return entitlement is not None and bool(entitlement.dashboard_enabled)
     workspace = get_workspace_by_id(settings.resolved_db_path, allocation.workspace_id)
     if workspace is None or not workspace.pr_comments_setting_enabled:
         return False
@@ -131,12 +224,66 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         await queue.ack(message.receipt_handle)
         return
 
-    if head_sha and has_completed_audit(settings.resolved_db_path, repo_full=repo_full, pr_number=pr_number, head_sha=head_sha):
-        JOBS_PROCESSED.labels(status="skipped").inc()
+    if payload["action"] in {"closed", "reopened"}:
+        onboarding = _get_latest_onboarding_if_available(settings.resolved_db_path, str(repo_full))
+        pr_title = str(payload.get("pr_title") or "") or None
+        pr_state = str(payload.get("pr_state") or "") or None
+        pr_merged = bool(payload.get("pr_merged")) if payload.get("pr_merged") is not None else None
+        pr_merge_commit_sha = str(payload.get("pr_merge_commit_sha") or "") or None
+
+        if onboarding is not None and payload["action"] == "closed" and pr_merged:
+            _ensure_lifecycle_only_audit_for_repo(payload, settings)
+
+        update_job_pr_state(
+            settings.resolved_db_path,
+            repo_full=str(repo_full),
+            pr_number=int(pr_number),
+            head_sha=str(head_sha) if head_sha else None,
+            pr_title=pr_title,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+            pr_closed_at=payload.get("pr_closed_at"),
+            pr_merged_at=payload.get("pr_merged_at"),
+            pr_merge_commit_sha=pr_merge_commit_sha,
+            pr_updated_at=payload.get("pr_updated_at"),
+        )
+        update_pull_request_audit_state(
+            settings.resolved_db_path,
+            repo_full=str(repo_full),
+            pr_number=int(pr_number),
+            head_sha=str(head_sha) if head_sha else None,
+            pr_title=pr_title,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+            pr_closed_at=payload.get("pr_closed_at"),
+            pr_merged_at=payload.get("pr_merged_at"),
+            pr_merge_commit_sha=pr_merge_commit_sha,
+            pr_updated_at=payload.get("pr_updated_at"),
+        )
+        record_pr_outcome_feedback_events(
+            settings.resolved_db_path,
+            repo_full=str(repo_full),
+            pr_number=int(pr_number),
+            head_sha=str(head_sha) if head_sha else None,
+            pr_state=pr_state,
+            pr_merged=pr_merged,
+        )
+        if payload["action"] == "closed" and pr_merged and pr_merge_commit_sha and onboarding is not None:
+            create_branch_scan_job(
+                settings.resolved_db_path,
+                repo_full=str(repo_full),
+                installation_id=int(payload["installation_id"]),
+                commit_sha=pr_merge_commit_sha,
+                branch_ref=f"refs/heads/{onboarding.default_branch}",
+                triggered_by="pr_merged_webhook",
+            )
+            JOBS_PROCESSED.labels(status="success").inc()
+        else:
+            JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return
 
-    if payload["action"] in {"closed", "reopened"}:
+    if head_sha and has_completed_audit(settings.resolved_db_path, repo_full=repo_full, pr_number=pr_number, head_sha=head_sha):
         JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return

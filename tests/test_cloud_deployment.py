@@ -20,6 +20,7 @@ from services.audit_records import (
     get_audit_comment_episode_for_pr_head_sha,
     has_completed_audit,
     list_pre_audit_relevance_decisions,
+    list_pull_request_audits_for_repo,
     record_audit_result,
 )
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
@@ -836,6 +837,30 @@ def test_message_authorization_denies_pull_request_events_without_control_plane_
     assert _message_still_authorized(payload, settings) is False
 
 
+def test_message_authorization_allows_closed_pull_request_events_when_dashboard_enabled_but_comments_disabled(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-lifecycle-auth.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=888, repo_full="doria90/dummyAI")
+
+    settings = get_settings()
+    payload = {
+        "installation_id": 888,
+        "repo_full": "doria90/dummyAI",
+        "event_type": "pull_request",
+        "action": "closed",
+        "pr_number": 5,
+    }
+
+    update_workspace_pr_comments_setting(db_path, 1, enabled=False)
+    assert _message_still_authorized(payload, settings) is True
+
+
 def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):
     db_path = str(tmp_path / "webhook-push.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -903,6 +928,105 @@ def test_worker_turns_push_message_into_branch_scan_job(tmp_path, monkeypatch):
     assert created_job is not None
     assert created_job.repo_full == "doria90/dummyAI"
     assert created_job.commit_sha == "pushsha123"
+
+
+def test_worker_closed_merged_pr_updates_existing_audit_and_queues_branch_scan(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-pr-closed.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+
+    created_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=17,
+        pr_title="Improve merge handling",
+        installation_id=123,
+        head_sha="sha-pr-17",
+        diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=created_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=17,
+        pr_title="Improve merge handling",
+        installation_id=123,
+        head_sha="sha-pr-17",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+            self.nacked = []
+            self.dlq = []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, receipt_handle, delay_seconds):
+            self.nacked.append((receipt_handle, delay_seconds))
+
+        async def move_to_dlq(self, receipt_handle):
+            self.dlq.append(receipt_handle)
+
+    message = QueueMessage(
+        message_id="msg-closed-17",
+        receipt_handle="receipt-closed-17",
+        payload={
+            "event_type": "pull_request",
+            "action": "closed",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 17,
+            "pr_title": "Improve merge handling",
+            "head_sha": "sha-pr-17",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710000000.0,
+            "pr_merged_at": 1710000010.0,
+            "pr_merge_commit_sha": "merge-sha-17",
+            "pr_updated_at": 1710000015.0,
+        },
+        attempt_count=1,
+    )
+
+    queue = AckQueue()
+    with patch(
+        "services.cloud_worker.get_latest_repository_onboarding",
+        return_value=type("Onboarding", (), {"default_branch": "main"})(),
+    ):
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), Mock()))
+
+    audits = list_pull_request_audits_for_repo(db_path, "doria90/dummyAI")
+    assert len(audits) == 1
+    assert audits[0].pr_state == "closed"
+    assert audits[0].pr_merged is True
+    assert audits[0].pr_merge_commit_sha == "merge-sha-17"
+    branch_scan_job = claim_next_branch_scan_job(db_path)
+    assert branch_scan_job is not None
+    assert branch_scan_job.commit_sha == "merge-sha-17"
+    assert branch_scan_job.branch_ref == "refs/heads/main"
+    assert branch_scan_job.triggered_by == "pr_merged_webhook"
+    assert queue.acked == ["receipt-closed-17"]
+    assert queue.nacked == []
+    assert queue.dlq == []
 
 
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
