@@ -295,36 +295,6 @@ def update_job_pr_state(
         pr_updated_at=pr_updated_at,
     )
     with _connect(db_path) as conn:
-        if head_sha:
-            conn.execute(
-                """
-                UPDATE audit_jobs
-                SET pr_title = ?,
-                    pr_state = ?,
-                    pr_merged = ?,
-                    pr_closed_at = ?,
-                    pr_merged_at = ?,
-                    pr_merge_commit_sha = ?,
-                    pr_updated_at = ?,
-                    updated_at = ?
-                WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
-                """,
-                (
-                    pr_title,
-                    pr_state,
-                    pr_merged_value,
-                    pr_closed_at,
-                    pr_merged_at,
-                    pr_merge_commit_sha,
-                    pr_updated_at,
-                    time.time(),
-                    repo_full,
-                    pr_number,
-                    head_sha,
-                ),
-            )
-            return
-
         conn.execute(
             """
             UPDATE audit_jobs
@@ -336,18 +306,12 @@ def update_job_pr_state(
                 pr_merge_commit_sha = ?,
                 pr_updated_at = ?,
                 updated_at = ?
-            WHERE id = (
-                SELECT id
-                FROM audit_jobs
-                WHERE repo_full = ? AND pr_number = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            )
+            WHERE repo_full = ? AND pr_number = ?
             """,
             (
                 pr_title,
                 pr_state,
-                (int(pr_merged) if pr_merged is not None else None),
+                pr_merged_value,
                 pr_closed_at,
                 pr_merged_at,
                 pr_merge_commit_sha,

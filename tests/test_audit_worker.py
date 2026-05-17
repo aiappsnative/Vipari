@@ -449,6 +449,181 @@ def test_update_pull_request_audit_state_clears_closed_timestamp_when_pr_reopens
     assert saved.pr_updated_at == 222.0
 
 
+def test_update_pull_request_audit_state_falls_back_when_head_sha_changes(tmp_path):
+    db_path = str(tmp_path / "jobs-head-fallback.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=305,
+        installation_id=123,
+        head_sha="old-head-305",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    analysis = analyze_diff("diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n")
+    record_audit_result(
+        db_path,
+        job_id=created.id,
+        repo_full="doria90/dummyAI",
+        pr_number=305,
+        installation_id=123,
+        head_sha="old-head-305",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    update_pull_request_audit_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=305,
+        head_sha="new-head-305",
+        pr_title="Merged after extra commits",
+        pr_state="closed",
+        pr_merged=True,
+        pr_closed_at=333.0,
+        pr_merged_at=333.0,
+        pr_merge_commit_sha="merge-sha-305",
+        pr_updated_at=333.0,
+    )
+
+    saved = get_pull_request_audit_for_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_title == "Merged after extra commits"
+    assert saved.pr_state == "closed"
+    assert saved.pr_merged is True
+    assert saved.pr_merged_at == 333.0
+    assert saved.pr_merge_commit_sha == "merge-sha-305"
+
+
+def test_update_job_pr_state_falls_back_when_head_sha_changes(tmp_path):
+    db_path = str(tmp_path / "jobs-head-fallback-job.db")
+    init_db(db_path)
+    created = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=306,
+        installation_id=123,
+        head_sha="old-head-306",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+
+    update_job_pr_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=306,
+        head_sha="new-head-306",
+        pr_title="Merged after extra commits",
+        pr_state="closed",
+        pr_merged=True,
+        pr_closed_at=444.0,
+        pr_merged_at=444.0,
+        pr_merge_commit_sha="merge-sha-306",
+        pr_updated_at=444.0,
+    )
+
+    saved = get_job(db_path, created.id)
+    assert saved is not None
+    assert saved.pr_title == "Merged after extra commits"
+    assert saved.pr_state == "closed"
+    assert saved.pr_merged is True
+    assert saved.pr_merged_at == 444.0
+    assert saved.pr_merge_commit_sha == "merge-sha-306"
+
+
+def test_update_pull_request_audit_state_updates_all_routes_for_same_pr(tmp_path):
+    db_path = str(tmp_path / "jobs-multi-route-merge.db")
+    init_db(db_path)
+    analysis = analyze_diff("diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n")
+
+    first_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="head-307-a",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    second_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="head-307-b",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=first_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="head-307-a",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+    record_audit_result(
+        db_path,
+        job_id=second_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        installation_id=123,
+        head_sha="head-307-b",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    update_pull_request_audit_state(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=307,
+        head_sha="head-307-b",
+        pr_title="Merged with multiple review episodes",
+        pr_state="closed",
+        pr_merged=True,
+        pr_closed_at=555.0,
+        pr_merged_at=555.0,
+        pr_merge_commit_sha="merge-sha-307",
+        pr_updated_at=555.0,
+    )
+
+    first_saved = get_pull_request_audit_for_job(db_path, first_job.id)
+    second_saved = get_pull_request_audit_for_job(db_path, second_job.id)
+    assert first_saved is not None and second_saved is not None
+    assert first_saved.pr_merged is True
+    assert second_saved.pr_merged is True
+    assert first_saved.pr_title == "Merged with multiple review episodes"
+    assert second_saved.pr_title == "Merged with multiple review episodes"
+
+
 def test_record_audit_feedback_event_persists_and_dedupes_by_event_key(tmp_path):
     db_path = str(tmp_path / "feedback-events.db")
     init_db(db_path)

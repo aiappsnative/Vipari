@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from engine.analysis import analyze_diff
 from services.audit_jobs import init_db
 from services.audit_records import record_audit_result
+from services.branch_scan_jobs import create_branch_scan_job
+from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 from services.onboarding_records import record_baseline_audit_log
 from services.repo_journey import (
@@ -247,6 +249,47 @@ def test_onboarding_and_backfill_persist_repo_journey_without_read_trigger(tmp_p
     snapshots_after_backfill = list_repo_posture_snapshots_for_repo(db_path, "doria90/dummyAI")
     assert any(snapshot.snapshot_type == "historical_commit" for snapshot in snapshots_after_backfill)
     assert snapshots_after_backfill[-1].snapshot_type == "current"
+
+
+def test_merge_branch_scan_materializes_merge_snapshot_without_pr_review_profile(tmp_path):
+    db_path = str(tmp_path / "journey-merge-branch-scan.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="merge-scan-sha",
+        branch_ref="refs/heads/main",
+        triggered_by="pr_merged_webhook",
+    )
+    settings = BranchScanWorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="private-key.pem",
+        github_app_private_key="private-key",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="token"
+    ), patch("services.branch_scan_worker.fetch_file_content", return_value=PROMPT_CURRENT):
+        result = process_branch_scan_job(job, settings)
+
+    assert result == "completed_with_updates"
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+    merge_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "merge")
+    assert merge_snapshot.commit_sha == "merge-scan-sha"
+    assert merge_snapshot.source_ref == "merged into main @ merge-s"
 
 
 def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):

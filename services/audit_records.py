@@ -1153,16 +1153,10 @@ def record_pr_outcome_feedback_events(
         return []
 
     with _connect(db_path) as conn:
-        if head_sha:
-            rows = conn.execute(
-                "SELECT * FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? AND head_sha = ? ORDER BY id ASC",
-                (repo_full, pr_number, head_sha),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? ORDER BY id ASC",
-                (repo_full, pr_number),
-            ).fetchall()
+        rows = conn.execute(
+            "SELECT * FROM pull_request_audits WHERE repo_full = ? AND pr_number = ? ORDER BY id ASC",
+            (repo_full, pr_number),
+        ).fetchall()
 
     recorded: list[AuditFeedbackEventRecord] = []
     for row in rows:
@@ -1806,36 +1800,6 @@ def update_pull_request_audit_state(
         pr_updated_at=pr_updated_at,
     )
     with _connect(db_path) as conn:
-        if head_sha:
-            conn.execute(
-                """
-                UPDATE pull_request_audits
-                SET pr_title = ?,
-                    pr_state = ?,
-                    pr_merged = ?,
-                    pr_closed_at = ?,
-                    pr_merged_at = ?,
-                    pr_merge_commit_sha = ?,
-                    pr_updated_at = ?,
-                    updated_at = ?
-                WHERE repo_full = ? AND pr_number = ? AND head_sha = ?
-                """,
-                (
-                    pr_title,
-                    pr_state,
-                    pr_merged_value,
-                    pr_closed_at,
-                    pr_merged_at,
-                    pr_merge_commit_sha,
-                    pr_updated_at,
-                    time.time(),
-                    repo_full,
-                    pr_number,
-                    head_sha,
-                ),
-            )
-            return
-
         conn.execute(
             """
             UPDATE pull_request_audits
@@ -1847,13 +1811,7 @@ def update_pull_request_audit_state(
                 pr_merge_commit_sha = ?,
                 pr_updated_at = ?,
                 updated_at = ?
-            WHERE id = (
-                SELECT id
-                FROM pull_request_audits
-                WHERE repo_full = ? AND pr_number = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            )
+            WHERE repo_full = ? AND pr_number = ?
             """,
             (
                 pr_title,

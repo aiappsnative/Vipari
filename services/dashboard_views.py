@@ -469,6 +469,18 @@ def build_repo_pr_review_routes_payload(
     safe_limit = max(1, min(int(limit), 20))
     normalized_head_sha = str(head_sha or "").strip()
     audits = list_pull_request_audits_for_repo(db_path, repo_full)
+    lifecycle_by_pr_number: dict[int, tuple[str | None, bool | None]] = {}
+    for audit in audits:
+        existing = lifecycle_by_pr_number.get(audit.pr_number)
+        existing_state = existing[0] if existing is not None else None
+        existing_merged = existing[1] if existing is not None else None
+        if audit.pr_merged:
+            lifecycle_by_pr_number[audit.pr_number] = (audit.pr_state, audit.pr_merged)
+            continue
+        if existing_merged:
+            continue
+        if str(audit.pr_state or "").strip().lower() == "open" or existing_state is None:
+            lifecycle_by_pr_number[audit.pr_number] = (audit.pr_state, audit.pr_merged)
     reversed_audits = list(reversed(audits))
     selected_audit = None
     if pr_number is not None and pr_number > 0 and normalized_head_sha:
@@ -491,7 +503,8 @@ def build_repo_pr_review_routes_payload(
         feedback_events = list_audit_feedback_events_for_audit(db_path, audit.id)
         findings = list_findings_for_audit(db_path, audit.id)
         changed_artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
-        lifecycle_label = _pr_review_lifecycle_label(audit.pr_state, audit.pr_merged)
+        aggregate_pr_state, aggregate_pr_merged = lifecycle_by_pr_number.get(audit.pr_number, (audit.pr_state, audit.pr_merged))
+        lifecycle_label = _pr_review_lifecycle_label(aggregate_pr_state, aggregate_pr_merged)
         route_entries.append(
             {
                 "audit_id": audit.id,
@@ -541,7 +554,7 @@ def build_repo_pr_review_routes_payload(
                 "pr_title": audit.pr_title,
                 "head_sha": audit.head_sha,
                 "short_head_sha": (audit.head_sha or "")[:7],
-                "lifecycle_label": _pr_review_lifecycle_label(audit.pr_state, audit.pr_merged),
+                "lifecycle_label": _pr_review_lifecycle_label(*lifecycle_by_pr_number.get(audit.pr_number, (audit.pr_state, audit.pr_merged))),
                 "risk_level": audit.suggested_risk_level,
                 "updated_at": audit.updated_at,
                 "summary": lightweight_entry.get("summary") if lightweight_entry is not None else None,

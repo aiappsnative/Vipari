@@ -906,6 +906,90 @@ def test_pr_review_routes_payload_marks_lifecycle_only_merged_routes(tmp_path):
     assert payload["route_search_entries"][0]["lifecycle_label"] == "Merged"
 
 
+def test_pr_review_routes_payload_aggregates_merged_state_across_pr_routes(tmp_path):
+    db_path = str(tmp_path / "dashboard-pr-route-aggregate.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    open_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        pr_title="Multi-route PR",
+        installation_id=123,
+        head_sha="sha-route-open",
+        diff_text=PROMPT_DIFF,
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=open_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        pr_title="Multi-route PR",
+        installation_id=123,
+        head_sha="sha-route-open",
+        pr_state="open",
+        pr_merged=False,
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+    )
+
+    merged_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        pr_title="Multi-route PR",
+        installation_id=123,
+        head_sha="sha-route-merged",
+        diff_text="",
+        pr_state="closed",
+        pr_merged=True,
+        pr_merged_at=time.time(),
+    )
+    record_audit_result(
+        db_path,
+        job_id=merged_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        pr_title="Multi-route PR",
+        installation_id=123,
+        head_sha="sha-route-merged",
+        pr_state="closed",
+        pr_merged=True,
+        pr_merged_at=time.time(),
+        deterministic_analysis=analyze_diff(""),
+        status="completed",
+        completion_mode="lifecycle_only",
+        output_mode="lifecycle_tracking",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=False,
+        suggested_risk_level="unknown",
+    )
+
+    payload = build_repo_pr_review_routes_payload(db_path, "doria90/dummyAI", pr_number=88)
+
+    assert payload["selected_route"]["lifecycle_label"] == "Merged"
+    assert all(route["lifecycle_label"] == "Merged" for route in payload["routes"] if route["pr_number"] == 88)
+    assert all(entry["lifecycle_label"] == "Merged" for entry in payload["route_search_entries"] if entry["pr_number"] == 88)
+
+
 def test_repo_dashboard_api_keeps_selected_older_pr_route_when_outside_recent_limit(tmp_path):
     db_path = str(tmp_path / "api-dashboard-routes-older-selection.db")
     init_db(db_path)

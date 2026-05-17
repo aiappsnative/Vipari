@@ -206,12 +206,14 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     events_by_key: dict[str, dict[str, Any]] = {}
     for artifact_path, artifact_type in sorted(artifact_types_by_path.items()):
         for profile in historical_profiles_by_path.get(artifact_path, []):
-            key = _repo_snapshot_key(repo_full, f"historical:{profile.commit_sha}")
+            snapshot_type = _historical_snapshot_type(profile, onboarding.default_branch)
+            snapshot_key_prefix = "merge" if snapshot_type == "merge" else "historical"
+            key = _repo_snapshot_key(repo_full, f"{snapshot_key_prefix}:{profile.commit_sha}")
             bucket = events_by_key.setdefault(
                 key,
                 {
                     "snapshot_key": key,
-                    "snapshot_type": _historical_snapshot_type(profile, onboarding.default_branch),
+                    "snapshot_type": snapshot_type,
                     "created_at": profile.created_at,
                     "commit_sha": profile.commit_sha,
                     "pr_number": None,
@@ -224,11 +226,14 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
                 },
             )
             bucket["created_at"] = max(bucket["created_at"], profile.created_at)
-            bucket["historical_event_count"] += 1
+            if snapshot_type == "merge":
+                bucket["merged_event_count"] += 1
+            else:
+                bucket["historical_event_count"] += 1
             bucket["events"].append(
                 _SnapshotEvent(
                     snapshot_key=key,
-                    snapshot_type=_historical_snapshot_type(profile, onboarding.default_branch),
+                    snapshot_type=snapshot_type,
                     created_at=profile.created_at,
                     commit_sha=profile.commit_sha,
                     pr_number=None,
@@ -664,12 +669,17 @@ def _artifact_state_from_baseline(baseline: OnboardingBaselineVersionRecord) -> 
 
 def _historical_snapshot_type(profile, default_branch: str | None) -> str:
     default_branch_ref = f"refs/heads/{default_branch}" if default_branch else None
+    if profile.triggered_by == "pr_merged_webhook":
+        return "merge"
     if profile.triggered_by in {"push_webhook", "scheduled", "manual"} and profile.branch_ref == default_branch_ref:
         return "branch_head"
     return "historical_commit"
 
 
 def _historical_source_ref(profile, default_branch: str | None) -> str:
+    if _historical_snapshot_type(profile, default_branch) == "merge":
+        branch_name = (profile.branch_ref or "").removeprefix("refs/heads/") or (default_branch or "default")
+        return f"merged into {branch_name} @ {profile.commit_sha[:7]}"
     if _historical_snapshot_type(profile, default_branch) == "branch_head":
         branch_name = (profile.branch_ref or "").removeprefix("refs/heads/") or (default_branch or "default")
         return f"{branch_name} @ {profile.commit_sha[:7]}"
