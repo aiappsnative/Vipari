@@ -1725,6 +1725,28 @@ def test_postgres_database_url_becomes_runtime_locator(monkeypatch):
     assert settings.resolved_db_path == "postgresql://user:pass@db.example.com/driftguard"
 
 
+def test_activity_database_url_stays_optional_until_configured(monkeypatch):
+    monkeypatch.delenv("ACTIVITY_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ACTIVITY_DB_PATH", raising=False)
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.has_activity_database_config is False
+    assert settings.resolved_activity_db_path == ""
+
+
+def test_activity_postgres_database_url_becomes_activity_locator(monkeypatch):
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/activity")
+    monkeypatch.setenv("ACTIVITY_DB_PATH", "ignored-activity.db")
+    _reset_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.has_activity_database_config is True
+    assert settings.resolved_activity_db_path == "postgresql://user:pass@db.example.com/activity"
+
+
 def test_api_write_routes_require_admin_token(tmp_path, monkeypatch):
     db_path = str(tmp_path / "secured-api.db")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)

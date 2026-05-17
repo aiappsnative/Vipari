@@ -3213,6 +3213,238 @@ def test_admin_logs_tab_applies_query_filters(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_logs_tab_reads_configured_activity_database(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_activity_db_path = main.settings.activity_db_path
+    original_activity_database_url = main.settings.activity_database_url
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs-activity-primary.db")
+    activity_db_path = str(tmp_path / "admin-logs-activity.db")
+    try:
+        main.init_db(main.AUDIT_DB_PATH)
+        main.settings.activity_database_url = ""
+        main.settings.activity_db_path = activity_db_path
+        main.settings.owner_github_login = "admin-user"
+        main.settings.owner_github_user_id = ""
+        main.settings.owner_email = ""
+
+        from services.activity_records import create_activity_event
+        from services.activity_schema_migrations import migrate_activity_database
+        from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity
+
+        migrate_activity_database(activity_db_path)
+
+        admin_user, _admin_identity = upsert_github_identity(
+            main.AUDIT_DB_PATH,
+            github_user_id="974",
+            github_login="admin-user",
+            display_name="Admin User",
+            primary_email="admin@example.com",
+            avatar_url=None,
+            granted_scopes=["read:user"],
+            access_token_encrypted="encrypted-token",
+        )
+        workspace = create_workspace(
+            main.AUDIT_DB_PATH,
+            billing_owner_user_id=admin_user.id,
+            display_name="Activity Workspace",
+            slug="activity-workspace",
+        )
+        session = create_user_session(
+            main.AUDIT_DB_PATH,
+            session_id="admin-logs-activity-session",
+            user_id=admin_user.id,
+            workspace_id=None,
+            csrf_secret="csrf-logs-activity",
+            expires_at=time.time() + 3600,
+        )
+        create_activity_event(
+            activity_db_path,
+            occurred_at=time.time(),
+            source="control_plane",
+            event_type="activity.only",
+            workspace_id=workspace.id,
+            actor_user_id=admin_user.id,
+            actor_label="Admin User",
+            repo_full=None,
+            subject_type="workspace",
+            subject_id=str(workspace.id),
+            details={"display_name": workspace.display_name},
+        )
+
+        response = client.get("/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
+
+        assert response.status_code == 200
+        assert "activity.only" in response.text
+        assert "Activity Workspace" in response.text
+        assert "Admin User" in response.text
+    finally:
+        main.settings.owner_github_login = original_login
+        main.settings.owner_github_user_id = original_id
+        main.settings.owner_email = original_email
+        main.settings.activity_db_path = original_activity_db_path
+        main.settings.activity_database_url = original_activity_database_url
+        main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_logs_tab_preserves_primary_history_when_activity_db_is_enabled(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_activity_db_path = main.settings.activity_db_path
+    original_activity_database_url = main.settings.activity_database_url
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs-history-primary.db")
+    activity_db_path = str(tmp_path / "admin-logs-history-activity.db")
+
+    try:
+        main.init_db(main.AUDIT_DB_PATH)
+        main.settings.owner_github_login = "admin-user"
+        main.settings.owner_github_user_id = ""
+        main.settings.owner_email = ""
+
+        from services.activity_schema_migrations import migrate_activity_database
+        from services.control_plane_records import create_control_plane_audit_log, create_user_session, create_workspace, upsert_github_identity
+
+        admin_user, _admin_identity = upsert_github_identity(
+            main.AUDIT_DB_PATH,
+            github_user_id="975",
+            github_login="admin-user",
+            display_name="Admin User",
+            primary_email="admin@example.com",
+            avatar_url=None,
+            granted_scopes=["read:user"],
+            access_token_encrypted="encrypted-token",
+        )
+        workspace = create_workspace(
+            main.AUDIT_DB_PATH,
+            billing_owner_user_id=admin_user.id,
+            display_name="History Workspace",
+            slug="history-workspace",
+        )
+        session = create_user_session(
+            main.AUDIT_DB_PATH,
+            session_id="admin-logs-history-session",
+            user_id=admin_user.id,
+            workspace_id=None,
+            csrf_secret="csrf-logs-history",
+            expires_at=time.time() + 3600,
+        )
+
+        main.settings.activity_database_url = ""
+        main.settings.activity_db_path = ""
+        create_control_plane_audit_log(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            actor_user_id=admin_user.id,
+            event_type="admin_history_only",
+            subject_type="workspace",
+            subject_id=str(workspace.id),
+            payload={"display_name": workspace.display_name},
+        )
+
+        main.settings.activity_database_url = ""
+        main.settings.activity_db_path = activity_db_path
+        migrate_activity_database(activity_db_path)
+        create_control_plane_audit_log(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            actor_user_id=admin_user.id,
+            event_type="admin_mirrored",
+            subject_type="workspace",
+            subject_id=str(workspace.id),
+            payload={"display_name": workspace.display_name},
+        )
+
+        response = client.get("/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
+
+        assert response.status_code == 200
+        assert "admin_history_only" in response.text
+        assert "admin_mirrored" in response.text
+        assert "2 matching log rows" in response.text
+    finally:
+        main.settings.owner_github_login = original_login
+        main.settings.owner_github_user_id = original_id
+        main.settings.owner_email = original_email
+        main.settings.activity_db_path = original_activity_db_path
+        main.settings.activity_database_url = original_activity_database_url
+        main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_logs_tab_deduplicates_webhook_rows_and_keeps_latest_status(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_activity_db_path = main.settings.activity_db_path
+    original_activity_database_url = main.settings.activity_database_url
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs-webhook-primary.db")
+    activity_db_path = str(tmp_path / "admin-logs-webhook-activity.db")
+
+    try:
+        main.init_db(main.AUDIT_DB_PATH)
+        main.settings.activity_database_url = ""
+        main.settings.activity_db_path = activity_db_path
+        main.settings.owner_github_login = "admin-user"
+        main.settings.owner_github_user_id = ""
+        main.settings.owner_email = ""
+
+        from services.activity_schema_migrations import migrate_activity_database
+        from services.control_plane_records import create_user_session, record_webhook_event, upsert_github_identity
+
+        migrate_activity_database(activity_db_path)
+
+        admin_user, _admin_identity = upsert_github_identity(
+            main.AUDIT_DB_PATH,
+            github_user_id="976",
+            github_login="admin-user",
+            display_name="Admin User",
+            primary_email="admin@example.com",
+            avatar_url=None,
+            granted_scopes=["read:user"],
+            access_token_encrypted="encrypted-token",
+        )
+        session = create_user_session(
+            main.AUDIT_DB_PATH,
+            session_id="admin-logs-webhook-session",
+            user_id=admin_user.id,
+            workspace_id=None,
+            csrf_secret="csrf-logs-webhook",
+            expires_at=time.time() + 3600,
+        )
+
+        record_webhook_event(
+            main.AUDIT_DB_PATH,
+            provider="github",
+            event_id="evt-webhook-dedupe",
+            event_type="installation",
+            status="processed",
+        )
+        record_webhook_event(
+            main.AUDIT_DB_PATH,
+            provider="github",
+            event_id="evt-webhook-dedupe",
+            event_type="installation",
+            status="failed",
+            error_summary="timeout",
+        )
+
+        response = client.get("/admin?tab=logs&query=evt-webhook-dedupe", cookies={main.settings.session_cookie_name: session.session_id})
+
+        assert response.status_code == 200
+        assert "1 matching log rows" in response.text
+        assert "timeout" in response.text
+    finally:
+        main.settings.owner_github_login = original_login
+        main.settings.owner_github_user_id = original_id
+        main.settings.owner_email = original_email
+        main.settings.activity_db_path = original_activity_db_path
+        main.settings.activity_database_url = original_activity_database_url
+        main.AUDIT_DB_PATH = original_db_path
+
+
 def test_admin_page_can_create_update_and_delete_users_workspaces_and_memberships(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login

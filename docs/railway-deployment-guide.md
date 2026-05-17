@@ -33,6 +33,10 @@ Railway project services:
   private
   Railway managed Postgres
   role: durable production store
+- `activity-postgres`:
+  private
+  Railway managed Postgres
+  role: append-only system activity store for the admin activity feed
 - `redis`:
   private
   Railway managed Redis
@@ -52,7 +56,7 @@ Railway project services:
 | --- | --- | --- | --- | --- | --- |
 | local-dev | direct Python or local Docker helper | SQLite by default | in-proc or SQLite | monolith or limited split | development only |
 | staging | Docker deployment from service Dockerfiles | Postgres | Redis | split | production-like rehearsal |
-| production | Docker deployment from service Dockerfiles | Postgres | Redis | split | blessed production topology |
+| production | Docker deployment from service Dockerfiles | Postgres + optional activity Postgres | Redis | split | blessed production topology |
 
 ### Shared production settings
 
@@ -72,6 +76,7 @@ Railway project services:
 - `GITHUB_OAUTH_CLIENT_SECRET`
 - `GITHUB_OAUTH_CALLBACK_URL=https://<your-api-domain>/auth/github/callback`
 - `DATABASE_URL=<postgres url>`
+- `ACTIVITY_DATABASE_URL=<activity postgres url>` when the separate activity feed is enabled
 
 ### Webhook service
 
@@ -80,6 +85,7 @@ Railway project services:
 - `QUEUE_BACKEND=redis`
 - `REDIS_URL=<railway redis url>`
 - `DATABASE_URL=<postgres url>`
+- `ACTIVITY_DATABASE_URL=<activity postgres url>` if webhook-delivered events are written into the separate activity stream
 
 ### Worker service
 
@@ -87,6 +93,7 @@ Railway project services:
 - `QUEUE_BACKEND=redis`
 - `REDIS_URL=<railway redis url>`
 - `DATABASE_URL=<postgres url>`
+- `ACTIVITY_DATABASE_URL=<activity postgres url>` when the worker writes activity events or maintains the activity store
 - `OPENAI_API_KEY` or `FOUNDRY_API_KEY`
 - `AZURE_OPENAI_ENDPOINT`
 - `AI_MODEL`
@@ -115,6 +122,7 @@ These are starting values only; increase them once real job volume and latency a
 ## Launch-day checklist
 
 - create Railway Postgres
+- create Railway Postgres for activity logs if the separate activity feed is enabled
 - create Railway Redis
 - create `api`, `webhook`, and `worker` services
 - attach the correct Dockerfile to each service
@@ -123,6 +131,8 @@ These are starting values only; increase them once real job volume and latency a
 - set all required production secrets as env vars
 - confirm `worker`, `postgres`, and `redis` are not public
 - run `python scripts/db_migrate.py` against the production `DATABASE_URL` before first traffic; in `APP_ENV=production` the command now fails closed if it resolves to SQLite
+- if the separate activity feed is enabled, run `python scripts/db_migrate.py --target activity` against `ACTIVITY_DATABASE_URL` before enabling the activity page
+- once `ACTIVITY_DATABASE_URL` is enabled, new control-plane audit logs, webhook receipts, feedback events, and triage events are mirrored into the activity store and `/admin?tab=logs` reads from that database
 - run `python scripts/railway_preflight.py --service-role <role> --app-env production` locally against the production env set before deploy
 - confirm GitHub OAuth callback URL matches the API domain exactly
 - confirm GitHub App webhook URL matches the webhook domain exactly
@@ -173,4 +183,5 @@ They remain useful for engineering, but they are not the launch path.
 - if production startup fails due to SQLite detection, do not bypass the guardrail casually
 - if `scripts/db_migrate.py` rejects the target in production, correct `DATABASE_URL` or the explicit `--db` override to Railway Postgres before retrying
 - production should point `DATABASE_URL` at Railway Postgres and let readiness confirm connectivity before cutting traffic
+- if enabled, production should point `ACTIVITY_DATABASE_URL` at the dedicated Railway Postgres activity store and let readiness confirm connectivity before enabling the unified activity page
 - SQLite remains for local development only; it is not the production fallback path

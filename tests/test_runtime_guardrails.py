@@ -116,6 +116,57 @@ def test_production_worker_requires_redis_queue(monkeypatch):
     assert "QUEUE_BACKEND=redis" in str(exc_info.value)
 
 
+def test_production_rejects_sqlite_activity_database_when_configured(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "sqlite:///./activity.db")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "ACTIVITY_DATABASE_URL" in str(exc_info.value)
+
+
+def test_runtime_configuration_rejects_activity_database_matching_primary(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "dedicated database" in str(exc_info.value)
+
+
+def test_runtime_configuration_rejects_activity_database_matching_primary_postgres_alias(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com:5432/driftguard")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "dedicated database" in str(exc_info.value)
+
+
 def test_production_rejects_monolith_service_role(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("SERVICE_ROLE", "monolith")
@@ -280,6 +331,48 @@ async def test_readiness_verifies_postgres_connectivity(monkeypatch):
     assert readiness["status"] == "ok"
     assert any(check["name"] == "persistence" and "PostgreSQL connectivity verified." in check["detail"] for check in readiness["checks"])
     connect.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
+
+
+@pytest.mark.anyio
+async def test_readiness_checks_activity_database_when_configured(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com/activity")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    primary_applied = [type("AppliedMigration", (), {"version": v})() for v in [
+        "0001_bootstrap_relational_schema",
+        "0002_add_pull_request_audits_fused_confidence",
+        "0003_add_onboarding_approval_columns",
+        "0004_add_machine_principals",
+        "0005_add_session_flash",
+        "0006_add_audit_feedback_and_triage_tables",
+        "0007_add_high_risk_proposal_tables",
+        "0008_ensure_ai_system_registry_schema",
+        "0009_ensure_export_jobs_snapshot_columns",
+        "0010_ensure_relevance_decision_tables",
+    ]]
+    activity_applied = [
+        type("AppliedActivityMigration", (), {"version": "0001_bootstrap_activity_schema"})(),
+        type("AppliedActivityMigration", (), {"version": "0002_add_activity_external_ids"})(),
+    ]
+    with patch("services.runtime_guardrails.connect_sqlite") as connect, patch(
+        "services.runtime_guardrails.list_applied_migrations",
+        return_value=primary_applied,
+    ), patch(
+        "services.runtime_guardrails.list_applied_activity_migrations",
+        return_value=activity_applied,
+    ):
+        readiness = await build_runtime_readiness(settings)
+
+    assert readiness["status"] == "ok"
+    assert any(check["name"] == "activity_persistence" and check["status"] == "ok" for check in readiness["checks"])
+    assert any(check["name"] == "activity_migrations" and check["status"] == "ok" for check in readiness["checks"])
+    assert connect.call_count == 2
 
 
 @pytest.mark.anyio

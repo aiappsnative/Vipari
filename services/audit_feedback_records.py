@@ -218,7 +218,29 @@ def add_audit_feedback(
         row = conn.execute(
             "SELECT * FROM audit_feedback_events WHERE id = ?", (row_id,)
         ).fetchone()
-    return _row_to_feedback(row)
+    record = _row_to_feedback(row)
+
+    from .activity_records import record_activity_event_if_configured
+
+    details: dict[str, object] = {"source": record.source}
+    if record.comment:
+        details["comment"] = record.comment
+    if record.metadata:
+        details["metadata"] = record.metadata
+    record_activity_event_if_configured(
+        external_id=f"audit_feedback:{record.id}",
+        occurred_at=record.created_at,
+        source="audit_feedback",
+        event_type=f"audit.feedback.{record.kind}",
+        workspace_id=record.workspace_id,
+        actor_user_id=None,
+        actor_label=record.source,
+        repo_full=None,
+        subject_type="audit",
+        subject_id=str(record.audit_id),
+        details=details,
+    )
+    return record
 
 
 def add_audit_triage(
@@ -246,7 +268,27 @@ def add_audit_triage(
         row = conn.execute(
             "SELECT * FROM audit_triage_events WHERE id = ?", (row_id,)
         ).fetchone()
-    return _row_to_triage(row)
+    record = _row_to_triage(row)
+
+    from .activity_records import record_activity_event_if_configured
+
+    details = {"state": record.state}
+    if record.reason:
+        details["reason"] = record.reason
+    record_activity_event_if_configured(
+        external_id=f"audit_triage:{record.id}",
+        occurred_at=record.created_at,
+        source="audit_triage",
+        event_type=f"audit.triage.{record.state}",
+        workspace_id=record.workspace_id,
+        actor_user_id=None,
+        actor_label="System",
+        repo_full=None,
+        subject_type="audit",
+        subject_id=str(record.audit_id),
+        details=details,
+    )
+    return record
 
 
 # ---------------------------------------------------------------------------

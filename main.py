@@ -37,6 +37,7 @@ from services.audit_records import (
     update_pull_request_audit_state,
 )
 from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
+from services.activity_records import list_recent_activity_events
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.audit_records import list_pre_audit_relevance_decisions
 from services.mcp_broker import (
@@ -998,6 +999,32 @@ def _admin_activity_payload_details(payload_json: str | None) -> str:
 
 
 def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
+    if settings.has_activity_database_config:
+        activity_entries = [
+            AdminActivityLogEntry(
+                source=row.source,
+                occurred_at=row.occurred_at,
+                event_type=row.event_type,
+                workspace_id=row.workspace_id,
+                actor_user_id=row.actor_user_id,
+                actor_label=row.actor_label or _admin_activity_actor_label(row.actor_user_id, user_labels),
+                subject_type=row.subject_type,
+                subject_id=row.subject_id,
+                details=_admin_activity_payload_details(row.details_json),
+                raw_id=row.external_id or f"activity:{row.id}",
+            )
+            for row in list_recent_activity_events(settings.resolved_activity_db_path, limit=fetch_limit)
+        ]
+        activity_raw_ids = {entry.raw_id for entry in activity_entries}
+        primary_entries = _build_admin_activity_entries_primary(db_path=db_path, user_labels=user_labels, fetch_limit=fetch_limit)
+        merged_entries = activity_entries + [entry for entry in primary_entries if entry.raw_id not in activity_raw_ids]
+        merged_entries.sort(key=lambda item: (item.occurred_at, item.raw_id), reverse=True)
+        return merged_entries
+
+    return _build_admin_activity_entries_primary(db_path=db_path, user_labels=user_labels, fetch_limit=fetch_limit)
+
+
+def _build_admin_activity_entries_primary(*, db_path: str, user_labels: dict[int, str], fetch_limit: int) -> list[AdminActivityLogEntry]:
     entries: list[AdminActivityLogEntry] = []
 
     for row in list_recent_control_plane_audit_logs(db_path, limit=fetch_limit):
@@ -1031,7 +1058,7 @@ def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], 
                 subject_type="webhook_event",
                 subject_id=row.event_id,
                 details=", ".join(details),
-                raw_id=f"webhook:{row.id}",
+                raw_id=f"webhook:{row.provider}:{row.event_id}",
             )
         )
 
