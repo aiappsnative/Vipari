@@ -5273,9 +5273,11 @@ async def webhook(request: Request):
     managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
     if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
         allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
-        allow_history_only = action in ("closed", "reopened") and allocation is None and onboarding is not None
-        if allow_history_only:
-            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, managed_installation.workspace_id)
+        if action in ("closed", "reopened"):
+            workspace_id = allocation.workspace_id if allocation is not None else managed_installation.workspace_id
+            if allocation is None and onboarding is None:
+                return JSONResponse({"message": "ignored: repo not allocated"})
+            entitlement = get_workspace_entitlement(AUDIT_DB_PATH, int(workspace_id))
             if entitlement is None or not entitlement.dashboard_enabled:
                 return JSONResponse({"message": "ignored: workspace not entitled"})
         else:

@@ -1246,4 +1246,127 @@ def test_webhook_queues_branch_scan_for_onboarded_unallocated_merged_pr(tmp_path
     assert audits[0].pr_merged is True
 
 
+def test_webhook_closed_pr_updates_lifecycle_when_comments_disabled_for_allocated_repo(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "managed-merged-comments-disabled.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+    )
+
+    try:
+        user, _identity = upsert_github_identity(
+            main.AUDIT_DB_PATH,
+            github_user_id="1600",
+            github_login="managed-merge-comments-off",
+            display_name="Managed Merge Comments Off",
+            primary_email="managed-merge-comments-off@example.com",
+            avatar_url=None,
+            granted_scopes=["read:user"],
+            access_token_encrypted="encrypted-token",
+        )
+        workspace = create_workspace(
+            main.AUDIT_DB_PATH,
+            slug="managed-merge-comments-off-workspace",
+            display_name="Managed Merge Comments Off Workspace",
+            billing_owner_user_id=user.id,
+        )
+        upsert_entitlement(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            payload={
+                "plan_code": "team",
+                "subscription_status": "active",
+                "dashboard_enabled": True,
+                "pr_comments_enabled": False,
+                "repo_limit": 5,
+                "org_limit": 1,
+                "seat_limit": 5,
+                "retention_policy": "standard",
+                "support_tier": "standard",
+                "feature_flags_json": "{}",
+            },
+        )
+        upsert_github_installation(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            installation_id=777,
+            account_id="777",
+            account_login="doria90",
+            account_type="Organization",
+            target_type="Organization",
+        )
+        allocate_repo_to_workspace(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            installation_id=777,
+            repo_github_id="dummyAI-777",
+            repo_full="doria90/dummyAI",
+            baseline_mode="onboarding",
+            activated_by_user_id=user.id,
+        )
+        record_repository_onboarding(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            installation_id=777,
+            default_branch="main",
+            status="baseline_approved",
+            discovered_artifacts=[
+                DiscoveredArtifactInput(
+                    artifact_path="prompts/policy.md",
+                    artifact_type="prompt",
+                    discovery_reason="seed",
+                    confidence=0.9,
+                    baseline_content="baseline policy",
+                )
+            ],
+            extract_signal_terms_fn=extract_signal_terms_from_text,
+            build_profile_fn=build_attribute_profile,
+        )
+
+        payload = {
+            "action": "closed",
+            "installation": {"id": 777},
+            "repository": {"full_name": "doria90/dummyAI"},
+            "pull_request": {
+                "number": 10,
+                "title": "Merge while PR comments are disabled",
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-05-17T10:00:00Z",
+                "merge_commit_sha": "merged777sha",
+                "base": {"sha": "base777", "ref": "main"},
+                "head": {"sha": "head777"},
+                "updated_at": "2026-05-17T10:00:00Z",
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "X-Hub-Signature-256": sign_payload(body, "secret"),
+            "X-GitHub-Event": "pull_request",
+            "Content-Type": "application/json",
+        }
+
+        with patch("main.generate_jwt", return_value="jwt"), patch(
+            "main.get_installation_token", return_value="token"
+        ), patch("main.refresh_audit_reaction_feedback_for_pr"):
+            response = client.post("/webhook", content=body, headers=headers)
+
+        audits = list_pull_request_audits_for_repo(main.AUDIT_DB_PATH, "doria90/dummyAI")
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "pr state updated"
+    assert response.json().get("branch_scan_job_id")
+    assert len(audits) == 1
+    assert audits[0].pr_merged is True
+
+
 # additional tests could mock github/openai but for MVP keep simple
