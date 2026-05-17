@@ -75,6 +75,7 @@ from services.auth_service import (
     generate_session_id,
     list_github_user_repositories,
 )
+from services.baseline_approval_mode import BASELINE_APPROVAL_MODE_MANUAL, normalize_baseline_approval_mode
 from services.billing_service import (
     create_billing_portal_session,
     create_checkout_session,
@@ -122,6 +123,7 @@ from services.control_plane_records import (
     delete_workspace_membership,
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
+    get_active_repo_allocation_for_repo,
     get_github_installation_by_installation_id,
     get_ai_system_by_id,
     get_ai_system_for_workspace_repo,
@@ -168,6 +170,7 @@ from services.control_plane_records import (
     update_user_profile_preferences,
     update_workspace_admin_fields,
     update_workspace_display_name,
+    update_workspace_baseline_approval_mode,
     update_repo_allocation_pr_feedback_mode,
     update_workspace_pr_feedback_mode,
     update_workspace_pr_comments_setting,
@@ -2582,6 +2585,7 @@ async def settings_page(request: Request):
             csrf_token=access_context["session"].csrf_secret,
             pr_comments_allowed_by_plan=pr_feedback_allowed,
             pr_feedback_mode=workspace.pr_feedback_mode,
+            baseline_approval_mode=workspace.baseline_approval_mode,
             can_manage=bool(membership and membership.role in {"owner", "admin"}),
             workspace_role=membership.role if membership else "viewer",
             workspace_members=_workspace_member_rows(workspace.id),
@@ -2606,6 +2610,7 @@ async def settings_page(request: Request):
 async def settings_update(
     request: Request,
     pr_feedback_mode: str = Form(...),
+    baseline_approval_mode: str = Form(...),
     workspace_name: str | None = Form(default=None),
     csrf_token: str | None = Form(None),
 ):
@@ -2618,6 +2623,7 @@ async def settings_update(
     normalized_feedback_mode = (pr_feedback_mode or "").strip().lower()
     if normalized_feedback_mode not in {"comments", "reviews", "off"}:
         raise HTTPException(status_code=400, detail="PR feedback mode must be comments, reviews, or off.")
+    normalized_baseline_approval_mode = normalize_baseline_approval_mode(baseline_approval_mode)
 
     normalized_workspace_name = (workspace_name or "").strip()
     if not normalized_workspace_name:
@@ -2629,6 +2635,11 @@ async def settings_update(
         AUDIT_DB_PATH,
         access_context["workspace"].id,
         pr_feedback_mode=normalized_feedback_mode,
+    )
+    update_workspace_baseline_approval_mode(
+        AUDIT_DB_PATH,
+        access_context["workspace"].id,
+        baseline_approval_mode=normalized_baseline_approval_mode,
     )
     update_workspace_pr_comments_setting(
         AUDIT_DB_PATH,
@@ -4756,6 +4767,9 @@ app.include_router(
     create_repo_baseline_router(
         authorize_repo_read_fn=lambda request, repo_full: _require_repo_dashboard_read_access(request, repo_full),
         authorize_repo_mutation_fn=lambda request, repo_full: _require_repo_dashboard_mutation_access(request, repo_full),
+        resolve_baseline_approval_mode_fn=lambda auth_context, _active_db_path, _repo_full: normalize_baseline_approval_mode(
+            getattr(auth_context.get("workspace"), "baseline_approval_mode", BASELINE_APPROVAL_MODE_MANUAL)
+        ),
         resolve_db_path_fn=lambda: AUDIT_DB_PATH,
         build_repo_dashboard_view_fn=lambda active_db_path, repo_full: build_repo_dashboard_view(active_db_path, repo_full),
         build_repo_journey_fn=lambda active_db_path, repo_full: build_repo_journey(active_db_path, repo_full),

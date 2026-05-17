@@ -1761,6 +1761,86 @@ def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
     assert approved_dashboard_payload["journey_comparison"]["left"]["id"] == historical_snapshot["id"]
     assert approved_dashboard_payload["journey_comparison"]["drift_summary"]["pair_distance"] > 0
     assert approved_dashboard_payload["journey_comparison"]["drift_summary"]["right_distance_from_selected_baseline"] > 0
+    approved_snapshots = approved_dashboard_payload["journey_snapshots"]
+    selected_snapshot = next(snapshot for snapshot in approved_snapshots if snapshot["id"] == historical_snapshot["id"])
+    original_baseline_snapshot = next(snapshot for snapshot in approved_snapshots if snapshot["snapshot_type"] == "baseline_approved")
+    current_anchor_snapshot = next(snapshot for snapshot in approved_snapshots if snapshot["is_current_anchor"])
+
+    assert selected_snapshot["is_reference_baseline"] is True
+    assert selected_snapshot["is_approved_baseline"] is True
+    assert selected_snapshot["baseline_marker_label"] == "Reference baseline"
+    assert original_baseline_snapshot["is_approved_baseline"] is True
+    assert original_baseline_snapshot["baseline_marker_label"] == "Approved baseline"
+    assert current_anchor_snapshot["snapshot_type"] == "current"
+
+
+def test_dashboard_api_rebaseline_auto_approves_when_workspace_policy_is_auto(tmp_path):
+    db_path = str(tmp_path / "api-rebaseline-auto-approve.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_MEDIUM,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+    session = _create_dashboard_owner_session(db_path)
+
+    from services.control_plane_records import update_workspace_baseline_approval_mode
+
+    update_workspace_baseline_approval_mode(db_path, session.workspace_id, baseline_approval_mode="auto")
+
+    with TestClient(main.app) as client:
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    historical_snapshot = next(
+        snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "historical_commit"
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.fetch_file_content", return_value=PROMPT_CURRENT), TestClient(main.app) as client:
+        rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/rebaseline",
+            json={"snapshot_id": historical_snapshot["id"], "rationale": "Auto-approve baseline."},
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+        dashboard_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert rebaseline_response.status_code == 200
+    assert rebaseline_response.json()["baseline_candidate_status"] == "approved"
+    assert rebaseline_response.json()["auto_approved"] is True
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert dashboard_payload["selected_baseline_source_snapshot_id"] == historical_snapshot["id"]
+    assert dashboard_payload["baseline_review"]["is_pending_review"] is False
 
 
 def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):

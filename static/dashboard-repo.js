@@ -364,6 +364,9 @@ function renderBaselineReviewPanel(panel) {
     }
 
     const recentDecisions = asArray(panel.recent_decisions);
+    const statusLine = panel.is_pending_review
+        ? `${Number(panel.pending_count || 0)} artifact ${Number(panel.pending_count || 0) === 1 ? "sign-off is" : "sign-offs are"} pending. Reference baseline selection is handled separately in Version Journey.`
+        : `${Number(panel.authoritative_artifact_count || panel.approved_count || 0)} artifact${Number(panel.authoritative_artifact_count || panel.approved_count || 0) === 1 ? " is" : "s are"} currently trusted for artifact sign-off. This does not choose the reference baseline.`;
     const artifactCards = asArray(panel.artifacts).slice(0, 6).map((artifact) => `
         <div class="artifact-card">
             <strong>${escapeHtml(artifact.artifact_path)}</strong>
@@ -386,35 +389,35 @@ function renderBaselineReviewPanel(panel) {
     const actionsHtml = panel.is_pending_review
         ? `
             <div class="export-actions">
-                <button type="button" class="export-submit-button" data-baseline-decision="approve">Approve artifact batch</button>
-                <button type="button" class="cue-action-button" data-baseline-decision="reject">Reject artifact batch</button>
+                <button type="button" class="export-submit-button" data-baseline-decision="approve">Approve sign-off batch</button>
+                <button type="button" class="cue-action-button" data-baseline-decision="reject">Reject sign-off batch</button>
             </div>
         `
-        : '<div class="detail-note">Artifact sign-off is not currently pending for this repository.</div>';
+        : '<div class="journey-status-note muted">Artifact sign-off is not currently waiting on a reviewer.</div>';
 
     return `
         <div class="stack compact-stack">
-            <div class="detail-note">Artifact Sign-off records human approval for each individual artifact. It confirms whether the stored files are trusted evidence and does not change which snapshot DriftGuard uses as the reference baseline.</div>
+            <div class="journey-status-note muted">${escapeHtml(statusLine)}</div>
             <div class="journey-strip">
                 <div class="journey-node journey-tone-primary">
                     <span class="journey-node-value">${escapeHtml(String(panel.artifact_count || 0))}</span>
                     <span class="journey-node-label">Artifacts</span>
-                    <span class="journey-node-caption">Tracked baseline candidates</span>
+                    <span class="journey-node-caption">Tracked for artifact sign-off</span>
                 </div>
                 <div class="journey-node journey-tone-medium">
                     <span class="journey-node-value">${escapeHtml(String(panel.pending_count || 0))}</span>
                     <span class="journey-node-label">Pending sign-off</span>
-                    <span class="journey-node-caption">Awaiting human approval per artifact</span>
+                    <span class="journey-node-caption">Waiting on reviewer confirmation</span>
                 </div>
                 <div class="journey-node journey-tone-primary">
-                    <span class="journey-node-value">${escapeHtml(String(panel.approved_count || 0))}</span>
-                    <span class="journey-node-label">Approved</span>
-                    <span class="journey-node-caption">Artifacts explicitly trusted by a human reviewer</span>
+                    <span class="journey-node-value">${escapeHtml(String(panel.authoritative_artifact_count || panel.approved_count || 0))}</span>
+                    <span class="journey-node-label">Trusted now</span>
+                    <span class="journey-node-caption">Current approved artifact evidence</span>
                 </div>
                 <div class="journey-node journey-tone-gap">
                     <span class="journey-node-value">${escapeHtml(String(panel.rejected_count || 0))}</span>
                     <span class="journey-node-label">Rejected</span>
-                    <span class="journey-node-caption">Artifacts that need follow-up or rework</span>
+                    <span class="journey-node-caption">Needs follow-up before trust</span>
                 </div>
             </div>
             ${actionsHtml}
@@ -2019,10 +2022,11 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
     if (!snapshots.length) {
         return '<div class="muted">No repository checkpoints have been materialized yet.</div>';
     }
-    const current = snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
-    const selectedBaseline = selectedBaselineSourceSnapshotId
-        ? snapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
-        : null;
+    const current = snapshots.find((item) => item.is_current_anchor) || snapshots.find((item) => item.snapshot_type === "current") || snapshots.find((item) => item.snapshot_type === "branch_head") || snapshots[snapshots.length - 1];
+    const selectedBaseline = snapshots.find((item) => item.is_reference_baseline)
+        || (selectedBaselineSourceSnapshotId
+            ? snapshots.find((item) => Number(item.id) === Number(selectedBaselineSourceSnapshotId)) || null
+            : null);
     const baseline = selectedBaseline || snapshots.find((item) => item.snapshot_type === "baseline_approved") || null;
     const mergedCount = snapshots.filter((item) => item.snapshot_type === "merge").length;
     const historicalCount = snapshots.filter((item) => item.snapshot_type === "historical_commit").length;
@@ -2060,34 +2064,32 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
 }
 
 function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null, isCurrent = false) {
-    const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
-    const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
-    const isApprovedBaseline = isSelectedBaseline || snapshot?.snapshot_type === "baseline_promotion" || snapshot?.snapshot_type === "baseline_approved";
+    const isSelectedBaseline = Boolean(snapshot?.is_reference_baseline) || (selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId));
+    const isApprovedBaseline = Boolean(snapshot?.is_approved_baseline);
     const displayTimestamp = journeyCardTimestamp(snapshot, isSelectedBaseline);
     const lifecycleLabel = journeyPullRequestLifecycleLabel(snapshot);
     const source = snapshot.source_url
         ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
         : escapeHtml(snapshot.source_ref || "Stored checkpoint");
     const labels = asArray(snapshot.change_labels).slice(0, 3);
-    const baselineMeta = isSelectedBaseline
-        ? `<div class="detail-note">Current approved baseline checkpoint${snapshot?.input_summary?.approved_by ? ` · selected by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}` : ""}</div>`
-        : snapshot.snapshot_type === "baseline_approved" && snapshot?.input_summary?.approved_by
-            ? `<div class="detail-note">Approved by @${escapeHtml(snapshot.input_summary.approved_by)} · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}</div>`
-            : "";
+    const approvalMeta = (isSelectedBaseline || isApprovedBaseline) && snapshot?.input_summary?.approved_by
+        ? `<div class="journey-card-meta muted">Approved by @${escapeHtml(snapshot.input_summary.approved_by)}${snapshot?.input_summary?.approved_at ? ` · ${escapeHtml(formatDateLabel(snapshot.input_summary.approved_at))}` : ""}</div>`
+        : "";
     const rebaselineButton = snapshot.commit_sha
         ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Create baseline candidate</button>`
         : "";
     const headingLabel = snapshotTypeLabel(snapshot.snapshot_type);
     return `
-        <div class="artifact-card journey-card ${baselineVerified ? "" : "journey-card-muted"} ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}" ${baselineVerified ? "" : 'title="Baseline not yet approved — drift scores are estimates."'}>
+        <div class="artifact-card journey-card ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}">
             <div class="artifact-card-head">
                 <div>
                     <strong>${escapeHtml(headingLabel)}</strong>
                     <div class="artifact-card-type">${escapeHtml(formatDateLabel(displayTimestamp))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
+                    ${approvalMeta}
                 </div>
                 <div class="tag-row">
                     ${isCurrent ? '<span class="drift-chip chip-governance">Current</span>' : ""}
-                    ${isApprovedBaseline ? '<span class="drift-chip chip-baseline">Approved baseline</span>' : ""}
+                    ${isSelectedBaseline ? '<span class="drift-chip chip-baseline">Reference baseline</span>' : isApprovedBaseline ? '<span class="drift-chip chip-baseline">Approved</span>' : ""}
                     ${lifecycleLabel ? `<span class="drift-chip chip-baseline">${escapeHtml(lifecycleLabel)}</span>` : ""}
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
@@ -2099,7 +2101,6 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             </div>
             ${labels.length ? `<div class="tag-row">${labels.map((label) => `<span class="tag tag-muted">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
             <div class="artifact-card-reason">${escapeHtml(snapshot.change_summary?.changed_artifact_count ? `${snapshot.change_summary.changed_artifact_count} changed, ${snapshot.change_summary.added_artifact_count} added, ${snapshot.change_summary.removed_artifact_count} removed.` : "No material artifact changes recorded for this checkpoint.")}</div>
-            ${baselineMeta}
             <div class="storyline-episode-meta muted">
                 <span>${escapeHtml(snapshot.default_branch || "")}</span>
                 <span>${source}</span>
@@ -2107,6 +2108,47 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             ${rebaselineButton}
         </div>
     `;
+}
+
+function renderJourneyStatusNotice(payload, snapshots = []) {
+    const baselineReview = payload?.baseline_review || null;
+    const lastOutcome = window.__lastRebaselineOutcome || null;
+    const referenceBaseline = snapshots.find((snapshot) => snapshot.is_reference_baseline) || null;
+    const reviewUrl = repoTabUrl("baseline", { hash: "baseline-review-panel" });
+
+    if (lastOutcome?.status === "approved") {
+        const selectedSnapshot = snapshots.find((snapshot) => Number(snapshot.id) === Number(lastOutcome.snapshotId)) || null;
+        const selectedLabel = selectedSnapshot?.source_ref || selectedSnapshot?.commit_sha || selectedSnapshot?.snapshot_key || "selected snapshot";
+        return `
+            <div class="journey-status-note muted">
+                New reference baseline created from ${escapeHtml(selectedLabel)}. Comparisons now use it.
+            </div>
+        `;
+    }
+
+    if (lastOutcome && baselineReview?.is_pending_review) {
+        const selectedSnapshot = snapshots.find((snapshot) => Number(snapshot.id) === Number(lastOutcome.snapshotId)) || null;
+        const selectedLabel = selectedSnapshot?.source_ref || selectedSnapshot?.commit_sha || selectedSnapshot?.snapshot_key || "selected snapshot";
+        const pendingCount = Number(baselineReview.pending_count || 0);
+        const referenceLabel = referenceBaseline?.source_ref || referenceBaseline?.snapshot_key || "the current reference baseline";
+        return `
+            <div class="journey-status-note muted">
+                New baseline candidate from ${escapeHtml(selectedLabel)}. ${pendingCount ? `${escapeHtml(String(pendingCount))} item${pendingCount === 1 ? " is" : "s are"} pending approval` : "Pending approval"}; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Review in Artifacts</a>.
+            </div>
+        `;
+    }
+
+    if (baselineReview?.is_pending_review) {
+        const pendingCount = Number(baselineReview.pending_count || 0);
+        const referenceLabel = referenceBaseline?.source_ref || referenceBaseline?.snapshot_key || "the current approved baseline";
+        return `
+            <div class="journey-status-note muted">
+                ${escapeHtml(String(pendingCount || 0))} baseline candidate${pendingCount === 1 ? " is" : "s are"} pending approval; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Open Artifacts</a>.
+            </div>
+        `;
+    }
+
+    return "";
 }
 
 function openRebaselineModal(snapshot) {
@@ -2120,8 +2162,7 @@ function openRebaselineModal(snapshot) {
     summary.innerHTML = `
         <div><strong>${escapeHtml(snapshotTypeLabel(snapshot.snapshot_type))}</strong> · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
         <div class="detail-note">${escapeHtml(`${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)} critical surfaces changed · this creates a new baseline candidate from this checkpoint for review.`)}</div>
-        <div class="detail-note">This does not replace the approved baseline yet. Vipari will create a pending candidate baseline, then a reviewer must approve it before future comparisons use it.</div>
-        <div class="detail-note">Artifact Sign-off stays separate, so reviewers may still need to re-approve the artifacts attached to that newer candidate.</div>
+        <div class="detail-note">Workspace approval policy decides whether it becomes the reference baseline immediately or stays pending. Artifact sign-off remains separate.</div>
     `;
     textarea.value = "";
     setRebaselineBusy(false);
@@ -2816,6 +2857,7 @@ function applyDashboardPayload(payload) {
     setSectionHtml("history-cues", renderCueCards(historyCues));
     setSectionHtml("baseline-review-panel", renderBaselineReviewPanel(baselineReview));
     setSectionHtml("repo-journey-summary", renderJourneySummary(journeySnapshots, selectedBaselineSourceSnapshotId));
+    setSectionHtml("repo-journey-status", renderJourneyStatusNotice(payload, journeySnapshots));
     setSectionHtml("repo-journey-timeline", renderJourneyTimeline(journeySnapshots, selectedBaselineSourceSnapshotId));
     setSectionHtml("repo-journey-compare", renderJourneyCompare(comparison));
     drawRepoRadar(payload);
@@ -2863,6 +2905,11 @@ async function submitRebaseline() {
             throw new Error(`Re-baseline request failed with ${response.status}`);
         }
         const payload = await response.json();
+        window.__lastRebaselineOutcome = {
+            snapshotId: snapshot.id,
+            createdBaselineCount: Number(payload?.created_baseline_count || 0),
+            status: String(payload?.baseline_candidate_status || "pending"),
+        };
         closeRebaselineModal(true);
         if (payload?.dashboard) {
             applyDashboardPayload(payload.dashboard);
