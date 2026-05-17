@@ -51,11 +51,13 @@ from .onboarding_records import (
     select_latest_onboarding_baseline_versions,
 )
 from .persistence import connect_sqlite
+from .persistence import get_database_backend
 from .provenance_labels import artifact_provenance_label
 
 
 _DASHBOARD_CACHE_LOCK = threading.RLock()
 _DASHBOARD_CACHE_MAX_ENTRIES = 128
+_POSTGRES_DASHBOARD_CACHE_TTL_SECONDS = 10.0
 _OVERVIEW_VIEW_CACHE: dict[tuple[Any, ...], DashboardOverviewView] = {}
 _REPO_VIEW_CACHE: dict[tuple[Any, ...], RepoDashboardView] = {}
 _PR_REVIEW_DIMENSION_LABELS = {
@@ -76,7 +78,11 @@ _PR_REVIEW_SEVERITY_RANK = {
 }
 
 
-def _db_cache_signature(db_path: str) -> tuple[int, int]:
+def _db_cache_signature(db_path: str) -> tuple[Any, ...]:
+    if get_database_backend(db_path) == "postgresql":
+        # PostgreSQL locators are not filesystem paths, so os.stat() cannot reflect DB changes.
+        # Use a short-lived cache bucket to keep repo pages fresh without rebuilding every request.
+        return ("postgresql", int(time.monotonic() // _POSTGRES_DASHBOARD_CACHE_TTL_SECONDS))
     try:
         stat = os.stat(db_path)
     except OSError:

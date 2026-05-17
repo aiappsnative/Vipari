@@ -9,7 +9,7 @@ from engine.analysis import analyze_diff
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
-from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, list_repo_dashboard_index
+from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
 from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
@@ -640,6 +640,55 @@ def test_build_dashboard_overview_view_reuses_cached_result_for_same_db_signatur
 
     assert first is second
     assert call_count == 1
+
+
+def test_build_repo_dashboard_view_postgres_cache_refreshes_after_ttl(monkeypatch):
+    db_path = "postgresql://user:pass@db.example.com/driftguard"
+    call_count = 0
+
+    invalidate_dashboard_caches()
+
+    def fake_uncached(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        return RepoDashboardView(
+            repo_full="doria90/dummyAI",
+            onboarding=None,
+            baseline_review=None,
+            backfill=RepoDashboardBackfillSummary(0, 0, 0, 0, 0, 0, 0),
+            pull_request_audit_count=call_count,
+            baseline_version_count=0,
+            drift_summary=RepoStaticDriftSummary("doria90/dummyAI", 0, 0, 0, 0.0, 0.0, 0.0, 0.0, None, 0.0),
+            top_drifting_artifacts=[],
+            insights=[],
+            lower_confidence_insights=[],
+            control_surface_groups=[],
+            history_timelines=[],
+            featured_storyline=None,
+            history_cues=[],
+            design_profiles=[],
+            governance_posture=None,
+            audit_brief=None,
+            artifacts=[],
+            journey_snapshots=[],
+            journey_comparison=None,
+            selected_baseline_source_snapshot_id=None,
+            export_jobs=[],
+        )
+
+    monotonic_values = iter([100.0, 101.0, 111.0])
+    monkeypatch.setattr("services.dashboard_views._build_repo_dashboard_view_uncached", fake_uncached)
+    monkeypatch.setattr("services.dashboard_views.time.monotonic", lambda: next(monotonic_values))
+
+    first = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    second = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    third = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+    assert first is second
+    assert third is not second
+    assert first.pull_request_audit_count == 1
+    assert third.pull_request_audit_count == 2
+    assert call_count == 2
 
 
 def test_build_repo_dashboard_view_reuses_cached_result_for_same_db_signature(tmp_path, monkeypatch):
