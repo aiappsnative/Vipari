@@ -211,6 +211,42 @@ def _create_dashboard_owner_session(db_path: str, *, repo_full: str = "doria90/d
     return session
 
 
+def _create_dashboard_member_session(
+    db_path: str,
+    *,
+    workspace_id: int,
+    role: str = "viewer",
+    installation_id: int = 123,
+):
+    from services.control_plane_records import create_user_session, upsert_github_identity, upsert_workspace_membership
+
+    user, _identity = upsert_github_identity(
+        db_path,
+        github_user_id=f"dashboard-member-user-{installation_id}-{role}",
+        github_login=f"dashboard-member-{installation_id}-{role}",
+        display_name="Dashboard Member",
+        primary_email=f"dashboard-member-{installation_id}-{role}@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo", "read:org"],
+        access_token_encrypted="encrypted-token",
+    )
+    upsert_workspace_membership(
+        db_path,
+        workspace_id=workspace_id,
+        user_id=user.id,
+        role=role,
+        invitation_state="accepted",
+    )
+    return create_user_session(
+        db_path,
+        session_id=f"dashboard-member-session-{installation_id}-{role}",
+        user_id=user.id,
+        workspace_id=workspace_id,
+        csrf_secret=f"csrf-{installation_id}-{role}",
+        expires_at=time.time() + 3600,
+    )
+
+
 def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
@@ -1841,6 +1877,67 @@ def test_dashboard_api_rebaseline_auto_approves_when_workspace_policy_is_auto(tm
     dashboard_payload = dashboard_response.json()
     assert dashboard_payload["selected_baseline_source_snapshot_id"] == historical_snapshot["id"]
     assert dashboard_payload["baseline_review"]["is_pending_review"] is False
+
+
+def test_dashboard_api_rebaseline_requires_owner_or_admin_for_auto_mode(tmp_path):
+    db_path = str(tmp_path / "api-rebaseline-auto-role.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_MEDIUM,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+    owner_session = _create_dashboard_owner_session(db_path)
+
+    from services.control_plane_records import update_workspace_baseline_approval_mode
+
+    update_workspace_baseline_approval_mode(db_path, owner_session.workspace_id, baseline_approval_mode="auto")
+    member_session = _create_dashboard_member_session(db_path, workspace_id=owner_session.workspace_id, role="viewer")
+
+    with TestClient(main.app) as client:
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: member_session.session_id},
+        )
+
+    historical_snapshot = next(
+        snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "historical_commit"
+    )
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token", return_value="installation-token"
+    ), patch("main.fetch_file_content", return_value=PROMPT_CURRENT), TestClient(main.app) as client:
+        rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/rebaseline",
+            json={"snapshot_id": historical_snapshot["id"], "rationale": "Auto mode should require elevated role."},
+            cookies={main.settings.session_cookie_name: member_session.session_id},
+        )
+
+    assert rebaseline_response.status_code == 403
+    assert rebaseline_response.json()["detail"] == "Auto-approved baseline creation requires a workspace owner or admin role."
 
 
 def test_dashboard_api_exposes_repo_journey_and_compare(tmp_path):

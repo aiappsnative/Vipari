@@ -641,6 +641,14 @@ def create_repo_baseline_router(
 		db_path = resolve_db_path_fn()
 		baseline_approval_mode = resolve_baseline_approval_mode_fn(auth_context, db_path, repo_full)
 		actor_login = resolve_actor_login_fn(request, payload)
+		membership = auth_context.get("membership") if isinstance(auth_context, dict) else None
+		if baseline_approval_mode == "auto" and (
+			membership is None or getattr(membership, "role", None) not in {"owner", "admin"}
+		):
+			raise HTTPException(
+				status_code=403,
+				detail="Auto-approved baseline creation requires a workspace owner or admin role.",
+			)
 		try:
 			baselines = rebaseline_repo_from_snapshot_fn(
 				db_path,
