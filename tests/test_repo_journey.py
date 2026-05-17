@@ -292,6 +292,53 @@ def test_merge_branch_scan_materializes_merge_snapshot_without_pr_review_profile
     assert merge_snapshot.source_ref == "merged into main @ merge-s"
 
 
+def test_build_repo_journey_keeps_current_snapshot_after_newer_merge_than_branch_head(tmp_path):
+    db_path = str(tmp_path / "journey-current-after-merge.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    settings = BranchScanWorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="private-key.pem",
+        github_app_private_key="private-key",
+    )
+    branch_head_job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="branch-head-sha",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="token"
+    ), patch("services.branch_scan_worker.fetch_file_content", return_value=PROMPT_MEDIUM):
+        assert process_branch_scan_job(branch_head_job, settings) == "completed_with_updates"
+
+    _record_merged_pr_profile(db_path)
+
+    snapshots = build_repo_journey(db_path, "doria90/dummyAI")
+
+    branch_head_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "branch_head")
+    current_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "current")
+
+    assert current_snapshot.created_at > branch_head_snapshot.created_at
+    assert current_snapshot.commit_sha == "sha-merge"
+    assert current_snapshot.pr_number == 42
+    assert current_snapshot.distance_from_baseline >= branch_head_snapshot.distance_from_baseline
+
+
 def test_compare_repo_snapshots_returns_change_drift_and_risk(tmp_path):
     db_path = str(tmp_path / "journey-compare.db")
     init_db(db_path)

@@ -2065,7 +2065,7 @@ function renderJourneySummary(snapshots = [], selectedBaselineSourceSnapshotId =
     `;
 }
 
-function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null) {
+function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = null, isCurrent = false) {
     const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
     const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
     const displayTimestamp = journeyCardTimestamp(snapshot, isSelectedBaseline);
@@ -2082,14 +2082,20 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
     const rebaselineButton = snapshot.commit_sha
         ? `<button type="button" class="journey-action-button" data-rebaseline-snapshot="${snapshot.id}">Set as reference baseline</button>`
         : "";
+    const headingLabel = isSelectedBaseline
+        ? "Approved baseline"
+        : isCurrent
+            ? "Current posture"
+            : snapshotTypeLabel(snapshot.snapshot_type);
     return `
         <div class="artifact-card journey-card ${baselineVerified ? "" : "journey-card-muted"} ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}" ${baselineVerified ? "" : 'title="Baseline not yet approved — drift scores are estimates."'}>
             <div class="artifact-card-head">
                 <div>
-                    <strong>${escapeHtml(isSelectedBaseline ? "Approved baseline" : snapshotTypeLabel(snapshot.snapshot_type))}</strong>
+                    <strong>${escapeHtml(headingLabel)}</strong>
                     <div class="artifact-card-type">${escapeHtml(formatDateLabel(displayTimestamp))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
                 </div>
                 <div class="tag-row">
+                    ${isCurrent ? '<span class="drift-chip chip-governance">Current</span>' : ""}
                     ${lifecycleLabel ? `<span class="drift-chip chip-baseline">${escapeHtml(lifecycleLabel)}</span>` : ""}
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
@@ -2917,10 +2923,18 @@ function renderJourneyTimeline(snapshots = [], selectedBaselineSourceSnapshotId 
     if (!snapshots.length) {
         return '<div class="muted">No timeline is available yet.</div>';
     }
+    const currentSnapshot = snapshots.find((snapshot) => snapshot.snapshot_type === "current")
+        || snapshots.find((snapshot) => snapshot.snapshot_type === "branch_head")
+        || snapshots[snapshots.length - 1]
+        || null;
     const displaySnapshots = selectedBaselineSourceSnapshotId
         ? snapshots.filter((snapshot) => snapshot.snapshot_type !== "baseline_approved")
         : snapshots;
-    const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId)).join("");
+    const timeline = displaySnapshots.slice(-6).map((snapshot) => renderJourneyTimelineCard(
+        snapshot,
+        selectedBaselineSourceSnapshotId,
+        currentSnapshot !== null && Number(snapshot.id) === Number(currentSnapshot.id),
+    )).join("");
     return `<div class="stack compact-stack">${timeline}</div>`;
 }
 

@@ -162,7 +162,6 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
     snapshots: list[RepoPostureSnapshotRecord] = []
     previous_snapshot: RepoPostureSnapshotRecord | None = None
     baseline_snapshot: RepoPostureSnapshotRecord | None = None
-    latest_branch_head_snapshot: RepoPostureSnapshotRecord | None = None
 
     if baseline_state:
         baseline_snapshot = _persist_snapshot(
@@ -378,10 +377,7 @@ def materialize_repo_journey(db_path: str, repo_full: str) -> list[RepoPostureSn
         snapshot_keys.add(snapshot.snapshot_key)
         snapshots.append(snapshot)
         previous_snapshot = snapshot
-        if snapshot.snapshot_type == "branch_head":
-            latest_branch_head_snapshot = snapshot
-
-    if current_state and latest_branch_head_snapshot is None:
+    if current_state and (previous_snapshot is None or previous_snapshot.snapshot_type != "branch_head"):
         latest = previous_snapshot or baseline_snapshot
         if latest is not None:
             current_snapshot = _persist_snapshot(
