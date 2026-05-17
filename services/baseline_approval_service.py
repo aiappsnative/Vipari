@@ -72,6 +72,10 @@ class RebaselineExternalError(RuntimeError):
     pass
 
 
+class RebaselineInternalError(RuntimeError):
+    pass
+
+
 def build_repo_baseline_review_panel_from_records(
     repo_full: str,
     onboarding: RepositoryOnboardingRecord,
@@ -448,12 +452,14 @@ def rebaseline_repo_from_snapshot(
             raise RebaselineExternalError(
                 f"Unable to fetch {artifact.artifact_path} from snapshot {snapshot.commit_sha}."
             ) from exc
-        return (
-            artifact,
-            content,
-            build_attribute_profile(content),
-            extract_signal_terms_from_text(content),
-        )
+        try:
+            profile = build_attribute_profile(content)
+            signal_terms = extract_signal_terms_from_text(content)
+        except Exception as exc:
+            raise RebaselineInternalError(
+                f"Unable to derive a baseline candidate for {artifact.artifact_path} from snapshot {snapshot.commit_sha}."
+            ) from exc
+        return (artifact, content, profile, signal_terms)
 
     created: list[OnboardingBaselineVersionRecord] = []
     missing_artifacts: list[str] = []
@@ -466,20 +472,25 @@ def rebaseline_repo_from_snapshot(
         if content is None or profile is None or signal_terms is None:
             missing_artifacts.append(artifact.artifact_path)
             continue
-        created.append(
-            create_onboarding_baseline_version(
-                db_path,
-                onboarding_id=onboarding.id,
-                onboarded_artifact_id=artifact.id,
-                repo_full=repo_full,
-                artifact_path=artifact.artifact_path,
-                artifact_type=artifact.artifact_type,
-                content_text=content,
-                profile=profile,
-                signal_terms=signal_terms,
-                approval_status="pending",
+        try:
+            created.append(
+                create_onboarding_baseline_version(
+                    db_path,
+                    onboarding_id=onboarding.id,
+                    onboarded_artifact_id=artifact.id,
+                    repo_full=repo_full,
+                    artifact_path=artifact.artifact_path,
+                    artifact_type=artifact.artifact_type,
+                    content_text=content,
+                    profile=profile,
+                    signal_terms=signal_terms,
+                    approval_status="pending",
+                )
             )
-        )
+        except Exception as exc:
+            raise RebaselineInternalError(
+                f"Unable to store a baseline candidate for {artifact.artifact_path} from snapshot {snapshot.commit_sha}."
+            ) from exc
 
     if not created:
         if missing_artifacts:

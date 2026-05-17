@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from services.api_models import BaselineDecisionRequest, RepoArtifactAddRequest, RepoArtifactUpdateRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
-from services.baseline_approval_service import RebaselineExternalError
+from services.baseline_approval_service import RebaselineExternalError, RebaselineInternalError
 
 
 _ARTIFACT_OPTIONS_CACHE_TTL_SECONDS = 30.0
@@ -655,6 +655,10 @@ def create_repo_baseline_router(
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
 		except RebaselineExternalError as exc:
 			raise HTTPException(status_code=502, detail=str(exc)) from exc
+		except RebaselineInternalError as exc:
+			raise HTTPException(status_code=500, detail=str(exc)) from exc
+		except Exception as exc:
+			raise HTTPException(status_code=500, detail=f"Unexpected rebaseline failure: {type(exc).__name__}") from exc
 		response_payload = {"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": None}
 		try:
 			dashboard = build_repo_dashboard_view_fn(db_path, repo_full)

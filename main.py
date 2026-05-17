@@ -53,6 +53,7 @@ from services.mcp_broker import (
 from services.mcp_package import build_customer_mcp_bundle
 from services.baseline_approval_service import (
     RebaselineExternalError,
+    RebaselineInternalError,
     approve_repo_baseline,
     approve_repo_baseline_artifact,
     build_repo_baseline_review_panel,
@@ -4738,6 +4739,10 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RebaselineExternalError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RebaselineInternalError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unexpected rebaseline failure: {type(exc).__name__}") from exc
     response_payload = {"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": None}
     try:
         dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
