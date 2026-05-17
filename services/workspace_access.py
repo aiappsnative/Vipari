@@ -7,17 +7,12 @@ from fastapi import HTTPException, Request
 from config import Settings
 from services.access_state import WorkspaceAccessSnapshot, resolve_workspace_access_state
 from services.control_plane_records import (
-    count_workspace_repo_allocations,
+    get_workspace_access_bundle,
     get_github_identity_for_user,
     get_repo_allocation_for_workspace,
     get_repo_connection_for_workspace,
     get_user_by_id,
     get_user_session,
-    get_workspace_by_id,
-    get_workspace_entitlement,
-    get_workspace_installation,
-    get_workspace_membership,
-    get_workspace_subscription,
 )
 from services.onboarding_records import get_latest_repository_onboarding
 
@@ -34,14 +29,16 @@ def build_access_context(db_path: str, session) -> dict[str, object]:
         resolution = resolve_workspace_access_state(WorkspaceAccessSnapshot(is_authenticated=False))
         return {"session": None, "user": None, "identity": None, "workspace": None, "resolution": resolution}
 
-    user = get_user_by_id(db_path, session.user_id)
-    identity = get_github_identity_for_user(db_path, session.user_id)
-    workspace = get_workspace_by_id(db_path, session.workspace_id) if session.workspace_id else None
-    membership = get_workspace_membership(db_path, workspace.id, session.user_id) if workspace else None
-    subscription = get_workspace_subscription(db_path, workspace.id) if workspace else None
-    entitlement = get_workspace_entitlement(db_path, workspace.id) if workspace else None
-    installation = get_workspace_installation(db_path, workspace.id) if workspace else None
-    allocated_repo_count, onboarded_repo_count = count_workspace_repo_allocations(db_path, workspace.id) if workspace else (0, 0)
+    bundle = get_workspace_access_bundle(db_path, session)
+    user = bundle.user
+    identity = bundle.identity
+    workspace = bundle.workspace
+    membership = bundle.membership
+    subscription = bundle.subscription
+    entitlement = bundle.entitlement
+    installation = bundle.installation
+    allocated_repo_count = bundle.allocated_repo_count
+    onboarded_repo_count = bundle.onboarded_repo_count
 
     subscription_status = (subscription.status if subscription else "").lower()
     snapshot = WorkspaceAccessSnapshot(

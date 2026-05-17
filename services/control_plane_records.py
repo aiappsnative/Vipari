@@ -44,6 +44,77 @@ class UserRecord:
 
 
 @dataclass(frozen=True)
+class WorkspaceAccessBundle:
+    user: UserRecord | None
+    identity: GithubIdentityRecord | None
+    workspace: WorkspaceRecord | None
+    membership: WorkspaceMembershipRecord | None
+    subscription: SubscriptionRecord | None
+    entitlement: EntitlementRecord | None
+    installation: GithubInstallationRecord | None
+    allocated_repo_count: int
+    onboarded_repo_count: int
+
+
+def get_workspace_access_bundle(db_path: str, session: UserSessionRecord) -> WorkspaceAccessBundle:
+    with _connect(db_path) as conn:
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (session.user_id,)).fetchone()
+        identity_row = conn.execute("SELECT * FROM github_identities WHERE user_id = ?", (session.user_id,)).fetchone()
+        workspace_row = None
+        membership_row = None
+        subscription_row = None
+        entitlement_row = None
+        installation_row = None
+        allocated_repo_count = 0
+        onboarded_repo_count = 0
+        if session.workspace_id:
+            workspace_row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (session.workspace_id,)).fetchone()
+            if workspace_row is not None:
+                workspace_id = int(workspace_row["id"])
+                membership_row = conn.execute(
+                    "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+                    (workspace_id, session.user_id),
+                ).fetchone()
+                subscription_row = conn.execute(
+                    "SELECT * FROM subscriptions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                    (workspace_id,),
+                ).fetchone()
+                entitlement_row = conn.execute(
+                    "SELECT * FROM entitlements WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                    (workspace_id,),
+                ).fetchone()
+                installation_row = conn.execute(
+                    "SELECT * FROM github_installations WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                    (workspace_id,),
+                ).fetchone()
+                counts_row = conn.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN allocation_status IN ('active', 'onboarded') THEN 1 ELSE 0 END) AS allocated_repo_count,
+                        SUM(CASE WHEN allocation_status = 'onboarded' THEN 1 ELSE 0 END) AS onboarded_repo_count
+                    FROM repo_allocations
+                    WHERE workspace_id = ?
+                    """,
+                    (workspace_id,),
+                ).fetchone()
+                if counts_row is not None:
+                    allocated_repo_count = int(counts_row["allocated_repo_count"] or 0)
+                    onboarded_repo_count = int(counts_row["onboarded_repo_count"] or 0)
+
+    return WorkspaceAccessBundle(
+        user=_row_to_user(user_row) if user_row else None,
+        identity=_row_to_github_identity(identity_row) if identity_row else None,
+        workspace=_row_to_workspace(workspace_row) if workspace_row else None,
+        membership=_row_to_membership(membership_row) if membership_row else None,
+        subscription=_row_to_subscription(subscription_row) if subscription_row else None,
+        entitlement=_row_to_entitlement(entitlement_row) if entitlement_row else None,
+        installation=_row_to_installation(installation_row) if installation_row else None,
+        allocated_repo_count=allocated_repo_count,
+        onboarded_repo_count=onboarded_repo_count,
+    )
+
+
+@dataclass(frozen=True)
 class GithubIdentityRecord:
     id: int
     user_id: int
