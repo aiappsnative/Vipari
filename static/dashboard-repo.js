@@ -3243,6 +3243,17 @@ async function loadAvailableRepos() {
     }
 }
 
+function scheduleAvailableReposLoad() {
+    const run = () => {
+        void loadAvailableRepos();
+    };
+    if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(run, { timeout: 1200 });
+        return;
+    }
+    window.setTimeout(run, 250);
+}
+
 function renderBlockedRepoShell() {
     document.body.classList.add("dashboard-shell-obscured");
     const button = detailButton();
@@ -3268,6 +3279,7 @@ async function loadDashboard() {
 
         const payload = await dashboardResponse.json();
         applyDashboardPayload(payload);
+        scheduleAvailableReposLoad();
     } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown repo dashboard error";
         const fallback = `<div class="muted">Unable to load repository dashboard. ${escapeHtml(message)}</div>`;
@@ -3315,11 +3327,11 @@ applyRepoTabVisibility();
 syncStorylinePanelCopy();
 bindRebaselineModal();
 bindExportForm();
-loadAvailableRepos();
 if (dashboardShellState() === "active") {
     loadDashboard();
 } else {
     renderBlockedRepoShell();
+    scheduleAvailableReposLoad();
 }
 
 function bindExportForm() {

@@ -65,6 +65,7 @@ def _repo_dashboard_build_options(active_tab: str | None) -> dict[str, object]:
 	if active_tab is None:
 		return {}
 	options: dict[str, object] = {
+		"include_repo_summary_metrics": active_tab not in {"version-control", "pr-reviews"},
 		"include_journey": active_tab == "version-control",
 		"include_featured_storyline": active_tab == "baseline",
 		"include_history_timelines": False,

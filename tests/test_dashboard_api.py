@@ -835,6 +835,9 @@ def test_repo_dashboard_api_scopes_version_control_tab_payload(tmp_path):
     payload = repo_response.json()
     assert payload["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
     assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
+    assert payload["pull_request_audit_count"] == 0
+    assert payload["drift_summary"]["artifact_count"] == 0
+    assert payload["top_drifting_artifacts"] == []
     assert payload["history_timelines"] == []
     assert payload["featured_storyline"] is None
     assert payload["history_cues"] == []
@@ -917,6 +920,9 @@ def test_repo_dashboard_api_scopes_pr_review_tab_payload(tmp_path):
     assert repo_response.status_code == 200
     payload = repo_response.json()
     assert payload["pr_review_routes"]["selected_route"]["pr_number"] == 21
+    assert payload["pull_request_audit_count"] == 0
+    assert payload["drift_summary"]["artifact_count"] == 0
+    assert payload["top_drifting_artifacts"] == []
     assert payload["journey_snapshots"] == []
     assert payload["journey_comparison"] is None
     assert payload["history_timelines"] == []

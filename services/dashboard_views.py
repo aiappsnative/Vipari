@@ -1636,6 +1636,7 @@ def build_repo_dashboard_view(
     db_path: str,
     repo_full: str,
     *,
+    include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
     include_featured_storyline: bool | None = None,
@@ -1654,6 +1655,7 @@ def build_repo_dashboard_view(
         db_path,
         _db_cache_signature(db_path),
         repo_full,
+        include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
         include_featured_storyline,
@@ -1669,6 +1671,7 @@ def build_repo_dashboard_view(
     view = _build_repo_dashboard_view_uncached(
         db_path,
         repo_full,
+        include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
         include_featured_storyline=include_featured_storyline,
@@ -1684,6 +1687,7 @@ def build_repo_dashboard_view_with_timings(
     db_path: str,
     repo_full: str,
     *,
+    include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
     include_featured_storyline: bool | None = None,
@@ -1702,6 +1706,7 @@ def build_repo_dashboard_view_with_timings(
         db_path,
         _db_cache_signature(db_path),
         repo_full,
+        include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
         include_featured_storyline,
@@ -1718,6 +1723,7 @@ def build_repo_dashboard_view_with_timings(
     view = _build_repo_dashboard_view_uncached(
         db_path,
         repo_full,
+        include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
         include_featured_storyline=include_featured_storyline,
@@ -1919,6 +1925,7 @@ def _build_repo_dashboard_view_uncached(
     db_path: str,
     repo_full: str,
     *,
+    include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
     include_featured_storyline: bool | None = None,
@@ -1943,9 +1950,14 @@ def _build_repo_dashboard_view_uncached(
 
     onboarding = timed_stage("repo-onboarding", lambda: get_latest_repository_onboarding(db_path, repo_full))
     baseline_review = None
-    drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
-    top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
-    pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
+    if include_repo_summary_metrics:
+        drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
+        top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
+        pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
+    else:
+        drift_summary = _empty_repo_static_drift_summary(repo_full)
+        top_drifting_artifacts = []
+        pull_request_audit_count = 0
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
@@ -1954,7 +1966,7 @@ def _build_repo_dashboard_view_uncached(
             "repo-selected-baseline",
             lambda: get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
         )
-    if include_journey:
+    if include_journey and onboarding is not None:
         journey_snapshots, journey_comparison = timed_stage(
             "repo-journey-panel",
             lambda: _build_repo_journey_panel(
