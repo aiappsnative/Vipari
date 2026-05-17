@@ -4775,7 +4775,7 @@ app.include_router(
             settings.resolved_github_private_key,
         ),
         get_installation_token_fn=lambda jwt_token, installation_id: get_installation_token(jwt_token, installation_id),
-        fetch_file_content_fn=lambda repo, path, token, ref: fetch_file_content(repo, path, token, ref),
+        fetch_file_content_fn=lambda repo, path, token, ref: fetch_file_content(repo, path, token, ref=ref),
     )
 )
 
