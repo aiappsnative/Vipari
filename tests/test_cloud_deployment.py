@@ -623,6 +623,7 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
+        "0011_ensure_audit_jobs_lifecycle_columns",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.api_service.init_db") as init_db_mock, patch(
@@ -725,6 +726,7 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
+        "0011_ensure_audit_jobs_lifecycle_columns",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.webhook_service.init_db") as init_db_mock, patch(

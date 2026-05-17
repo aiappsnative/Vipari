@@ -37,6 +37,29 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return connect_sqlite(db_path)
 
 
+def _ensure_audit_job_columns(conn: sqlite3.Connection) -> None:
+    audit_job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_jobs)").fetchall()}
+    if "pr_title" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_title TEXT")
+    if "pr_state" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_state TEXT")
+    if "pr_merged" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merged INTEGER")
+    if "pr_closed_at" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_closed_at REAL")
+    if "pr_merged_at" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merged_at REAL")
+    if "pr_merge_commit_sha" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merge_commit_sha TEXT")
+    if "pr_updated_at" not in audit_job_columns:
+        conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_updated_at REAL")
+
+
+def ensure_audit_job_schema(db_path: str) -> None:
+    with _connect(db_path) as conn:
+        _ensure_audit_job_columns(conn)
+
+
 def bootstrap_application_schema(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute(
@@ -66,21 +89,7 @@ def bootstrap_application_schema(db_path: str) -> None:
             )
             """
         )
-        audit_job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_jobs)").fetchall()}
-        if "pr_title" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_title TEXT")
-        if "pr_state" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_state TEXT")
-        if "pr_merged" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merged INTEGER")
-        if "pr_closed_at" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_closed_at REAL")
-        if "pr_merged_at" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merged_at REAL")
-        if "pr_merge_commit_sha" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_merge_commit_sha TEXT")
-        if "pr_updated_at" not in audit_job_columns:
-            conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_updated_at REAL")
+        _ensure_audit_job_columns(conn)
     from .audit_records import init_audit_record_db
     from .control_plane_records import init_control_plane_db
     from .export_jobs import init_export_job_db

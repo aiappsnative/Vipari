@@ -144,6 +144,12 @@ def _ensure_relevance_decision_tables(db_path: str) -> None:
     init_audit_record_db(db_path)
 
 
+def _ensure_audit_jobs_lifecycle_columns(db_path: str) -> None:
+    from .audit_jobs import ensure_audit_job_schema
+
+    ensure_audit_job_schema(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -195,6 +201,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0010_ensure_relevance_decision_tables",
         "Create pre_audit_relevance_decisions and repo_signal_overrides tables for confidence-tiered relevance gating and future repo-specific overrides.",
         _ensure_relevance_decision_tables,
+    ),
+    (
+        "0011_ensure_audit_jobs_lifecycle_columns",
+        "Repair legacy audit_jobs tables so pull-request lifecycle columns like pr_title exist even when the original bootstrap migration was applied before those columns were added.",
+        _ensure_audit_jobs_lifecycle_columns,
     ),
 )
 

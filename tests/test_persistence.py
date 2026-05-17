@@ -80,6 +80,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
+        "0011_ensure_audit_jobs_lifecycle_columns",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
@@ -156,6 +157,78 @@ def test_migrate_database_repairs_missing_export_job_snapshot_columns_for_legacy
     assert "ai_system_purpose_summary" in columns
     assert "result_sha256" in columns
     assert "result_blob" in columns
+
+
+def test_migrate_database_repairs_missing_audit_job_lifecycle_columns_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-audit-jobs.db")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        for index, version in enumerate(
+            [
+                "0001_bootstrap_relational_schema",
+                "0002_add_pull_request_audits_fused_confidence",
+                "0003_add_onboarding_approval_columns",
+                "0004_add_machine_principals",
+                "0005_add_session_flash",
+                "0006_add_audit_feedback_and_triage_tables",
+                "0007_add_high_risk_proposal_tables",
+                "0008_ensure_ai_system_registry_schema",
+                "0009_ensure_export_jobs_snapshot_columns",
+                "0010_ensure_relevance_decision_tables",
+            ],
+            start=1,
+        ):
+            conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                (version, f"legacy {version}", float(index)),
+            )
+        conn.execute(
+            """
+            CREATE TABLE audit_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                diff_text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at REAL NOT NULL,
+                last_error TEXT,
+                comment_body TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, pr_number, head_sha)
+            )
+            """
+        )
+
+    result = migrate_database(db_path)
+
+    assert "0011_ensure_audit_jobs_lifecycle_columns" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(audit_jobs)").fetchall()
+        }
+
+    assert "pr_title" in columns
+    assert "pr_state" in columns
+    assert "pr_merged" in columns
+    assert "pr_closed_at" in columns
+    assert "pr_merged_at" in columns
+    assert "pr_merge_commit_sha" in columns
+    assert "pr_updated_at" in columns
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

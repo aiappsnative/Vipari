@@ -321,6 +321,7 @@ async def test_readiness_verifies_postgres_connectivity(monkeypatch):
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
+        "0011_ensure_audit_jobs_lifecycle_columns",
     ]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.runtime_guardrails.connect_sqlite") as connect, patch(
@@ -355,6 +356,7 @@ async def test_readiness_checks_activity_database_when_configured(monkeypatch):
         "0008_ensure_ai_system_registry_schema",
         "0009_ensure_export_jobs_snapshot_columns",
         "0010_ensure_relevance_decision_tables",
+        "0011_ensure_audit_jobs_lifecycle_columns",
     ]]
     activity_applied = [
         type("AppliedActivityMigration", (), {"version": "0001_bootstrap_activity_schema"})(),
