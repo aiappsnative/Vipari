@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+import os
+from urllib.parse import parse_qsl, urlparse
 
 from fastapi.responses import JSONResponse
 from jwt.exceptions import InvalidKeyError
@@ -8,7 +9,7 @@ from jwt.exceptions import InvalidKeyError
 from config import AiProvider, AppEnv, Settings
 from .activity_schema_migrations import ACTIVITY_MIGRATIONS, list_applied_activity_migrations
 from .github_integration import generate_jwt
-from .persistence import is_sqlite_locator
+from .persistence import is_postgres_locator, is_sqlite_locator, sqlite_path_from_locator
 from .persistence import connect_sqlite
 from .schema_migrations import MIGRATIONS, list_applied_migrations
 
@@ -23,8 +24,26 @@ def _is_localhost_host(value: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
-def _normalized_locator(value: str | None) -> str:
-    return (value or "").strip()
+def _normalized_locator(value: str | None) -> tuple[object, ...]:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return tuple()
+    if is_postgres_locator(raw_value):
+        normalized_scheme_value = raw_value
+        if raw_value.lower().startswith("postgres://"):
+            normalized_scheme_value = f"postgresql://{raw_value[len('postgres://') :]}"
+        parsed = urlparse(normalized_scheme_value)
+        return (
+            "postgresql",
+            (parsed.hostname or "").strip().lower(),
+            parsed.port or 5432,
+            parsed.username or "",
+            parsed.password or "",
+            parsed.path.lstrip("/"),
+            tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True))),
+        )
+    sqlite_path = sqlite_path_from_locator(raw_value)
+    return ("sqlite", os.path.normcase(os.path.abspath(sqlite_path)))
 
 
 def _activity_targets_primary_database(settings: Settings, *, activity_locator: str | None = None) -> bool:

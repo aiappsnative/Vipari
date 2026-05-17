@@ -150,6 +150,23 @@ def test_runtime_configuration_rejects_activity_database_matching_primary(monkey
     assert "dedicated database" in str(exc_info.value)
 
 
+def test_runtime_configuration_rejects_activity_database_matching_primary_postgres_alias(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("ACTIVITY_DATABASE_URL", "postgresql://user:pass@db.example.com:5432/driftguard")
+    monkeypatch.setenv("INTERNAL_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "dedicated database" in str(exc_info.value)
+
+
 def test_production_rejects_monolith_service_role(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("SERVICE_ROLE", "monolith")

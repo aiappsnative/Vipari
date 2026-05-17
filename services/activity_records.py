@@ -123,7 +123,41 @@ def create_activity_event(
         if external_id:
             existing = conn.execute("SELECT * FROM activity_events WHERE external_id = ?", (external_id,)).fetchone()
             if existing is not None:
-                return _row_to_activity_event(existing)
+                conn.execute(
+                    """
+                    UPDATE activity_events
+                    SET occurred_at = ?,
+                        source = ?,
+                        event_type = ?,
+                        workspace_id = ?,
+                        actor_user_id = ?,
+                        actor_label = ?,
+                        repo_full = ?,
+                        subject_type = ?,
+                        subject_id = ?,
+                        details_json = ?,
+                        search_text = ?
+                    WHERE external_id = ?
+                    """,
+                    (
+                        occurred_at,
+                        source,
+                        event_type,
+                        workspace_id,
+                        actor_user_id,
+                        actor_label,
+                        repo_full,
+                        subject_type,
+                        subject_id,
+                        details_json,
+                        search_text,
+                        external_id,
+                    ),
+                )
+                row = conn.execute("SELECT * FROM activity_events WHERE external_id = ?", (external_id,)).fetchone()
+                if row is None:
+                    raise RuntimeError("Failed to reload updated activity event.")
+                return _row_to_activity_event(row)
         cursor = conn.execute(
             """
             INSERT INTO activity_events (

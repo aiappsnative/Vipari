@@ -1058,7 +1058,7 @@ def _build_admin_activity_entries_primary(*, db_path: str, user_labels: dict[int
                 subject_type="webhook_event",
                 subject_id=row.event_id,
                 details=", ".join(details),
-                raw_id=f"webhook:{row.id}",
+                raw_id=f"webhook:{row.provider}:{row.event_id}",
             )
         )
 
