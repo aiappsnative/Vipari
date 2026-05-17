@@ -2003,6 +2003,16 @@ function snapshotTypeLabel(snapshotType) {
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+function journeyPullRequestLifecycleLabel(snapshot) {
+    if (!snapshot || !snapshot.pr_number) {
+        return "";
+    }
+    if (String(snapshot.snapshot_type || "").toLowerCase() === "merge") {
+        return "Merged";
+    }
+    return "Pending merge";
+}
+
 function formatSigned(value, digits = 3) {
     const number = Number(value);
     if (!Number.isFinite(number)) {
@@ -2059,6 +2069,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
     const baselineVerified = snapshot?.input_summary?.baseline_verified !== false;
     const isSelectedBaseline = selectedBaselineSourceSnapshotId !== null && Number(snapshot?.id) === Number(selectedBaselineSourceSnapshotId);
     const displayTimestamp = journeyCardTimestamp(snapshot, isSelectedBaseline);
+    const lifecycleLabel = journeyPullRequestLifecycleLabel(snapshot);
     const source = snapshot.source_url
         ? `<a class="link" href="${snapshot.source_url}" data-open-source-change="${snapshot.source_url}" target="_blank" rel="noreferrer noopener">${escapeHtml(snapshot.source_ref || "Open checkpoint")}</a>`
         : escapeHtml(snapshot.source_ref || "Stored checkpoint");
@@ -2078,7 +2089,10 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                     <strong>${escapeHtml(isSelectedBaseline ? "Approved baseline" : snapshotTypeLabel(snapshot.snapshot_type))}</strong>
                     <div class="artifact-card-type">${escapeHtml(formatDateLabel(displayTimestamp))} · ${escapeHtml(snapshot.commit_sha || snapshot.snapshot_key)}</div>
                 </div>
-                <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
+                <div class="tag-row">
+                    ${lifecycleLabel ? `<span class="drift-chip chip-baseline">${escapeHtml(lifecycleLabel)}</span>` : ""}
+                    <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
+                </div>
             </div>
             <div class="journey-metrics-row">
                 <span>drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)}</span>
