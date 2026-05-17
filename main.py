@@ -13,7 +13,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -52,6 +52,7 @@ from services.mcp_broker import (
 )
 from services.mcp_package import build_customer_mcp_bundle
 from services.baseline_approval_service import (
+    RebaselineExternalError,
     approve_repo_baseline,
     approve_repo_baseline_artifact,
     build_repo_baseline_review_panel,
@@ -4735,6 +4736,8 @@ async def rebaseline_repo(request: Request, repo_full: str, payload: RepoRebasel
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RebaselineExternalError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     dashboard = build_repo_dashboard_view(AUDIT_DB_PATH, repo_full)
     return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
 

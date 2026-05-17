@@ -1460,6 +1460,59 @@ def test_dashboard_api_rebaseline_route_uses_resolved_github_private_key(tmp_pat
     )
 
 
+def test_dashboard_api_rebaseline_returns_502_when_github_access_fails(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-rebaseline-github-failure.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {"sha-1": PROMPT_CURRENT}[ref],
+    )
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        journey_response = client.get(
+            "/api/repos/doria90/dummyAI/journey",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert journey_response.status_code == 200
+    current_snapshot = next(snapshot for snapshot in journey_response.json()["snapshots"] if snapshot["snapshot_type"] == "current")
+
+    with patch("main.generate_jwt", return_value="jwt-token"), patch(
+        "main.get_installation_token",
+        side_effect=HTTPError("https://api.github.com/app/installations/123/access_tokens", 403, "Forbidden", hdrs=None, fp=None),
+    ), TestClient(main.app) as client:
+        rebaseline_response = client.post(
+            "/api/repos/doria90/dummyAI/baseline/rebaseline",
+            json={"snapshot_id": current_snapshot["id"], "rationale": "Retry later."},
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert rebaseline_response.status_code == 502
+    assert "Unable to access repository contents" in rebaseline_response.json()["detail"]
+
+
 def test_dashboard_api_uses_selected_baseline_for_journey_comparison(tmp_path):
     db_path = str(tmp_path / "api-dashboard-selected-baseline.db")
     init_db(db_path)

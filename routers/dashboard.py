@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from services.api_models import BaselineDecisionRequest, RepoArtifactAddRequest, RepoArtifactUpdateRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
+from services.baseline_approval_service import RebaselineExternalError
 
 
 _ARTIFACT_OPTIONS_CACHE_TTL_SECONDS = 30.0
@@ -652,6 +653,8 @@ def create_repo_baseline_router(
 			)
 		except ValueError as exc:
 			raise HTTPException(status_code=400, detail=str(exc)) from exc
+		except RebaselineExternalError as exc:
+			raise HTTPException(status_code=502, detail=str(exc)) from exc
 		dashboard = build_repo_dashboard_view_fn(db_path, repo_full)
 		return JSONResponse({"repo_full": repo_full, "snapshot_id": payload.snapshot_id, "created_baseline_count": len(baselines), "dashboard": asdict(dashboard)})
 

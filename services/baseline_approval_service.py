@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
@@ -66,6 +66,10 @@ class RepoBaselineReviewPanel:
     rejected_count: int
     artifacts: list[BaselineReviewArtifact]
     recent_decisions: list[BaselineReviewDecision]
+
+
+class RebaselineExternalError(RuntimeError):
+    pass
 
 
 def build_repo_baseline_review_panel_from_records(
@@ -410,8 +414,13 @@ def rebaseline_repo_from_snapshot(
     if not snapshot.commit_sha:
         raise ValueError("This snapshot cannot be re-baselined because it is not tied to a concrete commit.")
 
-    jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
-    installation_token = get_installation_token_fn(jwt_token, onboarding.installation_id)
+    try:
+        jwt_token = generate_jwt_fn(github_app_id, github_private_key_path)
+        installation_token = get_installation_token_fn(jwt_token, onboarding.installation_id)
+    except (HTTPError, URLError, OSError, RuntimeError) as exc:
+        raise RebaselineExternalError(
+            f"Unable to access repository contents for snapshot {snapshot.commit_sha}."
+        ) from exc
     onboarded_artifacts = list_onboarded_artifacts_for_onboarding(db_path, onboarding.id)
     tracked_paths = set((snapshot.artifact_coverage or {}).get("tracked_paths") or [])
     candidate_artifacts = [artifact for artifact in onboarded_artifacts if not tracked_paths or artifact.artifact_path in tracked_paths]
@@ -424,7 +433,13 @@ def rebaseline_repo_from_snapshot(
         except HTTPError as exc:
             if exc.code == 404:
                 return (artifact, None, None, None)
-            raise ValueError(f"Unable to fetch {artifact.artifact_path} from snapshot {snapshot.commit_sha}.") from exc
+            raise RebaselineExternalError(
+                f"Unable to fetch {artifact.artifact_path} from snapshot {snapshot.commit_sha}."
+            ) from exc
+        except (URLError, OSError, RuntimeError) as exc:
+            raise RebaselineExternalError(
+                f"Unable to fetch {artifact.artifact_path} from snapshot {snapshot.commit_sha}."
+            ) from exc
         return (
             artifact,
             content,
