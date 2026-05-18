@@ -877,6 +877,23 @@ function findDesignProfile(artifactPath) {
     return asArray(window.__designProfiles).find((item) => item.artifact_path === artifactPath) || null;
 }
 
+function resolveInsightProfile(item) {
+    const cachedProfile = findDesignProfile(item?.artifact_path);
+    if (cachedProfile) {
+        return cachedProfile;
+    }
+    const attributeProfile = asArray(item?.attribute_profile);
+    if (!attributeProfile.length) {
+        return null;
+    }
+    return {
+        attribute_profile: attributeProfile,
+        headline_summary: item?.recommended_action || item?.change_summary || item?.flag_summary || item?.rationale || "",
+        risk_tags: asArray(item?.risk_reasons),
+        narrative: [],
+    };
+}
+
 function attributeScore(entry, keyPrefix) {
     const scoreKey = keyPrefix === "baseline" ? "baseline_score" : "current_score";
     const score = Number(entry?.[scoreKey]);
@@ -1040,7 +1057,7 @@ function bindAttributeProfileTabs(profile) {
 
 function renderRepoTriageRow(item, index) {
     const severity = severityForPriority(item.priority);
-    const profile = findDesignProfile(item.artifact_path);
+    const profile = resolveInsightProfile(item);
     const meta = [item.baseline_label, item.review_target, item.evidence_label].filter(Boolean).join(" · ");
     return `
         <div class="triage-row" data-row-index="${index}" data-severity="${severity.label.toLowerCase()}" role="button" tabindex="0">
@@ -1120,7 +1137,7 @@ function insightMatchesHeadSha(item, headSha) {
 }
 
 function applyRepoDetail(item, options = {}) {
-    const profile = findDesignProfile(item.artifact_path);
+    const profile = resolveInsightProfile(item);
     const severity = severityForPriority(item.priority);
     const subtitle = [item.title, item.review_target, item.evidence_label].filter(Boolean).join(" · ") || item.artifact_path;
     const baselineScore = averageProfileScore(profile, "baseline");
@@ -2181,16 +2198,16 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             ? '<span class="drift-chip chip-baseline">Approved checkpoint</span>'
             : "";
     const cardEyebrow = isSelectedBaseline
-        ? "Comparison anchor"
+        ? "Reference baseline"
         : isCurrent
-            ? "Live repository state"
+            ? "Current state"
             : snapshot.snapshot_type === "merge"
-                ? "Merged checkpoint"
-                : "Historical checkpoint";
+                ? "Merged PR"
+                : "Historical commit";
     const cardSummary = isSelectedBaseline
-        ? "All current comparisons measure drift from this checkpoint."
+        ? "Current comparisons use this checkpoint as the reference baseline."
         : isCurrent
-            ? "This is the latest live state Vipari is comparing against the reference baseline."
+            ? "This is the latest landed repository state."
             : snapshot.snapshot_type === "merge"
                 ? "This merged checkpoint shows what changed before the repository reached its current state."
                 : "This historical checkpoint helps explain how the repository posture evolved over time.";
