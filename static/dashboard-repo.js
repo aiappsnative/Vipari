@@ -2204,13 +2204,6 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
             : snapshot.snapshot_type === "merge"
                 ? "Merged PR"
                 : "Historical commit";
-    const cardSummary = isSelectedBaseline
-        ? "Current comparisons use this checkpoint as the reference baseline."
-        : isCurrent
-            ? "This is the latest landed repository state."
-            : snapshot.snapshot_type === "merge"
-                ? "This merged checkpoint shows what changed before the repository reached its current state."
-                : "This historical checkpoint helps explain how the repository posture evolved over time.";
     return `
         <div class="artifact-card journey-card ${isSelectedBaseline ? "journey-card-selected-baseline" : ""}">
             <div class="artifact-card-head">
@@ -2227,7 +2220,6 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
                     <span class="severity-badge ${severityClassForRisk(snapshot.risk_summary?.risk_level)}">${escapeHtml(snapshot.risk_summary?.risk_level || "low")}</span>
                 </div>
             </div>
-            <div class="journey-card-summary">${escapeHtml(cardSummary)}</div>
             <div class="journey-metrics-row">
                 <span>drift ${asNumber(snapshot.distance_from_baseline).toFixed(3)}</span>
                 <span>critical ${asNumber(snapshot.change_breakdown?.critical_surfaces_changed)}</span>
