@@ -3037,6 +3037,11 @@ def test_dashboard_api_exposes_pr_review_target_with_supporting_history(tmp_path
     assert payload["insights"][0]["review_head_sha"] == "sha-current"
     assert payload["insights"][0]["supporting_review_target"] == "commit sha-2"
     assert payload["insights"][0]["supporting_review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
+    assert payload["design_profiles"][0]["provenance"]["source_type"] == "pull_request"
+    assert payload["design_profiles"][0]["provenance"]["label"] == "Pull request proposal"
+    assert payload["design_profiles"][0]["provenance"]["source_ref"] == "PR #42"
+    assert payload["design_profiles"][0]["provenance"]["source_url"] == "https://github.com/doria90/dummyAI/pull/42"
+    assert payload["design_profiles"][0]["provenance"]["review_context"] == "full semantic review · semantic complete · risk low"
 
 
 def test_dashboard_api_marks_baseline_only_profiles_as_not_promotable(tmp_path):

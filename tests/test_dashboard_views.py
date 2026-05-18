@@ -194,11 +194,11 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.design_profiles[0].baseline_provenance.source_type == "approved_baseline"
     assert dashboard.design_profiles[0].baseline_provenance.is_authoritative is True
     assert dashboard.design_profiles[0].provenance is not None
-    assert dashboard.design_profiles[0].provenance.source_type == "historical"
-    assert dashboard.design_profiles[0].provenance.label == "Historical backfill"
-    assert dashboard.design_profiles[0].provenance.source_ref == "commit sha-3"
-    assert dashboard.design_profiles[0].provenance.source_url == "https://github.com/doria90/dummyAI/commit/sha-3"
-    assert dashboard.design_profiles[0].provenance.review_context == "Historical snapshot from backfill"
+    assert dashboard.design_profiles[0].provenance.source_type == "pull_request"
+    assert dashboard.design_profiles[0].provenance.label == "Pull request proposal"
+    assert dashboard.design_profiles[0].provenance.source_ref == "PR #42"
+    assert dashboard.design_profiles[0].provenance.source_url == "https://github.com/doria90/dummyAI/pull/42"
+    assert dashboard.design_profiles[0].provenance.review_context == "full semantic review · semantic complete · risk low"
     assert dashboard.design_profiles[0].headline_summary
     assert dashboard.design_profiles[0].drift_label in {"small drift", "medium drift", "large drift"}
     assert dashboard.design_profiles[0].drift_tone in {"low", "medium", "high"}

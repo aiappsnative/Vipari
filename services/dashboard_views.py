@@ -3145,7 +3145,7 @@ def _build_repo_insights(
         score = _insight_score(artifact, evidence_bundle)
         priority = priority_from_fused_signals(score)
         baseline = baseline_by_path.get(artifact.artifact_path)
-        context = _preferred_profile_context(evidence_bundle)
+        context = _primary_review_context(evidence_bundle)
         review_context = _primary_review_context(evidence_bundle)
         attribute_profile = None
         if attribute_profile_mode == "all":
@@ -4992,7 +4992,7 @@ def _build_repo_design_profiles(
         if artifact is None or baseline is None:
             continue
 
-        context = _preferred_profile_context(profile_context_by_path.get(artifact_path))
+        context = _primary_review_context(profile_context_by_path.get(artifact_path))
         baseline_provenance = approved_onboarding_provenance(
             baseline.id,
             is_authoritative=baseline.approval_status == "approved",
