@@ -224,6 +224,7 @@ async def _reconcile_pull_request_lifecycle_for_repo(
     installation_id: int,
     default_branch: str,
     settings: Settings,
+    logger=None,
 ) -> int:
     audits = list_pull_request_audits_for_repo(settings.resolved_db_path, repo_full)
     if not audits:
@@ -240,22 +241,93 @@ async def _reconcile_pull_request_lifecycle_for_repo(
     installation_token = await _get_installation_token_for_worker(installation_id, settings)
     reconciled_count = 0
     for audit in latest_by_pr_number.values():
-        if audit.pr_merged and audit.pr_merge_commit_sha:
-            _queue_merge_branch_scan(
-                settings=settings,
-                repo_full=repo_full,
-                installation_id=installation_id,
-                commit_sha=audit.pr_merge_commit_sha,
-                base_ref=None,
-                default_branch=default_branch,
-                triggered_by="pr_lifecycle_reconcile",
-            )
-            if audit.pr_state == "closed":
+        step = "resume-merged-scan"
+        try:
+            if audit.pr_merged and audit.pr_merge_commit_sha:
+                _queue_merge_branch_scan(
+                    settings=settings,
+                    repo_full=repo_full,
+                    installation_id=installation_id,
+                    commit_sha=audit.pr_merge_commit_sha,
+                    base_ref=None,
+                    default_branch=default_branch,
+                    triggered_by="pr_lifecycle_reconcile",
+                )
+                if audit.pr_state == "closed":
+                    continue
+
+            step = "fetch-pr-lifecycle"
+            lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, audit.pr_number, installation_token)
+            step = "compare-lifecycle-state"
+            if lifecycle.pr_state == audit.pr_state and lifecycle.pr_merged == audit.pr_merged and lifecycle.pr_merge_commit_sha == audit.pr_merge_commit_sha:
+                if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
+                    step = "queue-merge-scan-noop-refresh"
+                    _queue_merge_branch_scan(
+                        settings=settings,
+                        repo_full=repo_full,
+                        installation_id=installation_id,
+                        commit_sha=lifecycle.pr_merge_commit_sha,
+                        base_ref=lifecycle.base_ref,
+                        default_branch=default_branch,
+                        triggered_by="pr_lifecycle_reconcile",
+                    )
                 continue
 
-        lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, audit.pr_number, installation_token)
-        if lifecycle.pr_state == audit.pr_state and lifecycle.pr_merged == audit.pr_merged and lifecycle.pr_merge_commit_sha == audit.pr_merge_commit_sha:
+            payload = {
+                "repo_full": repo_full,
+                "pr_number": audit.pr_number,
+                "pr_title": lifecycle.pr_title,
+                "installation_id": installation_id,
+                "head_sha": lifecycle.head_sha,
+                "pr_state": lifecycle.pr_state,
+                "pr_merged": lifecycle.pr_merged,
+                "pr_closed_at": lifecycle.pr_closed_at,
+                "pr_merged_at": lifecycle.pr_merged_at,
+                "pr_merge_commit_sha": lifecycle.pr_merge_commit_sha,
+                "pr_updated_at": lifecycle.pr_updated_at,
+            }
+            if lifecycle.pr_merged:
+                step = "ensure-lifecycle-only-audit"
+                _ensure_lifecycle_only_audit_for_repo(payload, settings)
+            step = "update-job-pr-state"
+            update_job_pr_state(
+                settings.resolved_db_path,
+                repo_full=repo_full,
+                pr_number=audit.pr_number,
+                head_sha=lifecycle.head_sha,
+                pr_title=lifecycle.pr_title,
+                pr_state=lifecycle.pr_state,
+                pr_merged=lifecycle.pr_merged,
+                pr_closed_at=lifecycle.pr_closed_at,
+                pr_merged_at=lifecycle.pr_merged_at,
+                pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
+                pr_updated_at=lifecycle.pr_updated_at,
+            )
+            step = "update-pull-request-audit-state"
+            update_pull_request_audit_state(
+                settings.resolved_db_path,
+                repo_full=repo_full,
+                pr_number=audit.pr_number,
+                head_sha=lifecycle.head_sha,
+                pr_title=lifecycle.pr_title,
+                pr_state=lifecycle.pr_state,
+                pr_merged=lifecycle.pr_merged,
+                pr_closed_at=lifecycle.pr_closed_at,
+                pr_merged_at=lifecycle.pr_merged_at,
+                pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
+                pr_updated_at=lifecycle.pr_updated_at,
+            )
+            step = "record-pr-outcome-feedback"
+            record_pr_outcome_feedback_events(
+                settings.resolved_db_path,
+                repo_full=repo_full,
+                pr_number=audit.pr_number,
+                head_sha=lifecycle.head_sha,
+                pr_state=lifecycle.pr_state,
+                pr_merged=lifecycle.pr_merged,
+            )
             if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
+                step = "queue-merge-branch-scan"
                 _queue_merge_branch_scan(
                     settings=settings,
                     repo_full=repo_full,
@@ -265,68 +337,20 @@ async def _reconcile_pull_request_lifecycle_for_repo(
                     default_branch=default_branch,
                     triggered_by="pr_lifecycle_reconcile",
                 )
-            continue
-
-        payload = {
-            "repo_full": repo_full,
-            "pr_number": audit.pr_number,
-            "pr_title": lifecycle.pr_title,
-            "installation_id": installation_id,
-            "head_sha": lifecycle.head_sha,
-            "pr_state": lifecycle.pr_state,
-            "pr_merged": lifecycle.pr_merged,
-            "pr_closed_at": lifecycle.pr_closed_at,
-            "pr_merged_at": lifecycle.pr_merged_at,
-            "pr_merge_commit_sha": lifecycle.pr_merge_commit_sha,
-            "pr_updated_at": lifecycle.pr_updated_at,
-        }
-        if lifecycle.pr_merged:
-            _ensure_lifecycle_only_audit_for_repo(payload, settings)
-        update_job_pr_state(
-            settings.resolved_db_path,
-            repo_full=repo_full,
-            pr_number=audit.pr_number,
-            head_sha=lifecycle.head_sha,
-            pr_title=lifecycle.pr_title,
-            pr_state=lifecycle.pr_state,
-            pr_merged=lifecycle.pr_merged,
-            pr_closed_at=lifecycle.pr_closed_at,
-            pr_merged_at=lifecycle.pr_merged_at,
-            pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
-            pr_updated_at=lifecycle.pr_updated_at,
-        )
-        update_pull_request_audit_state(
-            settings.resolved_db_path,
-            repo_full=repo_full,
-            pr_number=audit.pr_number,
-            head_sha=lifecycle.head_sha,
-            pr_title=lifecycle.pr_title,
-            pr_state=lifecycle.pr_state,
-            pr_merged=lifecycle.pr_merged,
-            pr_closed_at=lifecycle.pr_closed_at,
-            pr_merged_at=lifecycle.pr_merged_at,
-            pr_merge_commit_sha=lifecycle.pr_merge_commit_sha,
-            pr_updated_at=lifecycle.pr_updated_at,
-        )
-        record_pr_outcome_feedback_events(
-            settings.resolved_db_path,
-            repo_full=repo_full,
-            pr_number=audit.pr_number,
-            head_sha=lifecycle.head_sha,
-            pr_state=lifecycle.pr_state,
-            pr_merged=lifecycle.pr_merged,
-        )
-        if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
-            _queue_merge_branch_scan(
-                settings=settings,
-                repo_full=repo_full,
-                installation_id=installation_id,
-                commit_sha=lifecycle.pr_merge_commit_sha,
-                base_ref=lifecycle.base_ref,
-                default_branch=default_branch,
-                triggered_by="pr_lifecycle_reconcile",
-            )
-        reconciled_count += 1
+            reconciled_count += 1
+        except Exception:
+            if logger is not None:
+                logger.exception(
+                    "Failed to reconcile PR lifecycle audit",
+                    extra={
+                        "repo": repo_full,
+                        "pr_number": audit.pr_number,
+                        "head_sha": audit.head_sha,
+                        "installation_id": installation_id,
+                        "step": step,
+                    },
+                )
+            raise
     return reconciled_count
 
 
@@ -339,6 +363,7 @@ async def _reconcile_pull_request_lifecycle(settings: Settings, logger) -> int:
                 onboarding.installation_id,
                 onboarding.default_branch,
                 settings,
+                logger=logger,
             )
         except Exception:
             logger.exception("Failed to reconcile PR lifecycle state", extra={"repo": onboarding.repo_full})

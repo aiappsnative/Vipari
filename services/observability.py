@@ -20,10 +20,14 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "message": record.getMessage(),
         }
-        for key in ("delivery_id", "installation_id", "repo", "pr_number", "head_sha", "job_id", "duration_ms"):
+        for key in ("delivery_id", "installation_id", "repo", "pr_number", "head_sha", "job_id", "duration_ms", "step"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
+        if record.exc_info:
+            payload["exception_type"] = record.exc_info[0].__name__ if record.exc_info[0] is not None else None
+            payload["exception_message"] = str(record.exc_info[1]) if record.exc_info[1] is not None else None
+            payload["traceback"] = self.formatException(record.exc_info)
         return json.dumps(payload)
 
 

@@ -6,7 +6,7 @@ import os
 import sqlite3
 import sys
 import time
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -26,6 +26,7 @@ from services.audit_records import (
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.cloud_worker import _reconcile_pull_request_lifecycle_for_repo
 from services.observability import configure_logging
+from services.onboarding import onboard_repository
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     apply_github_installation_lifecycle_event,
@@ -1112,6 +1113,99 @@ def test_worker_reconciles_stale_merged_pr_and_queues_branch_scan(tmp_path, monk
     assert branch_scan_job.commit_sha == "merge-sha-23"
     assert branch_scan_job.branch_ref == "refs/heads/main"
     assert branch_scan_job.triggered_by == "pr_lifecycle_reconcile"
+
+
+def test_reconcile_pull_request_lifecycle_logs_failing_pr_step(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-lifecycle-error.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    settings = get_settings()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/test.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "baseline",
+    )
+    created_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=created_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        pr_state="open",
+        pr_merged=False,
+        suggested_risk_level="low",
+        deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    lifecycle = type(
+        "Lifecycle",
+        (),
+        {
+            "pr_number": 23,
+            "pr_title": "Merged later",
+            "head_sha": "sha-pr-23-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710001000.0,
+            "pr_merged_at": 1710001010.0,
+            "pr_merge_commit_sha": "merge-sha-23",
+            "pr_updated_at": 1710001020.0,
+            "base_ref": "main",
+        },
+    )()
+    logger = MagicMock()
+
+    with patch("services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"), patch(
+        "services.cloud_worker.fetch_pull_request_lifecycle",
+        return_value=lifecycle,
+    ), patch(
+        "services.cloud_worker.update_pull_request_audit_state",
+        side_effect=RuntimeError("db failed"),
+    ):
+        try:
+            asyncio.run(
+                _reconcile_pull_request_lifecycle_for_repo("doria90/dummyAI", 123, "main", settings, logger=logger)
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "db failed"
+        else:
+            raise AssertionError("Expected reconcile to raise runtime error")
+
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "Failed to reconcile PR lifecycle audit"
+    assert logger.exception.call_args.kwargs["extra"] == {
+        "repo": "doria90/dummyAI",
+        "pr_number": 23,
+        "head_sha": "sha-pr-23",
+        "installation_id": 123,
+        "step": "update-pull-request-audit-state",
+    }
 
 
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
