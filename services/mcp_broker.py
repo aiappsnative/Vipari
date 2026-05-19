@@ -114,7 +114,7 @@ def issue_mcp_broker_token_via_client_credentials(
 
 MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
     {
-        "name": "promptdrift.list_repos",
+        "name": "vipari.list_repos",
         "title": "List workspace repositories",
         "description": "List repositories allocated to the authenticated workspace with lightweight posture context.",
         "required_scope": MCP_READ_SCOPE,
@@ -126,7 +126,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.get_repo_posture",
+        "name": "vipari.get_repo_posture",
         "title": "Get repository posture",
         "description": "Return the current review posture, top reasons, and next action for one workspace-visible repository.",
         "required_scope": MCP_READ_SCOPE,
@@ -139,7 +139,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.get_repo_casefile",
+        "name": "vipari.get_repo_casefile",
         "title": "Get repository case file",
         "description": "Return a compact repository case file with baseline status, leading findings, and review targets.",
         "required_scope": MCP_READ_SCOPE,
@@ -152,7 +152,7 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "name": "promptdrift.list_escalations",
+        "name": "vipari.list_escalations",
         "title": "List workspace escalations",
         "description": "Return the workspace escalation queue with review-now and optional watch items.",
         "required_scope": MCP_READ_SCOPE,

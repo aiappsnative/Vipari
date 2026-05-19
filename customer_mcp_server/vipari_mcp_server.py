@@ -30,13 +30,9 @@ server = FastMCP("Vipari")
 
 def _issue_broker_token() -> tuple[str, float]:
     if not CLIENT_ID or not CLIENT_SECRET:
-        raise RuntimeError(
-            "VIPARI_CLIENT_ID and VIPARI_CLIENT_SECRET must be configured. Legacy PROMPTDRIFT_* variables are also accepted."
-        )
+        raise RuntimeError("VIPARI_CLIENT_ID and VIPARI_CLIENT_SECRET must be configured.")
     if not BROKER_URL:
-        raise RuntimeError(
-            "VIPARI_MCP_BROKER_URL must be configured. Legacy PROMPTDRIFT_MCP_BROKER_URL is also accepted."
-        )
+        raise RuntimeError("VIPARI_MCP_BROKER_URL must be configured.")
     payload = json.dumps({"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}).encode("utf-8")
     request = urllib.request.Request(
         f"{BROKER_URL}/token",
@@ -77,9 +73,7 @@ def _invalidate_broker_token() -> None:
 
 def _invoke(tool_name: str, arguments: dict[str, object] | None = None) -> dict[str, object]:
     if not BROKER_URL:
-        raise RuntimeError(
-            "VIPARI_MCP_BROKER_URL must be configured. Legacy PROMPTDRIFT_MCP_BROKER_URL is also accepted."
-        )
+        raise RuntimeError("VIPARI_MCP_BROKER_URL must be configured.")
     payload = json.dumps({"tool_name": tool_name, "arguments": arguments or {}}).encode("utf-8")
     for attempt in range(2):
         request = urllib.request.Request(

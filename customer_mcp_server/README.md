@@ -18,11 +18,10 @@ The connector also does not keep sending your long-lived client secret on every 
 
 1. Create or reuse a Vipari API key with `drift.read` scope.
 2. Copy the client secret immediately when it is shown. Vipari shows the secret once at creation time.
-2. Copy the files from this package into a local directory.
+3. Copy the files from this package into a local directory.
 3. Install the dependencies from `requirements.txt`.
 4. Copy `vipari.env.example` to `.env` or set the environment variables in your MCP host.
 5. Point your MCP host at `vipari_mcp_server.py`.
-6. If you already have an older PromptDrift connector deployment, the legacy `PROMPTDRIFT_*` environment variables remain accepted for compatibility.
 
 ## Recommended rollout order
 
@@ -53,8 +52,6 @@ If the client secret is lost, create a new API key and revoke the old one. Do no
 - `VIPARI_MCP_BROKER_URL`
 - `VIPARI_CLIENT_ID`
 - `VIPARI_CLIENT_SECRET`
-
-Legacy PromptDrift variable names remain accepted for existing deployments.
 
 If your MCP host manages environment variables directly in its own UI, use that host configuration instead of relying on a local `.env` file.
 
