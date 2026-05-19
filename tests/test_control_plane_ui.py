@@ -3267,6 +3267,98 @@ def test_admin_logs_tab_applies_query_filters(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_logs_tab_summarizes_mcp_denial_activity(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-logs-mcp-denials.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.control_plane_records import create_control_plane_audit_log, create_user_session, create_workspace, upsert_github_identity
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="975",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=admin_user.id,
+        display_name="MCP Logs Workspace",
+        slug="mcp-logs-workspace",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-logs-mcp-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-logs-mcp",
+        expires_at=time.time() + 3600,
+    )
+
+    for event_type, subject_id, payload in [
+        (
+            "mcp_broker.tool_denied",
+            "mcp-client-1",
+            {
+                "message": "Missing required scope: drift.write.low.",
+                "tool_name": "vipari.add_audit_feedback",
+                "error": "insufficient_scope",
+                "required_scope": "drift.write.low",
+                "granted_scopes": ["drift.read"],
+            },
+        ),
+        (
+            "mcp_broker.tool_denied",
+            "mcp-client-1",
+            {
+                "message": "Missing required scope: drift.write.low.",
+                "tool_name": "vipari.add_audit_feedback",
+                "error": "insufficient_scope",
+                "required_scope": "drift.write.low",
+                "granted_scopes": ["drift.read"],
+            },
+        ),
+        ("mcp_broker.auth_denied", "mcp-client-2", {"error": "invalid_token"}),
+        ("mcp_broker.token_denied", "mcp-client-3", {"error": "invalid_client"}),
+        ("mcp_broker.tool_denied", "mcp-client-4", {"tool_name": "vipari.add_audit_feedback", "error": "rate_limited"}),
+    ]:
+        create_control_plane_audit_log(
+            main.AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            actor_user_id=None,
+            event_type=event_type,
+            subject_type="machine_principal",
+            subject_id=subject_id,
+            payload=payload,
+        )
+
+    response = client.get("/admin?tab=logs", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "MCP denied events: 5" in response.text
+    assert "Denied clients: 4" in response.text
+    assert "Workspaces affected: 1" in response.text
+    assert "Top denied client: mcp-client-1" in response.text
+    assert "Top denied tool: vipari.add_audit_feedback" in response.text
+    assert "Missing required scope: drift.write.low. | error=insufficient_scope | required_scope=drift.write.low | granted_scopes=drift.read | tool_name=vipari.add_audit_feedback" in response.text
+    assert "Investigation recommended" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_admin_logs_tab_reads_configured_activity_database(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_activity_db_path = main.settings.activity_db_path

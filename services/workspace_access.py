@@ -37,6 +37,7 @@ def build_access_context(db_path: str, session) -> dict[str, object]:
     subscription = bundle.subscription
     entitlement = bundle.entitlement
     installation = bundle.installation
+    active_installation = installation if installation is not None and installation.status == "active" else None
     allocated_repo_count = bundle.allocated_repo_count
     onboarded_repo_count = bundle.onboarded_repo_count
 
@@ -52,7 +53,7 @@ def build_access_context(db_path: str, session) -> dict[str, object]:
         payment_failed=subscription_status in {"past_due", "unpaid", "payment_failed"},
         dashboard_enabled=bool(entitlement.dashboard_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
         pr_comments_enabled=bool(entitlement.pr_comments_enabled) if entitlement else subscription_status in SUPPORTED_ACTIVE_PLAN_STATUSES,
-        has_linked_installation=installation is not None,
+        has_linked_installation=active_installation is not None,
         allocated_repo_count=allocated_repo_count,
         onboarded_repo_count=onboarded_repo_count,
         cancel_at_period_end=bool(subscription.cancel_at_period_end) if subscription else False,
@@ -67,7 +68,7 @@ def build_access_context(db_path: str, session) -> dict[str, object]:
         "membership": membership,
         "subscription": subscription,
         "entitlement": entitlement,
-        "installation": installation,
+        "installation": active_installation,
         "resolution": resolution,
     }
 
