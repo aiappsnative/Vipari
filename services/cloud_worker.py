@@ -84,13 +84,15 @@ async def _fetch_pull_request_lifecycle_with_refresh(
     settings: Settings,
 ):
     try:
-        return await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, installation_token)
+        lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, installation_token)
+        return lifecycle, installation_token
     except HTTPError as exc:
         if exc.code != 401:
             raise
     await delete_installation_token(installation_id)
     refreshed_token = await _get_installation_token_for_worker(installation_id, settings)
-    return await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, refreshed_token)
+    lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, refreshed_token)
+    return lifecycle, refreshed_token
 
 
 def _retry_delay_seconds(attempt_count: int) -> int:
@@ -276,7 +278,7 @@ async def _reconcile_pull_request_lifecycle_for_repo(
                     continue
 
             step = "fetch-pr-lifecycle"
-            lifecycle = await _fetch_pull_request_lifecycle_with_refresh(
+            lifecycle, installation_token = await _fetch_pull_request_lifecycle_with_refresh(
                 repo_full=repo_full,
                 pr_number=audit.pr_number,
                 installation_id=installation_id,

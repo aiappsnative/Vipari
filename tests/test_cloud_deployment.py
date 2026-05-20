@@ -1303,6 +1303,119 @@ def test_reconcile_pull_request_lifecycle_refreshes_token_after_unauthorized(tmp
     assert fetch_lifecycle.call_args_list[1].args == ("doria90/dummyAI", 23, "fresh-installation-token")
 
 
+def test_reconcile_pull_request_lifecycle_reuses_refreshed_token_for_later_audits(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-lifecycle-refresh-reuse.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    settings = get_settings()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/test.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "baseline",
+    )
+
+    for pr_number, head_sha in [(23, "sha-pr-23"), (24, "sha-pr-24")]:
+        created_job = create_audit_job(
+            db_path,
+            repo_full="doria90/dummyAI",
+            pr_number=pr_number,
+            pr_title=f"PR {pr_number}",
+            installation_id=123,
+            head_sha=head_sha,
+            diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+            pr_state="open",
+            pr_merged=False,
+        )
+        record_audit_result(
+            db_path,
+            job_id=created_job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=pr_number,
+            pr_title=f"PR {pr_number}",
+            installation_id=123,
+            head_sha=head_sha,
+            pr_state="open",
+            pr_merged=False,
+            suggested_risk_level="low",
+            deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+            status="completed",
+            completion_mode="completed",
+            output_mode="full_review",
+            comment_body="done",
+            comment_mode="full_review",
+            semantic_review_completed=True,
+        )
+
+    lifecycle_23 = type(
+        "Lifecycle23",
+        (),
+        {
+            "pr_number": 23,
+            "pr_title": "Merged later 23",
+            "head_sha": "sha-pr-23-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710001000.0,
+            "pr_merged_at": 1710001010.0,
+            "pr_merge_commit_sha": "merge-sha-23",
+            "pr_updated_at": 1710001020.0,
+            "base_ref": "main",
+        },
+    )()
+    lifecycle_24 = type(
+        "Lifecycle24",
+        (),
+        {
+            "pr_number": 24,
+            "pr_title": "Merged later 24",
+            "head_sha": "sha-pr-24-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710002000.0,
+            "pr_merged_at": 1710002010.0,
+            "pr_merge_commit_sha": "merge-sha-24",
+            "pr_updated_at": 1710002020.0,
+            "base_ref": "main",
+        },
+    )()
+
+    unauthorized = HTTPError(
+        "https://api.github.com/repos/doria90/dummyAI/pulls/23",
+        401,
+        "Unauthorized",
+        hdrs=None,
+        fp=None,
+    )
+
+    with patch(
+        "services.cloud_worker._get_installation_token_for_worker",
+        side_effect=["stale-installation-token", "fresh-installation-token"],
+    ) as get_token, patch(
+        "services.cloud_worker.delete_installation_token",
+        new=AsyncMock(),
+    ) as delete_token, patch(
+        "services.cloud_worker.fetch_pull_request_lifecycle",
+        side_effect=[unauthorized, lifecycle_23, lifecycle_24],
+    ) as fetch_lifecycle:
+        reconciled = asyncio.run(
+            _reconcile_pull_request_lifecycle_for_repo("doria90/dummyAI", 123, "main", settings)
+        )
+
+    assert reconciled == 2
+    assert get_token.call_count == 2
+    delete_token.assert_awaited_once_with(123)
+    assert fetch_lifecycle.call_args_list[0].args == ("doria90/dummyAI", 23, "stale-installation-token")
+    assert fetch_lifecycle.call_args_list[1].args == ("doria90/dummyAI", 23, "fresh-installation-token")
+    assert fetch_lifecycle.call_args_list[2].args == ("doria90/dummyAI", 24, "fresh-installation-token")
+
+
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
