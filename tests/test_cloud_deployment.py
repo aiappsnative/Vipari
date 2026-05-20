@@ -6,7 +6,8 @@ import os
 import sqlite3
 import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
 
@@ -43,7 +44,7 @@ from services.control_plane_records import (
 )
 from services.entitlements import derive_entitlement_payload
 from services.queue import LocalSQLiteQueue, QueueMessage, close_queue_backend
-from services.token_cache import clear_local_token_cache, get_installation_token, set_installation_token
+from services.token_cache import clear_local_token_cache, delete_installation_token, get_installation_token, set_installation_token
 from services.webhook_deliveries import claim_webhook_delivery, cleanup_webhook_deliveries, init_webhook_delivery_db
 from services.webhook_service import create_webhook_app
 from services.api_service import create_api_app
@@ -1208,6 +1209,100 @@ def test_reconcile_pull_request_lifecycle_logs_failing_pr_step(tmp_path, monkeyp
     }
 
 
+def test_reconcile_pull_request_lifecycle_refreshes_token_after_unauthorized(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-lifecycle-refresh.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    settings = get_settings()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/test.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "baseline",
+    )
+    created_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=created_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        pr_state="open",
+        pr_merged=False,
+        suggested_risk_level="low",
+        deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    lifecycle = type(
+        "Lifecycle",
+        (),
+        {
+            "pr_number": 23,
+            "pr_title": "Merged later",
+            "head_sha": "sha-pr-23-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710001000.0,
+            "pr_merged_at": 1710001010.0,
+            "pr_merge_commit_sha": "merge-sha-23",
+            "pr_updated_at": 1710001020.0,
+            "base_ref": "main",
+        },
+    )()
+
+    unauthorized = HTTPError(
+        "https://api.github.com/repos/doria90/dummyAI/pulls/23",
+        401,
+        "Unauthorized",
+        hdrs=None,
+        fp=None,
+    )
+
+    with patch(
+        "services.cloud_worker._get_installation_token_for_worker",
+        side_effect=["stale-installation-token", "fresh-installation-token"],
+    ) as get_token, patch(
+        "services.cloud_worker.delete_installation_token",
+        new=AsyncMock(),
+    ) as delete_token, patch(
+        "services.cloud_worker.fetch_pull_request_lifecycle",
+        side_effect=[unauthorized, lifecycle],
+    ) as fetch_lifecycle:
+        reconciled = asyncio.run(
+            _reconcile_pull_request_lifecycle_for_repo("doria90/dummyAI", 123, "main", settings)
+        )
+
+    assert reconciled == 1
+    assert get_token.call_count == 2
+    delete_token.assert_awaited_once_with(123)
+    assert fetch_lifecycle.call_args_list[0].args == ("doria90/dummyAI", 23, "stale-installation-token")
+    assert fetch_lifecycle.call_args_list[1].args == ("doria90/dummyAI", 23, "fresh-installation-token")
+
+
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
     backing_db_path = tmp_path / "worker-postgres-sim.db"
     locator = "postgresql://user:pass@db.example.com/driftguard"
@@ -1825,6 +1920,20 @@ def test_token_cache_falls_back_to_in_process_cache(monkeypatch):
         assert await get_installation_token(321) is None
         await set_installation_token(321, "cached-token", 60)
         assert await get_installation_token(321) == "cached-token"
+
+    asyncio.run(exercise_cache())
+
+
+def test_token_cache_delete_removes_in_process_token(monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    _reset_settings_cache()
+    clear_local_token_cache()
+
+    async def exercise_cache():
+        await set_installation_token(654, "cached-token", 60)
+        assert await get_installation_token(654) == "cached-token"
+        await delete_installation_token(654)
+        assert await get_installation_token(654) is None
 
     asyncio.run(exercise_cache())
 

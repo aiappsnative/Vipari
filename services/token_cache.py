@@ -54,5 +54,14 @@ async def set_installation_token(installation_id: int, token: str, expires_in: i
     _local_cache[installation_id] = (token, time.time() + ttl_seconds)
 
 
+async def delete_installation_token(installation_id: int) -> None:
+    redis_client = await _get_redis_client()
+    if redis_client is not None:
+        await redis_client.delete(_redis_key(installation_id))
+        return
+
+    _local_cache.pop(installation_id, None)
+
+
 def clear_local_token_cache() -> None:
     _local_cache.clear()

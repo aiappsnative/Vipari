@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from urllib.error import HTTPError
 from urllib.error import URLError
 
 from github.GithubException import GithubException
@@ -38,7 +39,7 @@ from .onboarding_records import get_latest_repository_onboarding, list_latest_re
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue, close_queue_backend
 from .runtime_guardrails import validate_runtime_configuration
-from .token_cache import get_installation_token, set_installation_token
+from .token_cache import delete_installation_token, get_installation_token, set_installation_token
 from .webhook_deliveries import cleanup_webhook_deliveries
 
 
@@ -72,6 +73,24 @@ async def _get_installation_token_for_worker(installation_id: int, settings: Set
     token = request_installation_token(jwt_token, installation_id)
     await set_installation_token(installation_id, token, 60 * 60)
     return token
+
+
+async def _fetch_pull_request_lifecycle_with_refresh(
+    *,
+    repo_full: str,
+    pr_number: int,
+    installation_id: int,
+    installation_token: str,
+    settings: Settings,
+):
+    try:
+        return await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, installation_token)
+    except HTTPError as exc:
+        if exc.code != 401:
+            raise
+    await delete_installation_token(installation_id)
+    refreshed_token = await _get_installation_token_for_worker(installation_id, settings)
+    return await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, refreshed_token)
 
 
 def _retry_delay_seconds(attempt_count: int) -> int:
@@ -257,7 +276,13 @@ async def _reconcile_pull_request_lifecycle_for_repo(
                     continue
 
             step = "fetch-pr-lifecycle"
-            lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, audit.pr_number, installation_token)
+            lifecycle = await _fetch_pull_request_lifecycle_with_refresh(
+                repo_full=repo_full,
+                pr_number=audit.pr_number,
+                installation_id=installation_id,
+                installation_token=installation_token,
+                settings=settings,
+            )
             step = "compare-lifecycle-state"
             if lifecycle.pr_state == audit.pr_state and lifecycle.pr_merged == audit.pr_merged and lifecycle.pr_merge_commit_sha == audit.pr_merge_commit_sha:
                 if lifecycle.pr_merged and lifecycle.pr_merge_commit_sha:
