@@ -992,7 +992,7 @@ def _admin_activity_actor_label(actor_user_id: int | None, user_labels: dict[int
     return user_labels.get(actor_user_id, f"User #{actor_user_id}")
 
 
-def _admin_activity_payload_details(payload_json: str | None) -> str:
+def _admin_activity_payload_details(payload_json: str | None, *, event_type: str | None = None) -> str:
     if not payload_json:
         return "{}"
     try:
@@ -1003,6 +1003,26 @@ def _admin_activity_payload_details(payload_json: str | None) -> str:
         return str(payload)
     if not payload:
         return "{}"
+    normalized_event_type = (event_type or "").strip().lower()
+    if normalized_event_type.startswith("mcp_broker."):
+        details: list[str] = []
+        if payload.get("message"):
+            details.append(str(payload["message"]))
+        if payload.get("error"):
+            details.append(f"error={payload['error']}")
+        if payload.get("required_scope"):
+            details.append(f"required_scope={payload['required_scope']}")
+        granted_scopes = payload.get("granted_scopes")
+        if isinstance(granted_scopes, list) and granted_scopes:
+            details.append("granted_scopes=" + ", ".join(str(scope) for scope in granted_scopes))
+        if payload.get("tool_name"):
+            details.append(f"tool_name={payload['tool_name']}")
+        if payload.get("retry_after_seconds"):
+            details.append(f"retry_after_seconds={payload['retry_after_seconds']}")
+        if payload.get("client_ip"):
+            details.append(f"client_ip={payload['client_ip']}")
+        if details:
+            return " | ".join(details)
     return ", ".join(f"{key}={payload[key]}" for key in sorted(payload))
 
 
@@ -1018,7 +1038,7 @@ def _build_admin_activity_entries(*, db_path: str, user_labels: dict[int, str], 
                 actor_label=row.actor_label or _admin_activity_actor_label(row.actor_user_id, user_labels),
                 subject_type=row.subject_type,
                 subject_id=row.subject_id,
-                details=_admin_activity_payload_details(row.details_json),
+                details=_admin_activity_payload_details(row.details_json, event_type=row.event_type),
                 raw_id=row.external_id or f"activity:{row.id}",
             )
             for row in list_recent_activity_events(settings.resolved_activity_db_path, limit=fetch_limit)
@@ -1046,7 +1066,7 @@ def _build_admin_activity_entries_primary(*, db_path: str, user_labels: dict[int
                 actor_label=_admin_activity_actor_label(row.actor_user_id, user_labels),
                 subject_type=row.subject_type,
                 subject_id=row.subject_id,
-                details=_admin_activity_payload_details(row.payload_json),
+                details=_admin_activity_payload_details(row.payload_json, event_type=row.event_type),
                 raw_id=f"control_plane:{row.id}",
             )
         )
@@ -1190,6 +1210,21 @@ def _build_admin_logs_view(request: Request, *, admin_rows: list[dict[str, objec
     end = start + _ADMIN_LOG_PAGE_SIZE
     page_entries = filtered[start:end]
 
+    denied_event_types = {"mcp_broker.token_denied", "mcp_broker.auth_denied", "mcp_broker.tool_denied"}
+    denied_entries = [entry for entry in filtered if entry.event_type in denied_event_types]
+    denied_clients: dict[str, int] = {}
+    denied_tools: dict[str, int] = {}
+    denied_workspace_ids: set[int] = set()
+    for entry in denied_entries:
+        denied_clients[entry.subject_id] = denied_clients.get(entry.subject_id, 0) + 1
+        if entry.workspace_id is not None:
+            denied_workspace_ids.add(entry.workspace_id)
+        tool_match = re.search(r"(?:^|[|,]\s*)tool_name=([^|,]+)", entry.details or "")
+        if tool_match:
+            tool_name = tool_match.group(1).strip()
+            if tool_name:
+                denied_tools[tool_name] = denied_tools.get(tool_name, 0) + 1
+
     base_params = {"tab": "logs"}
     if event_type:
         base_params["event_type"] = event_type
@@ -1235,6 +1270,14 @@ def _build_admin_logs_view(request: Request, *, admin_rows: list[dict[str, objec
         ],
         "actor_options": sorted({entry.actor_label for entry in entries}),
         "result_count": len(filtered),
+        "mcp_summary": {
+            "denied_event_count": len(denied_entries),
+            "denied_client_count": len(denied_clients),
+            "denied_workspace_count": len(denied_workspace_ids),
+            "top_denied_client": max(denied_clients, key=denied_clients.get) if denied_clients else "None",
+            "top_denied_tool": max(denied_tools, key=denied_tools.get) if denied_tools else "None",
+            "investigation_recommended": len(denied_entries) >= 5 or len(denied_clients) >= 3,
+        },
         "page": page,
         "has_prev": page > 1,
         "has_next": end < len(filtered),

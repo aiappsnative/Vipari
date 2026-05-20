@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from datetime import datetime, timezone
 from html import escape as html_escape
@@ -260,6 +261,47 @@ def _format_timestamp(value: float | None) -> str:
     if value is None:
         return "Unavailable"
     return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _mcp_activity_event_label(event_type: str) -> str:
+    return {
+        "mcp_broker.token_issued": "Broker token issued",
+        "mcp_broker.token_denied": "Token request denied",
+        "mcp_broker.auth_denied": "Broker request denied",
+        "mcp_broker.tool_invoked": "Broker tool invoked",
+        "mcp_broker.tool_denied": "Broker tool denied",
+        "principal.created": "API key created",
+        "principal.revoked": "API key revoked",
+    }.get(event_type, event_type.replace("_", " ").replace(".", " / ").title())
+
+
+def _render_mcp_activity_details(event_type: str, payload: dict[str, object], subject_label: str) -> str:
+    details: list[str] = []
+    if payload.get("message"):
+        details.append(str(payload["message"]))
+    if payload.get("error"):
+        details.append(f"error={payload['error']}")
+    if payload.get("required_scope"):
+        details.append(f"required scope={payload['required_scope']}")
+    scopes = payload.get("scopes")
+    if isinstance(scopes, list) and scopes:
+        details.append("scopes=" + ", ".join(str(scope) for scope in scopes))
+    granted_scopes = payload.get("granted_scopes")
+    if isinstance(granted_scopes, list) and granted_scopes:
+        details.append("granted=" + ", ".join(str(scope) for scope in granted_scopes))
+    if payload.get("tool_name"):
+        details.append(f"tool={payload['tool_name']}")
+    if payload.get("retry_after_seconds"):
+        details.append(f"retry after={payload['retry_after_seconds']}s")
+    if payload.get("client_ip"):
+        details.append(f"client ip={payload['client_ip']}")
+    if payload.get("source"):
+        details.append(f"source={payload['source']}")
+    if not details and event_type == "mcp_broker.token_issued":
+        details.append("Short-lived broker token issued for this machine principal.")
+    if not details and event_type == "mcp_broker.tool_invoked":
+        details.append("Broker tool call completed for this machine principal.")
+    return " | ".join(details) if details else f"Activity recorded for {subject_label}"
 
 
 def _slugify_value(value: str) -> str:
@@ -1394,8 +1436,8 @@ def render_control_plane_mcp_page(
         ),
         "tools": (
             "Hosted broker tools",
-            "Review the current read-first tool surface exposed to customer agents through the hosted broker.",
-            "Use this tab to confirm the allowed surface before distributing credentials or connector config.",
+            "Review the current scoped tool surface exposed to customer agents through the hosted broker.",
+            "Use this tab to confirm the allowed surface before distributing credentials or connector config, especially when granting low-risk write scopes.",
         ),
         "api-keys": (
             "Workspace API keys",
@@ -1452,15 +1494,30 @@ def render_control_plane_mcp_page(
         f'''<article class="help-page-topic-card"><strong>{html_escape(tool["name"])}</strong><p>{html_escape(tool["description"])}</p><p><span class="control-page-badge">{html_escape(tool["required_scope"])}</span></p></article>'''
         for tool in MCP_BROKER_TOOLS
     )
+    tools_by_scope: dict[str, list[dict[str, str]]] = {}
+    for tool in MCP_BROKER_TOOLS:
+        tools_by_scope.setdefault(str(tool["required_scope"]), []).append(tool)
+    capability_scope_cards = "".join(
+        f'''<article class="control-page-meta-card"><span class="control-page-meta-label">{html_escape(scope_name)}</span><strong>{html_escape(str(len(scope_tools)))} tool{"s" if len(scope_tools) != 1 else ""}</strong><span class="control-page-copy">{html_escape(", ".join(str(tool["name"]) for tool in scope_tools[:4]))}{"..." if len(scope_tools) > 4 else ""}</span></article>'''
+        for scope_name, scope_tools in tools_by_scope.items()
+    )
     tools_section = f"""
         <article class="control-page-section control-page-section-wide">
             <div class="secondary-panel-title">Available tools</div>
-            <h2 class="control-page-section-title">Read-first MCP surface</h2>
-            <p class="control-page-copy">This is the full tool surface exposed by the hosted broker for customer agents.</p>
+            <h2 class="control-page-section-title">Scoped MCP surface</h2>
+            <p class="control-page-copy">This is the full tool surface exposed by the hosted broker for customer agents. Low-risk write tools require broader machine-principal scopes, while human-gated governance actions remain unavailable to service-account MCP clients.</p>
+            <div class="control-page-meta-grid">{capability_scope_cards}</div>
+            <p class="control-page-copy">The downloaded connector ships the full contract, but each token only gets the subset allowed by its granted scopes. After bootstrapping a client, run <code>vipari.list_available_tools</code> to confirm the effective live broker surface for that specific API key.</p>
             <div class="help-page-card-grid">{tool_cards}</div>
         </article>"""
 
     activity_rows = ""
+    denied_event_types = {"mcp_broker.token_denied", "mcp_broker.auth_denied", "mcp_broker.tool_denied"}
+    denied_event_count = 0
+    denied_client_ids: set[str] = set()
+    denied_tool_count = 0
+    denied_client_counter: Counter[str] = Counter()
+    denied_tool_counter: Counter[str] = Counter()
     for entry in audit_logs:
         try:
             payload = json.loads(getattr(entry, "payload_json", "") or "{}")
@@ -1470,35 +1527,51 @@ def render_control_plane_mcp_page(
         subject_type = str(getattr(entry, "subject_type", "workspace") or "workspace")
         subject_id = str(getattr(entry, "subject_id", "n/a") or "n/a")
         created_at = _format_timestamp(getattr(entry, "created_at", None))
-        details: list[str] = []
-        if isinstance(payload, dict):
-            if payload.get("source"):
-                details.append(f"source={payload['source']}")
-            scopes = payload.get("scopes")
-            if isinstance(scopes, list) and scopes:
-                details.append("scopes=" + ", ".join(str(scope) for scope in scopes))
-            if payload.get("tool_name"):
-                details.append(f"tool={payload['tool_name']}")
         subject_label = f"{subject_type}:{subject_id}"
-        detail_text = " | ".join(details) if details else "Workspace automation activity"
+        event_label = _mcp_activity_event_label(event_type)
+        detail_text = _render_mcp_activity_details(event_type, payload if isinstance(payload, dict) else {}, subject_label)
+        if event_type in denied_event_types:
+            denied_event_count += 1
+            denied_client_ids.add(subject_id)
+            denied_client_counter[subject_id] += 1
+            if event_type == "mcp_broker.tool_denied":
+                denied_tool_count += 1
+                tool_name = payload.get("tool_name") if isinstance(payload, dict) else None
+                if isinstance(tool_name, str) and tool_name.strip():
+                    denied_tool_counter[tool_name.strip()] += 1
         activity_rows += f"""
         <tr data-filter-row="activity"
             data-filter-date="{html_escape(created_at.lower())}"
-            data-filter-event="{html_escape(event_type.lower())}"
+            data-filter-event="{html_escape((event_type + ' ' + event_label).lower())}"
             data-filter-client="{html_escape(subject_id.lower())}"
             data-filter-details="{html_escape((subject_label + ' ' + detail_text).lower())}">
             <td>{html_escape(created_at)}</td>
-            <td><code>{html_escape(event_type)}</code></td>
+            <td><strong>{html_escape(event_label)}</strong><br /><code>{html_escape(event_type)}</code></td>
             <td><code class="control-page-monospace control-page-monospace-break">{html_escape(subject_label)}</code></td>
             <td>{html_escape(detail_text)}</td>
         </tr>"""
 
     if activity_rows:
+        top_denied_client = denied_client_counter.most_common(1)[0][0] if denied_client_counter else "None"
+        top_denied_tool = denied_tool_counter.most_common(1)[0][0] if denied_tool_counter else "None"
+        investigation_note = ""
+        if denied_event_count >= 5 or len(denied_client_ids) >= 3:
+            investigation_note = '<p class="control-page-copy">Investigation recommended: denial volume is high enough in this activity window to warrant checking client rollout health or abuse patterns.</p>'
+        activity_summary_cards = f"""
+            <div class="control-page-meta-grid">
+                <article class="control-page-meta-card"><span class="control-page-meta-label">Denied broker events</span><strong>{denied_event_count}</strong><span class="control-page-copy">Recent token, auth, and tool denials recorded in this activity window.</span></article>
+                <article class="control-page-meta-card"><span class="control-page-meta-label">Denied clients</span><strong>{len(denied_client_ids)}</strong><span class="control-page-copy">Distinct machine principals that hit a denied MCP action.</span></article>
+                <article class="control-page-meta-card"><span class="control-page-meta-label">Tool denials</span><strong>{denied_tool_count}</strong><span class="control-page-copy">Denied broker tool calls after token issuance and request auth succeeded.</span></article>
+                <article class="control-page-meta-card"><span class="control-page-meta-label">Top denied client</span><strong>{html_escape(top_denied_client)}</strong><span class="control-page-copy">Machine principal with the most denied MCP activity in this view.</span></article>
+                <article class="control-page-meta-card"><span class="control-page-meta-label">Top denied tool</span><strong>{html_escape(top_denied_tool)}</strong><span class="control-page-copy">Broker tool most often denied after request auth succeeded.</span></article>
+            </div>"""
         activity_section = f"""
         <article class="control-page-section control-page-section-wide control-page-section-table-wide">
             <div class="secondary-panel-title">Workspace activity</div>
             <h2 class="control-page-section-title">Recent integration and API-key events</h2>
             <p class="control-page-copy">This feed keeps connector setup, key rotation, and broker actions together on one page.</p>
+            {activity_summary_cards}
+            {investigation_note}
             <div class="control-page-filter-bar" data-filter-scope="activity">
                 <label class="control-page-filter-field">
                     <span class="control-page-filter-label">Date</span>
@@ -2545,12 +2618,29 @@ def render_control_plane_admin_page(
         f'<option value="{html_escape(option)}" {"selected" if option == logs_filters.get("actor") else ""}>{html_escape(option)}</option>'
         for option in logs_state.get("actor_options") or []
     )
+    mcp_summary = logs_state.get("mcp_summary") or {}
+    mcp_summary_markup = ""
+    if int(mcp_summary.get("denied_event_count") or 0) > 0:
+        investigation_markup = ""
+        if mcp_summary.get("investigation_recommended"):
+            investigation_markup = '<p class="page-note">Investigation recommended: denied MCP activity is elevated in the current filtered view.</p>'
+        mcp_summary_markup = f'''
+            <div class="admin-log-summary">
+                <span>MCP denied events: {int(mcp_summary.get("denied_event_count") or 0)}</span>
+                <span>Denied clients: {int(mcp_summary.get("denied_client_count") or 0)}</span>
+                <span>Workspaces affected: {int(mcp_summary.get("denied_workspace_count") or 0)}</span>
+                <span>Top denied client: {html_escape(str(mcp_summary.get("top_denied_client") or "None"))}</span>
+                <span>Top denied tool: {html_escape(str(mcp_summary.get("top_denied_tool") or "None"))}</span>
+            </div>
+            {investigation_markup}
+        '''
     logs_content = f'''
         <section class="admin-section">
             <div class="section-heading">
                 <p class="eyebrow">Operational activity</p>
                 <h2>Unified logs</h2>
             </div>
+            {mcp_summary_markup}
             <form method="get" action="/admin" class="admin-log-filters">
                 <input type="hidden" name="tab" value="logs" />
                 <select class="field-input" name="event_type">

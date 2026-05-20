@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import importlib.util
 import json
 import os
 import re
@@ -52,8 +53,43 @@ def test_build_customer_mcp_bundle_uses_self_contained_package_directory():
     assert "https://app.promptdrift.test/api/agent-integrations/mcp" in env_example
     assert "https://app.promptdrift.test/api/agent-integrations/mcp" in claude_example
     assert [tool["name"] for tool in manifest["tools"]] == [
+        "vipari.list_available_tools",
         "vipari.list_repos",
         "vipari.get_repo_posture",
         "vipari.get_repo_casefile",
         "vipari.list_escalations",
+        "vipari.get_export_status",
+        "vipari.create_compliance_export",
+        "vipari.list_baseline_proposals",
+        "vipari.create_baseline_proposal",
+        "vipari.list_onboarding_proposals",
+        "vipari.create_onboarding_proposal",
+        "vipari.add_audit_feedback",
+        "vipari.triage_audit",
     ]
+
+
+def test_connector_formats_structured_broker_errors_readably():
+    pytest = __import__("pytest")
+    pytest.importorskip("mcp.server.fastmcp")
+
+    connector_path = Path(__file__).resolve().parent.parent / "customer_mcp_server" / "vipari_mcp_server.py"
+    spec = importlib.util.spec_from_file_location("vipari_mcp_server_for_tests", connector_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    message = module._format_broker_http_error(
+        "request",
+        403,
+        json.dumps(
+            {
+                "detail": {
+                    "error": "insufficient_scope",
+                    "message": "Missing required scope: drift.write.low.",
+                }
+            }
+        ),
+    )
+
+    assert message == "Vipari MCP broker request failed: HTTP 403 insufficient_scope: Missing required scope: drift.write.low."

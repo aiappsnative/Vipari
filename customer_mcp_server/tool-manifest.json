@@ -1,6 +1,12 @@
 {
   "tools": [
     {
+      "name": "vipari.list_available_tools",
+      "title": "List available tools",
+      "description": "Return the current principal's granted scopes and the broker-exposed tools available to this token.",
+      "required_scope": "drift.read"
+    },
+    {
       "name": "vipari.list_repos",
       "title": "List workspace repositories",
       "description": "List repositories allocated to the authenticated workspace with lightweight posture context.",
@@ -23,6 +29,54 @@
       "title": "List workspace escalations",
       "description": "Return the workspace escalation queue with review-now and optional watch items.",
       "required_scope": "drift.read"
+    },
+    {
+      "name": "vipari.get_export_status",
+      "title": "Get export status",
+      "description": "Return the current status for one workspace-owned compliance export job.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "vipari.create_compliance_export",
+      "title": "Create compliance export",
+      "description": "Create a low-risk compliance export job for one workspace-visible repository.",
+      "required_scope": "drift.write.low"
+    },
+    {
+      "name": "vipari.list_baseline_proposals",
+      "title": "List baseline proposals",
+      "description": "List baseline proposals for one workspace-visible artifact.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "vipari.create_baseline_proposal",
+      "title": "Create baseline proposal",
+      "description": "Create a low-risk baseline proposal for one workspace-visible artifact.",
+      "required_scope": "drift.write.low"
+    },
+    {
+      "name": "vipari.list_onboarding_proposals",
+      "title": "List onboarding proposals",
+      "description": "List onboarding proposals for the authenticated workspace.",
+      "required_scope": "drift.read"
+    },
+    {
+      "name": "vipari.create_onboarding_proposal",
+      "title": "Create onboarding proposal",
+      "description": "Create a low-risk onboarding proposal for a repository in the authenticated workspace.",
+      "required_scope": "drift.write.low"
+    },
+    {
+      "name": "vipari.add_audit_feedback",
+      "title": "Add audit feedback",
+      "description": "Append low-risk structured feedback to an existing repository audit visible to the workspace.",
+      "required_scope": "drift.write.low"
+    },
+    {
+      "name": "vipari.triage_audit",
+      "title": "Triage audit",
+      "description": "Record a low-risk triage state transition for an existing repository audit visible to the workspace.",
+      "required_scope": "drift.write.low"
     }
   ]
 }
