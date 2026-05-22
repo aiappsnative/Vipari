@@ -3287,3 +3287,114 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     assert audit is not None
     assert audit.status == "completed"
     assert "Escalation label not applied" in (audit.error_message or "")
+
+
+def test_build_llm_comment_renders_shadow_mode_verifier_gate_for_low_confidence_review():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++Ask one clarifying question before answering.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt changed, but reviewer certainty is limited.\nRisk Level: Low\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        verifier_rollout_mode="shadow",
+        verifier_max_requests_per_review=2,
+        episode_context=PrCommentEpisodeContext(head_sha="sha-shadow", analyzed_at=1_700_000_400),
+    )
+
+    assert "### Verifier gate" not in comment
+
+
+def test_worker_persists_shadow_mode_verifier_metadata_and_caps_requests(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=77,
+        installation_id=123,
+        head_sha="sha-77",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\n"
+            "index 1..2\n"
+            "--- a/prompts/policy.md\n"
+            "+++ b/prompts/policy.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+Ask one clarifying question before answering.\n"
+            "diff --git a/prompts/refund.md b/prompts/refund.md\n"
+            "index 1..2\n"
+            "--- a/prompts/refund.md\n"
+            "+++ b/prompts/refund.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+Ask one clarifying question before issuing a refund.\n"
+        ),
+    )
+    posted = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompts changed, but reviewer certainty is limited.\nRisk Level: Low\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda repo, path, token, ref: "artifact snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 7701,
+    )
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        model="gpt-4o",
+        verifier_rollout_mode="shadow",
+        verifier_max_requests_per_review=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted
+    assert "### Verifier gate" not in posted[0]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.verifier_mode == "shadow"
+    assert audit.verifier_trigger == "low_confidence"
+    assert audit.verifier_request_count == 1

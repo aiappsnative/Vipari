@@ -26,6 +26,17 @@ Current implementation status on `feature/detection-engine-phase-a-signal-fusion
 - static profile extraction now discounts example blocks so capability, autonomy, and sampling signals are driven by live instructions rather than illustrative examples
 - focused Phase A validation is currently green for engine, rules, policy, drift profile, signal fusion, audit-worker fusion, and the OSS eval-harness regression slice
 
+Current implementation status on `feature/detection-engine-phase-b-verifier-eval`:
+
+- Phase B branch created from the updated parent branch after Phase A merged into `feature/detection-engine-roadmap`
+- explicit verifier contracts added in `engine/models.py` for invocation decisions, request payloads, and review results
+- new `engine/verifier.py` module added to separate verifier gating and request-building from proposer comment generation
+- live audit-worker review generation now computes bounded verifier plans with selective triggers for high-impact, low-confidence, disagreement, and merge-blocking cases
+- verifier rollout is now configurable and safe by default through shadow-mode planning plus per-review request caps in `services/audit_worker.py`
+- durable PR audit records now persist verifier mode, trigger, and request-count metadata so feedback and PR outcomes can calibrate future verifier policy safely
+- OSS evaluation packages now include a synthetic verifier release-gate block with trigger precision/recall, disagreement counts, and budgeted cost/latency reporting
+- focused Phase B validation is currently green across verifier, worker, persistence, and eval-harness slices
+
 Branch topology:
 
 1. `main`

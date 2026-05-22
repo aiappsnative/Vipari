@@ -98,6 +98,7 @@ def test_run_oss_evaluation_writes_repeatable_package_and_snapshots(tmp_path):
         expected_control_surfaces=["prompts", "model configuration"],
         manual_notes="Looks directionally good.",
         run_label="run-001",
+        verifier_rollout_mode="shadow",
         onboard_repository_fn=lambda *args, **kwargs: _onboarding_result(),
         plan_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(status="planned")],
         execute_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(job=SimpleNamespace(status="completed"))],
@@ -115,6 +116,9 @@ def test_run_oss_evaluation_writes_repeatable_package_and_snapshots(tmp_path):
     assert result.package["evaluator_rubric"][0]["dimension"] == "discovery"
     assert result.package["package_type"] == "evaluation_run"
     assert result.package["candidate_source"] == "oss"
+    assert result.package["verifier_release_gate"]["rollout_mode"] == "shadow"
+    assert result.package["verifier_release_gate"]["precision"] == 1.0
+    assert result.package["verifier_release_gate"]["verifier_disagreement_count"] == 1
 
     persisted = json.loads((tmp_path / "artifacts" / "feature-oss-eval-harness-v1" / "doria90-dummyai" / "run-001" / "run-package.json").read_text(encoding="utf-8"))
     assert persisted["repo_full"] == "doria90/dummyAI"
@@ -134,6 +138,12 @@ def test_compare_oss_eval_packages_reports_precision_and_coverage_changes():
             "lower_confidence_insights": [{"artifact_path": "one"}, {"artifact_path": "two"}],
         },
         "top_artifacts_requiring_review": [{"artifact_path": "prompts/system.txt"}],
+        "verifier_release_gate": {
+            "precision": 0.5,
+            "recall": 0.5,
+            "budget_filtered_count": 2,
+            "verifier_disagreement_count": 2,
+        },
     }
     current = {
         "repo_full": "doria90/dummyAI",
@@ -147,6 +157,12 @@ def test_compare_oss_eval_packages_reports_precision_and_coverage_changes():
             "lower_confidence_insights": [{"artifact_path": "one"}],
         },
         "top_artifacts_requiring_review": [{"artifact_path": "prompts/refund.txt"}],
+        "verifier_release_gate": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "budget_filtered_count": 0,
+            "verifier_disagreement_count": 1,
+        },
     }
 
     summary = compare_oss_eval_packages(current, baseline)
@@ -155,6 +171,67 @@ def test_compare_oss_eval_packages_reports_precision_and_coverage_changes():
     assert any("baseline coverage improved" in item.lower() for item in summary["improvements"])
     assert any("lower-confidence queue size improved" in item.lower() for item in summary["improvements"])
     assert any("Top review target changed" in item for item in summary["improvements"])
+    assert any("verifier trigger precision improved" in item.lower() for item in summary["improvements"])
+    assert any("verifier trigger recall improved" in item.lower() for item in summary["improvements"])
+    assert any("verifier budget filtering improved" in item.lower() for item in summary["improvements"])
+
+
+def test_run_oss_evaluation_reports_verifier_budget_caps(tmp_path):
+    result = run_oss_evaluation(
+        str(tmp_path / "eval.db"),
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        mode="baseline_only",
+        commit_limit_per_artifact=5,
+        output_root=str(tmp_path / "artifacts"),
+        branch_name="feature/oss-eval-harness-v1",
+        candidate_key="dummy-ai",
+        expected_control_surfaces=["prompts"],
+        manual_notes=None,
+        run_label="run-budget",
+        verifier_rollout_mode="shadow",
+        verifier_max_requests_per_review=2,
+        onboard_repository_fn=lambda *args, **kwargs: _onboarding_result(),
+        plan_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(status="planned")],
+        execute_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(job=SimpleNamespace(status="completed"))],
+        build_repo_dashboard_view_fn=lambda *args, **kwargs: _repo_dashboard(),
+        build_dashboard_overview_view_fn=lambda *args, **kwargs: _overview_dashboard(),
+    )
+
+    verifier_release_gate = result.package["verifier_release_gate"]
+    assert verifier_release_gate["requested_invocation_count"] == 4
+    assert verifier_release_gate["capped_request_count"] == 2
+    assert verifier_release_gate["budget_filtered_count"] == 2
+    assert verifier_release_gate["estimated_review_cost_usd"] == 0.04
+
+
+def test_run_oss_evaluation_keeps_verifier_release_gate_disabled_by_default(tmp_path):
+    result = run_oss_evaluation(
+        str(tmp_path / "eval.db"),
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        mode="baseline_only",
+        commit_limit_per_artifact=5,
+        output_root=str(tmp_path / "artifacts"),
+        branch_name="feature/oss-eval-harness-v1",
+        candidate_key="dummy-ai",
+        expected_control_surfaces=["prompts"],
+        manual_notes=None,
+        run_label="run-default-off",
+        onboard_repository_fn=lambda *args, **kwargs: _onboarding_result(),
+        plan_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(status="planned")],
+        execute_repository_history_backfill_fn=lambda *args, **kwargs: [SimpleNamespace(job=SimpleNamespace(status="completed"))],
+        build_repo_dashboard_view_fn=lambda *args, **kwargs: _repo_dashboard(),
+        build_dashboard_overview_view_fn=lambda *args, **kwargs: _overview_dashboard(),
+    )
+
+    verifier_release_gate = result.package["verifier_release_gate"]
+    assert verifier_release_gate["rollout_mode"] == "off"
+    assert verifier_release_gate["synthetic_case_count"] == 0
+    assert verifier_release_gate["requested_invocation_count"] == 0
+    assert verifier_release_gate["precision"] is None
 
 
 def test_resolve_oss_eval_target_supports_registry_key_and_repo_full():

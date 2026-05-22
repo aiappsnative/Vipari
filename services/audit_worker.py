@@ -16,6 +16,7 @@ from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
 from engine.policy import PolicyContext, default_policy_rules, evaluate_policy_rules
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
+from engine.verifier import build_verifier_review_requests, should_invoke_verifier
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
 from .governance_signals import GovernanceFinding, build_pr_comment_governance_findings
 from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normalize_risk_level
@@ -52,6 +53,8 @@ class WorkerSettings:
     max_attempts: int = 5
     max_retry_window_seconds: float = 5400.0
     poll_interval_seconds: float = 2.0
+    verifier_rollout_mode: str = "off"
+    verifier_max_requests_per_review: int = 3
 
 
 RISK_BADGES = {
@@ -101,6 +104,22 @@ class SignalFusionAssessment:
 
 
 @dataclass(frozen=True)
+class VerifierPlan:
+    rollout_mode: str
+    should_invoke: bool
+    trigger: str | None
+    reason: str
+    request_count: int
+
+
+@dataclass(frozen=True)
+class LlmCommentBuildResult:
+    comment_body: str
+    fusion_assessment: SignalFusionAssessment
+    verifier_plan: VerifierPlan
+
+
+@dataclass(frozen=True)
 class PrCommentEpisodeContext:
     head_sha: str
     analyzed_at: float
@@ -119,6 +138,7 @@ class PrCommentReview:
     evidence: tuple[str, ...]
     governance_findings: tuple[GovernanceFinding, ...]
     recommended_next_step: str
+    verifier_note: str | None
     episode_context: PrCommentEpisodeContext
     dashboard_deep_link: str | None = None
     feedback_link: str | None = None
@@ -136,7 +156,10 @@ def build_llm_comment(
     episode_context: PrCommentEpisodeContext | None = None,
     repo_full: str | None = None,
     pr_number: int | None = None,
-) -> str:
+    verifier_rollout_mode: str = "off",
+    verifier_max_requests_per_review: int = 3,
+    return_metadata: bool = False,
+) -> str | LlmCommentBuildResult:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
@@ -182,6 +205,15 @@ def build_llm_comment(
         deterministic_analysis,
         risk_level=fusion_assessment.risk_level,
     )
+    verifier_plan = _build_verifier_plan(
+        deterministic_analysis,
+        raw_comment,
+        semantic_packages=semantic_packages,
+        proposed_summary=summary,
+        proposed_recommendation=canonical_details.recommendation,
+        rollout_mode=verifier_rollout_mode,
+        max_requests_per_review=verifier_max_requests_per_review,
+    )
     review = _build_pr_comment_review(
         deterministic_analysis,
         risk_level=fusion_assessment.risk_level,
@@ -199,11 +231,19 @@ def build_llm_comment(
         semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
         attribute_profiles=attribute_profiles,
+        verifier_plan=verifier_plan,
         episode_context=episode_context,
         repo_full=repo_full,
         pr_number=pr_number,
     )
-    return _render_pr_comment_review(review)
+    comment_body = _render_pr_comment_review(review)
+    if return_metadata:
+        return LlmCommentBuildResult(
+            comment_body=comment_body,
+            fusion_assessment=fusion_assessment,
+            verifier_plan=verifier_plan,
+        )
+    return comment_body
 
 
 def build_fallback_comment(
@@ -245,6 +285,7 @@ def _build_pr_comment_review(
     semantic_recommendation: str,
     escalation_recommendation: EscalationRecommendation,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    verifier_plan: VerifierPlan | None = None,
     episode_context: PrCommentEpisodeContext | None = None,
     repo_full: str | None = None,
     pr_number: int | None = None,
@@ -272,6 +313,7 @@ def _build_pr_comment_review(
             semantic_recommendation,
             profiles,
         ),
+        verifier_note=_build_verifier_note(verifier_plan),
         episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
         dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles, episode_context),
         feedback_link=_build_pr_comment_feedback_link(repo_full, pr_number, episode_context),
@@ -314,6 +356,8 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
     if review.governance_findings:
         lines.extend(["", "### Governance signals"])
         lines.extend(f"- {finding.evidence_summary}" for finding in review.governance_findings)
+    if review.verifier_note:
+        lines.extend(["", "### Verifier gate", f"- {review.verifier_note}"])
     lines.extend(
         [
             "",
@@ -632,6 +676,83 @@ def _build_recommended_next_step(
     if normalized.lower().startswith("safe to merge"):
         return normalized
     return "Safe to merge after normal review."
+
+
+def _normalize_verifier_rollout_mode(mode: str | None) -> str:
+    candidate = str(mode or "off").strip().lower()
+    if candidate == "shadow":
+        return "shadow"
+    return "off"
+
+
+def _build_verifier_plan(
+    deterministic_analysis: DiffAnalysis,
+    comment_body: str,
+    *,
+    semantic_packages: list[object],
+    proposed_summary: str,
+    proposed_recommendation: str,
+    rollout_mode: str,
+    max_requests_per_review: int,
+) -> VerifierPlan:
+    normalized_mode = _normalize_verifier_rollout_mode(rollout_mode)
+    if normalized_mode == "off":
+        return VerifierPlan(
+            rollout_mode=normalized_mode,
+            should_invoke=False,
+            trigger=None,
+            reason="Verifier rollout is disabled for this worker.",
+            request_count=0,
+        )
+
+    semantic_risk = _extract_risk_level(comment_body, default=deterministic_analysis.suggested_risk_level.value)
+    semantic_confidence = _extract_confidence_level(comment_body, default="Medium")
+    semantic_recommendation = _extract_recommendation(
+        comment_body,
+        default=proposed_recommendation,
+    )
+    decision = should_invoke_verifier(
+        deterministic_analysis.suggested_risk_level.value,
+        semantic_risk,
+        semantic_confidence,
+        semantic_requires_escalation=_semantic_recommendation_requires_escalation(semantic_recommendation),
+    )
+    if not decision.should_invoke:
+        return VerifierPlan(
+            rollout_mode=normalized_mode,
+            should_invoke=False,
+            trigger=None,
+            reason=decision.reason,
+            request_count=0,
+        )
+
+    requested = build_verifier_review_requests(
+        semantic_packages[: max(0, max_requests_per_review)],
+        proposed_risk_level=semantic_risk,
+        proposed_confidence=semantic_confidence,
+        proposed_summary=proposed_summary,
+        proposed_recommendation=proposed_recommendation,
+    )
+    return VerifierPlan(
+        rollout_mode=normalized_mode,
+        should_invoke=bool(requested),
+        trigger=decision.trigger.value if decision.trigger is not None else None,
+        reason=decision.reason,
+        request_count=len(requested),
+    )
+
+
+def _build_verifier_note(verifier_plan: VerifierPlan | None) -> str | None:
+    if verifier_plan is None or verifier_plan.rollout_mode in {"off", "shadow"}:
+        return None
+    if verifier_plan.should_invoke:
+        request_label = "artifact" if verifier_plan.request_count == 1 else "artifacts"
+        return (
+            f"Shadow-mode verifier would review {verifier_plan.request_count} {request_label} "
+            f"via `{verifier_plan.trigger or 'unknown'}` because {verifier_plan.reason.rstrip('.').lower()}; "
+            "this does not change the merge lane until verifier rollout is promoted beyond shadow mode."
+        )
+    return f"Shadow-mode verifier stayed idle because {verifier_plan.reason.rstrip('.').lower()}."
 
 
 def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttributeProfile]) -> ArtifactAttributeProfile | None:
@@ -1306,6 +1427,9 @@ def _persist_audit_result(
     github_review_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     pr_feedback_mode: str | None = None,
+    verifier_mode: str | None = None,
+    verifier_trigger: str | None = None,
+    verifier_request_count: int = 0,
 ) :
     return record_audit_result(
         settings.db_path,
@@ -1335,6 +1459,9 @@ def _persist_audit_result(
         artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
         github_review_id=github_review_id,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
     )
 
 
@@ -1596,7 +1723,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     episode_context = _build_episode_context(job, settings)
     pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
     try:
-        comment_body = build_llm_comment(
+        comment_result = build_llm_comment(
             job.diff_text,
             deterministic_analysis,
             llm_client=settings.llm_client,
@@ -1607,12 +1734,33 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             episode_context=episode_context,
             repo_full=job.repo_full,
             pr_number=job.pr_number,
+            verifier_rollout_mode=settings.verifier_rollout_mode,
+            verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
+            return_metadata=True,
         )
-        fusion_assessment = _build_signal_fusion_assessment(
-            comment_body,
-            deterministic_analysis,
-            attribute_profiles=attribute_profiles,
-        )
+        if isinstance(comment_result, LlmCommentBuildResult):
+            comment_body = comment_result.comment_body
+            fusion_assessment = comment_result.fusion_assessment
+            verifier_plan = comment_result.verifier_plan
+        else:
+            comment_body = comment_result
+            fusion_assessment = _build_signal_fusion_assessment(
+                comment_body,
+                deterministic_analysis,
+                attribute_profiles=attribute_profiles,
+            )
+            verifier_plan = _build_verifier_plan(
+                deterministic_analysis,
+                comment_body,
+                semantic_packages=build_semantic_review_packages(deterministic_analysis),
+                proposed_summary=_extract_summary(comment_body, default=_build_fallback_summary(deterministic_analysis)),
+                proposed_recommendation=_extract_recommendation(
+                    comment_body,
+                    default=_default_recommendation_for_risk(fusion_assessment.risk_level),
+                ),
+                rollout_mode=settings.verifier_rollout_mode,
+                max_requests_per_review=settings.verifier_max_requests_per_review,
+            )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -1648,6 +1796,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 error_message=None,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=pr_feedback_mode,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
@@ -1710,6 +1861,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 github_review_id=github_review_id,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=pr_feedback_mode,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
@@ -1768,6 +1922,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
             pr_feedback_mode=pr_feedback_mode,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
         )
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
