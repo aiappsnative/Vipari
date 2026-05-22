@@ -372,7 +372,7 @@ Current note for the newly opened detection-engine roadmap:
 - GitHub issue `#18` (`Detection Engine Roadmap`) is now the parent feature for the next engine program.
 - GitHub issues `#19` through `#22` are the four execution phases under that parent.
 - The repo-visible execution plan for that parent feature lives in [docs/detection-engine-roadmap-parent-plan.md](docs/detection-engine-roadmap-parent-plan.md).
-- Phase A is merged into `feature/detection-engine-roadmap`, and Phase B is now functionally complete on `feature/detection-engine-phase-b-verifier-eval` with bounded shadow-mode verifier planning, calibration-ready audit fields, and release-gate metrics in the eval harness.
+- Phase A and Phase B are now merged into `feature/detection-engine-roadmap`; the parent branch includes bounded shadow-mode verifier planning, calibration-ready audit fields, and release-gate metrics in the eval harness, and is ready to branch Phase C.
 
 Verified against repo state and open issues:
 

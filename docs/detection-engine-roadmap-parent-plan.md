@@ -36,6 +36,7 @@ Current implementation status on `feature/detection-engine-phase-b-verifier-eval
 - durable PR audit records now persist verifier mode, trigger, and request-count metadata so feedback and PR outcomes can calibrate future verifier policy safely
 - OSS evaluation packages now include a synthetic verifier release-gate block with trigger precision/recall, disagreement counts, and budgeted cost/latency reporting
 - focused Phase B validation is currently green across verifier, worker, persistence, and eval-harness slices
+- Phase B merged into `feature/detection-engine-roadmap` at `3887bd5`, and the parent branch is now the canonical base for Phase C
 
 Branch topology:
 
@@ -230,6 +231,14 @@ Goal: add a proposer-verifier stack and turn evaluation into a measurable releas
 11. Delete the Phase B branch locally and remotely.
 12. Refresh the parent branch from the merged Phase B result.
 13. End-of-phase update step: update this document with Phase B status, merged commit, metric deltas, verifier rollout state, and any Phase C prerequisite adjustments.
+
+Phase B merge update:
+
+- merged PR: `#23` (`Complete Phase B verifier shadow gate`)
+- merged parent commit: `3887bd5`
+- rollout state: verifier planning remains shadow-mode only in the worker, with reviewer-facing PR comments intentionally kept free of rollout-internal verifier notes
+- validation summary before merge: `104 passed` across `tests/test_verifier.py`, `tests/test_engine.py`, `tests/test_audit_worker.py`, `tests/test_oss_eval_harness.py`, and `tests/test_persistence.py`
+- Phase C prerequisite adjustment: governance decision consumers should treat stored verifier metadata as calibration input and rollout evidence, not as an end-user policy decision on its own
 
 ## Phase C
 
