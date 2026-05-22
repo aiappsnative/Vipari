@@ -2602,6 +2602,25 @@ function prReviewLifecycleChip(route) {
     return `<span class="drift-chip chip-baseline">${escapeHtml(label)}</span>`;
 }
 
+function prReviewGovernanceDecisionBits(route) {
+    const governance = route?.governance_decision || {};
+    const lane = String(governance?.decision_lane || "").trim();
+    const rolloutMode = String(governance?.rollout_mode || "").trim();
+    const bits = [];
+    if (lane) {
+        bits.push(`governance ${lane.replaceAll("_", " ")}`);
+    }
+    if (rolloutMode) {
+        bits.push(`mode ${rolloutMode.replaceAll("_", " ")}`);
+    }
+    if (governance?.should_block_merge) {
+        bits.push("merge block active");
+    } else if (governance?.requires_escalation) {
+        bits.push("escalation advisory");
+    }
+    return bits;
+}
+
 function renderPrReviewRoutesSection(routePayload) {
     const routes = asArray(routePayload?.routes);
     const selectedRoute = routePayload?.selected_route || routes[0] || null;
@@ -2628,6 +2647,8 @@ function renderPrReviewRoutesSection(routePayload) {
     const artifactRows = asArray(baselineComparison.artifact_rows);
     const comparisonReady = Boolean(baselineComparison.comparison_ready);
     const comparisonNotice = prReviewComparisonNotice(selectedRoute, baselineComparison);
+    const governanceDecision = selectedRoute.governance_decision || {};
+    const governanceRationale = asArray(governanceDecision.rationale);
     const reviewNarrative = [selectedRoute.summary || "", selectedRoute.review_excerpt || ""].filter(Boolean);
     const reviewVerb = String(selectedRoute.output_mode || "").toLowerCase() === "lifecycle_tracking" ? "tracked" : "reviewed";
     const selectedTags = [
@@ -2642,6 +2663,7 @@ function renderPrReviewRoutesSection(routePayload) {
         selectedFeedback.strongly_disagree_count ? `${selectedFeedback.strongly_disagree_count} strongly disagree` : "",
         selectedFeedback.reaction_count ? `${selectedFeedback.reaction_count} GitHub reactions` : "",
         selectedFeedback.outcome_count ? `${selectedFeedback.outcome_count} recorded outcomes` : "",
+        ...prReviewGovernanceDecisionBits(selectedRoute),
     ].filter(Boolean);
 
     setSectionHtml("repo-pr-review-selected", `
@@ -2656,12 +2678,13 @@ function renderPrReviewRoutesSection(routePayload) {
                 <div class="pr-review-hero-meta">${escapeHtml(`Head ${selectedRoute.short_head_sha || selectedRoute.head_sha || "unknown"} · ${reviewVerb} ${formatDateLabel(selectedRoute.review_posted_at || selectedRoute.updated_at)}`)}</div>
                 <div class="pr-review-hero-copy">${escapeHtml(baselineComparison.headline || selectedRoute.summary || "Vipari recorded this PR review episode.")}</div>
                 ${selectedTags.length ? `<div class="tag-row">${selectedTags.map((tag) => `<span class="drift-chip chip-governance">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+                ${governanceRationale.length ? `<div class="artifact-card-reason">${escapeHtml(governanceRationale[0]?.summary || "")}</div>` : ""}
                 <div class="pr-review-metric-grid">
                     ${prReviewMetricCard("Touched artifacts", String(comparisonSummary.touched_artifact_count || selectedRoute.changed_artifact_count || 0), `${comparisonSummary.authoritative_baseline_count || 0} baseline-linked`, "pr-review-metric-strong")}
                     ${prReviewMetricCard("Line churn", `+${comparisonSummary.total_added_lines || 0} / -${comparisonSummary.total_removed_lines || 0}`, `${comparisonSummary.max_semantic_distance ? `max drift ${formatMetricValue(comparisonSummary.max_semantic_distance, 2)}` : "tracked diff volume"}`)}
                     ${prReviewMetricCard("Average drift", formatMetricValue(comparisonSummary.avg_semantic_distance || 0, 2), "semantic distance from current anchor")}
                     ${prReviewMetricCard("Coverage gaps", String(comparisonSummary.missing_baseline_count || 0), `${comparisonSummary.fallback_reference_count || 0} fallback anchors`, comparisonSummary.missing_baseline_count ? "pr-review-metric-warning" : "")}
-                    ${prReviewMetricCard("Flagged artifacts", String(comparisonSummary.flagged_artifact_count || 0), `${selectedFeedback.outcome_count || 0} recorded outcomes`)}
+                    ${prReviewMetricCard("Governance lane", String(governanceDecision.decision_lane || "normal").replaceAll("_", " "), governanceDecision.should_block_merge ? "merge block active" : (governanceDecision.requires_escalation ? "escalation advisory" : `${selectedFeedback.outcome_count || 0} recorded outcomes`), governanceDecision.should_block_merge ? "pr-review-metric-warning" : "")}
                 </div>
             </section>
 
@@ -2772,6 +2795,7 @@ function renderPrReviewRoutesSection(routePayload) {
             route.changed_artifact_count ? `${route.changed_artifact_count} touched` : "",
             feedback.helpful_count ? `${feedback.helpful_count} helpful` : "",
             feedback.reaction_count ? `${feedback.reaction_count} reactions` : "",
+            ...prReviewGovernanceDecisionBits(route),
         ].filter(Boolean);
         return `
             <article class="artifact-card${route.selected ? " artifact-card-selected" : ""}">

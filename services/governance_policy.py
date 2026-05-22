@@ -28,6 +28,28 @@ class GovernanceDecision:
     rationale: tuple[GovernanceDecisionReason, ...] = field(default_factory=tuple)
 
 
+def build_governance_ci_outcome(decision: GovernanceDecision) -> dict[str, object]:
+    decision_lane = str(decision.decision_lane or "inactive").strip().lower()
+
+    if decision.should_block_merge or decision_lane == "block_merge":
+        return {
+            "conclusion": "failure",
+            "recommended_exit_code": 1,
+            "recommended_gate": "block",
+        }
+    if decision.requires_escalation or decision_lane == "escalate":
+        return {
+            "conclusion": "neutral",
+            "recommended_exit_code": 0,
+            "recommended_gate": "warn",
+        }
+    return {
+        "conclusion": "success",
+        "recommended_exit_code": 0,
+        "recommended_gate": "pass",
+    }
+
+
 def normalize_governance_rollout_mode(value: str | None) -> str:
     candidate = str(value or GOVERNANCE_ROLLOUT_OFF).strip().lower()
     if candidate == GOVERNANCE_ROLLOUT_ENFORCE:

@@ -185,7 +185,7 @@ from services.control_plane_records import (
 )
 from services.pr_feedback_mode import resolve_pr_feedback_mode
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
-from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
+from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_governance_decision_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
 from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_repo_pr_review_routes_payload, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
@@ -4609,10 +4609,32 @@ def list_pre_audit_relevance_for_repo(request: Request, repo_full: str):
     )
 
 
+def get_repo_governance_decision(request: Request, repo_full: str):
+    _require_repo_dashboard_read_access(request, repo_full)
+    raw_pr_number = (request.query_params.get("pr_number") or request.query_params.get("pr") or "").strip()
+    raw_head_sha = (request.query_params.get("head_sha") or "").strip()
+    raw_rollout_mode = (request.query_params.get("rollout_mode") or "").strip()
+    if not raw_pr_number.isdigit() or not raw_head_sha:
+        raise HTTPException(status_code=400, detail="pr_number and head_sha are required.")
+    try:
+        payload = build_repo_governance_decision_payload(
+            AUDIT_DB_PATH,
+            repo_full,
+            pr_number=int(raw_pr_number),
+            head_sha=raw_head_sha,
+            rollout_mode=raw_rollout_mode or "dry_run",
+            build_pr_review_routes_payload_fn=build_repo_pr_review_routes_payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(payload)
+
+
 app.include_router(
     create_repo_read_router(
         pending_proposals_handler=list_pending_proposals_for_repo,
         pre_audit_relevance_handler=list_pre_audit_relevance_for_repo,
+        governance_decision_handler=get_repo_governance_decision,
     )
 )
 

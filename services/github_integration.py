@@ -451,6 +451,128 @@ def sync_pr_label(
     )
 
 
+def post_commit_status(
+    repo_full: str,
+    sha: str,
+    token: str,
+    *,
+    state: str,
+    description: str,
+    context: str = "vipari/governance-gate",
+    target_url: str | None = None,
+) -> None:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    commit = repo.get_commit(sha=sha)
+    commit.create_status(
+        state=state,
+        description=description,
+        context=context,
+        target_url=target_url,
+    )
+
+
+def post_check_run(
+    repo_full: str,
+    sha: str,
+    token: str,
+    *,
+    name: str = "Vipari Governance",
+    status: str = "completed",
+    conclusion: str | None = None,
+    title: str,
+    summary: str,
+    text: str | None = None,
+    details_url: str | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "name": name,
+        "head_sha": sha,
+        "status": status,
+        "output": {
+            "title": title,
+            "summary": summary,
+        },
+    }
+    if conclusion is not None:
+        payload["conclusion"] = conclusion
+    if text:
+        payload["output"]["text"] = text
+    if details_url:
+        payload["details_url"] = details_url
+
+    existing_check_run_id = _find_reusable_check_run_id(
+        repo_full,
+        sha,
+        token,
+        name=name,
+        target_status=status,
+    )
+    if existing_check_run_id is not None:
+        patch_payload = dict(payload)
+        patch_payload.pop("head_sha", None)
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo_full}/check-runs/{existing_check_run_id}",
+            data=json.dumps(patch_payload).encode("utf-8"),
+            method="PATCH",
+        )
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req):
+            return None
+
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo_full}/check-runs",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req):
+        return None
+
+
+def _find_reusable_check_run_id(
+    repo_full: str,
+    sha: str,
+    token: str,
+    *,
+    name: str,
+    target_status: str,
+) -> int | None:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo_full}/commits/{sha}/check-runs",
+        method="GET",
+    )
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    with urllib.request.urlopen(req) as response:
+        payload = json.load(response)
+
+    check_runs = payload.get("check_runs") if isinstance(payload, dict) else None
+    if not isinstance(check_runs, list):
+        return None
+
+    target_status_normalized = target_status.strip().lower()
+    reusable_statuses = {"in_progress"}
+    for check_run in reversed(check_runs):
+        if not isinstance(check_run, dict):
+            continue
+        if str(check_run.get("name") or "").strip() != name:
+            continue
+        existing_status = str(check_run.get("status") or "").strip().lower()
+        if target_status_normalized == "in_progress" and existing_status != "in_progress":
+            continue
+        if target_status_normalized == "completed" and existing_status not in reusable_statuses:
+            continue
+        check_run_id = check_run.get("id")
+        if isinstance(check_run_id, int):
+            return check_run_id
+    return None
+
+
 def _build_managed_comment_body(body: str) -> str:
     for marker in (DRIFTGUARD_MANAGED_MARKER, PROMPTDRIFT_MANAGED_MARKER):
         if body.startswith(marker):

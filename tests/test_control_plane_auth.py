@@ -566,6 +566,88 @@ def test_cp_repo_dashboard_valid_token_with_drift_read(tmp_path, monkeypatch):
     assert response.status_code == 200
 
 
+def test_cp_repo_governance_decision_valid_token_with_drift_read(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-read")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with patch(
+        "services.api_service.build_repo_governance_decision_payload",
+        return_value={
+            "repo_full": "org/repo",
+            "pr_number": 42,
+            "head_sha": "sha-42",
+            "conclusion": "neutral",
+            "recommended_exit_code": 0,
+            "recommended_gate": "warn",
+            "governance_decision": {"decision_lane": "escalate", "rollout_mode": "dry_run"},
+        },
+    ):
+        with TestClient(create_api_app()) as client:
+            response = client.get(
+                f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    assert response.status_code == 200
+    assert response.json()["conclusion"] == "neutral"
+    assert response.json()["recommended_exit_code"] == 0
+    assert response.json()["governance_decision"]["decision_lane"] == "escalate"
+
+
+def test_cp_repo_governance_decision_missing_scope_returns_403(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-scope")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 403
+
+
+def test_cp_repo_governance_decision_requires_pr_and_head_sha(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-params")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 400
+
+
+def test_cp_repo_governance_decision_not_allocated_returns_404(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    _user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-noalloc")
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 404
+
+
 def test_cp_repo_dashboard_missing_scope_returns_403(tmp_path, monkeypatch):
     db_path = str(tmp_path / "test.db")
     _configure_env(monkeypatch, db_path)

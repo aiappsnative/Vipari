@@ -164,12 +164,15 @@ def create_repo_read_router(
 	*,
 	pending_proposals_handler: Callable | None = None,
 	pre_audit_relevance_handler: Callable | None = None,
+	governance_decision_handler: Callable | None = None,
 ) -> APIRouter:
 	router = APIRouter(tags=["dashboard"])
 	if pending_proposals_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/proposals/pending", pending_proposals_handler, methods=["GET"])
 	if pre_audit_relevance_handler is not None:
 		router.add_api_route("/api/repos/{repo_full:path}/relevance-decisions", pre_audit_relevance_handler, methods=["GET"])
+	if governance_decision_handler is not None:
+		router.add_api_route("/api/repos/{repo_full:path}/governance-decision", governance_decision_handler, methods=["GET"])
 	return router
 
 

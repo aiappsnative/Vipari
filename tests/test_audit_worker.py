@@ -1499,6 +1499,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
     )
     posted = []
+    posted_check_runs = []
 
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
@@ -1507,6 +1508,10 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -1522,6 +1527,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         model="gpt-4o",
         max_attempts=2,
         max_retry_window_seconds=3600,
+        governance_check_run_rollout_mode="dry_run",
     )
 
     assert process_next_job_once(settings) is True
@@ -1536,9 +1542,24 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
+    assert len(posted_check_runs) == 2
     assert "## ❌ Vipari: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
+    assert posted_check_runs[0][0] == "doria90/dummyAI"
+    assert posted_check_runs[0][1] == "sha-2"
+    assert posted_check_runs[0][2] == "token"
+    assert posted_check_runs[0][3]["status"] == "in_progress"
+    assert posted_check_runs[0][3]["conclusion"] is None
+    assert posted_check_runs[0][3]["title"] == "Governance review pending retry"
+    assert posted_check_runs[1][0] == "doria90/dummyAI"
+    assert posted_check_runs[1][1] == "sha-2"
+    assert posted_check_runs[1][2] == "token"
+    assert posted_check_runs[1][3]["conclusion"] == "neutral"
+    assert posted_check_runs[1][3]["title"] == "Governance fallback review posted"
+    assert "Fallback reason: FakeRateLimitError: quota exceeded" in posted_check_runs[1][3]["text"]
+    assert "Deterministic risk: High" in posted_check_runs[1][3]["text"]
+    assert "Escalation decision: escalate_before_merge" in posted_check_runs[1][3]["text"]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1555,6 +1576,54 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert comment is not None
     assert comment.github_comment_id == 202
     assert comment.comment_mode == "preliminary_fallback"
+
+
+def test_worker_keeps_fallback_audit_when_fallback_governance_check_run_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=22,
+        installation_id=123,
+        head_sha="sha-22",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 2202)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+
+    def failing_comment(*args, **kwargs):
+        raise FakeRateLimitError("quota exceeded")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", failing_comment)
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        max_attempts=1,
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "fallback_posted"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "fallback_posted"
+    assert "Governance fallback check run not applied" in (audit.error_message or "")
 
 
 def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
@@ -1923,6 +1992,95 @@ def test_worker_uses_provider_retry_hint(tmp_path, monkeypatch):
     assert saved is not None
     assert saved.status == "retry_wait"
     assert saved.next_attempt_at >= before + 123
+
+
+def test_worker_posts_pending_governance_check_run_when_retrying(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=44,
+        installation_id=123,
+        head_sha="sha-44",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    posted_check_runs = []
+
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(FakeRateLimitError("quota exceeded")))
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "retry_wait"
+    assert len(posted_check_runs) == 1
+    repo_full, sha, token, payload = posted_check_runs[0]
+    assert repo_full == "doria90/dummyAI"
+    assert sha == "sha-44"
+    assert token == "token"
+    assert payload["name"] == "Vipari Governance"
+    assert payload["status"] == "in_progress"
+    assert payload["conclusion"] is None
+    assert payload["title"] == "Governance review pending retry"
+    assert payload["summary"] == "Vipari will retry governance review after a transient analysis failure."
+    assert "Retry reason: FakeRateLimitError: quota exceeded" in payload["text"]
+    assert "Retry scheduled at:" in payload["text"]
+
+
+def test_worker_keeps_retry_wait_when_pending_governance_check_run_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=45,
+        installation_id=123,
+        head_sha="sha-45",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(FakeRateLimitError("quota exceeded")))
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "retry_wait"
+    assert "Governance pending check run not applied" in (saved.last_error or "")
 
 
 def test_build_fallback_comment_renders_v3_structure():
@@ -3287,6 +3445,243 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     assert audit is not None
     assert audit.status == "completed"
     assert "Escalation label not applied" in (audit.error_message or "")
+
+
+def test_worker_posts_enforcing_governance_status_for_high_risk_changes(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=14,
+        installation_id=123,
+        head_sha="sha-14",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_statuses = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1414)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_commit_status",
+        lambda repo_full, sha, token, **kwargs: posted_statuses.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted_statuses == [
+        (
+            "doria90/dummyAI",
+            "sha-14",
+            "token",
+            {
+                "state": "failure",
+                "description": "Vipari governance blocked merge pending escalation.",
+                "context": "vipari/governance",
+                "target_url": None,
+            },
+        )
+    ]
+
+
+def test_worker_posts_neutral_governance_check_run_for_dry_run_escalation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=17,
+        installation_id=123,
+        head_sha="sha-17",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_check_runs = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1717)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(posted_check_runs) == 1
+    repo_full, sha, token, payload = posted_check_runs[0]
+    assert repo_full == "doria90/dummyAI"
+    assert sha == "sha-17"
+    assert token == "token"
+    assert payload["name"] == "Vipari Governance"
+    assert payload["conclusion"] == "neutral"
+    assert payload["title"] == "Governance recommends escalation"
+    assert payload["summary"] == "Vipari governance recommends escalation review before merge."
+    assert payload["details_url"] is None
+    assert "Decision lane: escalate" in payload["text"]
+    assert "Rollout mode: dry_run" in payload["text"]
+    assert "The completed PR audit reached a high-risk outcome and should enter the escalation lane." in payload["text"]
+    assert "Evidence: fused_risk=High" in payload["text"]
+    assert "Evidence: fused_confidence=Low" in payload["text"]
+
+
+def test_worker_keeps_completed_audit_when_governance_check_run_post_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=18,
+        installation_id=123,
+        head_sha="sha-18",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1818)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert "Governance check run not applied" in (audit.error_message or "")
+
+
+def test_worker_posts_advisory_governance_status_for_dry_run_escalation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=15,
+        installation_id=123,
+        head_sha="sha-15",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_statuses = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1515)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_commit_status",
+        lambda repo_full, sha, token, **kwargs: posted_statuses.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted_statuses == [
+        (
+            "doria90/dummyAI",
+            "sha-15",
+            "token",
+            {
+                "state": "success",
+                "description": "Vipari governance recommends escalation review before merge.",
+                "context": "vipari/governance",
+                "target_url": None,
+            },
+        )
+    ]
+
+
+def test_worker_keeps_completed_audit_when_governance_status_post_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=16,
+        installation_id=123,
+        head_sha="sha-16",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1616)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_status(*args, **kwargs):
+        raise RuntimeError("status unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_commit_status", fail_status)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert "Governance status not applied" in (audit.error_message or "")
 
 
 def test_build_llm_comment_renders_shadow_mode_verifier_gate_for_low_confidence_review():
