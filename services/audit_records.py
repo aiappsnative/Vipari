@@ -49,6 +49,9 @@ class PullRequestAuditRecord:
     suggested_risk_level: str
     fused_confidence: str | None
     semantic_review_completed: bool
+    verifier_mode: str | None
+    verifier_trigger: str | None
+    verifier_request_count: int
     error_message: str | None
     created_at: float
     updated_at: float
@@ -161,6 +164,9 @@ class ArtifactHistoryRecord:
     suggested_risk_level: str
     fused_confidence: str | None
     semantic_review_completed: bool
+    verifier_mode: str | None
+    verifier_trigger: str | None
+    verifier_request_count: int
     artifact_path: str
     artifact_type: str
     context_mode: str
@@ -275,6 +281,12 @@ def _ensure_pull_request_audit_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
     if "pr_feedback_mode" not in audit_columns:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_feedback_mode TEXT NOT NULL DEFAULT 'comments'")
+    if "verifier_mode" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_mode TEXT")
+    if "verifier_trigger" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_trigger TEXT")
+    if "verifier_request_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_request_count INTEGER NOT NULL DEFAULT 0")
 
 
 def ensure_pull_request_audit_schema(db_path: str) -> None:
@@ -308,6 +320,9 @@ def init_audit_record_db(db_path: str) -> None:
                 suggested_risk_level TEXT NOT NULL,
                 fused_confidence TEXT,
                 semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                verifier_mode TEXT,
+                verifier_trigger TEXT,
+                verifier_request_count INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
@@ -527,6 +542,9 @@ def record_audit_result(
     semantic_review_completed: bool,
     suggested_risk_level: str | None = None,
     fused_confidence: str | None = None,
+    verifier_mode: str | None = None,
+    verifier_trigger: str | None = None,
+    verifier_request_count: int = 0,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
@@ -570,8 +588,9 @@ def record_audit_result(
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode, pr_feedback_mode,
                     deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
+                    verifier_mode, verifier_trigger, verifier_request_count,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -594,6 +613,9 @@ def record_audit_result(
                     persisted_risk_level,
                     fused_confidence,
                     int(semantic_review_completed),
+                    verifier_mode,
+                    verifier_trigger,
+                    verifier_request_count,
                     error_message,
                     now,
                     now,
@@ -624,6 +646,9 @@ def record_audit_result(
                     suggested_risk_level = ?,
                     fused_confidence = ?,
                     semantic_review_completed = ?,
+                    verifier_mode = ?,
+                    verifier_trigger = ?,
+                    verifier_request_count = ?,
                     error_message = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -648,6 +673,9 @@ def record_audit_result(
                     persisted_risk_level,
                     fused_confidence,
                     int(semantic_review_completed),
+                    verifier_mode,
+                    verifier_trigger,
+                    verifier_request_count,
                     error_message,
                     now,
                     audit_id,
@@ -1667,6 +1695,9 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     fused_confidence = row["fused_confidence"] if "fused_confidence" in row.keys() else None
     pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else PR_FEEDBACK_MODE_COMMENTS
+    verifier_mode = row["verifier_mode"] if "verifier_mode" in row.keys() else None
+    verifier_trigger = row["verifier_trigger"] if "verifier_trigger" in row.keys() else None
+    verifier_request_count = row["verifier_request_count"] if "verifier_request_count" in row.keys() else 0
     return PullRequestAuditRecord(
         id=row["id"],
         job_id=row["job_id"],
@@ -1689,6 +1720,9 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=fused_confidence,
         semantic_review_completed=bool(row["semantic_review_completed"]),
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=int(verifier_request_count or 0),
         error_message=row["error_message"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -1933,6 +1967,9 @@ def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=row["fused_confidence"],
         semantic_review_completed=bool(row["semantic_review_completed"]),
+        verifier_mode=(row["verifier_mode"] if "verifier_mode" in row.keys() else None),
+        verifier_trigger=(row["verifier_trigger"] if "verifier_trigger" in row.keys() else None),
+        verifier_request_count=int((row["verifier_request_count"] if "verifier_request_count" in row.keys() else 0) or 0),
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],
         context_mode=row["context_mode"],

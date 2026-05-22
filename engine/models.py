@@ -21,6 +21,13 @@ class RiskLevel(str, Enum):
     HIGH = "High"
 
 
+class VerifierTrigger(str, Enum):
+    HIGH_IMPACT = "high_impact"
+    LOW_CONFIDENCE = "low_confidence"
+    RISK_DISAGREEMENT = "risk_disagreement"
+    MERGE_BLOCKING = "merge_blocking"
+
+
 class RelevanceConfidenceTier(str, Enum):
     CLEAR_YES = "clear_yes"
     UNCERTAIN = "uncertain"
@@ -120,3 +127,35 @@ class SemanticReviewPackage:
     added_lines: List[str] = field(default_factory=list)
     removed_lines: List[str] = field(default_factory=list)
     deterministic_findings: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class VerifierInvocationDecision:
+    should_invoke: bool
+    trigger: VerifierTrigger | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class VerifierReviewRequest:
+    path: str
+    artifact_type: str
+    review_scope: str
+    review_objective: str
+    key_questions: List[str] = field(default_factory=list)
+    deterministic_findings: List[str] = field(default_factory=list)
+    added_lines: List[str] = field(default_factory=list)
+    removed_lines: List[str] = field(default_factory=list)
+    proposed_risk_level: RiskLevel = RiskLevel.LOW
+    proposed_confidence: str = "Medium"
+    proposed_summary: str = ""
+    proposed_recommendation: str = ""
+
+
+@dataclass(frozen=True)
+class VerifierReviewResult:
+    risk_level: RiskLevel
+    confidence: str
+    summary: str
+    rationale: List[str] = field(default_factory=list)
+    requires_escalation: bool = False
