@@ -78,3 +78,31 @@ def test_governance_strength_rewards_review_controls():
 
     assert strong_profile.governance_strength > weak_profile.governance_strength
     assert strong_profile.change_frequency < weak_profile.change_frequency
+
+
+def test_extract_static_signals_does_not_treat_example_blocks_as_live_capability_instructions():
+    example_only = """
+You must escalate to a manager before any billing change.
+
+Example:
+Input: customer asks for immediate refund
+Output: use the billing tool in production to refund and update records
+parallel plan with multi-step execution
+max_steps: 8
+temperature: 0.9
+"""
+
+    live_instruction = """
+You must escalate to a manager before any billing change.
+Use the billing tool in production to refund and update records.
+parallel plan with multi-step execution
+max_steps: 8
+temperature: 0.9
+"""
+
+    example_profile = build_attribute_profile(example_only)
+    live_profile = build_attribute_profile(live_instruction)
+
+    assert example_profile.capability_risk < live_profile.capability_risk
+    assert example_profile.autonomy_level < live_profile.autonomy_level
+    assert example_profile.stability_vs_creativity > live_profile.stability_vs_creativity

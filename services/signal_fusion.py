@@ -36,31 +36,36 @@ def fuse_risk_levels(
     *,
     semantic_requires_escalation: bool = False,
     semantic_confidence: str | None = None,
+    policy_floor: str | None = None,
 ) -> str:
     normalized_deterministic = normalize_risk_level(deterministic_risk)
     normalized_semantic = normalize_risk_level(semantic_risk)
     normalized_confidence = normalize_confidence_level(semantic_confidence)
+    normalized_policy_floor = normalize_risk_level(policy_floor, default=normalized_deterministic)
     deterministic_order = RISK_ORDER[normalized_deterministic]
     semantic_order = RISK_ORDER[normalized_semantic]
+
+    def _apply_policy_floor(risk_level: str) -> str:
+        if RISK_ORDER[normalized_policy_floor] > RISK_ORDER[risk_level]:
+            return normalized_policy_floor
+        return risk_level
 
     if (
         normalized_deterministic == normalized_semantic == "Medium"
         and CONFIDENCE_ORDER[normalized_confidence] >= CONFIDENCE_ORDER["Medium"]
     ):
-        return "High"
+        return _apply_policy_floor("High")
 
     if CONFIDENCE_ORDER[normalized_confidence] == CONFIDENCE_ORDER["Low"] and not semantic_requires_escalation:
-        if semantic_order >= deterministic_order:
-            return normalized_deterministic
-        return normalized_deterministic
+        return _apply_policy_floor(normalized_deterministic)
 
     if semantic_order > deterministic_order and not semantic_requires_escalation:
         bounded_order = min(deterministic_order + 1, semantic_order)
-        return RISK_LEVELS[bounded_order]
+        return _apply_policy_floor(RISK_LEVELS[bounded_order])
 
     if semantic_order >= deterministic_order:
-        return normalized_semantic
-    return normalized_deterministic
+        return _apply_policy_floor(normalized_semantic)
+    return _apply_policy_floor(normalized_deterministic)
 
 
 def priority_from_fused_signals(score: float, *, risk_level: str | None = None) -> str:

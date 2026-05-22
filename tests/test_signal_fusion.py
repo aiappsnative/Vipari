@@ -33,3 +33,11 @@ def test_fuse_risk_levels_allows_full_semantic_escalation_when_merge_blocking():
 
 def test_fuse_risk_levels_keeps_deterministic_high_risk_when_inputs_differ():
     assert fuse_risk_levels("High", "Low") == "High"
+
+
+def test_fuse_risk_levels_applies_policy_floor_when_it_exceeds_fused_risk():
+    assert fuse_risk_levels("Low", "Low", policy_floor="Medium") == "Medium"
+
+
+def test_fuse_risk_levels_does_not_lower_result_below_existing_high_risk():
+    assert fuse_risk_levels("High", "Low", policy_floor="Medium") == "High"

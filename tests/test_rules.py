@@ -123,3 +123,37 @@ index 123..456 100644
     assert not any(f.rule_id == "capability_drift" for f in analysis.findings)
     assert not any(f.rule_id == "guardrail_weakening" for f in analysis.findings)
     assert analysis.suggested_risk_level.value == "Low"
+
+
+def test_analyze_diff_flags_orchestration_expansion_without_human_review():
+    diff = """diff --git a/prompts/agent.md b/prompts/agent.md
+index 123..456 100644
+--- a/prompts/agent.md
++++ b/prompts/agent.md
+@@ -1 +1,3 @@
+ You help the user with operations tasks.
++parallel tool execution is allowed when it improves speed.
++max_steps: 8
+"""
+    analysis = analyze_diff(diff)
+
+    assert analysis.has_relevant_changes
+    assert any(f.rule_id == "orchestration_drift" for f in analysis.findings)
+    assert analysis.suggested_risk_level.value == "Medium"
+
+
+def test_analyze_diff_flags_sensitive_tooling_access_without_safeguards():
+    diff = """diff --git a/tools/runner.yaml b/tools/runner.yaml
+index 123..456 100644
+--- a/tools/runner.yaml
++++ b/tools/runner.yaml
+@@ -1 +1,3 @@
+ tool: repo_runner
++tool: shell
++database access: enabled
+"""
+    analysis = analyze_diff(diff)
+
+    assert analysis.has_relevant_changes
+    assert any(f.rule_id == "sensitive_tooling_drift" for f in analysis.findings)
+    assert analysis.suggested_risk_level.value == "High"

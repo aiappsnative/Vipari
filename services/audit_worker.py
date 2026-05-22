@@ -14,6 +14,7 @@ from config import get_settings
 from engine.analysis import DiffAnalysis, analyze_diff
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
+from engine.policy import PolicyContext, default_policy_rules, evaluate_policy_rules
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
 from .governance_signals import GovernanceFinding, build_pr_comment_governance_findings
@@ -95,6 +96,8 @@ class SignalFusionAssessment:
     semantic_risk: str
     semantic_requires_escalation: bool
     escalation_recommendation: EscalationRecommendation
+    policy_floor: str | None = None
+    policy_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,11 @@ def build_llm_comment(
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
-    fusion_assessment = _build_signal_fusion_assessment(raw_comment, deterministic_analysis)
+    fusion_assessment = _build_signal_fusion_assessment(
+        raw_comment,
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
     canonical_details = _build_semantic_comment_details(
         raw_comment,
         deterministic_analysis,
@@ -186,6 +193,8 @@ def build_llm_comment(
             fusion_assessment.risk_level,
             confidence=fusion_assessment.confidence,
             semantic_requires_escalation=fusion_assessment.semantic_requires_escalation,
+            policy_floor=fusion_assessment.policy_floor,
+            policy_reasons=fusion_assessment.policy_reasons,
         ),
         semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
@@ -396,11 +405,17 @@ def _build_signal_fusion_summary(
     *,
     confidence: str | None,
     semantic_requires_escalation: bool,
+    policy_floor: str | None = None,
+    policy_reasons: tuple[str, ...] = (),
 ) -> str | None:
     normalized_deterministic = _normalize_risk_level(deterministic_risk)
     normalized_semantic = _normalize_risk_level(semantic_risk)
     normalized_fused = _normalize_risk_level(fused_risk)
     confidence_label = normalize_confidence_level(confidence, default="Medium").lower()
+
+    if policy_floor is not None and _normalize_risk_level(policy_floor) == normalized_fused and normalized_fused != normalized_deterministic:
+        reason_text = policy_reasons[0] if policy_reasons else "workspace policy raised the minimum review floor"
+        return f"Signal fusion honored a {normalized_fused.lower()} policy floor because {reason_text.rstrip('.').lower()}"
 
     if confidence_label == "low" and normalized_semantic != normalized_deterministic and normalized_fused == normalized_deterministic:
         return (
@@ -923,18 +938,58 @@ def _fuse_risk_levels(
     *,
     semantic_requires_escalation: bool = False,
     semantic_confidence: str | None = None,
+    policy_floor: str | None = None,
 ) -> str:
     return fuse_risk_levels(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         semantic_confidence=semantic_confidence,
+        policy_floor=policy_floor,
     )
+
+
+def _build_policy_evaluation(
+    deterministic_analysis: DiffAnalysis,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+):
+    policy_rules = default_policy_rules()
+    profiles = attribute_profiles or []
+    evaluations = []
+    risk_order = {"Low": 0, "Medium": 1, "High": 2}
+
+    for profile in profiles:
+        attribute_deltas = {
+            dimension.attribute_key: dimension.delta
+            for dimension in profile.dimensions
+            if dimension.delta is not None
+        }
+        evaluations.append(
+            evaluate_policy_rules(
+                PolicyContext(
+                    attribute_deltas=attribute_deltas,
+                    findings=tuple(deterministic_analysis.findings) if len(profiles) == 1 else tuple(),
+                ),
+                policy_rules,
+            )
+        )
+
+    if not evaluations:
+        evaluations.append(
+            evaluate_policy_rules(
+                PolicyContext(findings=tuple(deterministic_analysis.findings)),
+                policy_rules,
+            )
+        )
+
+    return max(evaluations, key=lambda evaluation: (risk_order[evaluation.minimum_risk.value], len(evaluation.matched_rules)))
 
 
 def _build_signal_fusion_assessment(
     comment_body: str,
     deterministic_analysis: DiffAnalysis,
+    *,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
 ) -> SignalFusionAssessment:
     deterministic_risk = deterministic_analysis.suggested_risk_level.value
     semantic_risk_explicit = _has_explicit_risk_level(comment_body)
@@ -947,11 +1002,14 @@ def _build_signal_fusion_assessment(
         default=_default_recommendation_for_risk(semantic_risk),
     )
     semantic_requires_escalation = _semantic_recommendation_requires_escalation(semantic_recommendation)
+    policy_evaluation = _build_policy_evaluation(deterministic_analysis, attribute_profiles)
+    policy_floor = policy_evaluation.minimum_risk.value if policy_evaluation.minimum_risk.value != "Low" else None
     fused_risk = _fuse_risk_levels(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         semantic_confidence=semantic_confidence,
+        policy_floor=policy_floor,
     )
 
     base_recommendation = _build_escalation_recommendation(deterministic_analysis)
@@ -976,6 +1034,8 @@ def _build_signal_fusion_assessment(
         semantic_risk=semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         escalation_recommendation=escalation_recommendation,
+        policy_floor=policy_floor,
+        policy_reasons=policy_evaluation.rationale,
     )
 
 
@@ -1548,7 +1608,11 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             repo_full=job.repo_full,
             pr_number=job.pr_number,
         )
-        fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
+        fusion_assessment = _build_signal_fusion_assessment(
+            comment_body,
+            deterministic_analysis,
+            attribute_profiles=attribute_profiles,
+        )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):

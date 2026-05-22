@@ -51,6 +51,37 @@ RETRIEVAL_TERMS = (
     "search index",
 )
 
+SENSITIVE_TOOL_ACCESS_TERMS = (
+    "database",
+    "sql",
+    "shell",
+    "payment",
+    "billing",
+    "refund",
+    "credential",
+    "token",
+)
+
+ORCHESTRATION_TERMS = (
+    "parallel",
+    "concurrent",
+    "multi-step",
+    "planner",
+    "plan first",
+    "max_steps",
+)
+
+HUMAN_REVIEW_TERMS = (
+    "ask manager",
+    "await approval",
+    "requires approval",
+    "human review",
+    "escalate",
+    "confirm with user",
+    "confirm with manager",
+    "handoff",
+)
+
 
 def _is_restrictive_line(text: str) -> bool:
     lowered = text.lower()
@@ -108,6 +139,22 @@ def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
             )
         )
 
+    if change.artifact_type in {"prompt", "system_prompt", "policy", "tooling"}:
+        newly_added_orchestration_terms = _matching_terms_in_nonrestrictive_lines(change.added_lines, ORCHESTRATION_TERMS) - _matching_terms(
+            change.removed_lines, ORCHESTRATION_TERMS
+        )
+        has_human_review_language = _contains_any(change.added_lines, HUMAN_REVIEW_TERMS)
+        if newly_added_orchestration_terms and not has_human_review_language:
+            findings.append(
+                RuleFinding(
+                    rule_id="orchestration_drift",
+                    title="Orchestration or autonomy expansion detected",
+                    severity=FindingSeverity.MEDIUM,
+                    rationale="Added lines increase step depth or parallel execution cues without matching human-review language.",
+                    evidence=change.added_lines[:3],
+                )
+            )
+
     if _contains_any(change.removed_lines, GUARDRAIL_TERMS):
         findings.append(
             RuleFinding(
@@ -153,6 +200,22 @@ def evaluate_structured_change(change: StructuredChange) -> List[RuleFinding]:
                 evidence=change.added_lines[:3],
             )
         )
+
+    if change.artifact_type in {"tooling", "ai_code"}:
+        newly_added_sensitive_tool_terms = _matching_terms_in_nonrestrictive_lines(change.added_lines, SENSITIVE_TOOL_ACCESS_TERMS) - _matching_terms(
+            change.removed_lines, SENSITIVE_TOOL_ACCESS_TERMS
+        )
+        has_guardrail_or_review_language = _contains_any(change.added_lines, GUARDRAIL_TERMS) or _contains_any(change.added_lines, HUMAN_REVIEW_TERMS)
+        if newly_added_sensitive_tool_terms and not has_guardrail_or_review_language:
+            findings.append(
+                RuleFinding(
+                    rule_id="sensitive_tooling_drift",
+                    title="Sensitive tooling access added without clear safeguards",
+                    severity=FindingSeverity.HIGH,
+                    rationale="Added tooling or AI code appears to grant access to sensitive systems or execution surfaces without matching guardrail or human-review language.",
+                    evidence=change.added_lines[:3],
+                )
+            )
 
     if change.artifact_type == "retrieval" and (
         _contains_any(change.added_lines, RETRIEVAL_TERMS) or _contains_any(change.removed_lines, RETRIEVAL_TERMS)

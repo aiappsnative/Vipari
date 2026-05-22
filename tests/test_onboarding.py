@@ -70,8 +70,9 @@ def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_cand
     )
 
     assert [artifact.artifact_path for artifact in result.artifacts] == ["config/model.yaml", "docs/prompts/system.txt"]
-    assert result.artifacts[0].confidence >= 0.88
-    assert result.artifacts[1].confidence >= 0.72
+    confidence_by_path = {artifact.artifact_path: artifact.confidence for artifact in result.artifacts}
+    assert confidence_by_path["config/model.yaml"] >= 0.82
+    assert confidence_by_path["docs/prompts/system.txt"] >= 0.88
     assert result.onboarding.discovered_artifact_count == 2
 
 

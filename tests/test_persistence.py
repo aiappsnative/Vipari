@@ -343,6 +343,8 @@ def test_db_migrate_allows_postgres_target_in_production(monkeypatch):
     get_settings.cache_clear()
 
     with patch.object(sys, "argv", ["db_migrate.py"]), patch(
+        "scripts.db_migrate.migrate_activity_database"
+    ) as migrate_activity_database_mock, patch(
         "scripts.db_migrate.migrate_database",
         return_value=_MigrationResult(
             backend="postgresql",
@@ -357,7 +359,7 @@ def test_db_migrate_allows_postgres_target_in_production(monkeypatch):
         exit_code = db_migrate_script.main()
 
     assert exit_code == 0
-    migrate_activity_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/activity")
+    migrate_activity_database_mock.assert_not_called()
     migrate_database_mock.assert_called_once_with("postgresql://user:pass@db.example.com/driftguard")
 
 

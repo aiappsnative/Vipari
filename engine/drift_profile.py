@@ -159,6 +159,28 @@ def _tokenize(text: str) -> set[str]:
     return {token.lower() for token in TOKEN_RE.findall(text) if len(token) > 2}
 
 
+def _strip_example_sections(text: str) -> str:
+    lines = text.splitlines()
+    retained: list[str] = []
+    in_example_block = False
+
+    for line in lines:
+        stripped = line.strip()
+        if EXAMPLE_RE.search(stripped):
+            in_example_block = True
+            continue
+        if in_example_block:
+            if not stripped:
+                in_example_block = False
+            elif stripped.startswith("#"):
+                in_example_block = False
+                retained.append(line)
+            continue
+        retained.append(line)
+
+    return "\n".join(retained)
+
+
 def lexical_similarity(left: str, right: str) -> float:
     left_tokens = _tokenize(left)
     right_tokens = _tokenize(right)
@@ -170,26 +192,27 @@ def lexical_similarity(left: str, right: str) -> float:
 
 
 def extract_static_signals(text: str) -> StaticSignals:
+    signal_text = _strip_example_sections(text)
     token_count = len(TOKEN_RE.findall(text))
     char_count = len(text)
     section_count = max(1, len([chunk for chunk in SECTION_SPLIT_RE.split(text) if chunk.strip()]))
     example_count = _count_pattern(EXAMPLE_RE, text)
-    constraint_count = sum(text.lower().count(marker) for marker in CONSTRAINT_MARKERS)
-    explicit_limit_count = _count_pattern(LIMIT_RE, text)
-    ambiguity_count = _count_pattern(AMBIGUITY_RE, text)
+    constraint_count = sum(signal_text.lower().count(marker) for marker in CONSTRAINT_MARKERS)
+    explicit_limit_count = _count_pattern(LIMIT_RE, signal_text)
+    ambiguity_count = _count_pattern(AMBIGUITY_RE, signal_text)
     instruction_density = 0.0 if token_count == 0 else round(constraint_count / token_count, 4)
-    guardrail_counts = {name: _count_pattern(pattern, text) for name, pattern in RULE_BUCKET_PATTERNS.items()}
-    write_signal_count = _count_pattern(WRITE_RE, text)
-    read_signal_count = _count_pattern(READ_RE, text)
-    sensitive_tool_count = _unique_term_hits(SENSITIVE_TOOL_TERMS, text)
-    prod_signal_count = _count_pattern(PROD_RE, text)
-    sandbox_signal_count = _count_pattern(SANDBOX_RE, text)
-    systems_touched_count = _unique_term_hits(SYSTEMS, text)
-    human_review_count = _count_pattern(APPROVAL_RE, text)
-    parallelism_signal_count = _count_pattern(PARALLEL_RE, text)
-    max_steps = _extract_optional_int(MAX_STEPS_RE, text)
-    temperature = _extract_optional_float(TEMPERATURE_RE, text)
-    top_p = _extract_optional_float(TOP_P_RE, text)
+    guardrail_counts = {name: _count_pattern(pattern, signal_text) for name, pattern in RULE_BUCKET_PATTERNS.items()}
+    write_signal_count = _count_pattern(WRITE_RE, signal_text)
+    read_signal_count = _count_pattern(READ_RE, signal_text)
+    sensitive_tool_count = _unique_term_hits(SENSITIVE_TOOL_TERMS, signal_text)
+    prod_signal_count = _count_pattern(PROD_RE, signal_text)
+    sandbox_signal_count = _count_pattern(SANDBOX_RE, signal_text)
+    systems_touched_count = _unique_term_hits(SYSTEMS, signal_text)
+    human_review_count = _count_pattern(APPROVAL_RE, signal_text)
+    parallelism_signal_count = _count_pattern(PARALLEL_RE, signal_text)
+    max_steps = _extract_optional_int(MAX_STEPS_RE, signal_text)
+    temperature = _extract_optional_float(TEMPERATURE_RE, signal_text)
+    top_p = _extract_optional_float(TOP_P_RE, signal_text)
 
     return StaticSignals(
         token_count=token_count,

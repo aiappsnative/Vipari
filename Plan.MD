@@ -367,6 +367,12 @@ proceed- `feature/eval-harness-v1`
 
 The live GitHub issue queue no longer matches the old ordering in this section.
 
+Current note for the newly opened detection-engine roadmap:
+
+- GitHub issue `#18` (`Detection Engine Roadmap`) is now the parent feature for the next engine program.
+- GitHub issues `#19` through `#22` are the four execution phases under that parent.
+- The repo-visible execution plan for that parent feature lives in [docs/detection-engine-roadmap-parent-plan.md](docs/detection-engine-roadmap-parent-plan.md).
+
 Verified against repo state and open issues:
 
 - GitHub issue `#20` (`feature/dashboard-redesign-v2`) is effectively completed and merged to `main`.
