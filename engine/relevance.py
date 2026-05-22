@@ -26,6 +26,12 @@ PATH_RULES = [
     (("ai", "llm", "assistant"), "ai_code", "Path indicates AI-related code or assets.", 55),
 ]
 
+NEGATIVE_PATH_MARKERS = (
+    "docs/",
+    "tests/",
+    "fixtures/",
+)
+
 CONTENT_RULES = [
     (("system prompt", "assistant behavior"), "system_prompt", "Content indicates a system prompt artifact.", 80),
     (("refuse", "do not reveal", "safety"), "guardrail", "Content indicates safety or guardrail instructions.", 75),
@@ -230,6 +236,10 @@ def evaluate_diff_for_audit(
 
 def classify_changed_file(changed_file: ChangedFile) -> RelevanceResult:
     path = changed_file.path.lower()
+    has_positive_path_signal = any(any(keyword in path for keyword in keywords) for keywords, _, _, _ in PATH_RULES)
+    if any(marker in path for marker in NEGATIVE_PATH_MARKERS) and not has_positive_path_signal:
+        return _build_relevance_result(changed_file, [])
+
     signals: List[RelevanceSignal] = []
     for keywords, artifact_type, reason, weight in PATH_RULES:
         if any(keyword in path for keyword in keywords):

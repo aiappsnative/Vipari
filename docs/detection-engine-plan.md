@@ -78,10 +78,12 @@ Implemented today:
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels synced to the latest high-confidence recommendation
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
+- static signal extraction now discounts example blocks so illustrative few-shot content does not inflate live capability or autonomy posture
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - approved-baseline-aware drift comparisons shared across PR review, onboarding history, and dashboard read models
 - normalized attribute-profile rendering shared across repo insights, overview hotspot entries, repo case files, and managed PR comments
 - PR comments now include a reviewer-facing attribute-profile section with baseline/current buckets, direction, and confidence when snapshots are available
+- signal fusion now supports policy-aware review floors derived from normalized attribute-profile deltas plus deterministic findings in the live audit-worker path
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
 - a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models

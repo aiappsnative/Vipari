@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 from config import get_settings
+from engine.models import FindingSeverity, RuleFinding
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -167,6 +168,106 @@ def test_build_signal_fusion_assessment_treats_missing_semantic_risk_as_low_conf
     assert assessment.risk_level == "Medium"
     assert assessment.confidence == "Low"
     assert assessment.escalation_recommendation.decision == "normal_review"
+
+
+def test_build_signal_fusion_assessment_applies_policy_floor_from_attribute_profiles():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.35),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.15),
+            ]
+        )
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Low\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "Medium"
+    assert assessment.policy_floor == "Medium"
+    assert assessment.policy_reasons
+
+
+def test_build_signal_fusion_assessment_does_not_combine_policy_deltas_across_artifacts():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.35),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=0.0),
+            ]
+        ),
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.0),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.15),
+            ]
+        ),
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Low\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "Low"
+    assert assessment.policy_floor is None
+    assert assessment.policy_reasons == ()
+
+
+def test_build_signal_fusion_assessment_keeps_finding_based_policy_floor_conservative_for_multi_artifact_changes():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Medium"),
+        findings=[
+            RuleFinding(
+                rule_id="sensitive_data_drift",
+                title="Sensitive data drift",
+                severity=FindingSeverity.HIGH,
+                rationale="Sensitive access was added.",
+            )
+        ],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.1),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=0.0),
+            ]
+        ),
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.0),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.2),
+            ]
+        ),
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Medium\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "High"
+    assert assessment.policy_floor is None
+    assert assessment.policy_reasons == ()
 
 
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):

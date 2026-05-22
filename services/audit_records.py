@@ -255,6 +255,8 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 def _ensure_pull_request_audit_columns(conn: sqlite3.Connection) -> None:
     audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+    if not audit_columns:
+        return
     if "pr_title" not in audit_columns:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_title TEXT")
     if "pr_state" not in audit_columns:
@@ -550,6 +552,7 @@ def record_audit_result(
     )
     persisted_feedback_mode = normalize_pr_feedback_mode(pr_feedback_mode)
     with _connect(db_path) as conn:
+        _ensure_pull_request_audit_columns(conn)
         existing = conn.execute(
             """
             SELECT id, created_at, pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at
@@ -1040,6 +1043,9 @@ def record_audit_feedback_event(
 ) -> AuditFeedbackEventRecord:
     timestamp = time.time() if created_at is None else created_at
     workspace_id = 0
+    from .audit_feedback_records import init_audit_feedback_db
+
+    init_audit_feedback_db(db_path)
     with _connect(db_path) as conn:
         audit_row = conn.execute(
             "SELECT id, repo_full, pr_number, head_sha FROM pull_request_audits WHERE id = ?",
@@ -1785,7 +1791,7 @@ def update_pull_request_audit_state(
     repo_full: str,
     pr_number: int,
     head_sha: str | None,
-    pr_title: str | None,
+    pr_title: str | None = None,
     pr_state: str | None,
     pr_merged: bool | None,
     pr_closed_at: float | None,
@@ -1812,7 +1818,7 @@ def update_pull_request_audit_state(
         conn.execute(
             """
             UPDATE pull_request_audits
-            SET pr_title = ?,
+            SET pr_title = COALESCE(?, pr_title),
                 pr_state = ?,
                 pr_merged = ?,
                 pr_closed_at = ?,
