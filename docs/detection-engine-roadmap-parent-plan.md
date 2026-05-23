@@ -240,13 +240,13 @@ Phase B merge update:
 - validation summary before merge: `104 passed` across `tests/test_verifier.py`, `tests/test_engine.py`, `tests/test_audit_worker.py`, `tests/test_oss_eval_harness.py`, and `tests/test_persistence.py`
 - Phase C prerequisite adjustment: governance decision consumers should treat stored verifier metadata as calibration input and rollout evidence, not as an end-user policy decision on its own
 
-Current implementation status on `feature/detection-engine-phase-c-governance-cicd`:
+Phase C merge update:
 
-- Phase C branch created from the refreshed roadmap parent branch after the Phase B merge landed on `feature/detection-engine-roadmap`
-- new governance decision-consumer service added in `services/governance_policy.py`
-- initial decision slice now evaluates persisted PR audits into `should_require_escalation` / `should_block_merge` style outcomes with explicit dry-run, warn, and enforce rollout semantics
-- verifier metadata is treated as calibration evidence in governance decisions rather than as a standalone merge-blocking signal
-- focused Phase C validation is currently green in `tests/test_governance_policy.py`
+- merged PR: `#24` (`Complete Phase C governance CI/CD lifecycle`)
+- merged parent commit: `967cbc2`
+- rollout state: governance decisions now have read-side consumers across dashboard, admin-token, and control-plane surfaces, with runner-side and worker-side GitHub status/check-run actuation still opt-in via dry-run/warn/enforce rollout settings
+- validation summary before merge: `247 passed` across `tests/test_github_integration.py`, `tests/test_audit_worker.py`, `tests/test_cloud_deployment.py`, `tests/test_dashboard_api.py`, `tests/test_control_plane_auth.py`, `tests/test_governance_gate_script.py`, and `tests/test_governance_policy.py`
+- Phase D prerequisite adjustment: optional scenario or hybrid-analysis follow-ons should preserve the new governance lifecycle as a downstream consumer of bounded audit evidence rather than turning experimental analysis into an implicit merge gate
 
 ## Phase C
 
@@ -301,6 +301,12 @@ Issue: `#22`
 Branch: `feature/detection-engine-phase-d-scenario-hybrid-analysis`
 PR target: `feature/detection-engine-roadmap`
 Goal: add optional scenario evals and hybrid static-analysis enrichments without changing the validity of the core engine when disabled.
+
+Current implementation status on `feature/detection-engine-phase-d-scenario-hybrid-analysis`:
+
+- Phase D branch created from the refreshed roadmap parent branch after the Phase C merge landed on `feature/detection-engine-roadmap`
+- first slice is scoped to disabled-by-default scenario-eval participation planning plus audit metadata capture, before any live scenario execution is wired into the worker path
+- Phase D should inherit the existing OSS eval-harness seeded-scenario surface rather than rebuilding scenario assertions from scratch
 
 ### Phase D Execution Checklist
 

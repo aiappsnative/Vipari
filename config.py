@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     governance_status_context: str = "vipari/governance"
     governance_check_run_rollout_mode: str = "off"
     governance_check_run_name: str = "Vipari Governance"
+    scenario_eval_rollout_mode: str = "off"
+    scenario_eval_max_artifacts_per_review: int = 2
+    scenario_eval_allowed_repos: str = ""
+    scenario_eval_allowed_artifact_types: str = ""
 
     openai_api_key: str = ""
     foundry_api_key: str = ""

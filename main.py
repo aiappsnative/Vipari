@@ -270,6 +270,10 @@ async def lifespan(_: FastAPI):
                 max_attempts=AUDIT_MAX_ATTEMPTS,
                 max_retry_window_seconds=AUDIT_MAX_RETRY_WINDOW_SECONDS,
                 poll_interval_seconds=AUDIT_WORKER_POLL_SECONDS,
+                scenario_eval_rollout_mode=settings.scenario_eval_rollout_mode,
+                scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
+                scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
+                scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
             )
         )
         worker.start()

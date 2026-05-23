@@ -618,6 +618,10 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
                 governance_status_context=settings.governance_status_context,
                 governance_check_run_rollout_mode=settings.governance_check_run_rollout_mode,
                 governance_check_run_name=settings.governance_check_run_name,
+                scenario_eval_rollout_mode=settings.scenario_eval_rollout_mode,
+                scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
+                scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
+                scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
             ),
         )
 
