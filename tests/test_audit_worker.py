@@ -55,6 +55,7 @@ from services.control_plane_records import (
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.hybrid_execution import HybridExecutionResult, HybridExecutionSummary
 from services.scenario_execution import ScenarioEvalExecution, ScenarioEvalExecutionSummary
 from services.activity_records import list_recent_activity_events
 from services.activity_schema_migrations import migrate_activity_database
@@ -337,6 +338,92 @@ def test_worker_persists_shadow_hybrid_analysis_plan_metadata(tmp_path, monkeypa
     assert audit.hybrid_analysis_requests[0]["artifact_path"] == "prompts/policy.md"
     assert audit.hybrid_analysis_requests[0]["analyzer_key"] == "prompt_policy_static_scan"
     assert "Shadow-mode hybrid static analysis would inspect 1 artifact" in (audit.hybrid_analysis_selection_reason or "")
+
+
+def test_worker_persists_shadow_hybrid_execution_summary(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=94,
+        installation_id=123,
+        head_sha="sha-94",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9004)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.execute_hybrid_analysis_plan",
+        lambda *args, **kwargs: HybridExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+            executions=(
+                HybridExecutionResult(
+                    analyzer_key="prompt_policy_static_scan",
+                    artifact_path="prompts/policy.md",
+                    artifact_type="prompt",
+                    finding_count=2,
+                    highest_severity="high",
+                    findings=(),
+                ),
+            ),
+        ),
+    )
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        hybrid_static_analysis_rollout_mode="shadow",
+        hybrid_static_analysis_max_artifacts_per_review=1,
+        hybrid_static_analysis_allowed_repos="doria90/*",
+        hybrid_static_analysis_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.hybrid_analysis_execution_count == 1
+    assert audit.hybrid_analysis_execution_reason == "Shadow-mode hybrid static analysis executed 1 artifact."
+    assert audit.hybrid_analysis_executions[0]["artifact_path"] == "prompts/policy.md"
+    assert audit.hybrid_analysis_executions[0]["highest_severity"] == "high"
 
 
 def test_build_signal_fusion_assessment_bounds_semantic_only_high_without_merge_blocking_recommendation():

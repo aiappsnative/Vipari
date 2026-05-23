@@ -298,18 +298,20 @@ Goal: turn calibrated engine outputs into auditable governance and CI/CD decisio
 ## Phase D
 
 Issue: `#22`
-Branch: `feature/detection-engine-phase-d-hybrid-execution`
+Branch: `feature/detection-engine-phase-d-hybrid-analyzer-execution`
 PR target: `feature/detection-engine-roadmap`
 Goal: add optional scenario evals and hybrid static-analysis enrichments without changing the validity of the core engine when disabled.
 
-Current implementation status on `feature/detection-engine-phase-d-hybrid-execution`:
+Current implementation status on `feature/detection-engine-phase-d-hybrid-analyzer-execution`:
 
 - the first two Phase D slices are already merged into `feature/detection-engine-roadmap` at `dae81b2`, covering disabled-by-default scenario participation planning plus shadow-only hybrid static-analysis planning and persistence
-- the current execution slice reuses the existing OSS eval-harness seeded-scenario surface instead of inventing a second scenario runtime
+- the scenario execution slice is already merged into `feature/detection-engine-roadmap` at `ed8b807`, reusing the existing OSS eval-harness seeded-scenario surface instead of inventing a second scenario runtime
 - shadow-mode scenario execution now runs only when the worker-selected scenario plan is eligible and the repo has a seeded scenario registered in the eval harness
 - scenario execution writes bounded execution summaries back into durable audit records, including scenario key, selected artifact paths, package/comparison paths, and assertion summary metadata
+- the current hybrid execution slice runs bounded in-memory analyzer passes over already-fetched artifact snapshots, keyed by the persisted hybrid-analysis plan rather than by a second repository crawl
+- hybrid execution now persists summary results for each selected artifact, including analyzer key, finding count, highest severity, and bounded finding metadata, while keeping rollout shadow-only and production-off
 - runtime guardrails continue to keep `SCENARIO_EVAL_ROLLOUT_MODE` and `HYBRID_STATIC_ANALYSIS_ROLLOUT_MODE` off in production and limited to `worker` or `monolith` roles elsewhere
-- latest targeted validation on this branch is green at `161 passed` across `tests/test_cloud_deployment.py`, `tests/test_audit_worker.py`, `tests/test_runtime_guardrails.py`, `tests/test_scenario_evaluation.py`, `tests/test_scenario_execution.py`, and `tests/test_hybrid_analysis.py`
+- latest targeted validation on this branch is green at `161 passed` across `tests/test_cloud_deployment.py`, `tests/test_audit_worker.py`, `tests/test_runtime_guardrails.py`, `tests/test_scenario_execution.py`, `tests/test_hybrid_analysis.py`, and `tests/test_hybrid_execution.py`
 
 ### Phase D Execution Checklist
 
