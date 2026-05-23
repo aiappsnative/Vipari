@@ -108,6 +108,7 @@ Implemented today:
 - human-gated proposal-and-approval flows for baseline promotions and repo onboarding: `cp_baseline_proposals` and `cp_repo_onboarding_proposals` tables managed by `services/proposals_records.py`; eight new `/cp/*` routes enforcing scope (`drift.write.low` / `drift.write.high`), principal-kind (`human_operator`-only approve gate), four-eyes rule, TOCTOU-safe conditional UPDATE, 30-day expiry, flood limits, and an `artifact_id` URL consistency guard to protect audit log integrity; service accounts structurally blocked from high-privilege scopes at both creation time (`validate_scope_kind_compatibility`) and route layer (`require_cp_principal_kind`)
 - shipped groundwork for repeatable OSS evaluation packages and CLI-driven branch-to-branch comparison
 - queue abstractions for local SQLite and SQS-style split execution, plus Redis-backed installation-token caching with in-process fallback
+- Phase D groundwork now includes disabled-by-default scenario and hybrid-analysis planning seams so optional deeper analysis can stay auditable and opt-in before any live execution path is promoted
 - retry-safe webhook delivery deduplication so ingress failures do not permanently drop redelivered GitHub events
 - split API/dashboard route protection via admin token, with metrics exposure disabled by default unless explicitly enabled
 - Docker and compose scaffolding for running Vipari as separately deployable webhook, worker, and API services

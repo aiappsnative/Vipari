@@ -133,6 +133,12 @@ def validate_runtime_configuration(settings: Settings) -> None:
         if not settings.has_github_app_credentials:
             errors.append("Worker service requires GitHub App credentials.")
 
+    if settings.hybrid_static_analysis_rollout_mode.strip().lower() != "off":
+        if settings.service_role not in {"worker", "monolith"}:
+            errors.append("Hybrid static analysis rollout is supported only on worker or monolith roles.")
+        if settings.is_production:
+            errors.append("Production must keep HYBRID_STATIC_ANALYSIS_ROLLOUT_MODE=off until Phase D rollout is explicitly promoted.")
+
     if settings.has_github_app_credentials:
         try:
             _validate_github_app_private_key(settings)

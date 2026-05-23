@@ -307,6 +307,7 @@ Current implementation status on `feature/detection-engine-phase-d-scenario-hybr
 - Phase D branch created from the refreshed roadmap parent branch after the Phase C merge landed on `feature/detection-engine-roadmap`
 - first slice is scoped to disabled-by-default scenario-eval participation planning plus audit metadata capture, before any live scenario execution is wired into the worker path
 - Phase D should inherit the existing OSS eval-harness seeded-scenario surface rather than rebuilding scenario assertions from scratch
+- second slice adds a shadow-only hybrid static-analysis planning contract plus production fail-closed runtime gating, without enabling any live analyzer execution yet
 
 ### Phase D Execution Checklist
 

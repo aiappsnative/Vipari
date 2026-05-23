@@ -274,6 +274,10 @@ async def lifespan(_: FastAPI):
                 scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
                 scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
                 scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
+                hybrid_static_analysis_rollout_mode=settings.hybrid_static_analysis_rollout_mode,
+                hybrid_static_analysis_max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
+                hybrid_static_analysis_allowed_repos=settings.hybrid_static_analysis_allowed_repos,
+                hybrid_static_analysis_allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
             )
         )
         worker.start()

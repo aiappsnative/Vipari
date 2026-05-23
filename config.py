@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     scenario_eval_max_artifacts_per_review: int = 2
     scenario_eval_allowed_repos: str = ""
     scenario_eval_allowed_artifact_types: str = ""
+    hybrid_static_analysis_rollout_mode: str = "off"
+    hybrid_static_analysis_max_artifacts_per_review: int = 2
+    hybrid_static_analysis_allowed_repos: str = ""
+    hybrid_static_analysis_allowed_artifact_types: str = ""
 
     openai_api_key: str = ""
     foundry_api_key: str = ""

@@ -44,6 +44,7 @@ from .governance_policy import (
     evaluate_governance_decision,
     normalize_governance_rollout_mode,
 )
+from .hybrid_analysis import HybridAnalysisPlan, build_hybrid_analysis_plan
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
 from .scenario_evaluation import ScenarioEvalPlan, build_scenario_eval_plan
@@ -71,6 +72,10 @@ class WorkerSettings:
     scenario_eval_max_artifacts_per_review: int = 2
     scenario_eval_allowed_repos: str = ""
     scenario_eval_allowed_artifact_types: str = ""
+    hybrid_static_analysis_rollout_mode: str = "off"
+    hybrid_static_analysis_max_artifacts_per_review: int = 2
+    hybrid_static_analysis_allowed_repos: str = ""
+    hybrid_static_analysis_allowed_artifact_types: str = ""
 
 
 RISK_BADGES = {
@@ -794,6 +799,21 @@ def _build_scenario_eval_plan_for_job(
         max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
         allowed_repos=settings.scenario_eval_allowed_repos,
         allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
+    )
+
+
+def _build_hybrid_analysis_plan_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+) -> HybridAnalysisPlan:
+    return build_hybrid_analysis_plan(
+        deterministic_analysis,
+        repo_full=job.repo_full,
+        rollout_mode=settings.hybrid_static_analysis_rollout_mode,
+        max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
+        allowed_repos=settings.hybrid_static_analysis_allowed_repos,
+        allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
     )
 
 
@@ -1739,12 +1759,19 @@ def _persist_audit_result(
     verifier_trigger: str | None = None,
     verifier_request_count: int = 0,
     scenario_eval_plan: ScenarioEvalPlan | None = None,
+    hybrid_analysis_plan: HybridAnalysisPlan | None = None,
 ) :
     scenario_eval_plan = scenario_eval_plan or ScenarioEvalPlan(
         rollout_mode="off",
         should_run=False,
         reason="Scenario eval rollout is disabled for this worker.",
         artifact_paths=(),
+    )
+    hybrid_analysis_plan = hybrid_analysis_plan or HybridAnalysisPlan(
+        rollout_mode="off",
+        should_run=False,
+        reason="Hybrid static analysis rollout is disabled for this worker.",
+        requests=(),
     )
     return record_audit_result(
         settings.db_path,
@@ -1781,6 +1808,10 @@ def _persist_audit_result(
         scenario_eval_artifact_count=scenario_eval_plan.artifact_count,
         scenario_eval_selection_reason=scenario_eval_plan.reason,
         scenario_eval_artifact_paths=list(scenario_eval_plan.artifact_paths),
+        hybrid_analysis_mode=hybrid_analysis_plan.rollout_mode,
+        hybrid_analysis_request_count=hybrid_analysis_plan.request_count,
+        hybrid_analysis_selection_reason=hybrid_analysis_plan.reason,
+        hybrid_analysis_requests=[request.__dict__ for request in hybrid_analysis_plan.requests],
     )
 
 
@@ -1832,9 +1863,11 @@ def _handle_fallback(
     escalation_recommendation: EscalationRecommendation | None = None,
     pr_feedback_mode: str | None = None,
     scenario_eval_plan: ScenarioEvalPlan | None = None,
+    hybrid_analysis_plan: HybridAnalysisPlan | None = None,
 ) -> str:
     effective_feedback_mode = pr_feedback_mode or _resolve_job_pr_feedback_mode(job, settings)
     effective_scenario_eval_plan = scenario_eval_plan or _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    effective_hybrid_analysis_plan = hybrid_analysis_plan or _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
     comment_attribute_profiles = _build_comment_attribute_profiles(
@@ -1868,6 +1901,7 @@ def _handle_fallback(
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
                 scenario_eval_plan=effective_scenario_eval_plan,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
             )
         except Exception as persist_exc:
             combined_error = f"{error_message}; persistence failed during silent fallback: {type(persist_exc).__name__}: {persist_exc}"
@@ -1907,6 +1941,7 @@ def _handle_fallback(
                         artifact_snapshots=artifact_snapshots,
                         pr_feedback_mode=effective_feedback_mode,
                         scenario_eval_plan=effective_scenario_eval_plan,
+                        hybrid_analysis_plan=effective_hybrid_analysis_plan,
                     )
                 except Exception as persist_exc:
                     combined_error = f"{combined_error}; persistence failed: {type(persist_exc).__name__}: {persist_exc}"
@@ -1957,6 +1992,7 @@ def _handle_fallback(
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
                 scenario_eval_plan=effective_scenario_eval_plan,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
             )
         except Exception as persist_exc:
             combined_error = f"{combined_error_message}; persistence failed after fallback review path: {type(persist_exc).__name__}: {persist_exc}"
@@ -1999,6 +2035,8 @@ def _handle_fallback(
                 error_message=combined_error,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
+                scenario_eval_plan=effective_scenario_eval_plan,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
             )
         except Exception as persist_exc:
             combined_error = (
@@ -2050,6 +2088,7 @@ def _handle_fallback(
             artifact_snapshots=artifact_snapshots,
             pr_feedback_mode=effective_feedback_mode,
             scenario_eval_plan=effective_scenario_eval_plan,
+            hybrid_analysis_plan=effective_hybrid_analysis_plan,
         )
     except Exception as persist_exc:
         combined_error = (
@@ -2080,6 +2119,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     episode_context = _build_episode_context(job, settings)
     pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
     scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
     try:
         comment_result = build_llm_comment(
             job.diff_text,
@@ -2151,6 +2191,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             escalation_recommendation=escalation_recommendation,
             pr_feedback_mode=pr_feedback_mode,
             scenario_eval_plan=scenario_eval_plan,
+            hybrid_analysis_plan=hybrid_analysis_plan,
         )
 
     if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
@@ -2174,6 +2215,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 verifier_trigger=verifier_plan.trigger,
                 verifier_request_count=verifier_plan.request_count,
                 scenario_eval_plan=scenario_eval_plan,
+                hybrid_analysis_plan=hybrid_analysis_plan,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
@@ -2207,6 +2249,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                     escalation_recommendation=escalation_recommendation,
                     pr_feedback_mode=pr_feedback_mode,
                     scenario_eval_plan=scenario_eval_plan,
+                    hybrid_analysis_plan=hybrid_analysis_plan,
                 )
 
         audit_error_message = None
@@ -2279,6 +2322,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 verifier_trigger=verifier_plan.trigger,
                 verifier_request_count=verifier_plan.request_count,
                 scenario_eval_plan=scenario_eval_plan,
+                hybrid_analysis_plan=hybrid_analysis_plan,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
@@ -2308,6 +2352,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             escalation_recommendation=escalation_recommendation,
             pr_feedback_mode=pr_feedback_mode,
             scenario_eval_plan=scenario_eval_plan,
+            hybrid_analysis_plan=hybrid_analysis_plan,
         )
 
     audit_error_message = None
@@ -2380,6 +2425,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             verifier_trigger=verifier_plan.trigger,
             verifier_request_count=verifier_plan.request_count,
             scenario_eval_plan=scenario_eval_plan,
+            hybrid_analysis_plan=hybrid_analysis_plan,
         )
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
