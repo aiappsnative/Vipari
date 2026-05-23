@@ -55,6 +55,7 @@ from services.control_plane_records import (
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.scenario_execution import ScenarioEvalExecution, ScenarioEvalExecutionSummary
 from services.activity_records import list_recent_activity_events
 from services.activity_schema_migrations import migrate_activity_database
 from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
@@ -181,6 +182,93 @@ def test_worker_persists_shadow_scenario_eval_plan_metadata(tmp_path, monkeypatc
     assert audit.scenario_eval_artifact_count == 1
     assert audit.scenario_eval_artifact_paths == ["prompts/policy.md"]
     assert "Shadow-mode scenario eval would review 1 artifact" in (audit.scenario_eval_selection_reason or "")
+
+
+def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=93,
+        installation_id=123,
+        head_sha="sha-93",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9003)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.execute_scenario_eval_plan",
+        lambda *args, **kwargs: ScenarioEvalExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+            executions=(
+                ScenarioEvalExecution(
+                    scenario_key="dummyai-review-target",
+                    artifact_paths=("prompts/policy.md",),
+                    package_path="artifacts/eval-runs/pr-93/doria90-dummyai/audit-job-1/run-package.json",
+                    comparison_path="artifacts/eval-runs/pr-93/doria90-dummyai/audit-job-1/comparison-summary.json",
+                    assertion_summary={"all_passed": True, "failed_count": 0},
+                    candidate_source="seeded",
+                ),
+            ),
+        ),
+    )
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        scenario_eval_rollout_mode="shadow",
+        scenario_eval_max_artifacts_per_review=1,
+        scenario_eval_allowed_repos="doria90/*",
+        scenario_eval_allowed_artifact_types="prompt,model_config",
+        scenario_eval_output_root=str(tmp_path / "artifacts"),
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.scenario_eval_execution_count == 1
+    assert "executed seeded scenario" in (audit.scenario_eval_execution_reason or "")
+    assert audit.scenario_eval_executions[0]["scenario_key"] == "dummyai-review-target"
+    assert audit.scenario_eval_executions[0]["assertion_summary"]["all_passed"] is True
 
 
 def test_worker_persists_shadow_hybrid_analysis_plan_metadata(tmp_path, monkeypatch):
