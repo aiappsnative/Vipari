@@ -136,6 +136,41 @@ def test_production_rejects_hybrid_static_analysis_rollout(monkeypatch):
     assert "HYBRID_STATIC_ANALYSIS_ROLLOUT_MODE=off" in str(exc_info.value)
 
 
+def test_production_rejects_scenario_eval_rollout(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("QUEUE_BACKEND", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://redis.example.com:6379/0")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "line1\nline2")
+    monkeypatch.setenv("SCENARIO_EVAL_ROLLOUT_MODE", "shadow")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "SCENARIO_EVAL_ROLLOUT_MODE=off" in str(exc_info.value)
+
+
+def test_api_role_rejects_scenario_eval_rollout(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "api")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./promptdrift.db")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setenv("SCENARIO_EVAL_ROLLOUT_MODE", "shadow")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "worker or monolith roles" in str(exc_info.value)
+
+
 def test_api_role_rejects_hybrid_static_analysis_rollout(monkeypatch):
     monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setenv("SERVICE_ROLE", "api")

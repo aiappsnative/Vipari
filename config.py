@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     scenario_eval_max_artifacts_per_review: int = 2
     scenario_eval_allowed_repos: str = ""
     scenario_eval_allowed_artifact_types: str = ""
+    scenario_eval_output_root: str = str(Path(__file__).resolve().parent / "artifacts" / "eval-runs")
     hybrid_static_analysis_rollout_mode: str = "off"
     hybrid_static_analysis_max_artifacts_per_review: int = 2
     hybrid_static_analysis_allowed_repos: str = ""
