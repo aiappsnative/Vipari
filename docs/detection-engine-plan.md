@@ -85,6 +85,7 @@ Implemented today:
 - PR comments now include a reviewer-facing attribute-profile section with baseline/current buckets, direction, and confidence when snapshots are available
 - signal fusion now supports policy-aware review floors derived from normalized attribute-profile deltas plus deterministic findings in the live audit-worker path
 - Phase B now includes explicit verifier contracts, bounded shadow-mode verifier planning in the live audit-worker path, calibration-ready verifier metadata in durable audit storage, and synthetic release-gate reporting in the OSS eval harness
+- Phase C has started with governance-policy consumers outside the engine core, beginning with persisted-audit decision helpers that separate dry-run escalation advice from enforce-mode merge blocking
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
 - a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models

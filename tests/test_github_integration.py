@@ -1,6 +1,8 @@
 import os
 import sys
 import base64
+import io
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -852,6 +854,270 @@ def test_remove_pr_label_removes_existing_issue_label(monkeypatch):
 
     assert removed is True
     assert removed_labels == [github_integration.DRIFTGUARD_ESCALATION_LABEL]
+
+
+def test_post_commit_status_creates_commit_status(monkeypatch):
+    created_statuses = []
+
+    class FakeCommit:
+        def create_status(self, *, state, description, context, target_url=None):
+            created_statuses.append((state, description, context, target_url))
+
+    class FakeRepo:
+        def get_commit(self, sha):
+            assert sha == "abc123"
+            return FakeCommit()
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    github_integration.post_commit_status(
+        "doria90/dummyAI",
+        "abc123",
+        "installation-token",
+        state="failure",
+        description="Vipari governance gate blocked this change.",
+        context="vipari/governance-gate",
+        target_url="https://app.example.test/dashboard/doria90%2FdummyAI?tab=pr-reviews",
+    )
+
+    assert created_statuses == [
+        (
+            "failure",
+            "Vipari governance gate blocked this change.",
+            "vipari/governance-gate",
+            "https://app.example.test/dashboard/doria90%2FdummyAI?tab=pr-reviews",
+        )
+    ]
+
+
+def test_post_check_run_posts_completed_check_run(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def __enter__(self):
+            if self.payload is None:
+                return self
+            return self.payload
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request):
+        if request.get_method() == "GET":
+            return FakeResponse(io.BytesIO(json.dumps({"check_runs": []}).encode("utf-8")))
+        captured["url"] = request.full_url
+        captured["authorization"] = request.get_header("Authorization")
+        captured["accept"] = request.get_header("Accept")
+        captured["content_type"] = request.get_header("Content-type")
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    github_integration.post_check_run(
+        "doria90/dummyAI",
+        "abc123",
+        "installation-token",
+        name="Vipari Governance",
+        conclusion="neutral",
+        title="Governance recommends escalation",
+        summary="Vipari governance recommends escalation review before merge.",
+        text="Decision lane: escalate\nRollout mode: dry_run",
+        details_url="https://app.example.test/dashboard/doria90%2FdummyAI?tab=pr-reviews",
+    )
+
+    assert captured == {
+        "url": "https://api.github.com/repos/doria90/dummyAI/check-runs",
+        "authorization": "Bearer installation-token",
+        "accept": "application/vnd.github+json",
+        "content_type": "application/json",
+        "payload": {
+            "name": "Vipari Governance",
+            "head_sha": "abc123",
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": "https://app.example.test/dashboard/doria90%2FdummyAI?tab=pr-reviews",
+            "output": {
+                "title": "Governance recommends escalation",
+                "summary": "Vipari governance recommends escalation review before merge.",
+                "text": "Decision lane: escalate\nRollout mode: dry_run",
+            },
+        },
+    }
+
+
+def test_post_check_run_posts_in_progress_check_run_without_conclusion(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def __enter__(self):
+            if self.payload is None:
+                return self
+            return self.payload
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request):
+        if request.get_method() == "GET":
+            return FakeResponse(io.BytesIO(json.dumps({"check_runs": []}).encode("utf-8")))
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    github_integration.post_check_run(
+        "doria90/dummyAI",
+        "abc123",
+        "installation-token",
+        name="Vipari Governance",
+        status="in_progress",
+        conclusion=None,
+        title="Governance review pending retry",
+        summary="Vipari will retry governance review after a transient analysis failure.",
+        text="Retry reason: RateLimitError: quota exceeded",
+    )
+
+    assert captured["payload"] == {
+        "name": "Vipari Governance",
+        "head_sha": "abc123",
+        "status": "in_progress",
+        "output": {
+            "title": "Governance review pending retry",
+            "summary": "Vipari will retry governance review after a transient analysis failure.",
+            "text": "Retry reason: RateLimitError: quota exceeded",
+        },
+    }
+
+
+def test_post_check_run_reuses_existing_in_progress_check_run(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def __enter__(self):
+            if self.payload is None:
+                return self
+            return self.payload
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request):
+        requests.append((request.get_method(), request.full_url, request.data))
+        if request.get_method() == "GET":
+            payload = {
+                "check_runs": [
+                    {"id": 77, "name": "Vipari Governance", "status": "in_progress"}
+                ]
+            }
+            return FakeResponse(io.BytesIO(json.dumps(payload).encode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    github_integration.post_check_run(
+        "doria90/dummyAI",
+        "abc123",
+        "installation-token",
+        name="Vipari Governance",
+        status="in_progress",
+        conclusion=None,
+        title="Governance review pending retry",
+        summary="Vipari will retry governance review after a transient analysis failure.",
+        text="Retry reason: RateLimitError: quota exceeded",
+    )
+
+    assert requests[0] == (
+        "GET",
+        "https://api.github.com/repos/doria90/dummyAI/commits/abc123/check-runs",
+        None,
+    )
+    assert requests[1][0] == "PATCH"
+    assert requests[1][1] == "https://api.github.com/repos/doria90/dummyAI/check-runs/77"
+    assert json.loads(requests[1][2].decode("utf-8")) == {
+        "name": "Vipari Governance",
+        "status": "in_progress",
+        "output": {
+            "title": "Governance review pending retry",
+            "summary": "Vipari will retry governance review after a transient analysis failure.",
+            "text": "Retry reason: RateLimitError: quota exceeded",
+        },
+    }
+
+
+def test_post_check_run_completes_existing_in_progress_check_run(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def __enter__(self):
+            if self.payload is None:
+                return self
+            return self.payload
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request):
+        requests.append((request.get_method(), request.full_url, request.data))
+        if request.get_method() == "GET":
+            payload = {
+                "check_runs": [
+                    {"id": 91, "name": "Vipari Governance", "status": "in_progress"}
+                ]
+            }
+            return FakeResponse(io.BytesIO(json.dumps(payload).encode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
+
+    github_integration.post_check_run(
+        "doria90/dummyAI",
+        "abc123",
+        "installation-token",
+        name="Vipari Governance",
+        conclusion="neutral",
+        title="Governance recommends escalation",
+        summary="Vipari governance recommends escalation review before merge.",
+        text="Decision lane: escalate",
+    )
+
+    assert requests[0] == (
+        "GET",
+        "https://api.github.com/repos/doria90/dummyAI/commits/abc123/check-runs",
+        None,
+    )
+    assert requests[1][0] == "PATCH"
+    assert requests[1][1] == "https://api.github.com/repos/doria90/dummyAI/check-runs/91"
+    assert json.loads(requests[1][2].decode("utf-8")) == {
+        "name": "Vipari Governance",
+        "status": "completed",
+        "conclusion": "neutral",
+        "output": {
+            "title": "Governance recommends escalation",
+            "summary": "Vipari governance recommends escalation review before merge.",
+            "text": "Decision lane: escalate",
+        },
+    }
 
 
 def test_remove_pr_label_removes_legacy_promptdrift_issue_label(monkeypatch):

@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from ipaddress import ip_address
+from types import SimpleNamespace
 from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
@@ -36,7 +37,13 @@ from .audit_records import (
     record_audit_result,
 )
 from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
-from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
+from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, post_check_run, post_commit_status, sync_pr_label, upsert_pr_comment
+from .governance_policy import (
+    GOVERNANCE_ROLLOUT_OFF,
+    build_governance_ci_outcome,
+    evaluate_governance_decision,
+    normalize_governance_rollout_mode,
+)
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
 
@@ -55,6 +62,10 @@ class WorkerSettings:
     poll_interval_seconds: float = 2.0
     verifier_rollout_mode: str = "off"
     verifier_max_requests_per_review: int = 3
+    governance_status_rollout_mode: str = "off"
+    governance_status_context: str = "vipari/governance"
+    governance_check_run_rollout_mode: str = "off"
+    governance_check_run_name: str = "Vipari Governance"
 
 
 RISK_BADGES = {
@@ -1386,6 +1397,283 @@ def _apply_escalation_label_for_job(
     )
 
 
+def _append_audit_error_message(existing: str | None, additional: str) -> str:
+    if existing:
+        return f"{existing}; {additional}"
+    return additional
+
+
+def _governance_status_state(conclusion: str) -> str:
+    normalized = str(conclusion or "").strip().lower()
+    if normalized == "failure":
+        return "failure"
+    return "success"
+
+
+def _governance_status_description(outcome: dict[str, object]) -> str:
+    recommended_gate = str(outcome.get("recommended_gate") or "pass").strip().lower()
+    if recommended_gate == "block":
+        return "Vipari governance blocked merge pending escalation."
+    if recommended_gate == "warn":
+        return "Vipari governance recommends escalation review before merge."
+    return "Vipari governance found no merge-blocking escalation signal."
+
+
+def _governance_check_run_title(outcome: dict[str, object]) -> str:
+    recommended_gate = str(outcome.get("recommended_gate") or "pass").strip().lower()
+    if recommended_gate == "block":
+        return "Governance blocked merge"
+    if recommended_gate == "warn":
+        return "Governance recommends escalation"
+    return "Governance passed"
+
+
+def _governance_reason_evidence_lines(reason: object, *, limit: int = 2) -> list[str]:
+    evidence = getattr(reason, "evidence", ()) or ()
+    lines: list[str] = []
+    for item in tuple(str(value).strip() for value in evidence if str(value).strip())[:limit]:
+        lines.append(f"  Evidence: {item}")
+    return lines
+
+
+def _governance_check_run_text(decision: object) -> str:
+    rationale = getattr(decision, "rationale", ()) or ()
+    lines = [
+        f"Decision lane: {getattr(decision, 'decision_lane', 'inactive')}",
+        f"Rollout mode: {getattr(decision, 'rollout_mode', 'off')}",
+    ]
+    if rationale:
+        lines.append("")
+        lines.append("Rationale:")
+        for reason in rationale:
+            lines.append(f"- {reason.summary}")
+            lines.extend(_governance_reason_evidence_lines(reason))
+    return "\n".join(lines)
+
+
+def _fallback_governance_check_run_text(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    error_message: str,
+    recommendation: EscalationRecommendation,
+) -> str:
+    lines = [
+        f"Fallback reason: {error_message}",
+        f"Deterministic risk: {_normalize_risk_level(deterministic_analysis.suggested_risk_level.value)}",
+        f"Escalation decision: {recommendation.decision}",
+    ]
+    if deterministic_analysis.findings:
+        lines.append("")
+        lines.append("Deterministic findings:")
+        for finding in deterministic_analysis.findings[:2]:
+            lines.append(f"- {finding.title}")
+    return "\n".join(lines)
+
+
+def _build_governance_signal_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    rollout_mode: str,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+) -> tuple[object, dict[str, object], str | None] | None:
+    normalized_rollout_mode = normalize_governance_rollout_mode(rollout_mode)
+    if normalized_rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return None
+
+    transient_audit = SimpleNamespace(
+        status="completed",
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+    )
+    decision = evaluate_governance_decision(
+        transient_audit,
+        findings=deterministic_analysis.findings,
+        rollout_mode=normalized_rollout_mode,
+    )
+    outcome = build_governance_ci_outcome(decision)
+    target_url = _build_pr_comment_dashboard_deep_link(
+        job.repo_full,
+        job.pr_number,
+        attribute_profiles,
+        episode_context,
+    )
+    return decision, outcome, target_url
+
+
+def _post_governance_status_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    signal = _build_governance_signal_for_job(
+        job,
+        deterministic_analysis,
+        rollout_mode=settings.governance_status_rollout_mode,
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+        attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+    )
+    if signal is None:
+        return
+    _decision, outcome, target_url = signal
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_commit_status(
+        job.repo_full,
+        job.head_sha,
+        token,
+        state=_governance_status_state(str(outcome.get("conclusion") or "")),
+        description=_governance_status_description(outcome),
+        context=(settings.governance_status_context or "vipari/governance").strip() or "vipari/governance",
+        target_url=target_url,
+    )
+
+
+def _post_governance_check_run_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    signal = _build_governance_signal_for_job(
+        job,
+        deterministic_analysis,
+        rollout_mode=settings.governance_check_run_rollout_mode,
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+        attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+    )
+    if signal is None:
+        return
+
+    decision, outcome, target_url = signal
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        conclusion=str(outcome.get("conclusion") or "success").strip().lower(),
+        title=_governance_check_run_title(outcome),
+        summary=_governance_status_description(outcome),
+        text=_governance_check_run_text(decision),
+        details_url=target_url,
+    )
+
+
+def _post_fallback_governance_check_run_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    error_message: str,
+    recommendation: EscalationRecommendation,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    rollout_mode = normalize_governance_rollout_mode(settings.governance_check_run_rollout_mode)
+    if rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        conclusion="neutral",
+        title="Governance fallback review posted",
+        summary="Vipari posted a deterministic fallback review because full semantic review was unavailable.",
+        text=_fallback_governance_check_run_text(
+            deterministic_analysis,
+            error_message=error_message,
+            recommendation=recommendation,
+        ),
+        details_url=_build_pr_comment_dashboard_deep_link(
+            job.repo_full,
+            job.pr_number,
+            attribute_profiles,
+            episode_context,
+        ),
+    )
+
+
+def _pending_governance_check_run_text(error_message: str, *, retry_at: float | None) -> str:
+    lines = [f"Retry reason: {error_message}"]
+    if retry_at is not None:
+        lines.append(f"Retry scheduled at: {int(retry_at)}")
+    return "\n".join(lines)
+
+
+def _post_pending_governance_check_run_for_job(
+    job: AuditJob,
+    settings: WorkerSettings,
+    *,
+    error_message: str,
+    retry_at: float | None,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    rollout_mode = normalize_governance_rollout_mode(settings.governance_check_run_rollout_mode)
+    if rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        status="in_progress",
+        conclusion=None,
+        title="Governance review pending retry",
+        summary="Vipari will retry governance review after a transient analysis failure.",
+        text=_pending_governance_check_run_text(error_message, retry_at=retry_at),
+        details_url=_build_pr_comment_dashboard_deep_link(
+            job.repo_full,
+            job.pr_number,
+            attribute_profiles,
+            episode_context,
+        ),
+    )
+
+
 def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
     if not deterministic_analysis.artifacts:
         return {}
@@ -1601,6 +1889,22 @@ def _handle_fallback(
             )
         except Exception as label_exc:
             combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+        try:
+            _post_fallback_governance_check_run_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                error_message=error_message,
+                recommendation=recommendation,
+                attribute_profiles=comment_attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            combined_error_message = _append_audit_error_message(
+                combined_error_message,
+                f"Governance fallback check run not applied: {type(exc).__name__}: {exc}",
+            )
 
         try:
             audit = _persist_audit_result(
@@ -1677,6 +1981,22 @@ def _handle_fallback(
         )
     except Exception as label_exc:
         combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+    try:
+        _post_fallback_governance_check_run_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            error_message=error_message,
+            recommendation=recommendation,
+            attribute_profiles=comment_attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        combined_error_message = _append_audit_error_message(
+            combined_error_message,
+            f"Governance fallback check run not applied: {type(exc).__name__}: {exc}",
+        )
 
     try:
         audit = _persist_audit_result(
@@ -1766,7 +2086,22 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
             retry_delay_seconds = _extract_retry_after_seconds(exc) or _retry_delay_seconds(job.attempt_count)
             retry_at = time.time() + retry_delay_seconds
-            mark_job_retry(settings.db_path, job.id, error_message=error_message, retry_at=retry_at)
+            retry_error_message = error_message
+            try:
+                _post_pending_governance_check_run_for_job(
+                    job,
+                    settings,
+                    error_message=error_message,
+                    retry_at=retry_at,
+                    attribute_profiles=attribute_profiles,
+                    episode_context=episode_context,
+                )
+            except Exception as pending_exc:
+                retry_error_message = _append_audit_error_message(
+                    retry_error_message,
+                    f"Governance pending check run not applied: {type(pending_exc).__name__}: {pending_exc}",
+                )
+            mark_job_retry(settings.db_path, job.id, error_message=retry_error_message, retry_at=retry_at)
             return "retry_wait"
 
         return _handle_fallback(
@@ -1843,6 +2178,44 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             )
         except Exception as exc:
             audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
+        try:
+            _post_governance_status_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            audit_error_message = _append_audit_error_message(
+                audit_error_message,
+                f"Governance status not applied: {type(exc).__name__}: {exc}",
+            )
+        try:
+            _post_governance_check_run_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            audit_error_message = _append_audit_error_message(
+                audit_error_message,
+                f"Governance check run not applied: {type(exc).__name__}: {exc}",
+            )
 
         try:
             _persist_audit_result(
@@ -1904,6 +2277,44 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         )
     except Exception as exc:
         audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
+    try:
+        _post_governance_status_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            suggested_risk_level=fusion_assessment.risk_level,
+            fused_confidence=fusion_assessment.confidence,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
+            attribute_profiles=attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = _append_audit_error_message(
+            audit_error_message,
+            f"Governance status not applied: {type(exc).__name__}: {exc}",
+        )
+    try:
+        _post_governance_check_run_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            suggested_risk_level=fusion_assessment.risk_level,
+            fused_confidence=fusion_assessment.confidence,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
+            attribute_profiles=attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = _append_audit_error_message(
+            audit_error_message,
+            f"Governance check run not applied: {type(exc).__name__}: {exc}",
+        )
 
     try:
         audit = _persist_audit_result(

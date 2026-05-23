@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
     pr_diff_fetch_attempts: int = 3
     pr_diff_fetch_retry_seconds: float = 2.0
+    governance_status_rollout_mode: str = "off"
+    governance_status_context: str = "vipari/governance"
+    governance_check_run_rollout_mode: str = "off"
+    governance_check_run_name: str = "Vipari Governance"
 
     openai_api_key: str = ""
     foundry_api_key: str = ""

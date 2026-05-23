@@ -240,6 +240,14 @@ Phase B merge update:
 - validation summary before merge: `104 passed` across `tests/test_verifier.py`, `tests/test_engine.py`, `tests/test_audit_worker.py`, `tests/test_oss_eval_harness.py`, and `tests/test_persistence.py`
 - Phase C prerequisite adjustment: governance decision consumers should treat stored verifier metadata as calibration input and rollout evidence, not as an end-user policy decision on its own
 
+Current implementation status on `feature/detection-engine-phase-c-governance-cicd`:
+
+- Phase C branch created from the refreshed roadmap parent branch after the Phase B merge landed on `feature/detection-engine-roadmap`
+- new governance decision-consumer service added in `services/governance_policy.py`
+- initial decision slice now evaluates persisted PR audits into `should_require_escalation` / `should_block_merge` style outcomes with explicit dry-run, warn, and enforce rollout semantics
+- verifier metadata is treated as calibration evidence in governance decisions rather than as a standalone merge-blocking signal
+- focused Phase C validation is currently green in `tests/test_governance_policy.py`
+
 ## Phase C
 
 Issue: `#21`

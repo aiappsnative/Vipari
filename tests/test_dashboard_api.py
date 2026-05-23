@@ -100,6 +100,31 @@ def _record_pr_profile(db_path: str):
     )
 
 
+def _record_governance_pr_audit(db_path: str):
+    analysis = analyze_diff(PROMPT_DIFF)
+    record_audit_result(
+        db_path,
+        job_id=199,
+        repo_full="doria90/dummyAI",
+        pr_number=84,
+        installation_id=123,
+        head_sha="sha-governance-84",
+        deterministic_analysis=analysis,
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+        suggested_risk_level="High",
+        fused_confidence="High",
+        verifier_mode="shadow",
+        verifier_trigger="high_impact",
+        verifier_request_count=1,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
+    )
+
+
 def _record_pre_audit_relevance(db_path: str, *, repo_full: str, pr_number: int, head_sha: str):
     diff_text = "diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n"
     changed_file = extract_changed_files(diff_text)[0]
@@ -463,6 +488,77 @@ def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path)
     assert payload["audit_brief"]["baseline_reference"] != "none-yet"
 
 
+def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_audit(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-governance.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_governance_pr_audit(db_path)
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["governance_decision"]["pr_number"] == 84
+    assert payload["governance_decision"]["head_sha"] == "sha-governance-84"
+    assert payload["governance_decision"]["rollout_mode"] == "dry_run"
+    assert payload["governance_decision"]["decision_lane"] == "escalate"
+    assert payload["governance_decision"]["requires_escalation"] is True
+    assert payload["governance_decision"]["should_block_merge"] is False
+    assert isinstance(payload["governance_decision"]["rationale"], list)
+    assert any(reason["code"] == "high_risk_audit" for reason in payload["governance_decision"]["rationale"])
+
+
+def test_dashboard_overview_api_surfaces_governance_escalation_state(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-overview-governance.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_governance_pr_audit(db_path)
+
+    with TestClient(main.app) as client:
+        overview_response = client.get(
+            "/api/dashboard/overview",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert overview_response.status_code == 200
+    payload = overview_response.json()
+    assert payload["attention_repos"][0]["governance_decision_lane"] == "escalate"
+    assert payload["attention_repos"][0]["governance_requires_escalation"] is True
+    assert payload["attention_repos"][0]["governance_should_block_merge"] is False
+    assert payload["attention_repos"][0]["governance_pr_number"] == 84
+    assert payload["attention_repos"][0]["governance_head_sha"] == "sha-governance-84"
+    assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_decision_lane"] == "escalate"
+    assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_requires_escalation"] is True
+
+
 def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
     db_path = str(tmp_path / "api-dashboard-overview-critical.db")
     init_db(db_path)
@@ -667,6 +763,92 @@ def test_repo_dashboard_api_includes_scoped_pre_audit_relevance_for_pr_deep_link
     assert payload["pre_audit_relevance"]["decisions"][0]["classifier_is_relevant"] is False
 
 
+def test_repo_governance_decision_api_returns_dry_run_decision_for_persisted_audit(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-governance-decision.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_governance_pr_audit(db_path)
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/dummyAI/governance-decision?pr_number=84&head_sha=sha-governance-84",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["pr_number"] == 84
+    assert payload["head_sha"] == "sha-governance-84"
+    assert payload["conclusion"] == "neutral"
+    assert payload["recommended_exit_code"] == 0
+    assert payload["recommended_gate"] == "warn"
+    assert payload["governance_decision"]["rollout_mode"] == "dry_run"
+    assert payload["governance_decision"]["decision_lane"] == "escalate"
+    assert payload["governance_decision"]["requires_escalation"] is True
+    assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["governance_decision"]["conclusion"] == "neutral"
+    assert payload["governance_decision"]["recommended_exit_code"] == 0
+
+
+def test_repo_governance_decision_api_supports_enforce_mode(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-governance-decision-enforce.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_governance_pr_audit(db_path)
+    session = _create_dashboard_owner_session(db_path)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/repos/doria90/dummyAI/governance-decision?pr_number=84&head_sha=sha-governance-84&rollout_mode=enforce",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["conclusion"] == "failure"
+    assert payload["recommended_exit_code"] == 1
+    assert payload["recommended_gate"] == "block"
+    assert payload["governance_decision"]["rollout_mode"] == "enforce"
+    assert payload["governance_decision"]["decision_lane"] == "block_merge"
+    assert payload["governance_decision"]["requires_escalation"] is True
+    assert payload["governance_decision"]["should_block_merge"] is True
+    assert payload["governance_decision"]["conclusion"] == "failure"
+
+
 def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_path):
     db_path = str(tmp_path / "api-dashboard-routes.db")
     init_db(db_path)
@@ -725,6 +907,8 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         comment_body="## ❌ Vipari: Escalate before merge\nSummary: This PR expands direct refund authority and needs human review.\nRisk Level: High",
         comment_mode="review",
         semantic_review_completed=True,
+        suggested_risk_level="High",
+        fused_confidence="High",
         artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
     )
     record_audit_feedback_event(
@@ -771,6 +955,15 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["review_excerpt"] == "This PR expands direct refund authority and needs human review."
     assert payload["pr_review_routes"]["selected_route"]["changed_artifact_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["finding_count"] == len(payload["pr_review_routes"]["selected_route"]["top_findings"])
+    assert payload["pr_review_routes"]["governance_rollout_mode"] == "dry_run"
+    assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["rollout_mode"] == "dry_run"
+    assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["decision_lane"] == "escalate"
+    assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["requires_escalation"] is True
+    assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["should_block_merge"] is False
+    assert any(
+        reason["code"] == "high_risk_audit"
+        for reason in payload["pr_review_routes"]["selected_route"]["governance_decision"]["rationale"]
+    )
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["reaction_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["helpful_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["outcome_count"] == 1
@@ -1163,6 +1356,62 @@ def test_pr_review_routes_payload_aggregates_merged_state_across_pr_routes(tmp_p
     assert payload["selected_route"]["lifecycle_label"] == "Merged"
     assert all(route["lifecycle_label"] == "Merged" for route in payload["routes"] if route["pr_number"] == 88)
     assert all(entry["lifecycle_label"] == "Merged" for entry in payload["route_search_entries"] if entry["pr_number"] == 88)
+
+
+def test_pr_review_routes_payload_applies_enforce_governance_mode_to_completed_high_risk_audits(tmp_path):
+    db_path = str(tmp_path / "dashboard-pr-route-governance-enforce.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    record_audit_result(
+        db_path,
+        job_id=401,
+        repo_full="doria90/dummyAI",
+        pr_number=91,
+        pr_title="Escalate refund controls",
+        installation_id=123,
+        head_sha="sha-governance-enforce-91",
+        deterministic_analysis=analyze_diff(PROMPT_DIFF),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ❌ Vipari: Escalate before merge\nSummary: High-risk refund path expanded.",
+        comment_mode="review",
+        semantic_review_completed=True,
+        suggested_risk_level="High",
+        fused_confidence="High",
+        verifier_mode="shadow",
+        verifier_trigger="high_impact",
+        verifier_request_count=1,
+        artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
+    )
+
+    payload = build_repo_pr_review_routes_payload(
+        db_path,
+        "doria90/dummyAI",
+        pr_number=91,
+        rollout_mode="enforce",
+    )
+
+    assert payload["governance_rollout_mode"] == "enforce"
+    assert payload["selected_route"]["pr_number"] == 91
+    assert payload["selected_route"]["governance_decision"]["rollout_mode"] == "enforce"
+    assert payload["selected_route"]["governance_decision"]["decision_lane"] == "block_merge"
+    assert payload["selected_route"]["governance_decision"]["requires_escalation"] is True
+    assert payload["selected_route"]["governance_decision"]["should_block_merge"] is True
+    assert any(
+        reason["code"] == "shadow_verifier_signal"
+        for reason in payload["selected_route"]["governance_decision"]["rationale"]
+    )
 
 
 def test_repo_dashboard_api_keeps_selected_older_pr_route_when_outside_recent_limit(tmp_path):

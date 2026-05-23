@@ -6,6 +6,25 @@ import json
 
 from services.control_plane_records import list_repo_allocations_for_workspace
 from services.dashboard_views import build_dashboard_overview_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.governance_policy import GOVERNANCE_ROLLOUT_DRY_RUN, build_governance_ci_outcome, normalize_governance_rollout_mode
+
+
+def _build_governance_ci_outcome(governance_decision: dict[str, object]) -> dict[str, object]:
+    return build_governance_ci_outcome(
+        normalize_governance_decision_payload(governance_decision)
+    )
+
+
+def normalize_governance_decision_payload(governance_decision: dict[str, object]):
+    from services.governance_policy import GovernanceDecision
+
+    return GovernanceDecision(
+        rollout_mode=str(governance_decision.get("rollout_mode") or GOVERNANCE_ROLLOUT_DRY_RUN),
+        requires_escalation=bool(governance_decision.get("requires_escalation")),
+        should_block_merge=bool(governance_decision.get("should_block_merge")),
+        decision_lane=str(governance_decision.get("decision_lane") or "inactive"),
+        rationale=tuple(),
+    )
 
 
 def build_repo_index_payload(
@@ -193,6 +212,57 @@ def build_pre_audit_relevance_payload(
         "head_sha": head_sha,
         "decision_count": len(payload_rows),
         "decisions": payload_rows,
+    }
+
+
+def build_repo_governance_decision_payload(
+    db_path: str,
+    repo_full: str,
+    *,
+    pr_number: int,
+    head_sha: str,
+    rollout_mode: str = GOVERNANCE_ROLLOUT_DRY_RUN,
+    build_pr_review_routes_payload_fn: Callable[..., dict[str, object]],
+) -> dict[str, object]:
+    normalized_rollout_mode = normalize_governance_rollout_mode(rollout_mode)
+    route_payload = build_pr_review_routes_payload_fn(
+        db_path,
+        repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        rollout_mode=normalized_rollout_mode,
+    )
+    selected_route = route_payload.get("selected_route") if isinstance(route_payload, dict) else None
+    if not isinstance(selected_route, dict):
+        raise ValueError("No persisted PR audit route matches the requested repo, PR number, and head SHA.")
+    if int(selected_route.get("pr_number") or 0) != pr_number or str(selected_route.get("head_sha") or "") != head_sha:
+        raise ValueError("No persisted PR audit route matches the requested repo, PR number, and head SHA.")
+
+    governance_decision = selected_route.get("governance_decision")
+    if not isinstance(governance_decision, dict):
+        raise ValueError("The selected PR audit route does not include governance decision data.")
+    ci_outcome = _build_governance_ci_outcome(governance_decision)
+    enriched_governance_decision = {
+        **governance_decision,
+        **ci_outcome,
+    }
+
+    return {
+        "repo_full": repo_full,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "audit_id": selected_route.get("audit_id"),
+        "status": selected_route.get("status"),
+        "completion_mode": selected_route.get("completion_mode"),
+        "output_mode": selected_route.get("output_mode"),
+        "risk_level": selected_route.get("risk_level"),
+        "confidence": selected_route.get("confidence"),
+        "pull_request_url": selected_route.get("pull_request_url"),
+        "review_url": selected_route.get("dashboard_url"),
+        "conclusion": ci_outcome["conclusion"],
+        "recommended_exit_code": ci_outcome["recommended_exit_code"],
+        "recommended_gate": ci_outcome["recommended_gate"],
+        "governance_decision": enriched_governance_decision,
     }
 
 
