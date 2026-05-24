@@ -130,6 +130,11 @@ def _cache_installation_token(installation_id: int, token: str, expires_at_raw: 
     return token
 
 
+def delete_cached_installation_token(installation_id: int) -> None:
+    with _INSTALLATION_TOKEN_CACHE_LOCK:
+        _INSTALLATION_TOKEN_CACHE.pop(installation_id, None)
+
+
 def get_installation_token(jwt_token: str, installation_id: int) -> str:
     cached = _cached_installation_token(installation_id)
     if cached is not None:

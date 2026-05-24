@@ -31,6 +31,7 @@ from .control_plane_records import (
     get_workspace_entitlement,
 )
 from .github_integration import (
+    delete_cached_installation_token,
     fetch_pull_request_lifecycle,
     generate_jwt,
     get_installation_token as request_installation_token,
@@ -92,6 +93,7 @@ async def _fetch_pull_request_lifecycle_with_refresh(
         if exc.code != 401:
             raise
     await delete_installation_token(installation_id)
+    await asyncio.to_thread(delete_cached_installation_token, installation_id)
     refreshed_token = await _get_installation_token_for_worker(installation_id, settings)
     lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, refreshed_token)
     return lifecycle, refreshed_token

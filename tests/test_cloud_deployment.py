@@ -26,6 +26,7 @@ from services.audit_records import (
 )
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.cloud_worker import _reconcile_pull_request_lifecycle_for_repo
+from services.github_integration import _cache_installation_token, delete_cached_installation_token
 from services.observability import configure_logging
 from services.onboarding import onboard_repository
 from services.control_plane_records import (
@@ -1437,6 +1438,126 @@ def test_reconcile_pull_request_lifecycle_reuses_refreshed_token_for_later_audit
     assert fetch_lifecycle.call_args_list[0].args == ("doria90/dummyAI", 23, "stale-installation-token")
     assert fetch_lifecycle.call_args_list[1].args == ("doria90/dummyAI", 23, "fresh-installation-token")
     assert fetch_lifecycle.call_args_list[2].args == ("doria90/dummyAI", 24, "fresh-installation-token")
+
+
+def test_reconcile_pull_request_lifecycle_clears_github_integration_token_cache_after_unauthorized(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-lifecycle-refresh-internal-cache.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    settings = get_settings()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/test.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "baseline",
+    )
+    created_job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        diff_text="diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n",
+        pr_state="open",
+        pr_merged=False,
+    )
+    record_audit_result(
+        db_path,
+        job_id=created_job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=23,
+        pr_title="PR 23",
+        installation_id=123,
+        head_sha="sha-pr-23",
+        pr_state="open",
+        pr_merged=False,
+        suggested_risk_level="low",
+        deterministic_analysis=analyze_diff("diff --git a/prompts/test.txt b/prompts/test.txt\n+prompt change\n"),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_review",
+        comment_body="done",
+        comment_mode="full_review",
+        semantic_review_completed=True,
+    )
+
+    lifecycle = type(
+        "Lifecycle",
+        (),
+        {
+            "pr_number": 23,
+            "pr_title": "Merged later",
+            "head_sha": "sha-pr-23-final",
+            "pr_state": "closed",
+            "pr_merged": True,
+            "pr_closed_at": 1710001000.0,
+            "pr_merged_at": 1710001010.0,
+            "pr_merge_commit_sha": "merge-sha-23",
+            "pr_updated_at": 1710001020.0,
+            "base_ref": "main",
+        },
+    )()
+
+    unauthorized = HTTPError(
+        "https://api.github.com/repos/doria90/dummyAI/pulls/23",
+        401,
+        "Unauthorized",
+        hdrs=None,
+        fp=None,
+    )
+
+    class _FakeTokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"token": "fresh-installation-token", "expires_at": "2099-01-01T00:00:00Z"}).encode("utf-8")
+
+    clear_local_token_cache()
+    delete_cached_installation_token(123)
+    asyncio.run(set_installation_token(123, "stale-installation-token", 60))
+    _cache_installation_token(123, "stale-installation-token", "2099-01-01T00:00:00Z")
+
+    monkeypatch.setattr("services.cloud_worker.generate_jwt", lambda *args, **kwargs: "jwt-token")
+
+    fetch_calls = []
+
+    def fake_fetch_pull_request_lifecycle(repo_full, pr_number, token):
+        fetch_calls.append((repo_full, pr_number, token))
+        if token == "stale-installation-token":
+            raise unauthorized
+        return lifecycle
+
+    def fake_urlopen(req):
+        assert req.full_url == "https://api.github.com/app/installations/123/access_tokens"
+        return _FakeTokenResponse()
+
+    with patch("services.cloud_worker.fetch_pull_request_lifecycle", side_effect=fake_fetch_pull_request_lifecycle), patch(
+        "services.github_integration.urllib.request.urlopen",
+        side_effect=fake_urlopen,
+    ):
+        reconciled = asyncio.run(
+            _reconcile_pull_request_lifecycle_for_repo("doria90/dummyAI", 123, "main", settings)
+        )
+
+    assert reconciled == 1
+    assert fetch_calls == [
+        ("doria90/dummyAI", 23, "stale-installation-token"),
+        ("doria90/dummyAI", 23, "fresh-installation-token"),
+    ]
+    assert asyncio.run(get_installation_token(123)) == "fresh-installation-token"
+    delete_cached_installation_token(123)
+    clear_local_token_cache()
 
 
 def test_worker_push_job_persists_across_restart_for_postgres_locator_simulation(tmp_path, monkeypatch):
