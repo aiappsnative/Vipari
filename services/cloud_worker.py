@@ -683,41 +683,70 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         await queue.nack(message.receipt_handle, _retry_delay_seconds(message.attempt_count))
         return
 
-    with JOB_DURATION.labels(phase="run_engine").time():
-        result = await asyncio.to_thread(
-            process_job,
-            job,
-            WorkerSettings(
-                db_path=settings.resolved_db_path,
-                github_app_id=settings.github_app_id,
-                github_private_key_path=settings.github_private_key_path,
-                github_app_private_key=settings.resolved_github_private_key,
-                llm_client=llm_client,
-                model=settings.ai_model,
-                llm_timeout_seconds=settings.llm_timeout_seconds,
-                max_attempts=settings.audit_max_attempts,
-                max_retry_window_seconds=settings.audit_max_retry_window_seconds,
-                poll_interval_seconds=settings.audit_worker_poll_seconds,
-                governance_status_rollout_mode=settings.governance_status_rollout_mode,
-                governance_status_context=settings.governance_status_context,
-                governance_check_run_rollout_mode=settings.governance_check_run_rollout_mode,
-                governance_check_run_name=settings.governance_check_run_name,
-                scenario_eval_rollout_mode=settings.scenario_eval_rollout_mode,
-                scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
-                scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
-                scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
-                scenario_eval_output_root=settings.scenario_eval_output_root,
-                hybrid_static_analysis_rollout_mode=settings.hybrid_static_analysis_rollout_mode,
-                hybrid_static_analysis_max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
-                hybrid_static_analysis_allowed_repos=settings.hybrid_static_analysis_allowed_repos,
-                hybrid_static_analysis_allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
-            ),
+    try:
+        with JOB_DURATION.labels(phase="run_engine").time():
+            result = await asyncio.to_thread(
+                process_job,
+                job,
+                WorkerSettings(
+                    db_path=settings.resolved_db_path,
+                    github_app_id=settings.github_app_id,
+                    github_private_key_path=settings.github_private_key_path,
+                    github_app_private_key=settings.resolved_github_private_key,
+                    llm_client=llm_client,
+                    model=settings.ai_model,
+                    llm_timeout_seconds=settings.llm_timeout_seconds,
+                    max_attempts=settings.audit_max_attempts,
+                    max_retry_window_seconds=settings.audit_max_retry_window_seconds,
+                    poll_interval_seconds=settings.audit_worker_poll_seconds,
+                    governance_status_rollout_mode=settings.governance_status_rollout_mode,
+                    governance_status_context=settings.governance_status_context,
+                    governance_check_run_rollout_mode=settings.governance_check_run_rollout_mode,
+                    governance_check_run_name=settings.governance_check_run_name,
+                    scenario_eval_rollout_mode=settings.scenario_eval_rollout_mode,
+                    scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
+                    scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
+                    scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
+                    scenario_eval_output_root=settings.scenario_eval_output_root,
+                    hybrid_static_analysis_rollout_mode=settings.hybrid_static_analysis_rollout_mode,
+                    hybrid_static_analysis_max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
+                    hybrid_static_analysis_allowed_repos=settings.hybrid_static_analysis_allowed_repos,
+                    hybrid_static_analysis_allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
+                ),
+            )
+    except Exception:
+        logger.exception(
+            "Audit job execution raised an unhandled exception",
+            extra={
+                "repo": repo_full,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "job_id": job.id,
+                "message_id": message.message_id,
+                "delivery_id": payload.get("delivery_id"),
+            },
         )
+        raise
 
     OPENAI_TOKENS.inc(_estimate_token_count(diff_text))
 
+    persisted_job = get_job(settings.resolved_db_path, job.id)
+
     if result == "retry_wait":
-        saved = get_job(settings.resolved_db_path, job.id)
+        saved = persisted_job
+        logger.info(
+            "Audit job scheduled for retry",
+            extra={
+                "repo": repo_full,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "job_id": job.id,
+                "result": result,
+                "job_status": (saved.status if saved is not None else None),
+                "job_error": (saved.last_error if saved is not None else None),
+                "next_attempt_at": (saved.next_attempt_at if saved is not None else None),
+            },
+        )
         delay_seconds = _retry_delay_seconds(message.attempt_count)
         if saved is not None and saved.next_attempt_at > time.time():
             delay_seconds = max(1, int(saved.next_attempt_at - time.time()))
@@ -733,6 +762,8 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
             "head_sha": head_sha,
             "job_id": job.id,
             "result": result,
+            "job_status": (persisted_job.status if persisted_job is not None else None),
+            "job_error": (persisted_job.last_error if persisted_job is not None else None),
         },
     )
     JOBS_PROCESSED.labels(status=status).inc()

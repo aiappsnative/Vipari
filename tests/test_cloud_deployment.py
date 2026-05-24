@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -2336,6 +2337,64 @@ def test_worker_still_skips_uncertain_diff_when_skipped_governance_check_fails(t
     assert queue.dlq == []
     create_job.assert_not_called()
     process_job.assert_not_called()
+
+
+def test_process_message_logs_unhandled_audit_execution_failure(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-unhandled-failure.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    _reset_settings_cache()
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+
+    class PassiveQueue:
+        async def ack(self, _receipt_handle):
+            return None
+
+        async def nack(self, _receipt_handle, _delay_seconds):
+            return None
+
+        async def move_to_dlq(self, _receipt_handle):
+            return None
+
+    message = QueueMessage(
+        message_id="msg-unhandled-failure",
+        receipt_handle="receipt-unhandled-failure",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 61,
+            "head_sha": "sha-unhandled-failure",
+            "delivery_id": "delivery-unhandled-failure",
+        },
+        attempt_count=1,
+    )
+
+    logger = Mock()
+    logger.info = Mock()
+    logger.exception = Mock()
+
+    with patch("services.cloud_worker._message_still_authorized", return_value=True), patch(
+        "services.cloud_worker._get_installation_token_for_worker",
+        return_value="installation-token",
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/policies/test.yml b/policies/test.yml\nindex 1..2\n+policy change\n",
+    ), patch(
+        "services.cloud_worker.evaluate_and_persist_audit_decision",
+        return_value=Mock(should_audit=True, relevant_results=[], skipped_results=[]),
+    ), patch(
+        "services.cloud_worker.process_job",
+        side_effect=RuntimeError("comment publish crashed"),
+    ):
+        with pytest.raises(RuntimeError, match="comment publish crashed"):
+            asyncio.run(_process_message(PassiveQueue(), message, get_settings(), logger, Mock()))
+
+    logger.exception.assert_called_once()
+    assert logger.exception.call_args.args[0] == "Audit job execution raised an unhandled exception"
+    assert logger.exception.call_args.kwargs["extra"]["job_id"] == 1
+    assert logger.exception.call_args.kwargs["extra"]["delivery_id"] == "delivery-unhandled-failure"
 
 
 def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):
