@@ -172,6 +172,11 @@ def validate_runtime_configuration(settings: Settings) -> None:
         if not app_base_is_localhost:
             errors.append("LOCAL_DEBUG_DISABLE_LOGIN requires APP_BASE_URL to resolve to localhost.")
 
+    if settings.is_internet_reachable_env and settings.service_role in {"worker", "webhook"} and settings.queue_backend == "sqlite":
+        errors.append(
+            f"{settings.app_env.value.title()} worker and webhook services must not use QUEUE_BACKEND=sqlite; use QUEUE_BACKEND=redis so ingress and workers share a durable queue."
+        )
+
     if settings.has_activity_database_config and settings.is_production and is_sqlite_locator(settings.resolved_activity_db_path):
         errors.append("Production activity logging must use ACTIVITY_DATABASE_URL pointing to PostgreSQL, not SQLite.")
     if _activity_targets_primary_database(settings):

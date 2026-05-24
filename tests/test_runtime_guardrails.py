@@ -305,6 +305,24 @@ def test_staging_rejects_dev_auth_fallbacks(monkeypatch):
     assert "local_owner_fallback" in message
 
 
+def test_staging_worker_rejects_sqlite_queue(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    monkeypatch.setenv("APP_BASE_URL", "https://staging.example.com")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com/driftguard")
+    monkeypatch.setenv("QUEUE_BACKEND", "sqlite")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_APP_ID", "app-id")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "line1\nline2")
+    _reset_settings_cache()
+
+    settings = get_settings()
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_runtime_configuration(settings)
+
+    assert "Staging worker and webhook services must not use QUEUE_BACKEND=sqlite" in str(exc_info.value)
+
+
 def test_production_worker_allows_missing_owner_access_config(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("SERVICE_ROLE", "worker")

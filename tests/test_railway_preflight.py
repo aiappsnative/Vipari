@@ -81,11 +81,26 @@ def test_preflight_does_not_build_sqlite_queue_for_invalid_production_worker():
     assert backend is None
 
 
+def test_preflight_does_not_build_sqlite_queue_for_invalid_staging_worker():
+    settings = SimpleNamespace(
+        service_role="worker",
+        queue_backend="sqlite",
+        is_production=False,
+        is_internet_reachable_env=True,
+        resolved_db_path="./promptdrift.db",
+    )
+
+    backend = railway_preflight._build_queue_backend(settings)
+
+    assert backend is None
+
+
 def test_preflight_still_builds_sqlite_queue_for_local_worker(tmp_path):
     settings = SimpleNamespace(
         service_role="worker",
         queue_backend="sqlite",
         is_production=False,
+        is_internet_reachable_env=False,
         resolved_db_path=str(tmp_path / "queue.db"),
     )
 

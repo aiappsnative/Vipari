@@ -602,6 +602,34 @@ def test_build_dashboard_overview_view_does_not_materialize_full_repo_views(tmp_
     assert overview.repos[0].repo_full == "doria90/dummyAI"
 
 
+def test_build_dashboard_overview_view_skips_per_repo_audit_and_baseline_lookups(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "overview-no-per-repo-lookups.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=1,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _record_pr_profile(db_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("portfolio overview should use batched audit and baseline lookups")
+
+    monkeypatch.setattr("services.dashboard_views.get_pull_request_audit_by_id", fail_if_called)
+    monkeypatch.setattr("services.dashboard_views.list_findings_for_audit", fail_if_called)
+    monkeypatch.setattr("services.dashboard_views.get_latest_baseline_snapshot_id_for_onboarding", fail_if_called)
+
+    overview = build_dashboard_overview_view(db_path)
+
+    assert overview.metrics[0].value == 1
+    assert overview.repos[0].repo_full == "doria90/dummyAI"
+
+
 def test_build_dashboard_overview_view_reuses_cached_result_for_same_db_signature(tmp_path, monkeypatch):
     db_path = str(tmp_path / "overview-cache.db")
     init_db(db_path)

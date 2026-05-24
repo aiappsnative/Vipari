@@ -16,6 +16,9 @@ from services.runtime_guardrails import build_runtime_readiness
 def _build_queue_backend(settings):
     if settings.service_role not in {"webhook", "worker"}:
         return None
+    if getattr(settings, "is_internet_reachable_env", False) and settings.queue_backend == "sqlite":
+        # Let readiness report the invalid split-service queue config without touching the local SQLite queue path first.
+        return None
     if settings.is_production and settings.queue_backend not in {"redis", "sqs"}:
         # Let readiness report the invalid config without touching the local SQLite queue path first.
         return None

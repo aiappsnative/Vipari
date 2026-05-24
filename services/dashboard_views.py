@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -1203,6 +1204,7 @@ def build_workspace_escalation_queue(
     """
     repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
     items: list[EscalationQueueItem] = []
+    repo_views: dict[str, RepoDashboardView] = {}
     for repo_entry in repos:
         view = build_repo_dashboard_view(
             db_path,
@@ -1210,6 +1212,7 @@ def build_workspace_escalation_queue(
             include_journey=False,
             include_detail_sections=False,
         )
+        repo_views[repo_entry.repo_full] = view
         for insight in (view.insights or []):
             if insight.priority == "review_now" or (include_watch and insight.priority == "watch"):
                 # Collect top-2 changed attribute dimensions
@@ -1273,13 +1276,9 @@ def build_workspace_escalation_queue(
     for item in items:
         if item.priority != "review_now":
             break
-        # Re-fetch the insight's risk_reasons from the view (already cached)
-        view = build_repo_dashboard_view(
-            db_path,
-            item.repo_full,
-            include_journey=False,
-            include_detail_sections=False,
-        )
+        view = repo_views.get(item.repo_full)
+        if view is None:
+            continue
         for insight in (view.insights or []):
             if insight.artifact_path == item.artifact_path and insight.priority == "review_now":
                 for reason in (insight.risk_reasons or []):
@@ -2508,11 +2507,14 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
             backfill_summaries,
             pull_request_audit_counts,
             latest_completed_audit_ids_by_repo,
+            latest_completed_audit_rows_by_repo,
+            finding_rows_by_audit_id,
             metrics_by_repo,
             profile_contexts_by_repo,
             drift_summaries,
             top_drifting_artifacts_by_repo,
-        ) = _load_overview_batch_state(conn, repo_fulls)
+            baseline_snapshot_ids_by_onboarding,
+        ) = _load_overview_batch_state(conn, repo_fulls, latest_onboarding_ids)
 
     views: list[RepoDashboardView] = []
     for repo in repos:
@@ -2582,6 +2584,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
             profile_context_by_path,
             attribute_profile_mode="ranked",
         )
+        latest_audit_row = latest_completed_audit_rows_by_repo.get(repo.repo_full)
 
         views.append(
             RepoDashboardView(
@@ -2601,17 +2604,17 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 history_cues=[],
                 design_profiles=[],
                 governance_decision=(
-                    _build_repo_governance_decision_summary(
-                        db_path,
-                        [get_pull_request_audit_by_id(db_path, latest_completed_audit_ids_by_repo[repo.repo_full])],
+                    _build_repo_governance_decision_summary_from_rows(
+                        latest_audit_row,
+                        finding_rows_by_audit_id.get(int(latest_audit_row["id"]), []),
                     )
-                    if repo.repo_full in latest_completed_audit_ids_by_repo
+                    if latest_audit_row is not None
                     else None
                 ),
                 artifacts=artifact_entries,
                 journey_snapshots=[],
                 journey_comparison=None,
-                selected_baseline_source_snapshot_id=get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
+                selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),
             )
         )
 
@@ -2621,17 +2624,21 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
 def _load_overview_batch_state(
     conn: sqlite3.Connection,
     repo_fulls: list[str],
+    latest_onboarding_ids: list[int],
 ) -> tuple[
     dict[str, RepoDashboardBackfillSummary],
     dict[str, int],
     dict[str, int],
+    dict[str, sqlite3.Row],
+    dict[int, list[sqlite3.Row]],
     dict[str, dict[str, dict[str, float | int]]],
     dict[str, dict[str, _RepoArtifactEvidenceBundle]],
     dict[str, RepoStaticDriftSummary],
     dict[str, list[ArtifactDriftLeaderboardEntry]],
+    dict[int, int],
 ]:
     if not repo_fulls:
-        return ({}, {}, {}, {}, {}, {}, {})
+        return ({}, {}, {}, {}, {}, {}, {}, {}, {})
 
     repo_placeholders = ", ".join("?" for _ in repo_fulls)
     repo_params = tuple(repo_fulls)
@@ -2652,6 +2659,8 @@ def _load_overview_batch_state(
 
     pull_request_audit_counts = {repo_full: 0 for repo_full in repo_fulls}
     latest_completed_audit_ids_by_repo: dict[str, int] = {}
+    latest_completed_audit_rows_by_repo: dict[str, sqlite3.Row] = {}
+    finding_rows_by_audit_id: dict[int, list[sqlite3.Row]] = {}
     audit_rows = conn.execute(
         f"""
         SELECT repo_full, COUNT(*) AS audit_count
@@ -2679,6 +2688,51 @@ def _load_overview_batch_state(
         if repo_full in latest_completed_audit_ids_by_repo:
             continue
         latest_completed_audit_ids_by_repo[repo_full] = int(row["id"])
+
+    if latest_completed_audit_ids_by_repo:
+        latest_audit_ids = tuple(latest_completed_audit_ids_by_repo.values())
+        latest_audit_placeholders = ", ".join("?" for _ in latest_audit_ids)
+        latest_audit_rows = conn.execute(
+            f"""
+            SELECT *
+            FROM pull_request_audits
+            WHERE id IN ({latest_audit_placeholders})
+            """,
+            latest_audit_ids,
+        ).fetchall()
+        for row in latest_audit_rows:
+            latest_completed_audit_rows_by_repo[str(row["repo_full"])] = row
+
+        finding_rows = conn.execute(
+            f"""
+            SELECT *
+            FROM findings
+            WHERE audit_id IN ({latest_audit_placeholders})
+            ORDER BY audit_id ASC, created_at ASC, id ASC
+            """,
+            latest_audit_ids,
+        ).fetchall()
+        for row in finding_rows:
+            finding_rows_by_audit_id.setdefault(int(row["audit_id"]), []).append(row)
+
+    baseline_snapshot_ids_by_onboarding: dict[int, int] = {}
+    if latest_onboarding_ids:
+        onboarding_placeholders = ", ".join("?" for _ in latest_onboarding_ids)
+        baseline_snapshot_rows = conn.execute(
+            f"""
+            SELECT onboarding_id, snapshot_id
+            FROM baseline_audit_log
+            WHERE onboarding_id IN ({onboarding_placeholders})
+              AND action = 'approve_repo_baseline'
+              AND snapshot_id IS NOT NULL
+            ORDER BY onboarding_id ASC, created_at DESC, id DESC
+            """,
+            tuple(latest_onboarding_ids),
+        ).fetchall()
+        for row in baseline_snapshot_rows:
+            onboarding_id = int(row["onboarding_id"])
+            if onboarding_id not in baseline_snapshot_ids_by_onboarding:
+                baseline_snapshot_ids_by_onboarding[onboarding_id] = int(row["snapshot_id"])
 
     metrics_by_repo: dict[str, dict[str, dict[str, float | int]]] = {}
     historical_version_rows = conn.execute(
@@ -2966,10 +3020,62 @@ def _load_overview_batch_state(
         backfill_summaries,
         pull_request_audit_counts,
         latest_completed_audit_ids_by_repo,
+        latest_completed_audit_rows_by_repo,
+        finding_rows_by_audit_id,
         metrics_by_repo,
         profile_contexts_by_repo,
         drift_summaries,
         top_drifting_artifacts_by_repo,
+        baseline_snapshot_ids_by_onboarding,
+    )
+
+
+def _build_repo_governance_decision_summary_from_rows(
+    audit_row: sqlite3.Row,
+    finding_rows: list[sqlite3.Row],
+) -> RepoGovernanceDecisionSummary:
+    audit = SimpleNamespace(
+        id=int(audit_row["id"]),
+        pr_number=int(audit_row["pr_number"]),
+        head_sha=str(audit_row["head_sha"]),
+        status=str(audit_row["status"]),
+        suggested_risk_level=str(audit_row["suggested_risk_level"]),
+        fused_confidence=(str(audit_row["fused_confidence"]) if audit_row["fused_confidence"] is not None else None),
+        verifier_mode=(str(audit_row["verifier_mode"]) if audit_row["verifier_mode"] is not None else None),
+        verifier_request_count=int(audit_row["verifier_request_count"] or 0),
+        verifier_trigger=(str(audit_row["verifier_trigger"]) if audit_row["verifier_trigger"] is not None else None),
+        created_at=float(audit_row["created_at"]),
+        updated_at=float(audit_row["updated_at"]),
+    )
+    findings = [
+        SimpleNamespace(
+            severity=str(row["severity"]),
+            rule_id=(str(row["rule_id"]) if row["rule_id"] is not None else None),
+        )
+        for row in finding_rows
+    ]
+    decision = evaluate_governance_decision(
+        audit,
+        findings=findings,
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+    )
+    return RepoGovernanceDecisionSummary(
+        audit_id=audit.id,
+        pr_number=audit.pr_number,
+        head_sha=audit.head_sha,
+        rollout_mode=decision.rollout_mode,
+        decision_lane=decision.decision_lane,
+        requires_escalation=decision.requires_escalation,
+        should_block_merge=decision.should_block_merge,
+        rationale=[
+            {
+                "code": reason.code,
+                "summary": reason.summary,
+                "severity": reason.severity,
+                "evidence": list(reason.evidence),
+            }
+            for reason in decision.rationale
+        ],
     )
 
 

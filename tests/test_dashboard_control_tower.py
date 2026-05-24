@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -293,6 +294,27 @@ def test_build_workspace_escalation_queue_workspace_posture_reasons_type(tmp_pat
     assert len(result["workspace_posture_reasons"]) <= 3
     for reason in result["workspace_posture_reasons"]:
         assert isinstance(reason, str)
+
+
+def test_build_workspace_escalation_queue_reuses_repo_views_for_posture_reasons(tmp_path):
+    db_path = str(tmp_path / "reused-views.db")
+    init_db(db_path)
+    _seed_repo_with_drift(db_path)
+
+    from services import dashboard_views
+
+    original = dashboard_views.build_repo_dashboard_view
+    call_count = 0
+
+    def counted_build_repo_dashboard_view(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original(*args, **kwargs)
+
+    with patch.object(dashboard_views, "build_repo_dashboard_view", side_effect=counted_build_repo_dashboard_view):
+        build_workspace_escalation_queue(db_path)
+
+    assert call_count == 1
 
 
 # ---------------------------------------------------------------------------
