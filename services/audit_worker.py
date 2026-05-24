@@ -1938,7 +1938,7 @@ def _review_event_for_risk_level(risk_level: str) -> str | None:
     normalized_risk = _normalize_risk_level(risk_level)
     if normalized_risk == "High":
         return "REQUEST_CHANGES"
-    if normalized_risk == "Medium":
+    if normalized_risk in {"Medium", "Low"}:
         return "COMMENT"
     return None
 

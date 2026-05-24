@@ -1755,7 +1755,7 @@ def test_worker_posts_comment_review_when_feedback_mode_reviews_and_risk_medium(
     assert comment.comment_mode == "review_comment"
 
 
-def test_worker_suppresses_low_risk_review_writeback_when_feedback_mode_reviews(tmp_path, monkeypatch):
+def test_worker_posts_comment_review_when_feedback_mode_reviews_and_risk_low(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
     job = create_audit_job(
@@ -1777,7 +1777,10 @@ def test_worker_suppresses_low_risk_review_writeback_when_feedback_mode_reviews(
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
-    monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: reviews.append(args) or 1313)
+    monkeypatch.setattr(
+        "services.audit_worker.create_pr_review",
+        lambda repo, pr, token, body, event=None: reviews.append((body, event)) or 1313,
+    )
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("comment path should not run")))
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(kwargs.get("should_have_label")))
 
@@ -1790,16 +1793,19 @@ def test_worker_suppresses_low_risk_review_writeback_when_feedback_mode_reviews(
     )
 
     assert process_next_job_once(settings) is True
-    assert reviews == []
+    assert len(reviews) == 1
+    assert reviews[0][1] == "COMMENT"
     assert labels == [False]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
-    assert audit.output_mode == "suppressed"
+    assert audit.output_mode == "formal_review"
     assert audit.pr_feedback_mode == "reviews"
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
-    assert comment is None
+    assert comment is not None
+    assert comment.github_review_id == 1313
+    assert comment.comment_mode == "review_comment"
 
 
 def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
