@@ -2138,6 +2138,122 @@ def test_worker_silent_off_mode_persists_fallback_without_github_output(tmp_path
     assert comment is None
 
 
+def test_worker_persists_shadow_enrichment_metadata_when_feedback_mode_off(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    owner = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug="ws-off-shadow", display_name="Workspace Off Shadow", billing_owner_user_id=owner.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="repo-123",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=owner.id,
+    )
+    update_workspace_pr_feedback_mode(db_path, workspace.id, pr_feedback_mode="off")
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=35,
+        installation_id=123,
+        head_sha="sha-35",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+    posted = []
+    labels = []
+    llm_invocations = []
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: llm_invocations.append(True) or "unexpected")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: posted.append(args) or 3500)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr(
+        "services.audit_worker._execute_scenario_eval_for_job",
+        lambda *args, **kwargs: ScenarioEvalExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+            executions=(
+                ScenarioEvalExecution(
+                    scenario_key="dummyai-review-target",
+                    artifact_paths=("prompts/policy.md",),
+                    package_path="artifacts/eval-runs/pr-35/run-package.json",
+                    comparison_path="artifacts/eval-runs/pr-35/comparison-summary.json",
+                    assertion_summary={"all_passed": True, "failed_count": 0},
+                    candidate_source="seeded",
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "services.audit_worker._execute_hybrid_analysis_for_job",
+        lambda *args, **kwargs: HybridExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+            executions=(
+                HybridExecutionResult(
+                    analyzer_key="prompt_policy_static_scan",
+                    artifact_path="prompts/policy.md",
+                    artifact_type="prompt",
+                    finding_count=1,
+                    highest_severity="high",
+                    findings=(),
+                ),
+            ),
+        ),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        scenario_eval_rollout_mode="shadow",
+        scenario_eval_max_artifacts_per_review=1,
+        scenario_eval_allowed_repos="doria90/*",
+        scenario_eval_allowed_artifact_types="prompt,model_config",
+        hybrid_static_analysis_rollout_mode="shadow",
+        hybrid_static_analysis_max_artifacts_per_review=1,
+        hybrid_static_analysis_allowed_repos="doria90/*",
+        hybrid_static_analysis_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted == []
+    assert labels == []
+    assert llm_invocations == []
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is False
+    assert audit.scenario_eval_mode == "shadow"
+    assert audit.scenario_eval_execution_count == 1
+    assert audit.hybrid_analysis_mode == "shadow"
+    assert audit.hybrid_analysis_execution_count == 1
+
+
 def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_reviews(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)

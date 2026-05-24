@@ -2229,6 +2229,18 @@ def _handle_fallback(
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
     pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
+    scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    scenario_eval_execution_summary = None
+    if scenario_eval_plan.should_run:
+        scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
+
+    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
+    artifact_snapshots = {}
+    hybrid_execution_summary = None
+    if hybrid_analysis_plan.should_run:
+        artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+        hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
+
     if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
             _persist_audit_result(
@@ -2244,8 +2256,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 suggested_risk_level=deterministic_analysis.suggested_risk_level.value,
                 fused_confidence=None,
                 error_message=None,
-                artifact_snapshots={},
+                artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=pr_feedback_mode,
+                scenario_eval_plan=scenario_eval_plan,
+                scenario_eval_execution_summary=scenario_eval_execution_summary,
+                hybrid_analysis_plan=hybrid_analysis_plan,
+                hybrid_execution_summary=hybrid_execution_summary,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
@@ -2255,14 +2271,11 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         mark_job_completed(settings.db_path, job.id, comment_body=None)
         return "completed"
 
-    artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+    if not artifact_snapshots:
+        artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
-    scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
-    scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
-    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
-    hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
     try:
         comment_result = build_llm_comment(
             job.diff_text,
@@ -2339,38 +2352,6 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             hybrid_execution_summary=hybrid_execution_summary,
         )
 
-    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
-        try:
-            audit = _persist_audit_result(
-                job,
-                deterministic_analysis,
-                settings,
-                status="completed",
-                completion_mode="completed",
-                output_mode="suppressed",
-                comment_body=None,
-                comment_mode=None,
-                semantic_review_completed=True,
-                suggested_risk_level=fusion_assessment.risk_level,
-                fused_confidence=fusion_assessment.confidence,
-                error_message=None,
-                artifact_snapshots=artifact_snapshots,
-                pr_feedback_mode=pr_feedback_mode,
-                verifier_mode=verifier_plan.rollout_mode,
-                verifier_trigger=verifier_plan.trigger,
-                verifier_request_count=verifier_plan.request_count,
-                scenario_eval_plan=scenario_eval_plan,
-                scenario_eval_execution_summary=scenario_eval_execution_summary,
-                hybrid_analysis_plan=hybrid_analysis_plan,
-                hybrid_execution_summary=hybrid_execution_summary,
-            )
-        except Exception as persist_exc:
-            error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
-            mark_job_failed(settings.db_path, job.id, error_message=error_message)
-            return "failed"
-
-        mark_job_completed(settings.db_path, job.id, comment_body=None)
-        return "completed"
     if pr_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
         review_event = _review_event_for_risk_level(fusion_assessment.risk_level)
         github_review_id = None
