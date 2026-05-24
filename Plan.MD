@@ -373,7 +373,7 @@ Current note for the newly opened detection-engine roadmap:
 - GitHub issues `#19` through `#22` are the four execution phases under that parent.
 - The repo-visible execution plan for that parent feature lives in [docs/detection-engine-roadmap-parent-plan.md](docs/detection-engine-roadmap-parent-plan.md).
 - Phase A, Phase B, and Phase C are now merged into `feature/detection-engine-roadmap`; the parent branch includes bounded verifier planning, persisted governance decisions, and opt-in GitHub/CI governance signaling.
-- Phase D is now in progress on `feature/detection-engine-phase-d-hybrid-analyzer-execution`; the current local slice adds bounded shadow-mode hybrid analyzer execution plus persisted execution summaries on top of the merged scenario and hybrid-analysis planning work, with the latest targeted validation green at `161 passed`.
+- Phase D is now in progress on `feature/detection-engine-phase-d-execution-read-models`; the current local slice exposes the persisted scenario and hybrid execution summaries through the repo PR-review dashboard payloads, with the latest targeted validation green at `45 passed` and the focused PR-review regression green at `1 passed`.
 
 Verified against repo state and open issues:
 
