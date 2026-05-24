@@ -78,10 +78,14 @@ Implemented today:
 - durable persistence for PR audits, changed artifacts, findings, audit comments, and artifact versions
 - escalation-aware PR review with explicit risk labeling in managed PR comments plus GitHub escalation labels synced to the latest high-confidence recommendation
 - a first-pass static drift-profile engine that converts prompt/config text plus governance metadata into a stable attribute profile and drift delta
+- static signal extraction now discounts example blocks so illustrative few-shot content does not inflate live capability or autonomy posture
 - durable local persistence of static artifact profiles with baseline links to prior profile history for the same artifact
 - approved-baseline-aware drift comparisons shared across PR review, onboarding history, and dashboard read models
 - normalized attribute-profile rendering shared across repo insights, overview hotspot entries, repo case files, and managed PR comments
 - PR comments now include a reviewer-facing attribute-profile section with baseline/current buckets, direction, and confidence when snapshots are available
+- signal fusion now supports policy-aware review floors derived from normalized attribute-profile deltas plus deterministic findings in the live audit-worker path
+- Phase B now includes explicit verifier contracts, bounded shadow-mode verifier planning in the live audit-worker path, calibration-ready verifier metadata in durable audit storage, and synthetic release-gate reporting in the OSS eval harness
+- Phase C now includes governance-policy consumers outside the engine core plus runner-side and worker-side GitHub status/check-run actuation, giving persisted PR audits CI-friendly governance decisions without making rollout-internal signals implicit merge gates
 - first-pass read-side trend aggregation for repo summaries and top-drifting artifacts
 - unified repo dashboard read models, JSON query APIs, dashboard HTML pages, and local CLI operator workflows
 - a triage-first dashboard frontend with portfolio Triage/Coverage modes and repo case-file layouts built on those read models
@@ -104,6 +108,7 @@ Implemented today:
 - human-gated proposal-and-approval flows for baseline promotions and repo onboarding: `cp_baseline_proposals` and `cp_repo_onboarding_proposals` tables managed by `services/proposals_records.py`; eight new `/cp/*` routes enforcing scope (`drift.write.low` / `drift.write.high`), principal-kind (`human_operator`-only approve gate), four-eyes rule, TOCTOU-safe conditional UPDATE, 30-day expiry, flood limits, and an `artifact_id` URL consistency guard to protect audit log integrity; service accounts structurally blocked from high-privilege scopes at both creation time (`validate_scope_kind_compatibility`) and route layer (`require_cp_principal_kind`)
 - shipped groundwork for repeatable OSS evaluation packages and CLI-driven branch-to-branch comparison
 - queue abstractions for local SQLite and SQS-style split execution, plus Redis-backed installation-token caching with in-process fallback
+- Phase D roadmap work now includes disabled-by-default scenario and hybrid-analysis planning seams, shadow-only seeded scenario execution, bounded hybrid analyzer execution over fetched artifact snapshots with persisted run summaries, and read-side exposure of those summaries on PR-review dashboard payloads plus shared repo audit-brief, machine-auth control-plane repo dashboard, standalone machine-auth control-plane audit list/detail surfaces with state/severity/artifact/recency filtering, and MCP casefile surfaces, with the current Phase D validation gate green across worker execution, hybrid analysis, dashboard, MCP, and control-plane suites, so optional deeper analysis stays auditable, bounded, and off in production until explicitly promoted
 - retry-safe webhook delivery deduplication so ingress failures do not permanently drop redelivered GitHub events
 - split API/dashboard route protection via admin token, with metrics exposure disabled by default unless explicitly enabled
 - Docker and compose scaffolding for running Vipari as separately deployable webhook, worker, and API services

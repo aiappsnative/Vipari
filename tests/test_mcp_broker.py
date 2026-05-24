@@ -248,6 +248,47 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
 
     client_id, client_secret = _seed_mcp_workspace(db_path)
+    scenario_eval_executions = [
+        {
+            "scenario_key": "dummyai-review-target",
+            "artifact_paths": ["prompts/refund.txt"],
+            "assertion_summary": {"all_passed": True, "failed_count": 0},
+            "candidate_source": "seeded",
+        }
+    ]
+    hybrid_analysis_executions = [
+        {
+            "analyzer_key": "prompt_policy_static_scan",
+            "artifact_path": "prompts/refund.txt",
+            "artifact_type": "prompt",
+            "finding_count": 1,
+            "highest_severity": "high",
+            "findings": [{"finding_key": "internal_policy_disclosure", "severity": "high"}],
+        }
+    ]
+    _seed_audit_row(db_path, audit_id=1)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE pull_request_audits
+            SET scenario_eval_execution_count = ?,
+                scenario_eval_execution_reason = ?,
+                scenario_eval_executions_json = ?,
+                hybrid_analysis_execution_count = ?,
+                hybrid_analysis_execution_reason = ?,
+                hybrid_analysis_executions_json = ?
+            WHERE id = ?
+            """,
+            (
+                1,
+                "Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+                json.dumps(scenario_eval_executions),
+                1,
+                "Shadow-mode hybrid static analysis executed 1 artifact.",
+                json.dumps(hybrid_analysis_executions),
+                1,
+            ),
+        )
 
     with TestClient(main.app) as client:
         broker_token = _issue_broker_token(client, client_id, client_secret)
@@ -298,6 +339,9 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     assert posture_response.json()["result"]["repo_full"] == "doria90/dummyAI"
     assert casefile_response.status_code == 200
     assert casefile_response.json()["result"]["coverage_summary"]["discovered_artifact_count"] >= 1
+    assert casefile_response.json()["result"]["audit_brief"]["latest_execution"]["scenario_eval_execution"]["count"] == 1
+    assert casefile_response.json()["result"]["audit_brief"]["latest_execution"]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert casefile_response.json()["result"]["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
     assert escalations_response.status_code == 200
     assert escalations_response.json()["result"]["workspace_id"] >= 1
     entries = list_control_plane_audit_logs_for_workspace(db_path, 1)
@@ -987,8 +1031,6 @@ def test_mcp_broker_hides_repo_after_allocation_is_deactivated(tmp_path):
     assert repos_response.json()["result"]["repos"] == []
     assert posture_response.status_code == 404
     assert posture_response.json()["detail"]["error"] == "repo_not_allocated"
-
-
 def test_mcp_broker_rejects_unknown_tool_with_structured_error(tmp_path):
     db_path = str(tmp_path / "mcp-broker-unknown-tool.db")
     original_db_path = main.AUDIT_DB_PATH

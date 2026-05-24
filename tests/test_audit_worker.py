@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 from config import get_settings
+from engine.models import FindingSeverity, RuleFinding
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
@@ -54,6 +55,8 @@ from services.control_plane_records import (
 )
 from services.onboarding import onboard_repository
 from services.audit_worker import WorkerSettings, build_fallback_comment, process_next_job_once
+from services.hybrid_execution import HybridExecutionResult, HybridExecutionSummary
+from services.scenario_execution import ScenarioEvalExecution, ScenarioEvalExecutionSummary
 from services.activity_records import list_recent_activity_events
 from services.activity_schema_migrations import migrate_activity_database
 from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
@@ -115,6 +118,319 @@ def test_build_signal_fusion_assessment_escalates_on_medium_medium_agreement():
     assert assessment.escalation_recommendation.decision == "normal_review"
 
 
+def test_worker_persists_shadow_scenario_eval_plan_metadata(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=91,
+        installation_id=123,
+        head_sha="sha-91",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9001)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        scenario_eval_rollout_mode="shadow",
+        scenario_eval_max_artifacts_per_review=1,
+        scenario_eval_allowed_repos="doria90/*",
+        scenario_eval_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.scenario_eval_mode == "shadow"
+    assert audit.scenario_eval_artifact_count == 1
+    assert audit.scenario_eval_artifact_paths == ["prompts/policy.md"]
+    assert "Shadow-mode scenario eval would review 1 artifact" in (audit.scenario_eval_selection_reason or "")
+
+
+def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=93,
+        installation_id=123,
+        head_sha="sha-93",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9003)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    captured = {}
+
+    def fake_execute_scenario_eval_plan(*args, **kwargs):
+        captured["workspace_id"] = kwargs.get("workspace_id")
+        return ScenarioEvalExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+            executions=(
+                ScenarioEvalExecution(
+                    scenario_key="dummyai-review-target",
+                    artifact_paths=("prompts/policy.md",),
+                    package_path="artifacts/eval-runs/pr-93/doria90-dummyai/audit-job-1/run-package.json",
+                    comparison_path="artifacts/eval-runs/pr-93/doria90-dummyai/audit-job-1/comparison-summary.json",
+                    assertion_summary={"all_passed": True, "failed_count": 0},
+                    candidate_source="seeded",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("services.audit_worker.execute_scenario_eval_plan", fake_execute_scenario_eval_plan)
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        scenario_eval_rollout_mode="shadow",
+        scenario_eval_max_artifacts_per_review=1,
+        scenario_eval_allowed_repos="doria90/*",
+        scenario_eval_allowed_artifact_types="prompt,model_config",
+        scenario_eval_output_root=str(tmp_path / "artifacts"),
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert captured["workspace_id"] == 1
+    assert audit.scenario_eval_execution_count == 1
+    assert "executed seeded scenario" in (audit.scenario_eval_execution_reason or "")
+    assert audit.scenario_eval_executions[0]["scenario_key"] == "dummyai-review-target"
+    assert audit.scenario_eval_executions[0]["assertion_summary"]["all_passed"] is True
+
+
+def test_worker_persists_shadow_hybrid_analysis_plan_metadata(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=92,
+        installation_id=123,
+        head_sha="sha-92",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9002)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        hybrid_static_analysis_rollout_mode="shadow",
+        hybrid_static_analysis_max_artifacts_per_review=1,
+        hybrid_static_analysis_allowed_repos="doria90/*",
+        hybrid_static_analysis_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.hybrid_analysis_mode == "shadow"
+    assert audit.hybrid_analysis_request_count == 1
+    assert audit.hybrid_analysis_requests[0]["artifact_path"] == "prompts/policy.md"
+    assert audit.hybrid_analysis_requests[0]["analyzer_key"] == "prompt_policy_static_scan"
+    assert "Shadow-mode hybrid static analysis would inspect 1 artifact" in (audit.hybrid_analysis_selection_reason or "")
+
+
+def test_worker_persists_shadow_hybrid_execution_summary(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=94,
+        installation_id=123,
+        head_sha="sha-94",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9004)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.execute_hybrid_analysis_plan",
+        lambda *args, **kwargs: HybridExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+            executions=(
+                HybridExecutionResult(
+                    analyzer_key="prompt_policy_static_scan",
+                    artifact_path="prompts/policy.md",
+                    artifact_type="prompt",
+                    finding_count=2,
+                    highest_severity="high",
+                    findings=(),
+                ),
+            ),
+        ),
+    )
+
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "Summary: The prompt and model settings changed in a way that weakens guardrails.\n"
+                                    "Risk Level: High\n"
+                                    "Confidence: High\n"
+                                    "Detailed Analysis:\n"
+                                    "- The policy prompt now permits internal policy disclosure.\n"
+                                    "- The model configuration increases output variability.\n"
+                                    "Recommendation: Escalate before merge."
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=llm_client,
+        model="gpt-4o",
+        hybrid_static_analysis_rollout_mode="shadow",
+        hybrid_static_analysis_max_artifacts_per_review=1,
+        hybrid_static_analysis_allowed_repos="doria90/*",
+        hybrid_static_analysis_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.hybrid_analysis_execution_count == 1
+    assert audit.hybrid_analysis_execution_reason == "Shadow-mode hybrid static analysis executed 1 artifact."
+    assert audit.hybrid_analysis_executions[0]["artifact_path"] == "prompts/policy.md"
+    assert audit.hybrid_analysis_executions[0]["highest_severity"] == "high"
+
+
 def test_build_signal_fusion_assessment_bounds_semantic_only_high_without_merge_blocking_recommendation():
     from services.audit_worker import _build_signal_fusion_assessment
 
@@ -167,6 +483,106 @@ def test_build_signal_fusion_assessment_treats_missing_semantic_risk_as_low_conf
     assert assessment.risk_level == "Medium"
     assert assessment.confidence == "Low"
     assert assessment.escalation_recommendation.decision == "normal_review"
+
+
+def test_build_signal_fusion_assessment_applies_policy_floor_from_attribute_profiles():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.35),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.15),
+            ]
+        )
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Low\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "Medium"
+    assert assessment.policy_floor == "Medium"
+    assert assessment.policy_reasons
+
+
+def test_build_signal_fusion_assessment_does_not_combine_policy_deltas_across_artifacts():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Low"),
+        findings=[],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.35),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=0.0),
+            ]
+        ),
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.0),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.15),
+            ]
+        ),
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Low\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "Low"
+    assert assessment.policy_floor is None
+    assert assessment.policy_reasons == ()
+
+
+def test_build_signal_fusion_assessment_applies_finding_based_policy_floor_for_multi_artifact_changes():
+    from services.audit_worker import _build_signal_fusion_assessment
+
+    deterministic_analysis = SimpleNamespace(
+        suggested_risk_level=SimpleNamespace(value="Medium"),
+        findings=[
+            RuleFinding(
+                rule_id="sensitive_data_drift",
+                title="Sensitive data drift",
+                severity=FindingSeverity.HIGH,
+                rationale="Sensitive access was added.",
+            )
+        ],
+    )
+    attribute_profiles = [
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.1),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=0.0),
+            ]
+        ),
+        SimpleNamespace(
+            dimensions=[
+                SimpleNamespace(attribute_key="capability_risk", delta=0.0),
+                SimpleNamespace(attribute_key="guardrail_robustness", delta=-0.2),
+            ]
+        ),
+    ]
+
+    assessment = _build_signal_fusion_assessment(
+        "Risk Level: Medium\nConfidence: Medium\nRecommendation: Review the changed AI control surface closely before merge.",
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
+
+    assert assessment.risk_level == "High"
+    assert assessment.policy_floor == "High"
+    assert assessment.policy_reasons
 
 
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):
@@ -1398,6 +1814,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
     )
     posted = []
+    posted_check_runs = []
 
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
@@ -1406,6 +1823,10 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         lambda repo, pr, token, body, existing_comment_id=None: posted.append((body, existing_comment_id)) or 202,
     )
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
     monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
 
     def failing_comment(*args, **kwargs):
@@ -1421,6 +1842,7 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
         model="gpt-4o",
         max_attempts=2,
         max_retry_window_seconds=3600,
+        governance_check_run_rollout_mode="dry_run",
     )
 
     assert process_next_job_once(settings) is True
@@ -1435,9 +1857,24 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert second_attempt is not None
     assert second_attempt.status == "fallback_posted"
     assert len(posted) == 1
+    assert len(posted_check_runs) == 2
     assert "## ❌ Vipari: Escalate before merge" in posted[0][0]
     assert "### Evidence" in posted[0][0]
     assert "quota exceeded" not in posted[0][0]
+    assert posted_check_runs[0][0] == "doria90/dummyAI"
+    assert posted_check_runs[0][1] == "sha-2"
+    assert posted_check_runs[0][2] == "token"
+    assert posted_check_runs[0][3]["status"] == "in_progress"
+    assert posted_check_runs[0][3]["conclusion"] is None
+    assert posted_check_runs[0][3]["title"] == "Governance review pending retry"
+    assert posted_check_runs[1][0] == "doria90/dummyAI"
+    assert posted_check_runs[1][1] == "sha-2"
+    assert posted_check_runs[1][2] == "token"
+    assert posted_check_runs[1][3]["conclusion"] == "neutral"
+    assert posted_check_runs[1][3]["title"] == "Governance fallback review posted"
+    assert "Fallback reason: FakeRateLimitError: quota exceeded" in posted_check_runs[1][3]["text"]
+    assert "Deterministic risk: High" in posted_check_runs[1][3]["text"]
+    assert "Escalation decision: escalate_before_merge" in posted_check_runs[1][3]["text"]
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
@@ -1454,6 +1891,54 @@ def test_worker_retries_then_posts_fallback(tmp_path, monkeypatch):
     assert comment is not None
     assert comment.github_comment_id == 202
     assert comment.comment_mode == "preliminary_fallback"
+
+
+def test_worker_keeps_fallback_audit_when_fallback_governance_check_run_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=22,
+        installation_id=123,
+        head_sha="sha-22",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 2202)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+
+    def failing_comment(*args, **kwargs):
+        raise FakeRateLimitError("quota exceeded")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", failing_comment)
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        max_attempts=1,
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "fallback_posted"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "fallback_posted"
+    assert "Governance fallback check run not applied" in (audit.error_message or "")
 
 
 def test_worker_falls_back_after_retry_window_expires(tmp_path, monkeypatch):
@@ -1575,7 +2060,7 @@ def test_worker_suppresses_github_output_when_feedback_mode_off(tmp_path, monkey
     assert audit.status == "completed"
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
-    assert audit.semantic_review_completed is True
+    assert audit.semantic_review_completed is False
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is None
@@ -1647,10 +2132,126 @@ def test_worker_silent_off_mode_persists_fallback_without_github_output(tmp_path
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
     assert audit.semantic_review_completed is False
-    assert audit.error_message == "RuntimeError: model unavailable"
+    assert audit.error_message is None
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is None
+
+
+def test_worker_persists_shadow_enrichment_metadata_when_feedback_mode_off(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    owner = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug="ws-off-shadow", display_name="Workspace Off Shadow", billing_owner_user_id=owner.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="acct-123",
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="repo-123",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=owner.id,
+    )
+    update_workspace_pr_feedback_mode(db_path, workspace.id, pr_feedback_mode="off")
+
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=35,
+        installation_id=123,
+        head_sha="sha-35",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n"
+            "diff --git a/config/model.yaml b/config/model.yaml\nindex 1..2\n@@ -0,0 +1 @@\n+temperature: 1.0\n"
+        ),
+    )
+    posted = []
+    labels = []
+    llm_invocations = []
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: llm_invocations.append(True) or "unexpected")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: posted.append(args) or 3500)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
+    monkeypatch.setattr(
+        "services.audit_worker._execute_scenario_eval_for_job",
+        lambda *args, **kwargs: ScenarioEvalExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+            executions=(
+                ScenarioEvalExecution(
+                    scenario_key="dummyai-review-target",
+                    artifact_paths=("prompts/policy.md",),
+                    package_path="artifacts/eval-runs/pr-35/run-package.json",
+                    comparison_path="artifacts/eval-runs/pr-35/comparison-summary.json",
+                    assertion_summary={"all_passed": True, "failed_count": 0},
+                    candidate_source="seeded",
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "services.audit_worker._execute_hybrid_analysis_for_job",
+        lambda *args, **kwargs: HybridExecutionSummary(
+            rollout_mode="shadow",
+            attempted=True,
+            executed=True,
+            reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+            executions=(
+                HybridExecutionResult(
+                    analyzer_key="prompt_policy_static_scan",
+                    artifact_path="prompts/policy.md",
+                    artifact_type="prompt",
+                    finding_count=1,
+                    highest_severity="high",
+                    findings=(),
+                ),
+            ),
+        ),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        scenario_eval_rollout_mode="shadow",
+        scenario_eval_max_artifacts_per_review=1,
+        scenario_eval_allowed_repos="doria90/*",
+        scenario_eval_allowed_artifact_types="prompt,model_config",
+        hybrid_static_analysis_rollout_mode="shadow",
+        hybrid_static_analysis_max_artifacts_per_review=1,
+        hybrid_static_analysis_allowed_repos="doria90/*",
+        hybrid_static_analysis_allowed_artifact_types="prompt,model_config",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted == []
+    assert labels == []
+    assert llm_invocations == []
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert audit.output_mode == "suppressed"
+    assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is False
+    assert audit.scenario_eval_mode == "shadow"
+    assert audit.scenario_eval_execution_count == 1
+    assert audit.hybrid_analysis_mode == "shadow"
+    assert audit.hybrid_analysis_execution_count == 1
 
 
 def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_reviews(tmp_path, monkeypatch):
@@ -1684,14 +2285,17 @@ def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_review
     reviews = []
     comments = []
     labels = []
+    invoked = []
 
     monkeypatch.setattr(
         "services.audit_worker.build_llm_comment",
-        lambda *args, **kwargs: "Summary: Guardrails weakened.\nRisk Level: High\nConfidence: High\nRecommendation: Escalate before merge.",
+        lambda *args, **kwargs: invoked.append("llm") or "unexpected",
     )
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: invoked.append("snapshot") or "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker._execute_scenario_eval_for_job", lambda *args, **kwargs: invoked.append("scenario"))
+    monkeypatch.setattr("services.audit_worker._execute_hybrid_analysis_for_job", lambda *args, **kwargs: invoked.append("hybrid"))
     monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: reviews.append(args) or 3300)
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: comments.append(args) or 3301)
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
@@ -1708,11 +2312,13 @@ def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_review
     assert reviews == []
     assert comments == []
     assert labels == []
+    assert invoked == []
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is False
 
 
 def test_worker_reuses_existing_review_for_requeued_failed_same_sha_job(tmp_path, monkeypatch):
@@ -1822,6 +2428,95 @@ def test_worker_uses_provider_retry_hint(tmp_path, monkeypatch):
     assert saved is not None
     assert saved.status == "retry_wait"
     assert saved.next_attempt_at >= before + 123
+
+
+def test_worker_posts_pending_governance_check_run_when_retrying(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=44,
+        installation_id=123,
+        head_sha="sha-44",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+    posted_check_runs = []
+
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(FakeRateLimitError("quota exceeded")))
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "retry_wait"
+    assert len(posted_check_runs) == 1
+    repo_full, sha, token, payload = posted_check_runs[0]
+    assert repo_full == "doria90/dummyAI"
+    assert sha == "sha-44"
+    assert token == "token"
+    assert payload["name"] == "Vipari Governance"
+    assert payload["status"] == "in_progress"
+    assert payload["conclusion"] is None
+    assert payload["title"] == "Governance review pending retry"
+    assert payload["summary"] == "Vipari will retry governance review after a transient analysis failure."
+    assert "Retry reason: FakeRateLimitError: quota exceeded" in payload["text"]
+    assert "Retry scheduled at:" in payload["text"]
+
+
+def test_worker_keeps_retry_wait_when_pending_governance_check_run_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=45,
+        installation_id=123,
+        head_sha="sha-45",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.RateLimitError", FakeRateLimitError)
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: (_ for _ in ()).throw(FakeRateLimitError("quota exceeded")))
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "retry_wait"
+    assert "Governance pending check run not applied" in (saved.last_error or "")
 
 
 def test_build_fallback_comment_renders_v3_structure():
@@ -3186,3 +3881,351 @@ def test_worker_keeps_completed_audit_when_escalation_label_application_fails(tm
     assert audit is not None
     assert audit.status == "completed"
     assert "Escalation label not applied" in (audit.error_message or "")
+
+
+def test_worker_posts_enforcing_governance_status_for_high_risk_changes(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=14,
+        installation_id=123,
+        head_sha="sha-14",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_statuses = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1414)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_commit_status",
+        lambda repo_full, sha, token, **kwargs: posted_statuses.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted_statuses == [
+        (
+            "doria90/dummyAI",
+            "sha-14",
+            "token",
+            {
+                "state": "failure",
+                "description": "Vipari governance blocked merge pending escalation.",
+                "context": "vipari/governance",
+                "target_url": None,
+            },
+        )
+    ]
+
+
+def test_worker_posts_neutral_governance_check_run_for_dry_run_escalation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=17,
+        installation_id=123,
+        head_sha="sha-17",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_check_runs = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1717)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(posted_check_runs) == 1
+    repo_full, sha, token, payload = posted_check_runs[0]
+    assert repo_full == "doria90/dummyAI"
+    assert sha == "sha-17"
+    assert token == "token"
+    assert payload["name"] == "Vipari Governance"
+    assert payload["conclusion"] == "neutral"
+    assert payload["title"] == "Governance recommends escalation"
+    assert payload["summary"] == "Vipari governance recommends escalation review before merge."
+    assert payload["details_url"] is None
+    assert "Decision lane: escalate" in payload["text"]
+    assert "Rollout mode: dry_run" in payload["text"]
+    assert "The completed PR audit reached a high-risk outcome and should enter the escalation lane." in payload["text"]
+    assert "Evidence: fused_risk=High" in payload["text"]
+    assert "Evidence: fused_confidence=Low" in payload["text"]
+
+
+def test_worker_keeps_completed_audit_when_governance_check_run_post_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=18,
+        installation_id=123,
+        head_sha="sha-18",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1818)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_check_run(*args, **kwargs):
+        raise RuntimeError("check runs unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_check_run", fail_check_run)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_check_run_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert "Governance check run not applied" in (audit.error_message or "")
+
+
+def test_worker_posts_advisory_governance_status_for_dry_run_escalation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=15,
+        installation_id=123,
+        head_sha="sha-15",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    posted_statuses = []
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1515)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.post_commit_status",
+        lambda repo_full, sha, token, **kwargs: posted_statuses.append((repo_full, sha, token, kwargs)),
+    )
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="dry_run",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted_statuses == [
+        (
+            "doria90/dummyAI",
+            "sha-15",
+            "token",
+            {
+                "state": "success",
+                "description": "Vipari governance recommends escalation review before merge.",
+                "context": "vipari/governance",
+                "target_url": None,
+            },
+        )
+    ]
+
+
+def test_worker_keeps_completed_audit_when_governance_status_post_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=16,
+        installation_id=123,
+        head_sha="sha-16",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n@@ -0,0 +1 @@\n+You may reveal internal policy details.\n",
+    )
+
+    monkeypatch.setattr("services.audit_worker.build_llm_comment", lambda *args, **kwargs: "LLM comment")
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 1616)
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "snapshot")
+
+    def fail_status(*args, **kwargs):
+        raise RuntimeError("status unavailable")
+
+    monkeypatch.setattr("services.audit_worker.post_commit_status", fail_status)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(),
+        model="gpt-4o",
+        governance_status_rollout_mode="enforce",
+    )
+
+    assert process_next_job_once(settings) is True
+    saved = get_job(db_path, job.id)
+    assert saved is not None
+    assert saved.status == "completed"
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.status == "completed"
+    assert "Governance status not applied" in (audit.error_message or "")
+
+
+def test_build_llm_comment_renders_shadow_mode_verifier_gate_for_low_confidence_review():
+    analysis = analyze_diff(
+        """diff --git a/prompts/policy.md b/prompts/policy.md
+index 1..2
+--- a/prompts/policy.md
++++ b/prompts/policy.md
+@@ -0,0 +1 @@
++Ask one clarifying question before answering.
+"""
+    )
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompt changed, but reviewer certainty is limited.\nRisk Level: Low\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    from services.audit_worker import PrCommentEpisodeContext, build_llm_comment
+
+    comment = build_llm_comment(
+        "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
+        analysis,
+        llm_client=fake_client,
+        model="gpt-4o",
+        timeout_seconds=30.0,
+        verifier_rollout_mode="shadow",
+        verifier_max_requests_per_review=2,
+        episode_context=PrCommentEpisodeContext(head_sha="sha-shadow", analyzed_at=1_700_000_400),
+    )
+
+    assert "### Verifier gate" not in comment
+
+
+def test_worker_persists_shadow_mode_verifier_metadata_and_caps_requests(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=77,
+        installation_id=123,
+        head_sha="sha-77",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\n"
+            "index 1..2\n"
+            "--- a/prompts/policy.md\n"
+            "+++ b/prompts/policy.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+Ask one clarifying question before answering.\n"
+            "diff --git a/prompts/refund.md b/prompts/refund.md\n"
+            "index 1..2\n"
+            "--- a/prompts/refund.md\n"
+            "+++ b/prompts/refund.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+Ask one clarifying question before issuing a refund.\n"
+        ),
+    )
+    posted = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Summary: The prompts changed, but reviewer certainty is limited.\nRisk Level: Low\nConfidence: Low\nRecommendation: Review the changed AI control surface closely before merge."
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda repo, path, token, ref: "artifact snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 7701,
+    )
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        model="gpt-4o",
+        verifier_rollout_mode="shadow",
+        verifier_max_requests_per_review=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    assert posted
+    assert "### Verifier gate" not in posted[0]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.verifier_mode == "shadow"
+    assert audit.verifier_trigger == "low_confidence"
+    assert audit.verifier_request_count == 1

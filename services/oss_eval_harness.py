@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, is_dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+from engine.verifier import should_invoke_verifier
 from services.dashboard_views import build_dashboard_overview_view, build_repo_dashboard_view
 from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
 
@@ -15,6 +16,73 @@ DEFAULT_TOP_REVIEW_TARGET_LIMIT = 5
 DEFAULT_EVAL_CANDIDATE_SOURCE = "oss"
 DEFAULT_EVAL_SCENARIO_SOURCE = "seeded"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_VERIFIER_ROLLOUT_MODE = "off"
+DEFAULT_VERIFIER_MAX_REQUESTS_PER_REVIEW = 3
+ESTIMATED_VERIFIER_COST_PER_REQUEST_USD = 0.02
+ESTIMATED_VERIFIER_LATENCY_MS_PER_REQUEST = 1200
+
+DEFAULT_VERIFIER_EVAL_CASES = (
+    {
+        "case_id": "high-impact",
+        "deterministic_risk": "High",
+        "semantic_risk": "High",
+        "semantic_confidence": "High",
+        "semantic_requires_escalation": False,
+        "expected_invoke": True,
+        "expected_trigger": "high_impact",
+        "risk_bucket": "High",
+    },
+    {
+        "case_id": "low-confidence",
+        "deterministic_risk": "Low",
+        "semantic_risk": "High",
+        "semantic_confidence": "Low",
+        "semantic_requires_escalation": False,
+        "expected_invoke": True,
+        "expected_trigger": "low_confidence",
+        "risk_bucket": "Low",
+    },
+    {
+        "case_id": "risk-disagreement",
+        "deterministic_risk": "Low",
+        "semantic_risk": "Medium",
+        "semantic_confidence": "High",
+        "semantic_requires_escalation": False,
+        "expected_invoke": True,
+        "expected_trigger": "risk_disagreement",
+        "risk_bucket": "Low",
+    },
+    {
+        "case_id": "merge-blocking",
+        "deterministic_risk": "Medium",
+        "semantic_risk": "Medium",
+        "semantic_confidence": "High",
+        "semantic_requires_escalation": True,
+        "expected_invoke": True,
+        "expected_trigger": "merge_blocking",
+        "risk_bucket": "Medium",
+    },
+    {
+        "case_id": "aligned-low",
+        "deterministic_risk": "Low",
+        "semantic_risk": "Low",
+        "semantic_confidence": "High",
+        "semantic_requires_escalation": False,
+        "expected_invoke": False,
+        "expected_trigger": None,
+        "risk_bucket": "Low",
+    },
+    {
+        "case_id": "aligned-medium",
+        "deterministic_risk": "Medium",
+        "semantic_risk": "Medium",
+        "semantic_confidence": "Medium",
+        "semantic_requires_escalation": False,
+        "expected_invoke": False,
+        "expected_trigger": None,
+        "risk_bucket": "Medium",
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -224,7 +292,137 @@ def _build_evaluator_rubric(*, expected_control_surfaces: list[str], manual_note
             "question": "Do the overview and repo case-file outputs help decide what to inspect next?",
             "notes": manual_notes,
         },
+        {
+            "dimension": "verifier_release_gate",
+            "status": "automated_check",
+            "question": "Did synthetic verifier traps preserve trigger precision and stay within the configured shadow-mode budget?",
+            "notes": f"Default verifier rollout: {DEFAULT_VERIFIER_ROLLOUT_MODE}.",
+        },
     ]
+
+
+def _safe_divide(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _build_verifier_release_gate_summary(
+    *,
+    rollout_mode: str,
+    max_requests_per_review: int,
+) -> dict[str, Any]:
+    normalized_rollout_mode = str(rollout_mode or "off").strip().lower()
+    if normalized_rollout_mode != "shadow":
+        return {
+            "rollout_mode": normalized_rollout_mode,
+            "max_requests_per_review": max_requests_per_review,
+            "synthetic_case_count": 0,
+            "requested_invocation_count": 0,
+            "capped_request_count": 0,
+            "budget_filtered_count": 0,
+            "trigger_counts": {
+                "high_impact": 0,
+                "low_confidence": 0,
+                "risk_disagreement": 0,
+                "merge_blocking": 0,
+            },
+            "verifier_disagreement_count": 0,
+            "precision": None,
+            "recall": None,
+            "estimated_review_cost_usd": 0.0,
+            "estimated_review_latency_ms": 0,
+            "risk_level_summary": {
+                "Low": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0, "precision": None, "recall": None},
+                "Medium": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0, "precision": None, "recall": None},
+                "High": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0, "precision": None, "recall": None},
+            },
+            "cases": [],
+        }
+
+    case_results: list[dict[str, Any]] = []
+    trigger_counts = {
+        "high_impact": 0,
+        "low_confidence": 0,
+        "risk_disagreement": 0,
+        "merge_blocking": 0,
+    }
+    by_risk_level: dict[str, dict[str, int]] = {
+        "Low": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0},
+        "Medium": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0},
+        "High": {"expected_positive": 0, "actual_positive": 0, "true_positive": 0},
+    }
+    true_positive = 0
+    false_positive = 0
+    false_negative = 0
+
+    for case in DEFAULT_VERIFIER_EVAL_CASES:
+        decision = should_invoke_verifier(
+            case["deterministic_risk"],
+            case["semantic_risk"],
+            case["semantic_confidence"],
+            semantic_requires_escalation=bool(case["semantic_requires_escalation"]),
+        )
+        expected_invoke = bool(case["expected_invoke"])
+        actual_invoke = bool(decision.should_invoke)
+        bucket = by_risk_level[case["risk_bucket"]]
+        if expected_invoke:
+            bucket["expected_positive"] += 1
+        if actual_invoke:
+            bucket["actual_positive"] += 1
+        if expected_invoke and actual_invoke:
+            true_positive += 1
+            bucket["true_positive"] += 1
+        elif actual_invoke and not expected_invoke:
+            false_positive += 1
+        elif expected_invoke and not actual_invoke:
+            false_negative += 1
+
+        actual_trigger = decision.trigger.value if decision.trigger is not None else None
+        if actual_trigger in trigger_counts:
+            trigger_counts[actual_trigger] += 1
+
+        case_results.append(
+            {
+                "case_id": case["case_id"],
+                "risk_bucket": case["risk_bucket"],
+                "expected_invoke": expected_invoke,
+                "actual_invoke": actual_invoke,
+                "expected_trigger": case["expected_trigger"],
+                "actual_trigger": actual_trigger,
+                "matched_expectation": expected_invoke == actual_invoke and case["expected_trigger"] == actual_trigger,
+                "reason": decision.reason,
+            }
+        )
+
+    requested_count = sum(1 for item in case_results if item["actual_invoke"])
+    capped_request_count = min(requested_count, max(0, max_requests_per_review))
+    budget_filtered_count = max(0, requested_count - capped_request_count)
+
+    risk_level_summary: dict[str, Any] = {}
+    for risk_level, counts in by_risk_level.items():
+        risk_level_summary[risk_level] = {
+            **counts,
+            "precision": _safe_divide(counts["true_positive"], counts["actual_positive"]),
+            "recall": _safe_divide(counts["true_positive"], counts["expected_positive"]),
+        }
+
+    return {
+        "rollout_mode": normalized_rollout_mode,
+        "max_requests_per_review": max_requests_per_review,
+        "synthetic_case_count": len(case_results),
+        "requested_invocation_count": requested_count,
+        "capped_request_count": capped_request_count,
+        "budget_filtered_count": budget_filtered_count,
+        "trigger_counts": trigger_counts,
+        "verifier_disagreement_count": trigger_counts["risk_disagreement"],
+        "precision": _safe_divide(true_positive, true_positive + false_positive),
+        "recall": _safe_divide(true_positive, true_positive + false_negative),
+        "estimated_review_cost_usd": round(capped_request_count * ESTIMATED_VERIFIER_COST_PER_REQUEST_USD, 4),
+        "estimated_review_latency_ms": capped_request_count * ESTIMATED_VERIFIER_LATENCY_MS_PER_REQUEST,
+        "risk_level_summary": risk_level_summary,
+        "cases": case_results,
+    }
 
 
 def _build_baseline_coverage_summary(discovered_artifacts: list[dict[str, Any]], baseline_versions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -428,6 +626,8 @@ def compare_oss_eval_packages(current_package: dict[str, Any], baseline_package:
     baseline_targets = baseline_package.get("top_artifacts_requiring_review") or []
     current_assertions = current_package.get("assertions") or []
     baseline_assertions = baseline_package.get("assertions") or []
+    current_verifier = current_package.get("verifier_release_gate") or {}
+    baseline_verifier = baseline_package.get("verifier_release_gate") or {}
 
     improvements: list[str] = []
     regressions: list[str] = []
@@ -495,6 +695,60 @@ def compare_oss_eval_packages(current_package: dict[str, Any], baseline_package:
         else:
             unchanged.append(f"Explicit assertion failures held at {current_failed_assertions}.")
 
+    current_precision = current_verifier.get("precision")
+    baseline_precision = baseline_verifier.get("precision")
+    if current_precision is not None and baseline_precision is not None:
+        if current_precision > baseline_precision:
+            improvements.append(
+                f"Verifier trigger precision improved from {baseline_precision:.0%} to {current_precision:.0%}."
+            )
+        elif current_precision < baseline_precision:
+            regressions.append(
+                f"Verifier trigger precision regressed from {baseline_precision:.0%} to {current_precision:.0%}."
+            )
+        else:
+            unchanged.append(f"Verifier trigger precision held at {current_precision:.0%}.")
+
+    current_recall = current_verifier.get("recall")
+    baseline_recall = baseline_verifier.get("recall")
+    if current_recall is not None and baseline_recall is not None:
+        if current_recall > baseline_recall:
+            improvements.append(
+                f"Verifier trigger recall improved from {baseline_recall:.0%} to {current_recall:.0%}."
+            )
+        elif current_recall < baseline_recall:
+            regressions.append(
+                f"Verifier trigger recall regressed from {baseline_recall:.0%} to {current_recall:.0%}."
+            )
+        else:
+            unchanged.append(f"Verifier trigger recall held at {current_recall:.0%}.")
+
+    current_budget_filtered = int(current_verifier.get("budget_filtered_count") or 0)
+    baseline_budget_filtered = int(baseline_verifier.get("budget_filtered_count") or 0)
+    if current_budget_filtered < baseline_budget_filtered:
+        improvements.append(
+            f"Verifier budget filtering improved from {baseline_budget_filtered} to {current_budget_filtered}."
+        )
+    elif current_budget_filtered > baseline_budget_filtered:
+        regressions.append(
+            f"Verifier budget filtering regressed from {baseline_budget_filtered} to {current_budget_filtered}."
+        )
+    elif current_verifier or baseline_verifier:
+        unchanged.append(f"Verifier budget filtering held at {current_budget_filtered}.")
+
+    current_disagreements = int(current_verifier.get("verifier_disagreement_count") or 0)
+    baseline_disagreements = int(baseline_verifier.get("verifier_disagreement_count") or 0)
+    if current_disagreements < baseline_disagreements:
+        improvements.append(
+            f"Verifier disagreement count improved from {baseline_disagreements} to {current_disagreements}."
+        )
+    elif current_disagreements > baseline_disagreements:
+        regressions.append(
+            f"Verifier disagreement count regressed from {baseline_disagreements} to {current_disagreements}."
+        )
+    elif current_verifier or baseline_verifier:
+        unchanged.append(f"Verifier disagreement count held at {current_disagreements}.")
+
     return {
         "repo_full": current_package.get("repo_full"),
         "current_run_id": current_package.get("run_id"),
@@ -528,6 +782,7 @@ def compare_eval_package_files(current_package_path: str, baseline_package_path:
 def run_oss_evaluation(
     db_path: str,
     *,
+    workspace_id: int | None = None,
     repo_full: str,
     installation_id: int,
     token: str,
@@ -541,6 +796,8 @@ def run_oss_evaluation(
     run_label: str | None = None,
     compare_to_package_path: str | None = None,
     scenario_key: str | None = None,
+    verifier_rollout_mode: str = DEFAULT_VERIFIER_ROLLOUT_MODE,
+    verifier_max_requests_per_review: int = DEFAULT_VERIFIER_MAX_REQUESTS_PER_REVIEW,
     onboard_repository_fn=onboard_repository,
     plan_repository_history_backfill_fn=plan_repository_history_backfill,
     execute_repository_history_backfill_fn=execute_repository_history_backfill,
@@ -589,6 +846,10 @@ def run_oss_evaluation(
     backfill_execution_summary = _build_backfill_execution_summary(planned_jobs, execution_results, repo_dashboard_payload)
     top_review_targets = _build_top_review_targets(repo_dashboard_payload)
     evaluator_rubric = _build_evaluator_rubric(expected_control_surfaces=expected, manual_notes=manual_notes)
+    verifier_release_gate = _build_verifier_release_gate_summary(
+        rollout_mode=verifier_rollout_mode,
+        max_requests_per_review=verifier_max_requests_per_review,
+    )
     assertions = _build_eval_assertions(
         scenario=scenario,
         baseline_coverage_summary=baseline_coverage_summary,
@@ -600,6 +861,7 @@ def run_oss_evaluation(
     package = {
         "run_id": effective_run_label,
         "package_type": "evaluation_run",
+        "workspace_id": workspace_id,
         "repo_full": repo_full,
         "installation_id": installation_id,
         "candidate_key": candidate_key,
@@ -611,6 +873,7 @@ def run_oss_evaluation(
         "comparison_baseline_package_path": effective_compare_to_package_path,
         "expected_control_surfaces": expected,
         "manual_notes": manual_notes,
+        "verifier_rollout_mode": verifier_rollout_mode,
         "onboarding_summary": {
             "record": onboarding_record,
             "discovered_artifact_count": len(discovered_artifacts),
@@ -623,6 +886,7 @@ def run_oss_evaluation(
         "top_artifacts_requiring_review": top_review_targets,
         "repo_dashboard_snapshot": repo_dashboard_payload,
         "overview_dashboard_snapshot": overview_dashboard_payload,
+        "verifier_release_gate": verifier_release_gate,
         "evaluator_rubric": evaluator_rubric,
         "assertions": assertions,
         "assertion_summary": assertion_summary,

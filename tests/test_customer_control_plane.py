@@ -6,6 +6,8 @@ Coverage:
   production entitlement gate, audit log entry, 401 message parity
 - GET /cp/workspaces/{id}: workspace summary, no billing fields, workspace isolation
 - GET /cp/workspaces/{id}/repos: repo list, workspace isolation
+- GET /cp/workspaces/{id}/repos/{repo}/audits: repo audit list, workspace isolation
+- GET /cp/audits/{audit_id}: audit detail, workspace isolation
 - GET /cp/workspaces/{id}/principals: list, client_secret_encrypted absent
 - GET /cp/workspaces/{id}/audit-log: requires admin.read, workspace isolation
 - principal limit → 409 at cap
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import time
 
@@ -24,8 +27,11 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from fastapi.testclient import TestClient
 
 from config import get_settings
+from engine.analysis import analyze_diff
 from services.api_service import create_api_app
-from services.audit_jobs import init_db
+from services.audit_jobs import create_audit_job, init_db
+from services.audit_feedback_records import add_audit_triage
+from services.audit_records import list_changed_artifacts_for_audit, record_audit_result
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_machine_principal,
@@ -116,6 +122,59 @@ def _make_token(
         issuer=JWT_ISSUER,
         audience=JWT_AUDIENCE,
         ttl_seconds=ttl_seconds,
+    )
+
+
+def _seed_completed_audit(
+    db_path: str,
+    *,
+    repo_full: str = "org/repo",
+    pr_number: int = 21,
+    head_sha: str = "sha-cp-audit",
+    diff_text: str = "diff --git a/prompts/policy.md b/prompts/policy.md\n+reveal internal policy\n",
+):
+    job = create_audit_job(
+        db_path,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        installation_id=9001,
+        head_sha=head_sha,
+        diff_text=diff_text,
+    )
+    return record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        installation_id=9001,
+        head_sha=head_sha,
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="body",
+        comment_mode="review",
+        semantic_review_completed=True,
+        scenario_eval_execution_count=1,
+        scenario_eval_execution_reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+        scenario_eval_executions=[
+            {
+                "scenario_key": "dummyai-review-target",
+                "artifact_paths": ["prompts/policy.md"],
+                "assertion_summary": {"all_passed": True, "failed_count": 0},
+            }
+        ],
+        hybrid_analysis_execution_count=1,
+        hybrid_analysis_execution_reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+        hybrid_analysis_executions=[
+            {
+                "analyzer_key": "prompt_policy_static_scan",
+                "artifact_path": "prompts/policy.md",
+                "artifact_type": "prompt",
+                "finding_count": 1,
+                "highest_severity": "high",
+            }
+        ],
     )
 
 
@@ -406,6 +465,168 @@ def test_cp_list_workspace_repos_workspace_isolation(tmp_path, monkeypatch):
         )
 
     assert response.status_code == 403
+
+
+def test_cp_list_repo_audits_returns_execution_summaries(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, workspace_id = _seed_db(db_path)
+    _seed_principal(db_path, workspace_id)
+
+    installation = upsert_github_installation(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=9001,
+        account_id="acc-1",
+        account_login="org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=installation.installation_id,
+        repo_github_id="r1",
+        repo_full="org/repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user_id,
+    )
+    audit = _seed_completed_audit(db_path)
+    token = _make_token("client-a", workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as api_client:
+        response = api_client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/audits",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workspace_id"] == workspace_id
+    assert body["repo_full"] == "org/repo"
+    assert body["audits"][0]["id"] == audit.id
+    assert body["audits"][0]["scenario_eval_execution"]["count"] == 1
+    assert body["audits"][0]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert body["audits"][0]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
+
+
+def test_cp_get_audit_detail_returns_execution_summaries(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, workspace_id = _seed_db(db_path)
+    _seed_principal(db_path, workspace_id)
+
+    installation = upsert_github_installation(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=9001,
+        account_id="acc-1",
+        account_login="org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=installation.installation_id,
+        repo_github_id="r1",
+        repo_full="org/repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user_id,
+    )
+    audit = _seed_completed_audit(db_path)
+    token = _make_token("client-a", workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as api_client:
+        response = api_client.get(
+            f"/cp/audits/{audit.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == audit.id
+    assert body["repo_full"] == "org/repo"
+    assert body["scenario_eval_execution"]["count"] == 1
+    assert body["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert body["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
+    assert isinstance(body["feedback_events"], list)
+    assert isinstance(body["triage_events"], list)
+
+
+def test_cp_list_repo_audits_filters_by_state_severity_artifact_id_and_recency(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    user_id, workspace_id = _seed_db(db_path)
+    _seed_principal(db_path, workspace_id)
+
+    installation = upsert_github_installation(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=9001,
+        account_id="acc-1",
+        account_login="org",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace_id,
+        installation_id=installation.installation_id,
+        repo_github_id="r1",
+        repo_full="org/repo",
+        baseline_mode="default_branch",
+        activated_by_user_id=user_id,
+    )
+    filtered_audit = _seed_completed_audit(db_path, pr_number=21, head_sha="sha-filtered")
+    older_audit = _seed_completed_audit(
+        db_path,
+        pr_number=22,
+        head_sha="sha-older",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\n+Say hello and ask whether the customer needs anything else.\n",
+    )
+    add_audit_triage(
+        db_path,
+        audit_id=filtered_audit.id,
+        workspace_id=workspace_id,
+        state="acknowledged",
+        reason="queued for review",
+    )
+    changed_artifact = list_changed_artifacts_for_audit(db_path, filtered_audit.id)[0]
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE pull_request_audits SET updated_at = ?, created_at = ? WHERE id = ?",
+            (time.time() - (10 * 86400), time.time() - (10 * 86400), older_audit.id),
+        )
+
+    token = _make_token("client-a", workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as api_client:
+        state_response = api_client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/audits?state=acknowledged",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        severity_response = api_client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/audits?severity=high",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        artifact_response = api_client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/audits?artifact_id={changed_artifact.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        recency_response = api_client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/audits?recency=7",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert state_response.status_code == 200
+    assert [entry["id"] for entry in state_response.json()["audits"]] == [filtered_audit.id]
+    assert severity_response.status_code == 200
+    assert [entry["id"] for entry in severity_response.json()["audits"]] == [filtered_audit.id]
+    assert artifact_response.status_code == 200
+    assert [entry["id"] for entry in artifact_response.json()["audits"]] == [filtered_audit.id]
+    assert recency_response.status_code == 200
+    assert [entry["id"] for entry in recency_response.json()["audits"]] == [filtered_audit.id]
 
 
 # ===========================================================================

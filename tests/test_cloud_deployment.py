@@ -36,6 +36,7 @@ from services.control_plane_records import (
     create_workspace,
     init_control_plane_db,
     replace_repo_connections,
+    update_github_installation_status,
     update_repo_allocation_status,
     update_workspace_pr_comments_setting,
     upsert_entitlement,
@@ -866,6 +867,28 @@ def test_message_authorization_allows_closed_pull_request_events_when_dashboard_
 
     update_workspace_pr_comments_setting(db_path, 1, enabled=False)
     assert _message_still_authorized(payload, settings) is True
+
+
+def test_message_authorization_denies_inactive_installation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-inactive-installation.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=888, repo_full="doria90/dummyAI")
+    update_github_installation_status(db_path, installation_id=888, status="inactive")
+
+    settings = get_settings()
+    payload = {
+        "installation_id": 888,
+        "repo_full": "doria90/dummyAI",
+        "event_type": "pull_request",
+    }
+
+    assert _message_still_authorized(payload, settings) is False
 
 
 def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):
@@ -2055,6 +2078,7 @@ def test_worker_skips_uncertain_diff_when_micro_classifier_rejects_and_persists_
     db_path = str(tmp_path / "worker-uncertain.db")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GOVERNANCE_CHECK_RUN_ROLLOUT_MODE", "dry_run")
     _reset_settings_cache()
     init_db(db_path)
     _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
@@ -2089,13 +2113,17 @@ def test_worker_skips_uncertain_diff_when_micro_classifier_rejects_and_persists_
 
     queue = AckQueue()
     llm_client = _fake_llm_client({"is_relevant": False, "reason": "General routing code; not an AI control surface."})
+    posted_check_runs = []
 
     with patch("services.cloud_worker._message_still_authorized", return_value=True), patch(
         "services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"
     ), patch(
         "services.cloud_worker.fetch_diff_with_retry",
         return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
-    ), patch("services.cloud_worker.create_audit_job") as create_job, patch("services.cloud_worker.process_job") as process_job:
+    ), patch("services.cloud_worker.create_audit_job") as create_job, patch("services.cloud_worker.process_job") as process_job, patch(
+        "services.cloud_worker.post_check_run",
+        lambda repo_full, sha, token, **kwargs: posted_check_runs.append((repo_full, sha, token, kwargs)),
+    ):
         asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), llm_client))
 
     assert queue.acked == ["receipt-uncertain-1"]
@@ -2113,6 +2141,80 @@ def test_worker_skips_uncertain_diff_when_micro_classifier_rejects_and_persists_
     assert decisions[0].artifact_path == "src/assistant_router.py"
     assert decisions[0].classifier_is_relevant is False
     assert decisions[0].confidence_tier == "uncertain"
+    assert posted_check_runs == [
+        (
+            "doria90/dummyAI",
+            "worker-uncertain-head",
+            "installation-token",
+            {
+                "name": "Vipari Governance",
+                "status": "completed",
+                "conclusion": "neutral",
+                "title": "Governance audit skipped",
+                "summary": "Vipari skipped full governance audit after pre-audit relevance review.",
+                "text": "Vipari's pre-audit relevance review determined this change was not an AI control surface that needed full governance audit.",
+                "details_url": None,
+            },
+        )
+    ]
+
+
+def test_worker_still_skips_uncertain_diff_when_skipped_governance_check_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-uncertain-fail.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GOVERNANCE_CHECK_RUN_ROLLOUT_MODE", "dry_run")
+    _reset_settings_cache()
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+            self.nacked = []
+            self.dlq = []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, receipt_handle, delay_seconds):
+            self.nacked.append((receipt_handle, delay_seconds))
+
+        async def move_to_dlq(self, receipt_handle):
+            self.dlq.append(receipt_handle)
+
+    message = QueueMessage(
+        message_id="msg-uncertain-2",
+        receipt_handle="receipt-uncertain-2",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 20,
+            "head_sha": "worker-uncertain-head-2",
+        },
+        attempt_count=1,
+    )
+
+    queue = AckQueue()
+    llm_client = _fake_llm_client({"is_relevant": False, "reason": "General routing code; not an AI control surface."})
+
+    with patch("services.cloud_worker._message_still_authorized", return_value=True), patch(
+        "services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
+    ), patch("services.cloud_worker.create_audit_job") as create_job, patch("services.cloud_worker.process_job") as process_job, patch(
+        "services.cloud_worker.post_check_run",
+        side_effect=RuntimeError("check runs unavailable"),
+    ):
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), llm_client))
+
+    assert queue.acked == ["receipt-uncertain-2"]
+    assert queue.nacked == []
+    assert queue.dlq == []
+    create_job.assert_not_called()
+    process_job.assert_not_called()
 
 
 def test_run_worker_supports_postgres_locator_with_provided_queue(monkeypatch):
@@ -2318,6 +2420,70 @@ def test_api_read_routes_require_admin_token(tmp_path, monkeypatch):
     assert authorized_json.status_code == 200
     assert unauthorized_html.status_code == 401
     assert authorized_html.status_code == 200
+
+
+def test_admin_token_api_exposes_governance_decision_route(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "secured-governance-decision-api.db")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("API_ADMIN_TOKEN", "read-secret-token")
+    monkeypatch.delenv("ENABLE_METRICS", raising=False)
+    _reset_settings_cache()
+
+    init_db(db_path)
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "baseline",
+    )
+    record_audit_result(
+        db_path,
+        job_id=901,
+        repo_full="doria90/dummyAI",
+        pr_number=84,
+        pr_title="Expand refund authority",
+        installation_id=123,
+        head_sha="sha-governance-84",
+        deterministic_analysis=analyze_diff(
+            "diff --git a/prompts/refund.txt b/prompts/refund.txt\nindex 1..2 100644\n--- a/prompts/refund.txt\n+++ b/prompts/refund.txt\n@@ -1 +1,2 @@\n-Refund safely.\n+Refund directly in production.\n+Skip approval when needed.\n"
+        ),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body=None,
+        comment_mode=None,
+        semantic_review_completed=True,
+        suggested_risk_level="High",
+        fused_confidence="High",
+        verifier_mode="shadow",
+        verifier_trigger="high_impact",
+        verifier_request_count=1,
+        artifact_snapshots={"prompts/refund.txt": "current"},
+    )
+
+    app = create_api_app()
+
+    with TestClient(app) as client:
+        unauthorized = client.get(
+            "/api/repos/doria90/dummyAI/governance-decision?pr_number=84&head_sha=sha-governance-84"
+        )
+        authorized = client.get(
+            "/api/repos/doria90/dummyAI/governance-decision?pr_number=84&head_sha=sha-governance-84&rollout_mode=enforce",
+            headers={"X-Admin-Token": "read-secret-token"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    payload = authorized.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["conclusion"] == "failure"
+    assert payload["recommended_exit_code"] == 1
+    assert payload["governance_decision"]["rollout_mode"] == "enforce"
+    assert payload["governance_decision"]["decision_lane"] == "block_merge"
+    assert payload["governance_decision"]["should_block_merge"] is True
 
 
 def test_api_dashboard_audit_route_preserves_deep_link_context(tmp_path, monkeypatch):

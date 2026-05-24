@@ -152,6 +152,7 @@ The active repo-evidence slice also sharpens the ranked queue inside those surfa
 - captures PR-review feedback signals for audit episodes through three v1 paths: explicit reviewer submissions on managed feedback links, coarse PR close/merge lifecycle outcomes, and GitHub reactions refreshed against Vipari-managed comments/reviews
 - records triage state transitions on PR audits at `POST /cp/audits/{audit_id}/triage` (`drift.write.low`): append-only events with validated `state` (three values) and optional bounded `reason`; never mutates `pull_request_audits`
 - returns export job status (without `result_blob`) at `GET /cp/workspaces/{workspace_id}/exports/{export_id}` (`drift.read`)
+- exposes dedicated governance-decision reads for persisted PR audits on dashboard, admin-token, and control-plane API surfaces, including CI-friendly `conclusion`, `recommended_gate`, and `recommended_exit_code` fields plus optional runner-side and worker-side GitHub status/check-run actuation with rationale evidence, neutral skipped checks for pre-audit no-audit decisions, reusable in-progress retry checks, and neutral fallback checks in GitHub checks
 
 Local operator workflows for that feedback loop now include:
 
@@ -160,10 +161,12 @@ Local operator workflows for that feedback loop now include:
 - `python scripts/repo_ops.py refresh-feedback-reactions owner/repo INSTALLATION_ID --audit-id 123 --db path/to/db.sqlite` to force-refresh GitHub reactions for one persisted audit episode
 - `python scripts/repo_ops.py refresh-feedback-reactions owner/repo INSTALLATION_ID --pr-number 88 --head-sha abc123 --db path/to/db.sqlite` to refresh all matching audits for a specific PR/head
 
+For machine-runner usage, see [docs/governance-gate-workflow.md](docs/governance-gate-workflow.md) for a checked-in example that calls `scripts/governance_gate.py` from CI.
+
 ## High-level architecture
 
 - **Webhook path:** verify signature, fetch diff, run relevance gate, enqueue audit job
-- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, durable persistence
+- **Worker path:** deterministic analysis, semantic review, retry/fallback handling, current-head comment upsert, escalation-label sync, optional governance-status/check-run sync, durable persistence
 - **Static drift layer:** derive design attributes from prompts/configs and compare them to a baseline to measure design drift without runtime data
 - **Persistence:** operational queue tables plus durable audit/history tables, artifact versions, and static profile records in one relational store for now
 - **Customer agent integration path:** machine-principal credentials mint short-lived MCP broker tokens, the hosted broker exposes a curated workspace-bound read surface, and the downloadable connector stays thin so internal control-plane tokens never leave Vipari
@@ -240,6 +243,7 @@ Optional variables:
 - `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, and `SESSION_TTL_SECONDS`
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_CALLBACK_URL`
 - `BILLING_HANDOFF_SECRET`, `BILLING_HANDOFF_TTL_SECONDS`, and `BASE44_CHECKOUT_URL`
+- `GOVERNANCE_STATUS_ROLLOUT_MODE`, `GOVERNANCE_STATUS_CONTEXT`, `GOVERNANCE_CHECK_RUN_ROLLOUT_MODE`, and `GOVERNANCE_CHECK_RUN_NAME`
 - `OWNER_GITHUB_LOGIN`, `OWNER_GITHUB_USER_ID`, and `OWNER_EMAIL` for the single owner-locked admin surface
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`
 - `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_TEAM`, `STRIPE_PRICE_ENTERPRISE`, and `STRIPE_PRICE_BUSINESS`

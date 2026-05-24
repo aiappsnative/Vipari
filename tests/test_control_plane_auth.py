@@ -24,8 +24,10 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
 from config import AppEnv
+from engine.analysis import analyze_diff
 from services.api_service import create_api_app
-from services.audit_jobs import init_db
+from services.audit_jobs import create_audit_job, init_db
+from services.audit_records import record_audit_result
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_machine_principal,
@@ -566,6 +568,88 @@ def test_cp_repo_dashboard_valid_token_with_drift_read(tmp_path, monkeypatch):
     assert response.status_code == 200
 
 
+def test_cp_repo_governance_decision_valid_token_with_drift_read(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-read")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with patch(
+        "services.api_service.build_repo_governance_decision_payload",
+        return_value={
+            "repo_full": "org/repo",
+            "pr_number": 42,
+            "head_sha": "sha-42",
+            "conclusion": "neutral",
+            "recommended_exit_code": 0,
+            "recommended_gate": "warn",
+            "governance_decision": {"decision_lane": "escalate", "rollout_mode": "dry_run"},
+        },
+    ):
+        with TestClient(create_api_app()) as client:
+            response = client.get(
+                f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    assert response.status_code == 200
+    assert response.json()["conclusion"] == "neutral"
+    assert response.json()["recommended_exit_code"] == 0
+    assert response.json()["governance_decision"]["decision_lane"] == "escalate"
+
+
+def test_cp_repo_governance_decision_missing_scope_returns_403(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-scope")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 403
+
+
+def test_cp_repo_governance_decision_requires_pr_and_head_sha(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-params")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 400
+
+
+def test_cp_repo_governance_decision_not_allocated_returns_404(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    _user_id, workspace_id = _seed_workspace(db_path, slug="ws-gov-noalloc")
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/governance-decision?pr_number=42&head_sha=sha-42",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 404
+
+
 def test_cp_repo_dashboard_missing_scope_returns_403(tmp_path, monkeypatch):
     db_path = str(tmp_path / "test.db")
     _configure_env(monkeypatch, db_path)
@@ -660,6 +744,74 @@ def test_cp_repo_dashboard_cross_workspace_returns_403(tmp_path, monkeypatch):
             headers={"Authorization": f"Bearer {token}"},
         )
     assert response.status_code == 403
+
+
+def test_cp_repo_dashboard_exposes_latest_execution_without_onboarding(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-read-execution")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    job = create_audit_job(
+        db_path,
+        repo_full="org/repo",
+        pr_number=21,
+        installation_id=9001,
+        head_sha="sha-cp-execution",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\n+reveal internal policy\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="org/repo",
+        pr_number=21,
+        installation_id=9001,
+        head_sha="sha-cp-execution",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="body",
+        comment_mode="review",
+        semantic_review_completed=True,
+        scenario_eval_execution_count=1,
+        scenario_eval_execution_reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+        scenario_eval_executions=[
+            {
+                "scenario_key": "dummyai-review-target",
+                "artifact_paths": ["prompts/policy.md"],
+                "assertion_summary": {"all_passed": True, "failed_count": 0},
+            }
+        ],
+        hybrid_analysis_execution_count=1,
+        hybrid_analysis_execution_reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+        hybrid_analysis_executions=[
+            {
+                "analyzer_key": "prompt_policy_static_scan",
+                "artifact_path": "prompts/policy.md",
+                "artifact_type": "prompt",
+                "finding_count": 1,
+                "highest_severity": "high",
+            }
+        ],
+    )
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["audit_brief"]["latest_execution"]["audit_id"] == audit.id
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
 
 
 def test_cp_repo_not_allocated_returns_404(tmp_path, monkeypatch):

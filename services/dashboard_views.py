@@ -25,6 +25,7 @@ from .audit_records import (
     ArtifactDriftLeaderboardEntry,
     RepoStaticDriftSummary,
     get_audit_comment_for_audit,
+    get_pull_request_audit_by_id,
     get_repo_static_drift_summary,
     list_changed_artifacts_for_audit,
     list_audit_feedback_events_for_audit,
@@ -32,6 +33,11 @@ from .audit_records import (
     list_pull_request_audits_for_repo,
     list_static_profiles_for_repo,
     list_top_drifting_artifacts_for_repo,
+)
+from .governance_policy import (
+    GOVERNANCE_ROLLOUT_DRY_RUN,
+    evaluate_governance_decision,
+    normalize_governance_rollout_mode,
 )
 from .governance_signals import GovernanceAttentionSummary, RepoGovernancePosture, build_overview_governance_attention, build_repo_governance_posture
 from .signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
@@ -357,6 +363,24 @@ def _extract_pr_review_excerpt(comment_body: str | None) -> str | None:
     return " ".join(excerpt_lines)
 
 
+def _build_execution_summary_payload(
+    *,
+    count: int,
+    reason: str | None,
+    executions: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    normalized_count = max(0, int(count or 0))
+    normalized_reason = str(reason or "").strip() or None
+    normalized_executions = [dict(item) for item in (executions or []) if isinstance(item, dict)]
+    if normalized_count == 0 and normalized_reason is None and not normalized_executions:
+        return None
+    return {
+        "count": normalized_count,
+        "reason": normalized_reason,
+        "executions": normalized_executions,
+    }
+
+
 def _pr_review_lifecycle_label(pr_state: str | None, pr_merged: bool | None) -> str:
     if pr_merged:
         return "Merged"
@@ -471,9 +495,11 @@ def build_repo_pr_review_routes_payload(
     pr_number: int | None = None,
     head_sha: str | None = None,
     limit: int = 8,
+    rollout_mode: str = GOVERNANCE_ROLLOUT_DRY_RUN,
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 20))
     normalized_head_sha = str(head_sha or "").strip()
+    normalized_rollout_mode = normalize_governance_rollout_mode(rollout_mode)
     audits = list_pull_request_audits_for_repo(db_path, repo_full)
     lifecycle_by_pr_number: dict[int, tuple[str | None, bool | None]] = {}
     for audit in audits:
@@ -511,6 +537,11 @@ def build_repo_pr_review_routes_payload(
         changed_artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
         aggregate_pr_state, aggregate_pr_merged = lifecycle_by_pr_number.get(audit.pr_number, (audit.pr_state, audit.pr_merged))
         lifecycle_label = _pr_review_lifecycle_label(aggregate_pr_state, aggregate_pr_merged)
+        governance_decision = evaluate_governance_decision(
+            audit,
+            findings=findings,
+            rollout_mode=normalized_rollout_mode,
+        )
         route_entries.append(
             {
                 "audit_id": audit.id,
@@ -542,8 +573,19 @@ def build_repo_pr_review_routes_payload(
                     }
                     for finding in findings[:3]
                 ],
+                "governance_decision": _governance_decision_payload(governance_decision),
                 "feedback": _summarize_pr_review_feedback(feedback_events),
                 "recent_feedback": _build_recent_pr_review_feedback(feedback_events),
+                "scenario_eval_execution": _build_execution_summary_payload(
+                    count=audit.scenario_eval_execution_count,
+                    reason=audit.scenario_eval_execution_reason,
+                    executions=audit.scenario_eval_executions,
+                ),
+                "hybrid_analysis_execution": _build_execution_summary_payload(
+                    count=audit.hybrid_analysis_execution_count,
+                    reason=audit.hybrid_analysis_execution_reason,
+                    executions=audit.hybrid_analysis_executions,
+                ),
                 "dashboard_url": _dashboard_pr_route_url(repo_full, audit.pr_number, audit.head_sha),
                 "pull_request_url": f"https://github.com/{repo_full}/pull/{audit.pr_number}",
             }
@@ -597,10 +639,29 @@ def build_repo_pr_review_routes_payload(
         "repo_full": repo_full,
         "selected_pr_number": pr_number,
         "selected_head_sha": normalized_head_sha or None,
+        "governance_rollout_mode": normalized_rollout_mode,
         "route_count": len(audits),
         "selected_route": selected_route,
         "routes": trimmed_routes,
         "route_search_entries": route_search_entries,
+    }
+
+
+def _governance_decision_payload(decision: object) -> dict[str, Any]:
+    return {
+        "rollout_mode": getattr(decision, "rollout_mode", GOVERNANCE_ROLLOUT_DRY_RUN),
+        "decision_lane": getattr(decision, "decision_lane", "inactive"),
+        "requires_escalation": bool(getattr(decision, "requires_escalation", False)),
+        "should_block_merge": bool(getattr(decision, "should_block_merge", False)),
+        "rationale": [
+            {
+                "code": reason.code,
+                "summary": reason.summary,
+                "severity": reason.severity,
+                "evidence": list(reason.evidence),
+            }
+            for reason in getattr(decision, "rationale", ())
+        ],
     }
 
 
@@ -663,6 +724,11 @@ class DashboardOverviewAttentionRepo:
     highest_review_pr_number: int | None = None
     highest_review_head_sha: str | None = None
     highest_updated_at: float | None = None
+    governance_decision_lane: str | None = None
+    governance_requires_escalation: bool = False
+    governance_should_block_merge: bool = False
+    governance_pr_number: int | None = None
+    governance_head_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -756,6 +822,11 @@ class DashboardOverviewRepoCard:
     top_drift_magnitude: float = 0.0
     avg_semantic_distance: float = 0.0
     recent_activity_at: float = 0.0
+    governance_decision_lane: str | None = None
+    governance_requires_escalation: bool = False
+    governance_should_block_merge: bool = False
+    governance_pr_number: int | None = None
+    governance_head_sha: str | None = None
     matched_risk_item: DashboardOverviewRegressionEntry | None = None
 
 
@@ -899,6 +970,7 @@ class RepoAuditBrief:
     baseline_reference: str = "none-yet"
     baseline_status: str = "unknown"
     confidence_label: str = "mixed"
+    latest_execution: dict[str, Any] | None = None
     affected_dimensions: list[str] = None
     actions: list[RepoAuditBriefAction] = None
     findings: list[RepoAuditBriefFinding] = None
@@ -1050,6 +1122,18 @@ class RepoArtifactDesignProfile:
 
 
 @dataclass(frozen=True)
+class RepoGovernanceDecisionSummary:
+    audit_id: int
+    pr_number: int
+    head_sha: str
+    rollout_mode: str
+    decision_lane: str
+    requires_escalation: bool
+    should_block_merge: bool
+    rationale: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class RepoDashboardView:
     repo_full: str
     onboarding: RepositoryOnboardingRecord | None
@@ -1067,6 +1151,7 @@ class RepoDashboardView:
     history_cues: list[RepoHistoryCue] = None
     design_profiles: list[RepoArtifactDesignProfile] = None
     governance_posture: RepoGovernancePosture = field(default_factory=lambda: RepoGovernancePosture("low confidence", "mixed", 0, "current", ()))
+    governance_decision: RepoGovernanceDecisionSummary | None = None
     audit_brief: RepoAuditBrief | None = None
     artifacts: list[RepoDashboardArtifactEntry] = None
     journey_snapshots: list[dict[str, Any]] = None
@@ -1619,6 +1704,11 @@ def _build_overview_repo_cards(
                 top_drift_magnitude=(attention.top_drift_magnitude if attention is not None else 0.0),
                 avg_semantic_distance=(attention.avg_semantic_distance if attention is not None else 0.0),
                 recent_activity_at=(attention.highest_updated_at if attention is not None and attention.highest_updated_at is not None else repo.last_onboarded_at),
+                governance_decision_lane=(attention.governance_decision_lane if attention is not None else None),
+                governance_requires_escalation=(attention.governance_requires_escalation if attention is not None else False),
+                governance_should_block_merge=(attention.governance_should_block_merge if attention is not None else False),
+                governance_pr_number=(attention.governance_pr_number if attention is not None else None),
+                governance_head_sha=(attention.governance_head_sha if attention is not None else None),
                 matched_risk_item=matched_risk_item,
             )
         )
@@ -1751,6 +1841,45 @@ def _extract_audit_brief_dimensions(insight: RepoDashboardInsightEntry | None) -
     return dimensions[:3]
 
 
+def _latest_completed_repo_audit(repo_audits: list[object]) -> object | None:
+    completed_audits = [audit for audit in repo_audits if getattr(audit, "status", None) == "completed"]
+    if not completed_audits:
+        return None
+    return sorted(
+        completed_audits,
+        key=lambda audit: (
+            float(getattr(audit, "updated_at", 0.0) or 0.0),
+            float(getattr(audit, "created_at", 0.0) or 0.0),
+            int(getattr(audit, "id", 0) or 0),
+        ),
+        reverse=True,
+    )[0]
+
+
+def _build_repo_audit_brief_execution_payload(audit: object | None) -> dict[str, Any] | None:
+    if audit is None:
+        return None
+    scenario_eval_execution = _build_execution_summary_payload(
+        count=getattr(audit, "scenario_eval_execution_count", 0),
+        reason=getattr(audit, "scenario_eval_execution_reason", None),
+        executions=getattr(audit, "scenario_eval_executions", None),
+    ) or {"count": 0, "reason": None, "executions": []}
+    hybrid_analysis_execution = _build_execution_summary_payload(
+        count=getattr(audit, "hybrid_analysis_execution_count", 0),
+        reason=getattr(audit, "hybrid_analysis_execution_reason", None),
+        executions=getattr(audit, "hybrid_analysis_executions", None),
+    ) or {"count": 0, "reason": None, "executions": []}
+    if scenario_eval_execution["count"] <= 0 and hybrid_analysis_execution["count"] <= 0:
+        return None
+    return {
+        "audit_id": int(getattr(audit, "id", 0) or 0),
+        "pr_number": int(getattr(audit, "pr_number", 0) or 0),
+        "head_sha": str(getattr(audit, "head_sha", "") or ""),
+        "scenario_eval_execution": scenario_eval_execution,
+        "hybrid_analysis_execution": hybrid_analysis_execution,
+    }
+
+
 def _baseline_reference_for_audit_brief(insight: RepoDashboardInsightEntry | None, fallback: str | None = None) -> str:
     if insight is None:
         return fallback or "none-yet"
@@ -1792,6 +1921,7 @@ def _build_repo_audit_brief(
     baseline_review: RepoBaselineReviewPanel | None,
     insights: list[RepoDashboardInsightEntry],
     lower_confidence_insights: list[RepoDashboardInsightEntry],
+    repo_audits: list[object] | None = None,
     fallback_baseline_reference: str | None = None,
 ) -> RepoAuditBrief:
     sorted_insights = sorted(
@@ -1806,6 +1936,7 @@ def _build_repo_audit_brief(
     baseline_status = _baseline_status_for_audit_brief(onboarding, baseline_review)
     baseline_reference = _baseline_reference_for_audit_brief(top_insight, fallback_baseline_reference)
     affected_dimensions = _extract_audit_brief_dimensions(top_insight)
+    latest_execution = _build_repo_audit_brief_execution_payload(_latest_completed_repo_audit(repo_audits or []))
 
     actions: list[RepoAuditBriefAction] = [
         RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "secondary"),
@@ -1840,6 +1971,7 @@ def _build_repo_audit_brief(
             baseline_reference="none-yet",
             baseline_status=baseline_status,
             confidence_label="limited coverage",
+            latest_execution=latest_execution,
             affected_dimensions=[],
             actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
             findings=[],
@@ -1859,6 +1991,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label=top_insight.confidence_label or "mixed",
+            latest_execution=latest_execution,
             affected_dimensions=affected_dimensions,
             actions=actions,
             findings=findings,
@@ -1878,6 +2011,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label=top_insight.confidence_label or "mixed",
+            latest_execution=latest_execution,
             affected_dimensions=affected_dimensions,
             actions=actions,
             findings=findings,
@@ -1897,6 +2031,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label="baseline pending",
+            latest_execution=latest_execution,
             affected_dimensions=[],
             actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
             findings=[],
@@ -1915,6 +2050,7 @@ def _build_repo_audit_brief(
         baseline_reference=baseline_reference,
         baseline_status=baseline_status,
         confidence_label="baseline aligned",
+        latest_execution=latest_execution,
         affected_dimensions=[],
         actions=[RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "primary")],
         findings=[],
@@ -1949,11 +2085,12 @@ def _build_repo_dashboard_view_uncached(
         return result
 
     onboarding = timed_stage("repo-onboarding", lambda: get_latest_repository_onboarding(db_path, repo_full))
+    repo_audits = timed_stage("repo-pr-audits", lambda: list_pull_request_audits_for_repo(db_path, repo_full))
     baseline_review = None
     if include_repo_summary_metrics:
         drift_summary = timed_stage("repo-drift-summary", lambda: get_repo_static_drift_summary(db_path, repo_full))
         top_drifting_artifacts = timed_stage("repo-top-drifting", lambda: list_top_drifting_artifacts_for_repo(db_path, repo_full))
-        pull_request_audit_count = timed_stage("repo-pr-audits", lambda: len(list_pull_request_audits_for_repo(db_path, repo_full)))
+        pull_request_audit_count = len(repo_audits)
     else:
         drift_summary = _empty_repo_static_drift_summary(repo_full)
         top_drifting_artifacts = []
@@ -1984,6 +2121,7 @@ def _build_repo_dashboard_view_uncached(
             baseline_review=None,
             insights=[],
             lower_confidence_insights=[],
+            repo_audits=repo_audits,
         )
         return RepoDashboardView(
             repo_full=repo_full,
@@ -2010,6 +2148,7 @@ def _build_repo_dashboard_view_uncached(
             history_cues=[],
             design_profiles=[],
             governance_posture=RepoGovernancePosture("low confidence", "mixed", 0, "current", ()),
+            governance_decision=_build_repo_governance_decision_summary(db_path, repo_audits),
             audit_brief=audit_brief,
             artifacts=[],
             journey_snapshots=journey_snapshots,
@@ -2152,6 +2291,10 @@ def _build_repo_dashboard_view_uncached(
             insights=insights,
         ),
     )
+    governance_decision = timed_stage(
+        "repo-governance-decision",
+        lambda: _build_repo_governance_decision_summary(db_path, repo_audits),
+    )
     audit_brief = timed_stage(
         "repo-audit-brief",
         lambda: _build_repo_audit_brief(
@@ -2160,6 +2303,7 @@ def _build_repo_dashboard_view_uncached(
             baseline_review=baseline_review,
             insights=insights,
             lower_confidence_insights=lower_confidence_insights,
+            repo_audits=repo_audits,
             fallback_baseline_reference=_baseline_reference_from_versions(latest_approved_baseline_versions or latest_baseline_versions),
         ),
     )
@@ -2189,12 +2333,56 @@ def _build_repo_dashboard_view_uncached(
         history_cues=history_cues,
         design_profiles=design_profiles,
         governance_posture=governance_posture,
+        governance_decision=governance_decision,
         audit_brief=audit_brief,
         artifacts=artifact_entries,
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         export_jobs=[],
+    )
+
+
+def _build_repo_governance_decision_summary(
+    db_path: str,
+    repo_audits: list[object],
+) -> RepoGovernanceDecisionSummary | None:
+    completed_audits = [audit for audit in repo_audits if getattr(audit, "status", None) == "completed"]
+    if not completed_audits:
+        return None
+
+    latest_audit = sorted(
+        completed_audits,
+        key=lambda audit: (
+            float(getattr(audit, "updated_at", 0.0) or 0.0),
+            float(getattr(audit, "created_at", 0.0) or 0.0),
+            int(getattr(audit, "id", 0) or 0),
+        ),
+        reverse=True,
+    )[0]
+    findings = list_findings_for_audit(db_path, latest_audit.id)
+    decision = evaluate_governance_decision(
+        latest_audit,
+        findings=findings,
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+    )
+    return RepoGovernanceDecisionSummary(
+        audit_id=latest_audit.id,
+        pr_number=latest_audit.pr_number,
+        head_sha=latest_audit.head_sha,
+        rollout_mode=decision.rollout_mode,
+        decision_lane=decision.decision_lane,
+        requires_escalation=decision.requires_escalation,
+        should_block_merge=decision.should_block_merge,
+        rationale=[
+            {
+                "code": reason.code,
+                "summary": reason.summary,
+                "severity": reason.severity,
+                "evidence": list(reason.evidence),
+            }
+            for reason in decision.rationale
+        ],
     )
 
 
@@ -2319,6 +2507,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
         (
             backfill_summaries,
             pull_request_audit_counts,
+            latest_completed_audit_ids_by_repo,
             metrics_by_repo,
             profile_contexts_by_repo,
             drift_summaries,
@@ -2411,6 +2600,14 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 featured_storyline=None,
                 history_cues=[],
                 design_profiles=[],
+                governance_decision=(
+                    _build_repo_governance_decision_summary(
+                        db_path,
+                        [get_pull_request_audit_by_id(db_path, latest_completed_audit_ids_by_repo[repo.repo_full])],
+                    )
+                    if repo.repo_full in latest_completed_audit_ids_by_repo
+                    else None
+                ),
                 artifacts=artifact_entries,
                 journey_snapshots=[],
                 journey_comparison=None,
@@ -2427,13 +2624,14 @@ def _load_overview_batch_state(
 ) -> tuple[
     dict[str, RepoDashboardBackfillSummary],
     dict[str, int],
+    dict[str, int],
     dict[str, dict[str, dict[str, float | int]]],
     dict[str, dict[str, _RepoArtifactEvidenceBundle]],
     dict[str, RepoStaticDriftSummary],
     dict[str, list[ArtifactDriftLeaderboardEntry]],
 ]:
     if not repo_fulls:
-        return ({}, {}, {}, {}, {}, {})
+        return ({}, {}, {}, {}, {}, {}, {})
 
     repo_placeholders = ", ".join("?" for _ in repo_fulls)
     repo_params = tuple(repo_fulls)
@@ -2453,6 +2651,7 @@ def _load_overview_batch_state(
         backfill_counts_by_repo.setdefault(repo_full, {})[str(row["status"])] = int(row["job_count"])
 
     pull_request_audit_counts = {repo_full: 0 for repo_full in repo_fulls}
+    latest_completed_audit_ids_by_repo: dict[str, int] = {}
     audit_rows = conn.execute(
         f"""
         SELECT repo_full, COUNT(*) AS audit_count
@@ -2464,6 +2663,22 @@ def _load_overview_batch_state(
     ).fetchall()
     for row in audit_rows:
         pull_request_audit_counts[str(row["repo_full"])] = int(row["audit_count"])
+
+    latest_completed_audit_rows = conn.execute(
+        f"""
+        SELECT id, repo_full
+        FROM pull_request_audits
+        WHERE repo_full IN ({repo_placeholders})
+          AND status = 'completed'
+        ORDER BY repo_full ASC, updated_at DESC, created_at DESC, id DESC
+        """,
+        repo_params,
+    ).fetchall()
+    for row in latest_completed_audit_rows:
+        repo_full = str(row["repo_full"])
+        if repo_full in latest_completed_audit_ids_by_repo:
+            continue
+        latest_completed_audit_ids_by_repo[repo_full] = int(row["id"])
 
     metrics_by_repo: dict[str, dict[str, dict[str, float | int]]] = {}
     historical_version_rows = conn.execute(
@@ -2750,6 +2965,7 @@ def _load_overview_batch_state(
     return (
         backfill_summaries,
         pull_request_audit_counts,
+        latest_completed_audit_ids_by_repo,
         metrics_by_repo,
         profile_contexts_by_repo,
         drift_summaries,
@@ -5124,6 +5340,11 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 avg_semantic_distance=view.drift_summary.avg_semantic_distance,
                 discovered_artifact_count=(view.onboarding.discovered_artifact_count if view.onboarding is not None else 0),
                 highest_updated_at=(top_insight.updated_at if top_insight is not None else None),
+                governance_decision_lane=(view.governance_decision.decision_lane if view.governance_decision is not None else None),
+                governance_requires_escalation=(view.governance_decision.requires_escalation if view.governance_decision is not None else False),
+                governance_should_block_merge=(view.governance_decision.should_block_merge if view.governance_decision is not None else False),
+                governance_pr_number=(view.governance_decision.pr_number if view.governance_decision is not None else None),
+                governance_head_sha=(view.governance_decision.head_sha if view.governance_decision is not None else None),
             )
         )
 

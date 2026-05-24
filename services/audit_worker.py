@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from ipaddress import ip_address
+from types import SimpleNamespace
 from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
@@ -14,7 +15,9 @@ from config import get_settings
 from engine.analysis import DiffAnalysis, analyze_diff
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
+from engine.policy import PolicyContext, default_policy_rules, evaluate_policy_rules
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
+from engine.verifier import build_verifier_review_requests, should_invoke_verifier
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
 from .governance_signals import GovernanceFinding, build_pr_comment_governance_findings
 from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normalize_risk_level
@@ -34,9 +37,19 @@ from .audit_records import (
     record_audit_result,
 )
 from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
-from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, sync_pr_label, upsert_pr_comment
+from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, post_check_run, post_commit_status, sync_pr_label, upsert_pr_comment
+from .governance_policy import (
+    GOVERNANCE_ROLLOUT_OFF,
+    build_governance_ci_outcome,
+    evaluate_governance_decision,
+    normalize_governance_rollout_mode,
+)
+from .hybrid_analysis import HybridAnalysisPlan, build_hybrid_analysis_plan
+from .hybrid_execution import HybridExecutionSummary, execute_hybrid_analysis_plan
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
 from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
+from .scenario_execution import ScenarioEvalExecutionSummary, execute_scenario_eval_plan
+from .scenario_evaluation import ScenarioEvalPlan, build_scenario_eval_plan
 
 
 @dataclass(frozen=True)
@@ -51,6 +64,21 @@ class WorkerSettings:
     max_attempts: int = 5
     max_retry_window_seconds: float = 5400.0
     poll_interval_seconds: float = 2.0
+    verifier_rollout_mode: str = "off"
+    verifier_max_requests_per_review: int = 3
+    governance_status_rollout_mode: str = "off"
+    governance_status_context: str = "vipari/governance"
+    governance_check_run_rollout_mode: str = "off"
+    governance_check_run_name: str = "Vipari Governance"
+    scenario_eval_rollout_mode: str = "off"
+    scenario_eval_max_artifacts_per_review: int = 2
+    scenario_eval_allowed_repos: str = ""
+    scenario_eval_allowed_artifact_types: str = ""
+    scenario_eval_output_root: str = ""
+    hybrid_static_analysis_rollout_mode: str = "off"
+    hybrid_static_analysis_max_artifacts_per_review: int = 2
+    hybrid_static_analysis_allowed_repos: str = ""
+    hybrid_static_analysis_allowed_artifact_types: str = ""
 
 
 RISK_BADGES = {
@@ -95,6 +123,24 @@ class SignalFusionAssessment:
     semantic_risk: str
     semantic_requires_escalation: bool
     escalation_recommendation: EscalationRecommendation
+    policy_floor: str | None = None
+    policy_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VerifierPlan:
+    rollout_mode: str
+    should_invoke: bool
+    trigger: str | None
+    reason: str
+    request_count: int
+
+
+@dataclass(frozen=True)
+class LlmCommentBuildResult:
+    comment_body: str
+    fusion_assessment: SignalFusionAssessment
+    verifier_plan: VerifierPlan
 
 
 @dataclass(frozen=True)
@@ -116,6 +162,7 @@ class PrCommentReview:
     evidence: tuple[str, ...]
     governance_findings: tuple[GovernanceFinding, ...]
     recommended_next_step: str
+    verifier_note: str | None
     episode_context: PrCommentEpisodeContext
     dashboard_deep_link: str | None = None
     feedback_link: str | None = None
@@ -133,7 +180,10 @@ def build_llm_comment(
     episode_context: PrCommentEpisodeContext | None = None,
     repo_full: str | None = None,
     pr_number: int | None = None,
-) -> str:
+    verifier_rollout_mode: str = "off",
+    verifier_max_requests_per_review: int = 3,
+    return_metadata: bool = False,
+) -> str | LlmCommentBuildResult:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     semantic_packages = build_semantic_review_packages(deterministic_analysis)
     system_prompt = (
@@ -169,11 +219,24 @@ def build_llm_comment(
         raw_comment,
         default=_build_fallback_summary(deterministic_analysis),
     )
-    fusion_assessment = _build_signal_fusion_assessment(raw_comment, deterministic_analysis)
+    fusion_assessment = _build_signal_fusion_assessment(
+        raw_comment,
+        deterministic_analysis,
+        attribute_profiles=attribute_profiles,
+    )
     canonical_details = _build_semantic_comment_details(
         raw_comment,
         deterministic_analysis,
         risk_level=fusion_assessment.risk_level,
+    )
+    verifier_plan = _build_verifier_plan(
+        deterministic_analysis,
+        raw_comment,
+        semantic_packages=semantic_packages,
+        proposed_summary=summary,
+        proposed_recommendation=canonical_details.recommendation,
+        rollout_mode=verifier_rollout_mode,
+        max_requests_per_review=verifier_max_requests_per_review,
     )
     review = _build_pr_comment_review(
         deterministic_analysis,
@@ -186,15 +249,25 @@ def build_llm_comment(
             fusion_assessment.risk_level,
             confidence=fusion_assessment.confidence,
             semantic_requires_escalation=fusion_assessment.semantic_requires_escalation,
+            policy_floor=fusion_assessment.policy_floor,
+            policy_reasons=fusion_assessment.policy_reasons,
         ),
         semantic_recommendation=canonical_details.recommendation,
         escalation_recommendation=fusion_assessment.escalation_recommendation or recommendation,
         attribute_profiles=attribute_profiles,
+        verifier_plan=verifier_plan,
         episode_context=episode_context,
         repo_full=repo_full,
         pr_number=pr_number,
     )
-    return _render_pr_comment_review(review)
+    comment_body = _render_pr_comment_review(review)
+    if return_metadata:
+        return LlmCommentBuildResult(
+            comment_body=comment_body,
+            fusion_assessment=fusion_assessment,
+            verifier_plan=verifier_plan,
+        )
+    return comment_body
 
 
 def build_fallback_comment(
@@ -236,6 +309,7 @@ def _build_pr_comment_review(
     semantic_recommendation: str,
     escalation_recommendation: EscalationRecommendation,
     attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    verifier_plan: VerifierPlan | None = None,
     episode_context: PrCommentEpisodeContext | None = None,
     repo_full: str | None = None,
     pr_number: int | None = None,
@@ -263,6 +337,7 @@ def _build_pr_comment_review(
             semantic_recommendation,
             profiles,
         ),
+        verifier_note=_build_verifier_note(verifier_plan),
         episode_context=episode_context or PrCommentEpisodeContext(head_sha="unknown", analyzed_at=time.time()),
         dashboard_deep_link=_build_pr_comment_dashboard_deep_link(repo_full, pr_number, profiles, episode_context),
         feedback_link=_build_pr_comment_feedback_link(repo_full, pr_number, episode_context),
@@ -305,6 +380,8 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
     if review.governance_findings:
         lines.extend(["", "### Governance signals"])
         lines.extend(f"- {finding.evidence_summary}" for finding in review.governance_findings)
+    if review.verifier_note:
+        lines.extend(["", "### Verifier gate", f"- {review.verifier_note}"])
     lines.extend(
         [
             "",
@@ -396,11 +473,17 @@ def _build_signal_fusion_summary(
     *,
     confidence: str | None,
     semantic_requires_escalation: bool,
+    policy_floor: str | None = None,
+    policy_reasons: tuple[str, ...] = (),
 ) -> str | None:
     normalized_deterministic = _normalize_risk_level(deterministic_risk)
     normalized_semantic = _normalize_risk_level(semantic_risk)
     normalized_fused = _normalize_risk_level(fused_risk)
     confidence_label = normalize_confidence_level(confidence, default="Medium").lower()
+
+    if policy_floor is not None and _normalize_risk_level(policy_floor) == normalized_fused and normalized_fused != normalized_deterministic:
+        reason_text = policy_reasons[0] if policy_reasons else "workspace policy raised the minimum review floor"
+        return f"Signal fusion honored a {normalized_fused.lower()} policy floor because {reason_text.rstrip('.').lower()}"
 
     if confidence_label == "low" and normalized_semantic != normalized_deterministic and normalized_fused == normalized_deterministic:
         return (
@@ -619,6 +702,83 @@ def _build_recommended_next_step(
     return "Safe to merge after normal review."
 
 
+def _normalize_verifier_rollout_mode(mode: str | None) -> str:
+    candidate = str(mode or "off").strip().lower()
+    if candidate == "shadow":
+        return "shadow"
+    return "off"
+
+
+def _build_verifier_plan(
+    deterministic_analysis: DiffAnalysis,
+    comment_body: str,
+    *,
+    semantic_packages: list[object],
+    proposed_summary: str,
+    proposed_recommendation: str,
+    rollout_mode: str,
+    max_requests_per_review: int,
+) -> VerifierPlan:
+    normalized_mode = _normalize_verifier_rollout_mode(rollout_mode)
+    if normalized_mode == "off":
+        return VerifierPlan(
+            rollout_mode=normalized_mode,
+            should_invoke=False,
+            trigger=None,
+            reason="Verifier rollout is disabled for this worker.",
+            request_count=0,
+        )
+
+    semantic_risk = _extract_risk_level(comment_body, default=deterministic_analysis.suggested_risk_level.value)
+    semantic_confidence = _extract_confidence_level(comment_body, default="Medium")
+    semantic_recommendation = _extract_recommendation(
+        comment_body,
+        default=proposed_recommendation,
+    )
+    decision = should_invoke_verifier(
+        deterministic_analysis.suggested_risk_level.value,
+        semantic_risk,
+        semantic_confidence,
+        semantic_requires_escalation=_semantic_recommendation_requires_escalation(semantic_recommendation),
+    )
+    if not decision.should_invoke:
+        return VerifierPlan(
+            rollout_mode=normalized_mode,
+            should_invoke=False,
+            trigger=None,
+            reason=decision.reason,
+            request_count=0,
+        )
+
+    requested = build_verifier_review_requests(
+        semantic_packages[: max(0, max_requests_per_review)],
+        proposed_risk_level=semantic_risk,
+        proposed_confidence=semantic_confidence,
+        proposed_summary=proposed_summary,
+        proposed_recommendation=proposed_recommendation,
+    )
+    return VerifierPlan(
+        rollout_mode=normalized_mode,
+        should_invoke=bool(requested),
+        trigger=decision.trigger.value if decision.trigger is not None else None,
+        reason=decision.reason,
+        request_count=len(requested),
+    )
+
+
+def _build_verifier_note(verifier_plan: VerifierPlan | None) -> str | None:
+    if verifier_plan is None or verifier_plan.rollout_mode in {"off", "shadow"}:
+        return None
+    if verifier_plan.should_invoke:
+        request_label = "artifact" if verifier_plan.request_count == 1 else "artifacts"
+        return (
+            f"Shadow-mode verifier would review {verifier_plan.request_count} {request_label} "
+            f"via `{verifier_plan.trigger or 'unknown'}` because {verifier_plan.reason.rstrip('.').lower()}; "
+            "this does not change the merge lane until verifier rollout is promoted beyond shadow mode."
+        )
+    return f"Shadow-mode verifier stayed idle because {verifier_plan.reason.rstrip('.').lower()}."
+
+
 def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttributeProfile]) -> ArtifactAttributeProfile | None:
     if not attribute_profiles:
         return None
@@ -628,6 +788,105 @@ def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttribute
         reverse=True,
     )
     return ranked[0]
+
+
+def _build_scenario_eval_plan_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+) -> ScenarioEvalPlan:
+    return build_scenario_eval_plan(
+        deterministic_analysis,
+        repo_full=job.repo_full,
+        rollout_mode=settings.scenario_eval_rollout_mode,
+        max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
+        allowed_repos=settings.scenario_eval_allowed_repos,
+        allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
+    )
+
+
+def _build_hybrid_analysis_plan_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+) -> HybridAnalysisPlan:
+    return build_hybrid_analysis_plan(
+        deterministic_analysis,
+        repo_full=job.repo_full,
+        rollout_mode=settings.hybrid_static_analysis_rollout_mode,
+        max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
+        allowed_repos=settings.hybrid_static_analysis_allowed_repos,
+        allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
+    )
+
+
+def _execute_scenario_eval_for_job(
+    job: AuditJob,
+    settings: WorkerSettings,
+    scenario_eval_plan: ScenarioEvalPlan,
+) -> ScenarioEvalExecutionSummary:
+    if not scenario_eval_plan.should_run:
+        return ScenarioEvalExecutionSummary(
+            rollout_mode=scenario_eval_plan.rollout_mode,
+            attempted=False,
+            executed=False,
+            reason=scenario_eval_plan.reason,
+            executions=(),
+        )
+
+    try:
+        installation_token = _get_installation_token_for_job(job, settings)
+    except Exception as exc:
+        return ScenarioEvalExecutionSummary(
+            rollout_mode=scenario_eval_plan.rollout_mode,
+            attempted=False,
+            executed=False,
+            reason=f"Scenario eval token acquisition failed: {type(exc).__name__}: {exc}",
+            executions=(),
+        )
+
+    try:
+        allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+        return execute_scenario_eval_plan(
+            scenario_eval_plan,
+            db_path=settings.db_path,
+            workspace_id=allocation.workspace_id if allocation is not None else None,
+            repo_full=job.repo_full,
+            installation_id=job.installation_id,
+            token=installation_token,
+            output_root=settings.scenario_eval_output_root,
+            branch_name=f"pr-{job.pr_number}",
+            run_label=f"audit-job-{job.id}",
+            verifier_rollout_mode=settings.verifier_rollout_mode,
+            verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
+        )
+    except Exception as exc:
+        return ScenarioEvalExecutionSummary(
+            rollout_mode=scenario_eval_plan.rollout_mode,
+            attempted=True,
+            executed=False,
+            reason=f"Scenario eval execution failed: {type(exc).__name__}: {exc}",
+            executions=(),
+        )
+
+
+def _execute_hybrid_analysis_for_job(
+    hybrid_analysis_plan: HybridAnalysisPlan,
+    artifact_snapshots: dict[str, str],
+) -> HybridExecutionSummary:
+    try:
+        return execute_hybrid_analysis_plan(
+            hybrid_analysis_plan,
+            artifact_snapshots=artifact_snapshots,
+        )
+    except Exception as exc:
+        return HybridExecutionSummary(
+            rollout_mode=hybrid_analysis_plan.rollout_mode,
+            attempted=True,
+            executed=False,
+            reason=f"Hybrid static analysis execution failed: {type(exc).__name__}: {exc}",
+            executions=(),
+        )
 
 
 def _episode_metadata_line(context: PrCommentEpisodeContext) -> str:
@@ -923,18 +1182,58 @@ def _fuse_risk_levels(
     *,
     semantic_requires_escalation: bool = False,
     semantic_confidence: str | None = None,
+    policy_floor: str | None = None,
 ) -> str:
     return fuse_risk_levels(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         semantic_confidence=semantic_confidence,
+        policy_floor=policy_floor,
     )
+
+
+def _build_policy_evaluation(
+    deterministic_analysis: DiffAnalysis,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+):
+    policy_rules = default_policy_rules()
+    profiles = attribute_profiles or []
+    evaluations = []
+    risk_order = {"Low": 0, "Medium": 1, "High": 2}
+
+    for profile in profiles:
+        attribute_deltas = {
+            dimension.attribute_key: dimension.delta
+            for dimension in profile.dimensions
+            if dimension.delta is not None
+        }
+        evaluations.append(
+            evaluate_policy_rules(
+                PolicyContext(
+                    attribute_deltas=attribute_deltas,
+                    findings=tuple(deterministic_analysis.findings),
+                ),
+                policy_rules,
+            )
+        )
+
+    if not evaluations:
+        evaluations.append(
+            evaluate_policy_rules(
+                PolicyContext(findings=tuple(deterministic_analysis.findings)),
+                policy_rules,
+            )
+        )
+
+    return max(evaluations, key=lambda evaluation: (risk_order[evaluation.minimum_risk.value], len(evaluation.matched_rules)))
 
 
 def _build_signal_fusion_assessment(
     comment_body: str,
     deterministic_analysis: DiffAnalysis,
+    *,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
 ) -> SignalFusionAssessment:
     deterministic_risk = deterministic_analysis.suggested_risk_level.value
     semantic_risk_explicit = _has_explicit_risk_level(comment_body)
@@ -947,11 +1246,14 @@ def _build_signal_fusion_assessment(
         default=_default_recommendation_for_risk(semantic_risk),
     )
     semantic_requires_escalation = _semantic_recommendation_requires_escalation(semantic_recommendation)
+    policy_evaluation = _build_policy_evaluation(deterministic_analysis, attribute_profiles)
+    policy_floor = policy_evaluation.minimum_risk.value if policy_evaluation.minimum_risk.value != "Low" else None
     fused_risk = _fuse_risk_levels(
         deterministic_risk,
         semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         semantic_confidence=semantic_confidence,
+        policy_floor=policy_floor,
     )
 
     base_recommendation = _build_escalation_recommendation(deterministic_analysis)
@@ -976,6 +1278,8 @@ def _build_signal_fusion_assessment(
         semantic_risk=semantic_risk,
         semantic_requires_escalation=semantic_requires_escalation,
         escalation_recommendation=escalation_recommendation,
+        policy_floor=policy_floor,
+        policy_reasons=policy_evaluation.rationale,
     )
 
 
@@ -1205,6 +1509,283 @@ def _apply_escalation_label_for_job(
     )
 
 
+def _append_audit_error_message(existing: str | None, additional: str) -> str:
+    if existing:
+        return f"{existing}; {additional}"
+    return additional
+
+
+def _governance_status_state(conclusion: str) -> str:
+    normalized = str(conclusion or "").strip().lower()
+    if normalized == "failure":
+        return "failure"
+    return "success"
+
+
+def _governance_status_description(outcome: dict[str, object]) -> str:
+    recommended_gate = str(outcome.get("recommended_gate") or "pass").strip().lower()
+    if recommended_gate == "block":
+        return "Vipari governance blocked merge pending escalation."
+    if recommended_gate == "warn":
+        return "Vipari governance recommends escalation review before merge."
+    return "Vipari governance found no merge-blocking escalation signal."
+
+
+def _governance_check_run_title(outcome: dict[str, object]) -> str:
+    recommended_gate = str(outcome.get("recommended_gate") or "pass").strip().lower()
+    if recommended_gate == "block":
+        return "Governance blocked merge"
+    if recommended_gate == "warn":
+        return "Governance recommends escalation"
+    return "Governance passed"
+
+
+def _governance_reason_evidence_lines(reason: object, *, limit: int = 2) -> list[str]:
+    evidence = getattr(reason, "evidence", ()) or ()
+    lines: list[str] = []
+    for item in tuple(str(value).strip() for value in evidence if str(value).strip())[:limit]:
+        lines.append(f"  Evidence: {item}")
+    return lines
+
+
+def _governance_check_run_text(decision: object) -> str:
+    rationale = getattr(decision, "rationale", ()) or ()
+    lines = [
+        f"Decision lane: {getattr(decision, 'decision_lane', 'inactive')}",
+        f"Rollout mode: {getattr(decision, 'rollout_mode', 'off')}",
+    ]
+    if rationale:
+        lines.append("")
+        lines.append("Rationale:")
+        for reason in rationale:
+            lines.append(f"- {reason.summary}")
+            lines.extend(_governance_reason_evidence_lines(reason))
+    return "\n".join(lines)
+
+
+def _fallback_governance_check_run_text(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    error_message: str,
+    recommendation: EscalationRecommendation,
+) -> str:
+    lines = [
+        f"Fallback reason: {error_message}",
+        f"Deterministic risk: {_normalize_risk_level(deterministic_analysis.suggested_risk_level.value)}",
+        f"Escalation decision: {recommendation.decision}",
+    ]
+    if deterministic_analysis.findings:
+        lines.append("")
+        lines.append("Deterministic findings:")
+        for finding in deterministic_analysis.findings[:2]:
+            lines.append(f"- {finding.title}")
+    return "\n".join(lines)
+
+
+def _build_governance_signal_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    *,
+    rollout_mode: str,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+) -> tuple[object, dict[str, object], str | None] | None:
+    normalized_rollout_mode = normalize_governance_rollout_mode(rollout_mode)
+    if normalized_rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return None
+
+    transient_audit = SimpleNamespace(
+        status="completed",
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+    )
+    decision = evaluate_governance_decision(
+        transient_audit,
+        findings=deterministic_analysis.findings,
+        rollout_mode=normalized_rollout_mode,
+    )
+    outcome = build_governance_ci_outcome(decision)
+    target_url = _build_pr_comment_dashboard_deep_link(
+        job.repo_full,
+        job.pr_number,
+        attribute_profiles,
+        episode_context,
+    )
+    return decision, outcome, target_url
+
+
+def _post_governance_status_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    signal = _build_governance_signal_for_job(
+        job,
+        deterministic_analysis,
+        rollout_mode=settings.governance_status_rollout_mode,
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+        attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+    )
+    if signal is None:
+        return
+    _decision, outcome, target_url = signal
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_commit_status(
+        job.repo_full,
+        job.head_sha,
+        token,
+        state=_governance_status_state(str(outcome.get("conclusion") or "")),
+        description=_governance_status_description(outcome),
+        context=(settings.governance_status_context or "vipari/governance").strip() or "vipari/governance",
+        target_url=target_url,
+    )
+
+
+def _post_governance_check_run_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    suggested_risk_level: str,
+    fused_confidence: str | None,
+    verifier_mode: str | None,
+    verifier_trigger: str | None,
+    verifier_request_count: int,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    signal = _build_governance_signal_for_job(
+        job,
+        deterministic_analysis,
+        rollout_mode=settings.governance_check_run_rollout_mode,
+        suggested_risk_level=suggested_risk_level,
+        fused_confidence=fused_confidence,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+        attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+    )
+    if signal is None:
+        return
+
+    decision, outcome, target_url = signal
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        conclusion=str(outcome.get("conclusion") or "success").strip().lower(),
+        title=_governance_check_run_title(outcome),
+        summary=_governance_status_description(outcome),
+        text=_governance_check_run_text(decision),
+        details_url=target_url,
+    )
+
+
+def _post_fallback_governance_check_run_for_job(
+    job: AuditJob,
+    deterministic_analysis: DiffAnalysis,
+    settings: WorkerSettings,
+    *,
+    error_message: str,
+    recommendation: EscalationRecommendation,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    rollout_mode = normalize_governance_rollout_mode(settings.governance_check_run_rollout_mode)
+    if rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        conclusion="neutral",
+        title="Governance fallback review posted",
+        summary="Vipari posted a deterministic fallback review because full semantic review was unavailable.",
+        text=_fallback_governance_check_run_text(
+            deterministic_analysis,
+            error_message=error_message,
+            recommendation=recommendation,
+        ),
+        details_url=_build_pr_comment_dashboard_deep_link(
+            job.repo_full,
+            job.pr_number,
+            attribute_profiles,
+            episode_context,
+        ),
+    )
+
+
+def _pending_governance_check_run_text(error_message: str, *, retry_at: float | None) -> str:
+    lines = [f"Retry reason: {error_message}"]
+    if retry_at is not None:
+        lines.append(f"Retry scheduled at: {int(retry_at)}")
+    return "\n".join(lines)
+
+
+def _post_pending_governance_check_run_for_job(
+    job: AuditJob,
+    settings: WorkerSettings,
+    *,
+    error_message: str,
+    retry_at: float | None,
+    attribute_profiles: list[ArtifactAttributeProfile],
+    episode_context: PrCommentEpisodeContext,
+    installation_token: str | None = None,
+) -> None:
+    rollout_mode = normalize_governance_rollout_mode(settings.governance_check_run_rollout_mode)
+    if rollout_mode == GOVERNANCE_ROLLOUT_OFF:
+        return
+
+    token = installation_token or _get_installation_token_for_job(job, settings)
+    post_check_run(
+        job.repo_full,
+        job.head_sha,
+        token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        status="in_progress",
+        conclusion=None,
+        title="Governance review pending retry",
+        summary="Vipari will retry governance review after a transient analysis failure.",
+        text=_pending_governance_check_run_text(error_message, retry_at=retry_at),
+        details_url=_build_pr_comment_dashboard_deep_link(
+            job.repo_full,
+            job.pr_number,
+            attribute_profiles,
+            episode_context,
+        ),
+    )
+
+
 def _fetch_artifact_snapshots(job: AuditJob, deterministic_analysis: DiffAnalysis, settings: WorkerSettings) -> dict[str, str]:
     if not deterministic_analysis.artifacts:
         return {}
@@ -1246,7 +1827,40 @@ def _persist_audit_result(
     github_review_id: int | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     pr_feedback_mode: str | None = None,
+    verifier_mode: str | None = None,
+    verifier_trigger: str | None = None,
+    verifier_request_count: int = 0,
+    scenario_eval_plan: ScenarioEvalPlan | None = None,
+    scenario_eval_execution_summary: ScenarioEvalExecutionSummary | None = None,
+    hybrid_analysis_plan: HybridAnalysisPlan | None = None,
+    hybrid_execution_summary: HybridExecutionSummary | None = None,
 ) :
+    scenario_eval_plan = scenario_eval_plan or ScenarioEvalPlan(
+        rollout_mode="off",
+        should_run=False,
+        reason="Scenario eval rollout is disabled for this worker.",
+        artifact_paths=(),
+    )
+    scenario_eval_execution_summary = scenario_eval_execution_summary or ScenarioEvalExecutionSummary(
+        rollout_mode=scenario_eval_plan.rollout_mode,
+        attempted=False,
+        executed=False,
+        reason=scenario_eval_plan.reason,
+        executions=(),
+    )
+    hybrid_analysis_plan = hybrid_analysis_plan or HybridAnalysisPlan(
+        rollout_mode="off",
+        should_run=False,
+        reason="Hybrid static analysis rollout is disabled for this worker.",
+        requests=(),
+    )
+    hybrid_execution_summary = hybrid_execution_summary or HybridExecutionSummary(
+        rollout_mode=hybrid_analysis_plan.rollout_mode,
+        attempted=False,
+        executed=False,
+        reason=hybrid_analysis_plan.reason,
+        executions=(),
+    )
     return record_audit_result(
         settings.db_path,
         job_id=job.id,
@@ -1272,9 +1886,26 @@ def _persist_audit_result(
         suggested_risk_level=suggested_risk_level,
         fused_confidence=fused_confidence,
         error_message=error_message,
-        artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
+        artifact_snapshots=artifact_snapshots if artifact_snapshots is not None else _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
         github_review_id=github_review_id,
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=verifier_request_count,
+        scenario_eval_mode=scenario_eval_plan.rollout_mode,
+        scenario_eval_artifact_count=scenario_eval_plan.artifact_count,
+        scenario_eval_selection_reason=scenario_eval_plan.reason,
+        scenario_eval_artifact_paths=list(scenario_eval_plan.artifact_paths),
+        scenario_eval_execution_count=scenario_eval_execution_summary.execution_count,
+        scenario_eval_execution_reason=scenario_eval_execution_summary.reason,
+        scenario_eval_executions=[execution.__dict__ for execution in scenario_eval_execution_summary.executions],
+        hybrid_analysis_mode=hybrid_analysis_plan.rollout_mode,
+        hybrid_analysis_request_count=hybrid_analysis_plan.request_count,
+        hybrid_analysis_selection_reason=hybrid_analysis_plan.reason,
+        hybrid_analysis_requests=[request.__dict__ for request in hybrid_analysis_plan.requests],
+        hybrid_analysis_execution_count=hybrid_execution_summary.execution_count,
+        hybrid_analysis_execution_reason=hybrid_execution_summary.reason,
+        hybrid_analysis_executions=[execution.__dict__ for execution in hybrid_execution_summary.executions],
     )
 
 
@@ -1325,8 +1956,23 @@ def _handle_fallback(
     artifact_snapshots: dict[str, str] | None = None,
     escalation_recommendation: EscalationRecommendation | None = None,
     pr_feedback_mode: str | None = None,
+    scenario_eval_plan: ScenarioEvalPlan | None = None,
+    scenario_eval_execution_summary: ScenarioEvalExecutionSummary | None = None,
+    hybrid_analysis_plan: HybridAnalysisPlan | None = None,
+    hybrid_execution_summary: HybridExecutionSummary | None = None,
 ) -> str:
     effective_feedback_mode = pr_feedback_mode or _resolve_job_pr_feedback_mode(job, settings)
+    effective_scenario_eval_plan = scenario_eval_plan or _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    effective_scenario_eval_execution_summary = scenario_eval_execution_summary or _execute_scenario_eval_for_job(
+        job,
+        settings,
+        effective_scenario_eval_plan,
+    )
+    effective_hybrid_analysis_plan = hybrid_analysis_plan or _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
+    effective_hybrid_execution_summary = hybrid_execution_summary or _execute_hybrid_analysis_for_job(
+        effective_hybrid_analysis_plan,
+        artifact_snapshots or {},
+    )
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
     comment_attribute_profiles = _build_comment_attribute_profiles(
@@ -1346,7 +1992,7 @@ def _handle_fallback(
     )
     if effective_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
-            audit = _persist_audit_result(
+            _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,
@@ -1359,6 +2005,10 @@ def _handle_fallback(
                 error_message=error_message,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
+                scenario_eval_plan=effective_scenario_eval_plan,
+                scenario_eval_execution_summary=effective_scenario_eval_execution_summary,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
+                hybrid_execution_summary=effective_hybrid_execution_summary,
             )
         except Exception as persist_exc:
             combined_error = f"{error_message}; persistence failed during silent fallback: {type(persist_exc).__name__}: {persist_exc}"
@@ -1397,6 +2047,10 @@ def _handle_fallback(
                         error_message=combined_error,
                         artifact_snapshots=artifact_snapshots,
                         pr_feedback_mode=effective_feedback_mode,
+                        scenario_eval_plan=effective_scenario_eval_plan,
+                        scenario_eval_execution_summary=effective_scenario_eval_execution_summary,
+                        hybrid_analysis_plan=effective_hybrid_analysis_plan,
+                        hybrid_execution_summary=effective_hybrid_execution_summary,
                     )
                 except Exception as persist_exc:
                     combined_error = f"{combined_error}; persistence failed: {type(persist_exc).__name__}: {persist_exc}"
@@ -1414,6 +2068,22 @@ def _handle_fallback(
             )
         except Exception as label_exc:
             combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+        try:
+            _post_fallback_governance_check_run_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                error_message=error_message,
+                recommendation=recommendation,
+                attribute_profiles=comment_attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            combined_error_message = _append_audit_error_message(
+                combined_error_message,
+                f"Governance fallback check run not applied: {type(exc).__name__}: {exc}",
+            )
 
         try:
             audit = _persist_audit_result(
@@ -1430,6 +2100,10 @@ def _handle_fallback(
                 github_review_id=github_review_id,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
+                scenario_eval_plan=effective_scenario_eval_plan,
+                scenario_eval_execution_summary=effective_scenario_eval_execution_summary,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
+                hybrid_execution_summary=effective_hybrid_execution_summary,
             )
         except Exception as persist_exc:
             combined_error = f"{combined_error_message}; persistence failed after fallback review path: {type(persist_exc).__name__}: {persist_exc}"
@@ -1472,6 +2146,10 @@ def _handle_fallback(
                 error_message=combined_error,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=effective_feedback_mode,
+                scenario_eval_plan=effective_scenario_eval_plan,
+                scenario_eval_execution_summary=effective_scenario_eval_execution_summary,
+                hybrid_analysis_plan=effective_hybrid_analysis_plan,
+                hybrid_execution_summary=effective_hybrid_execution_summary,
             )
         except Exception as persist_exc:
             combined_error = (
@@ -1490,6 +2168,22 @@ def _handle_fallback(
         )
     except Exception as label_exc:
         combined_error_message = f"{error_message}; escalation label not applied: {type(label_exc).__name__}: {label_exc}"
+    try:
+        _post_fallback_governance_check_run_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            error_message=error_message,
+            recommendation=recommendation,
+            attribute_profiles=comment_attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        combined_error_message = _append_audit_error_message(
+            combined_error_message,
+            f"Governance fallback check run not applied: {type(exc).__name__}: {exc}",
+        )
 
     try:
         audit = _persist_audit_result(
@@ -1506,6 +2200,10 @@ def _handle_fallback(
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
             pr_feedback_mode=effective_feedback_mode,
+            scenario_eval_plan=effective_scenario_eval_plan,
+            scenario_eval_execution_summary=effective_scenario_eval_execution_summary,
+            hybrid_analysis_plan=effective_hybrid_analysis_plan,
+            hybrid_execution_summary=effective_hybrid_execution_summary,
         )
     except Exception as persist_exc:
         combined_error = (
@@ -1530,13 +2228,56 @@ def _handle_fallback(
 
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
-    artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+    pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
+    scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    scenario_eval_execution_summary = None
+    if scenario_eval_plan.should_run:
+        scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
+
+    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
+    artifact_snapshots = {}
+    hybrid_execution_summary = None
+    if hybrid_analysis_plan.should_run:
+        artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+        hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
+
+    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="completed",
+                completion_mode="completed",
+                output_mode="suppressed",
+                comment_body=None,
+                comment_mode=None,
+                semantic_review_completed=False,
+                suggested_risk_level=deterministic_analysis.suggested_risk_level.value,
+                fused_confidence=None,
+                error_message=None,
+                artifact_snapshots=artifact_snapshots,
+                pr_feedback_mode=pr_feedback_mode,
+                scenario_eval_plan=scenario_eval_plan,
+                scenario_eval_execution_summary=scenario_eval_execution_summary,
+                hybrid_analysis_plan=hybrid_analysis_plan,
+                hybrid_execution_summary=hybrid_execution_summary,
+            )
+        except Exception as persist_exc:
+            error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=error_message)
+            return "failed"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=None)
+        return "completed"
+
+    if not artifact_snapshots:
+        artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
-    pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
     try:
-        comment_body = build_llm_comment(
+        comment_result = build_llm_comment(
             job.diff_text,
             deterministic_analysis,
             llm_client=settings.llm_client,
@@ -1547,14 +2288,54 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             episode_context=episode_context,
             repo_full=job.repo_full,
             pr_number=job.pr_number,
+            verifier_rollout_mode=settings.verifier_rollout_mode,
+            verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
+            return_metadata=True,
         )
-        fusion_assessment = _build_signal_fusion_assessment(comment_body, deterministic_analysis)
+        if isinstance(comment_result, LlmCommentBuildResult):
+            comment_body = comment_result.comment_body
+            fusion_assessment = comment_result.fusion_assessment
+            verifier_plan = comment_result.verifier_plan
+        else:
+            comment_body = comment_result
+            fusion_assessment = _build_signal_fusion_assessment(
+                comment_body,
+                deterministic_analysis,
+                attribute_profiles=attribute_profiles,
+            )
+            verifier_plan = _build_verifier_plan(
+                deterministic_analysis,
+                comment_body,
+                semantic_packages=build_semantic_review_packages(deterministic_analysis),
+                proposed_summary=_extract_summary(comment_body, default=_build_fallback_summary(deterministic_analysis)),
+                proposed_recommendation=_extract_recommendation(
+                    comment_body,
+                    default=_default_recommendation_for_risk(fusion_assessment.risk_level),
+                ),
+                rollout_mode=settings.verifier_rollout_mode,
+                max_requests_per_review=settings.verifier_max_requests_per_review,
+            )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
             retry_delay_seconds = _extract_retry_after_seconds(exc) or _retry_delay_seconds(job.attempt_count)
             retry_at = time.time() + retry_delay_seconds
-            mark_job_retry(settings.db_path, job.id, error_message=error_message, retry_at=retry_at)
+            retry_error_message = error_message
+            try:
+                _post_pending_governance_check_run_for_job(
+                    job,
+                    settings,
+                    error_message=error_message,
+                    retry_at=retry_at,
+                    attribute_profiles=attribute_profiles,
+                    episode_context=episode_context,
+                )
+            except Exception as pending_exc:
+                retry_error_message = _append_audit_error_message(
+                    retry_error_message,
+                    f"Governance pending check run not applied: {type(pending_exc).__name__}: {pending_exc}",
+                )
+            mark_job_retry(settings.db_path, job.id, error_message=retry_error_message, retry_at=retry_at)
             return "retry_wait"
 
         return _handle_fallback(
@@ -1565,33 +2346,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             artifact_snapshots=artifact_snapshots,
             escalation_recommendation=escalation_recommendation,
             pr_feedback_mode=pr_feedback_mode,
+            scenario_eval_plan=scenario_eval_plan,
+            scenario_eval_execution_summary=scenario_eval_execution_summary,
+            hybrid_analysis_plan=hybrid_analysis_plan,
+            hybrid_execution_summary=hybrid_execution_summary,
         )
 
-    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
-        try:
-            audit = _persist_audit_result(
-                job,
-                deterministic_analysis,
-                settings,
-                status="completed",
-                completion_mode="completed",
-                output_mode="suppressed",
-                comment_body=None,
-                comment_mode=None,
-                semantic_review_completed=True,
-                suggested_risk_level=fusion_assessment.risk_level,
-                fused_confidence=fusion_assessment.confidence,
-                error_message=None,
-                artifact_snapshots=artifact_snapshots,
-                pr_feedback_mode=pr_feedback_mode,
-            )
-        except Exception as persist_exc:
-            error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
-            mark_job_failed(settings.db_path, job.id, error_message=error_message)
-            return "failed"
-
-        mark_job_completed(settings.db_path, job.id, comment_body=None)
-        return "completed"
     if pr_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
         review_event = _review_event_for_risk_level(fusion_assessment.risk_level)
         github_review_id = None
@@ -1616,6 +2376,10 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                     artifact_snapshots=artifact_snapshots,
                     escalation_recommendation=escalation_recommendation,
                     pr_feedback_mode=pr_feedback_mode,
+                    scenario_eval_plan=scenario_eval_plan,
+                    scenario_eval_execution_summary=scenario_eval_execution_summary,
+                    hybrid_analysis_plan=hybrid_analysis_plan,
+                    hybrid_execution_summary=hybrid_execution_summary,
                 )
 
         audit_error_message = None
@@ -1628,6 +2392,44 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             )
         except Exception as exc:
             audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
+        try:
+            _post_governance_status_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            audit_error_message = _append_audit_error_message(
+                audit_error_message,
+                f"Governance status not applied: {type(exc).__name__}: {exc}",
+            )
+        try:
+            _post_governance_check_run_for_job(
+                job,
+                deterministic_analysis,
+                settings,
+                suggested_risk_level=fusion_assessment.risk_level,
+                fused_confidence=fusion_assessment.confidence,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                installation_token=installation_token,
+            )
+        except Exception as exc:
+            audit_error_message = _append_audit_error_message(
+                audit_error_message,
+                f"Governance check run not applied: {type(exc).__name__}: {exc}",
+            )
 
         try:
             _persist_audit_result(
@@ -1646,6 +2448,13 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 github_review_id=github_review_id,
                 artifact_snapshots=artifact_snapshots,
                 pr_feedback_mode=pr_feedback_mode,
+                verifier_mode=verifier_plan.rollout_mode,
+                verifier_trigger=verifier_plan.trigger,
+                verifier_request_count=verifier_plan.request_count,
+                scenario_eval_plan=scenario_eval_plan,
+                scenario_eval_execution_summary=scenario_eval_execution_summary,
+                hybrid_analysis_plan=hybrid_analysis_plan,
+                hybrid_execution_summary=hybrid_execution_summary,
             )
         except Exception as persist_exc:
             error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
@@ -1674,6 +2483,10 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             artifact_snapshots=artifact_snapshots,
             escalation_recommendation=escalation_recommendation,
             pr_feedback_mode=pr_feedback_mode,
+            scenario_eval_plan=scenario_eval_plan,
+            scenario_eval_execution_summary=scenario_eval_execution_summary,
+            hybrid_analysis_plan=hybrid_analysis_plan,
+            hybrid_execution_summary=hybrid_execution_summary,
         )
 
     audit_error_message = None
@@ -1686,6 +2499,44 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         )
     except Exception as exc:
         audit_error_message = f"Escalation label not applied: {type(exc).__name__}: {exc}"
+    try:
+        _post_governance_status_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            suggested_risk_level=fusion_assessment.risk_level,
+            fused_confidence=fusion_assessment.confidence,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
+            attribute_profiles=attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = _append_audit_error_message(
+            audit_error_message,
+            f"Governance status not applied: {type(exc).__name__}: {exc}",
+        )
+    try:
+        _post_governance_check_run_for_job(
+            job,
+            deterministic_analysis,
+            settings,
+            suggested_risk_level=fusion_assessment.risk_level,
+            fused_confidence=fusion_assessment.confidence,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
+            attribute_profiles=attribute_profiles,
+            episode_context=episode_context,
+            installation_token=installation_token,
+        )
+    except Exception as exc:
+        audit_error_message = _append_audit_error_message(
+            audit_error_message,
+            f"Governance check run not applied: {type(exc).__name__}: {exc}",
+        )
 
     try:
         audit = _persist_audit_result(
@@ -1704,6 +2555,13 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             github_comment_id=github_comment_id,
             artifact_snapshots=artifact_snapshots,
             pr_feedback_mode=pr_feedback_mode,
+            verifier_mode=verifier_plan.rollout_mode,
+            verifier_trigger=verifier_plan.trigger,
+            verifier_request_count=verifier_plan.request_count,
+            scenario_eval_plan=scenario_eval_plan,
+            scenario_eval_execution_summary=scenario_eval_execution_summary,
+            hybrid_analysis_plan=hybrid_analysis_plan,
+            hybrid_execution_summary=hybrid_execution_summary,
         )
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"

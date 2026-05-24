@@ -367,6 +367,14 @@ proceed- `feature/eval-harness-v1`
 
 The live GitHub issue queue no longer matches the old ordering in this section.
 
+Current note for the newly opened detection-engine roadmap:
+
+- GitHub issue `#18` (`Detection Engine Roadmap`) is now the parent feature for the next engine program.
+- GitHub issues `#19` through `#22` are the four execution phases under that parent.
+- The repo-visible execution plan for that parent feature lives in [docs/detection-engine-roadmap-parent-plan.md](docs/detection-engine-roadmap-parent-plan.md).
+- Phase A, Phase B, and Phase C are now merged into `feature/detection-engine-roadmap`; the parent branch includes bounded verifier planning, persisted governance decisions, and opt-in GitHub/CI governance signaling.
+- Phase D is now merged into `feature/detection-engine-roadmap` at `b801b4a`; the final read-model slice extends those persisted scenario and hybrid execution summaries into the shared repo audit brief, the machine-auth control-plane repo dashboard payload, the standalone machine-auth control-plane audit list/detail endpoints, and the MCP repo casefile payload, and the CP audit list now supports the older `state`/`severity`/`artifact_id`/`recency` filters; the broader Phase D gate is green at `228 passed` across `tests/test_audit_worker.py`, `tests/test_hybrid_analysis.py`, `tests/test_hybrid_execution.py`, `tests/test_dashboard_api.py`, `tests/test_mcp_broker.py`, `tests/test_customer_control_plane.py`, `tests/test_cp_low_risk_actions.py`, and `tests/test_control_plane_auth.py`, leaving the parent branch ready for the final PR to `main`.
+
 Verified against repo state and open issues:
 
 - GitHub issue `#20` (`feature/dashboard-redesign-v2`) is effectively completed and merged to `main`.

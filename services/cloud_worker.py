@@ -34,7 +34,9 @@ from .github_integration import (
     fetch_pull_request_lifecycle,
     generate_jwt,
     get_installation_token as request_installation_token,
+    post_check_run,
 )
+from .governance_policy import GOVERNANCE_ROLLOUT_OFF, normalize_governance_rollout_mode
 from .onboarding_records import get_latest_repository_onboarding, list_latest_repository_onboardings
 from .observability import configure_logging
 from .queue import LocalSQLiteQueue, QueueBackend, QueueMessage, RedisQueue, SQSQueue, close_queue_backend
@@ -93,6 +95,30 @@ async def _fetch_pull_request_lifecycle_with_refresh(
     refreshed_token = await _get_installation_token_for_worker(installation_id, settings)
     lifecycle = await asyncio.to_thread(fetch_pull_request_lifecycle, repo_full, pr_number, refreshed_token)
     return lifecycle, refreshed_token
+
+
+async def _maybe_post_skipped_governance_check_run(
+    *,
+    settings: Settings,
+    repo_full: str,
+    head_sha: str,
+    installation_token: str,
+) -> None:
+    if normalize_governance_rollout_mode(settings.governance_check_run_rollout_mode) == GOVERNANCE_ROLLOUT_OFF:
+        return
+    await asyncio.to_thread(
+        post_check_run,
+        repo_full,
+        head_sha,
+        installation_token,
+        name=(settings.governance_check_run_name or "Vipari Governance").strip() or "Vipari Governance",
+        status="completed",
+        conclusion="neutral",
+        title="Governance audit skipped",
+        summary="Vipari skipped full governance audit after pre-audit relevance review.",
+        text="Vipari's pre-audit relevance review determined this change was not an AI control surface that needed full governance audit.",
+        details_url=None,
+    )
 
 
 def _retry_delay_seconds(attempt_count: int) -> int:
@@ -192,6 +218,9 @@ def _message_still_authorized(payload: dict[str, object], settings: Settings) ->
     )
     onboarding = _get_latest_onboarding_if_available(settings.resolved_db_path, str(payload["repo_full"]))
     installation = get_github_installation_by_installation_id(settings.resolved_db_path, int(payload["installation_id"]))
+
+    if installation is not None and installation.workspace_id is not None and installation.status != "active":
+        return False
 
     if event_type == "push":
         if allocation is None:
@@ -536,6 +565,15 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
     )
 
     if not audit_decision.should_audit:
+        try:
+            await _maybe_post_skipped_governance_check_run(
+                settings=settings,
+                repo_full=repo_full,
+                head_sha=head_sha,
+                installation_token=installation_token,
+            )
+        except Exception:
+            pass
         JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return
@@ -579,6 +617,19 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
                 max_attempts=settings.audit_max_attempts,
                 max_retry_window_seconds=settings.audit_max_retry_window_seconds,
                 poll_interval_seconds=settings.audit_worker_poll_seconds,
+                governance_status_rollout_mode=settings.governance_status_rollout_mode,
+                governance_status_context=settings.governance_status_context,
+                governance_check_run_rollout_mode=settings.governance_check_run_rollout_mode,
+                governance_check_run_name=settings.governance_check_run_name,
+                scenario_eval_rollout_mode=settings.scenario_eval_rollout_mode,
+                scenario_eval_max_artifacts_per_review=settings.scenario_eval_max_artifacts_per_review,
+                scenario_eval_allowed_repos=settings.scenario_eval_allowed_repos,
+                scenario_eval_allowed_artifact_types=settings.scenario_eval_allowed_artifact_types,
+                scenario_eval_output_root=settings.scenario_eval_output_root,
+                hybrid_static_analysis_rollout_mode=settings.hybrid_static_analysis_rollout_mode,
+                hybrid_static_analysis_max_artifacts_per_review=settings.hybrid_static_analysis_max_artifacts_per_review,
+                hybrid_static_analysis_allowed_repos=settings.hybrid_static_analysis_allowed_repos,
+                hybrid_static_analysis_allowed_artifact_types=settings.hybrid_static_analysis_allowed_artifact_types,
             ),
         )
 

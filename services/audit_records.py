@@ -49,9 +49,26 @@ class PullRequestAuditRecord:
     suggested_risk_level: str
     fused_confidence: str | None
     semantic_review_completed: bool
+    verifier_mode: str | None
+    verifier_trigger: str | None
+    verifier_request_count: int
+    scenario_eval_mode: str | None
+    scenario_eval_artifact_count: int
+    scenario_eval_selection_reason: str | None
+    scenario_eval_artifact_paths: list[str]
+    hybrid_analysis_mode: str | None
+    hybrid_analysis_request_count: int
+    hybrid_analysis_selection_reason: str | None
+    hybrid_analysis_requests: list[dict[str, object]]
     error_message: str | None
     created_at: float
     updated_at: float
+    scenario_eval_execution_count: int = 0
+    scenario_eval_execution_reason: str | None = None
+    scenario_eval_executions: list[dict[str, object]] | None = None
+    hybrid_analysis_execution_count: int = 0
+    hybrid_analysis_execution_reason: str | None = None
+    hybrid_analysis_executions: list[dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +178,17 @@ class ArtifactHistoryRecord:
     suggested_risk_level: str
     fused_confidence: str | None
     semantic_review_completed: bool
+    verifier_mode: str | None
+    verifier_trigger: str | None
+    verifier_request_count: int
+    scenario_eval_mode: str | None
+    scenario_eval_artifact_count: int
+    scenario_eval_selection_reason: str | None
+    scenario_eval_artifact_paths: list[str]
+    hybrid_analysis_mode: str | None
+    hybrid_analysis_request_count: int
+    hybrid_analysis_selection_reason: str | None
+    hybrid_analysis_requests: list[dict[str, object]]
     artifact_path: str
     artifact_type: str
     context_mode: str
@@ -168,6 +196,12 @@ class ArtifactHistoryRecord:
     added_count: int
     removed_count: int
     created_at: float
+    scenario_eval_execution_count: int = 0
+    scenario_eval_execution_reason: str | None = None
+    scenario_eval_executions: list[dict[str, object]] | None = None
+    hybrid_analysis_execution_count: int = 0
+    hybrid_analysis_execution_reason: str | None = None
+    hybrid_analysis_executions: list[dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +289,8 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 def _ensure_pull_request_audit_columns(conn: sqlite3.Connection) -> None:
     audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()}
+    if not audit_columns:
+        return
     if "pr_title" not in audit_columns:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_title TEXT")
     if "pr_state" not in audit_columns:
@@ -273,6 +309,40 @@ def _ensure_pull_request_audit_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN fused_confidence TEXT")
     if "pr_feedback_mode" not in audit_columns:
         conn.execute("ALTER TABLE pull_request_audits ADD COLUMN pr_feedback_mode TEXT NOT NULL DEFAULT 'comments'")
+    if "verifier_mode" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_mode TEXT")
+    if "verifier_trigger" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_trigger TEXT")
+    if "verifier_request_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN verifier_request_count INTEGER NOT NULL DEFAULT 0")
+    if "scenario_eval_mode" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_mode TEXT")
+    if "scenario_eval_artifact_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_artifact_count INTEGER NOT NULL DEFAULT 0")
+    if "scenario_eval_selection_reason" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_selection_reason TEXT")
+    if "scenario_eval_artifact_paths_json" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_artifact_paths_json TEXT NOT NULL DEFAULT '[]'")
+    if "scenario_eval_execution_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_execution_count INTEGER NOT NULL DEFAULT 0")
+    if "scenario_eval_execution_reason" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_execution_reason TEXT")
+    if "scenario_eval_executions_json" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN scenario_eval_executions_json TEXT NOT NULL DEFAULT '[]'")
+    if "hybrid_analysis_mode" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_mode TEXT")
+    if "hybrid_analysis_request_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_request_count INTEGER NOT NULL DEFAULT 0")
+    if "hybrid_analysis_selection_reason" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_selection_reason TEXT")
+    if "hybrid_analysis_requests_json" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_requests_json TEXT NOT NULL DEFAULT '[]'")
+    if "hybrid_analysis_execution_count" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_execution_count INTEGER NOT NULL DEFAULT 0")
+    if "hybrid_analysis_execution_reason" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_execution_reason TEXT")
+    if "hybrid_analysis_executions_json" not in audit_columns:
+        conn.execute("ALTER TABLE pull_request_audits ADD COLUMN hybrid_analysis_executions_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def ensure_pull_request_audit_schema(db_path: str) -> None:
@@ -306,6 +376,23 @@ def init_audit_record_db(db_path: str) -> None:
                 suggested_risk_level TEXT NOT NULL,
                 fused_confidence TEXT,
                 semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                verifier_mode TEXT,
+                verifier_trigger TEXT,
+                verifier_request_count INTEGER NOT NULL DEFAULT 0,
+                scenario_eval_mode TEXT,
+                scenario_eval_artifact_count INTEGER NOT NULL DEFAULT 0,
+                scenario_eval_selection_reason TEXT,
+                scenario_eval_artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+                scenario_eval_execution_count INTEGER NOT NULL DEFAULT 0,
+                scenario_eval_execution_reason TEXT,
+                scenario_eval_executions_json TEXT NOT NULL DEFAULT '[]',
+                hybrid_analysis_mode TEXT,
+                hybrid_analysis_request_count INTEGER NOT NULL DEFAULT 0,
+                hybrid_analysis_selection_reason TEXT,
+                hybrid_analysis_requests_json TEXT NOT NULL DEFAULT '[]',
+                                hybrid_analysis_execution_count INTEGER NOT NULL DEFAULT 0,
+                                hybrid_analysis_execution_reason TEXT,
+                                hybrid_analysis_executions_json TEXT NOT NULL DEFAULT '[]',
                 error_message TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
@@ -525,6 +612,23 @@ def record_audit_result(
     semantic_review_completed: bool,
     suggested_risk_level: str | None = None,
     fused_confidence: str | None = None,
+    verifier_mode: str | None = None,
+    verifier_trigger: str | None = None,
+    verifier_request_count: int = 0,
+    scenario_eval_mode: str | None = None,
+    scenario_eval_artifact_count: int = 0,
+    scenario_eval_selection_reason: str | None = None,
+    scenario_eval_artifact_paths: list[str] | None = None,
+    scenario_eval_execution_count: int = 0,
+    scenario_eval_execution_reason: str | None = None,
+    scenario_eval_executions: list[dict[str, object]] | None = None,
+    hybrid_analysis_mode: str | None = None,
+    hybrid_analysis_request_count: int = 0,
+    hybrid_analysis_selection_reason: str | None = None,
+    hybrid_analysis_requests: list[dict[str, object]] | None = None,
+    hybrid_analysis_execution_count: int = 0,
+    hybrid_analysis_execution_reason: str | None = None,
+    hybrid_analysis_executions: list[dict[str, object]] | None = None,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
@@ -532,6 +636,10 @@ def record_audit_result(
 ) -> PullRequestAuditRecord:
     now = time.time()
     artifact_snapshots = artifact_snapshots or {}
+    scenario_eval_artifact_paths = list(scenario_eval_artifact_paths or [])
+    scenario_eval_executions = list(scenario_eval_executions or [])
+    hybrid_analysis_requests = list(hybrid_analysis_requests or [])
+    hybrid_analysis_executions = list(hybrid_analysis_executions or [])
     persisted_risk_level = suggested_risk_level or deterministic_analysis.suggested_risk_level.value
     (
         pr_state,
@@ -550,6 +658,7 @@ def record_audit_result(
     )
     persisted_feedback_mode = normalize_pr_feedback_mode(pr_feedback_mode)
     with _connect(db_path) as conn:
+        _ensure_pull_request_audit_columns(conn)
         existing = conn.execute(
             """
             SELECT id, created_at, pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at
@@ -567,8 +676,13 @@ def record_audit_result(
                     pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at,
                     status, completion_mode, output_mode, pr_feedback_mode,
                     deterministic_score, suggested_risk_level, fused_confidence, semantic_review_completed,
+                    verifier_mode, verifier_trigger, verifier_request_count,
+                    scenario_eval_mode, scenario_eval_artifact_count, scenario_eval_selection_reason, scenario_eval_artifact_paths_json,
+                    scenario_eval_execution_count, scenario_eval_execution_reason, scenario_eval_executions_json,
+                    hybrid_analysis_mode, hybrid_analysis_request_count, hybrid_analysis_selection_reason, hybrid_analysis_requests_json,
+                    hybrid_analysis_execution_count, hybrid_analysis_execution_reason, hybrid_analysis_executions_json,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -591,6 +705,23 @@ def record_audit_result(
                     persisted_risk_level,
                     fused_confidence,
                     int(semantic_review_completed),
+                    verifier_mode,
+                    verifier_trigger,
+                    verifier_request_count,
+                    scenario_eval_mode,
+                    scenario_eval_artifact_count,
+                    scenario_eval_selection_reason,
+                    json.dumps(scenario_eval_artifact_paths),
+                    scenario_eval_execution_count,
+                    scenario_eval_execution_reason,
+                    json.dumps(scenario_eval_executions),
+                    hybrid_analysis_mode,
+                    hybrid_analysis_request_count,
+                    hybrid_analysis_selection_reason,
+                    json.dumps(hybrid_analysis_requests),
+                    hybrid_analysis_execution_count,
+                    hybrid_analysis_execution_reason,
+                    json.dumps(hybrid_analysis_executions),
                     error_message,
                     now,
                     now,
@@ -621,6 +752,23 @@ def record_audit_result(
                     suggested_risk_level = ?,
                     fused_confidence = ?,
                     semantic_review_completed = ?,
+                    verifier_mode = ?,
+                    verifier_trigger = ?,
+                    verifier_request_count = ?,
+                    scenario_eval_mode = ?,
+                    scenario_eval_artifact_count = ?,
+                    scenario_eval_selection_reason = ?,
+                    scenario_eval_artifact_paths_json = ?,
+                    scenario_eval_execution_count = ?,
+                    scenario_eval_execution_reason = ?,
+                    scenario_eval_executions_json = ?,
+                    hybrid_analysis_mode = ?,
+                    hybrid_analysis_request_count = ?,
+                    hybrid_analysis_selection_reason = ?,
+                    hybrid_analysis_requests_json = ?,
+                    hybrid_analysis_execution_count = ?,
+                    hybrid_analysis_execution_reason = ?,
+                    hybrid_analysis_executions_json = ?,
                     error_message = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -645,6 +793,23 @@ def record_audit_result(
                     persisted_risk_level,
                     fused_confidence,
                     int(semantic_review_completed),
+                    verifier_mode,
+                    verifier_trigger,
+                    verifier_request_count,
+                    scenario_eval_mode,
+                    scenario_eval_artifact_count,
+                    scenario_eval_selection_reason,
+                    json.dumps(scenario_eval_artifact_paths),
+                    scenario_eval_execution_count,
+                    scenario_eval_execution_reason,
+                    json.dumps(scenario_eval_executions),
+                    hybrid_analysis_mode,
+                    hybrid_analysis_request_count,
+                    hybrid_analysis_selection_reason,
+                    json.dumps(hybrid_analysis_requests),
+                    hybrid_analysis_execution_count,
+                    hybrid_analysis_execution_reason,
+                    json.dumps(hybrid_analysis_executions),
                     error_message,
                     now,
                     audit_id,
@@ -1040,6 +1205,9 @@ def record_audit_feedback_event(
 ) -> AuditFeedbackEventRecord:
     timestamp = time.time() if created_at is None else created_at
     workspace_id = 0
+    from .audit_feedback_records import init_audit_feedback_db
+
+    init_audit_feedback_db(db_path)
     with _connect(db_path) as conn:
         audit_row = conn.execute(
             "SELECT id, repo_full, pr_number, head_sha FROM pull_request_audits WHERE id = ?",
@@ -1661,6 +1829,39 @@ def list_top_drifting_artifacts_for_repo(db_path: str, repo_full: str, *, limit:
 def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     fused_confidence = row["fused_confidence"] if "fused_confidence" in row.keys() else None
     pr_feedback_mode = row["pr_feedback_mode"] if "pr_feedback_mode" in row.keys() else PR_FEEDBACK_MODE_COMMENTS
+    verifier_mode = row["verifier_mode"] if "verifier_mode" in row.keys() else None
+    verifier_trigger = row["verifier_trigger"] if "verifier_trigger" in row.keys() else None
+    verifier_request_count = row["verifier_request_count"] if "verifier_request_count" in row.keys() else 0
+    scenario_eval_mode = row["scenario_eval_mode"] if "scenario_eval_mode" in row.keys() else None
+    scenario_eval_artifact_count = row["scenario_eval_artifact_count"] if "scenario_eval_artifact_count" in row.keys() else 0
+    scenario_eval_selection_reason = row["scenario_eval_selection_reason"] if "scenario_eval_selection_reason" in row.keys() else None
+    scenario_eval_artifact_paths_json = row["scenario_eval_artifact_paths_json"] if "scenario_eval_artifact_paths_json" in row.keys() else "[]"
+    scenario_eval_execution_count = row["scenario_eval_execution_count"] if "scenario_eval_execution_count" in row.keys() else 0
+    scenario_eval_execution_reason = row["scenario_eval_execution_reason"] if "scenario_eval_execution_reason" in row.keys() else None
+    scenario_eval_executions_json = row["scenario_eval_executions_json"] if "scenario_eval_executions_json" in row.keys() else "[]"
+    hybrid_analysis_mode = row["hybrid_analysis_mode"] if "hybrid_analysis_mode" in row.keys() else None
+    hybrid_analysis_request_count = row["hybrid_analysis_request_count"] if "hybrid_analysis_request_count" in row.keys() else 0
+    hybrid_analysis_selection_reason = row["hybrid_analysis_selection_reason"] if "hybrid_analysis_selection_reason" in row.keys() else None
+    hybrid_analysis_requests_json = row["hybrid_analysis_requests_json"] if "hybrid_analysis_requests_json" in row.keys() else "[]"
+    hybrid_analysis_execution_count = row["hybrid_analysis_execution_count"] if "hybrid_analysis_execution_count" in row.keys() else 0
+    hybrid_analysis_execution_reason = row["hybrid_analysis_execution_reason"] if "hybrid_analysis_execution_reason" in row.keys() else None
+    hybrid_analysis_executions_json = row["hybrid_analysis_executions_json"] if "hybrid_analysis_executions_json" in row.keys() else "[]"
+    try:
+        scenario_eval_artifact_paths = json.loads(scenario_eval_artifact_paths_json or "[]")
+    except json.JSONDecodeError:
+        scenario_eval_artifact_paths = []
+    try:
+        scenario_eval_executions = json.loads(scenario_eval_executions_json or "[]")
+    except json.JSONDecodeError:
+        scenario_eval_executions = []
+    try:
+        hybrid_analysis_requests = json.loads(hybrid_analysis_requests_json or "[]")
+    except json.JSONDecodeError:
+        hybrid_analysis_requests = []
+    try:
+        hybrid_analysis_executions = json.loads(hybrid_analysis_executions_json or "[]")
+    except json.JSONDecodeError:
+        hybrid_analysis_executions = []
     return PullRequestAuditRecord(
         id=row["id"],
         job_id=row["job_id"],
@@ -1683,9 +1884,26 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=fused_confidence,
         semantic_review_completed=bool(row["semantic_review_completed"]),
+        verifier_mode=verifier_mode,
+        verifier_trigger=verifier_trigger,
+        verifier_request_count=int(verifier_request_count or 0),
+        scenario_eval_mode=scenario_eval_mode,
+        scenario_eval_artifact_count=int(scenario_eval_artifact_count or 0),
+        scenario_eval_selection_reason=scenario_eval_selection_reason,
+        scenario_eval_artifact_paths=[str(item) for item in scenario_eval_artifact_paths],
+        hybrid_analysis_mode=hybrid_analysis_mode,
+        hybrid_analysis_request_count=int(hybrid_analysis_request_count or 0),
+        hybrid_analysis_selection_reason=hybrid_analysis_selection_reason,
+        hybrid_analysis_requests=[dict(item) for item in hybrid_analysis_requests if isinstance(item, dict)],
         error_message=row["error_message"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        scenario_eval_execution_count=int(scenario_eval_execution_count or 0),
+        scenario_eval_execution_reason=scenario_eval_execution_reason,
+        scenario_eval_executions=[dict(item) for item in scenario_eval_executions if isinstance(item, dict)],
+        hybrid_analysis_execution_count=int(hybrid_analysis_execution_count or 0),
+        hybrid_analysis_execution_reason=hybrid_analysis_execution_reason,
+        hybrid_analysis_executions=[dict(item) for item in hybrid_analysis_executions if isinstance(item, dict)],
     )
 
 
@@ -1785,7 +2003,7 @@ def update_pull_request_audit_state(
     repo_full: str,
     pr_number: int,
     head_sha: str | None,
-    pr_title: str | None,
+    pr_title: str | None = None,
     pr_state: str | None,
     pr_merged: bool | None,
     pr_closed_at: float | None,
@@ -1812,7 +2030,7 @@ def update_pull_request_audit_state(
         conn.execute(
             """
             UPDATE pull_request_audits
-            SET pr_title = ?,
+            SET pr_title = COALESCE(?, pr_title),
                 pr_state = ?,
                 pr_merged = ?,
                 pr_closed_at = ?,
@@ -1914,6 +2132,26 @@ def _row_to_pr_comment_episode(row: sqlite3.Row) -> PrCommentEpisodeRecord:
 
 
 def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
+    raw_paths_json = row["scenario_eval_artifact_paths_json"] if "scenario_eval_artifact_paths_json" in row.keys() else "[]"
+    raw_scenario_executions_json = row["scenario_eval_executions_json"] if "scenario_eval_executions_json" in row.keys() else "[]"
+    raw_hybrid_requests_json = row["hybrid_analysis_requests_json"] if "hybrid_analysis_requests_json" in row.keys() else "[]"
+    raw_hybrid_executions_json = row["hybrid_analysis_executions_json"] if "hybrid_analysis_executions_json" in row.keys() else "[]"
+    try:
+        scenario_eval_artifact_paths = json.loads(raw_paths_json or "[]")
+    except json.JSONDecodeError:
+        scenario_eval_artifact_paths = []
+    try:
+        scenario_eval_executions = json.loads(raw_scenario_executions_json or "[]")
+    except json.JSONDecodeError:
+        scenario_eval_executions = []
+    try:
+        hybrid_analysis_requests = json.loads(raw_hybrid_requests_json or "[]")
+    except json.JSONDecodeError:
+        hybrid_analysis_requests = []
+    try:
+        hybrid_analysis_executions = json.loads(raw_hybrid_executions_json or "[]")
+    except json.JSONDecodeError:
+        hybrid_analysis_executions = []
     return ArtifactHistoryRecord(
         audit_id=row["audit_id"],
         job_id=row["job_id"],
@@ -1927,6 +2165,17 @@ def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
         suggested_risk_level=row["suggested_risk_level"],
         fused_confidence=row["fused_confidence"],
         semantic_review_completed=bool(row["semantic_review_completed"]),
+        verifier_mode=(row["verifier_mode"] if "verifier_mode" in row.keys() else None),
+        verifier_trigger=(row["verifier_trigger"] if "verifier_trigger" in row.keys() else None),
+        verifier_request_count=int((row["verifier_request_count"] if "verifier_request_count" in row.keys() else 0) or 0),
+        scenario_eval_mode=(row["scenario_eval_mode"] if "scenario_eval_mode" in row.keys() else None),
+        scenario_eval_artifact_count=int((row["scenario_eval_artifact_count"] if "scenario_eval_artifact_count" in row.keys() else 0) or 0),
+        scenario_eval_selection_reason=(row["scenario_eval_selection_reason"] if "scenario_eval_selection_reason" in row.keys() else None),
+        scenario_eval_artifact_paths=[str(item) for item in scenario_eval_artifact_paths],
+        hybrid_analysis_mode=(row["hybrid_analysis_mode"] if "hybrid_analysis_mode" in row.keys() else None),
+        hybrid_analysis_request_count=int((row["hybrid_analysis_request_count"] if "hybrid_analysis_request_count" in row.keys() else 0) or 0),
+        hybrid_analysis_selection_reason=(row["hybrid_analysis_selection_reason"] if "hybrid_analysis_selection_reason" in row.keys() else None),
+        hybrid_analysis_requests=[dict(item) for item in hybrid_analysis_requests if isinstance(item, dict)],
         artifact_path=row["artifact_path"],
         artifact_type=row["artifact_type"],
         context_mode=row["context_mode"],
@@ -1934,6 +2183,12 @@ def _row_to_artifact_history(row: sqlite3.Row) -> ArtifactHistoryRecord:
         added_count=row["added_count"],
         removed_count=row["removed_count"],
         created_at=row["created_at"],
+        scenario_eval_execution_count=int((row["scenario_eval_execution_count"] if "scenario_eval_execution_count" in row.keys() else 0) or 0),
+        scenario_eval_execution_reason=(row["scenario_eval_execution_reason"] if "scenario_eval_execution_reason" in row.keys() else None),
+        scenario_eval_executions=[dict(item) for item in scenario_eval_executions if isinstance(item, dict)],
+        hybrid_analysis_execution_count=int((row["hybrid_analysis_execution_count"] if "hybrid_analysis_execution_count" in row.keys() else 0) or 0),
+        hybrid_analysis_execution_reason=(row["hybrid_analysis_execution_reason"] if "hybrid_analysis_execution_reason" in row.keys() else None),
+        hybrid_analysis_executions=[dict(item) for item in hybrid_analysis_executions if isinstance(item, dict)],
     )
 
 

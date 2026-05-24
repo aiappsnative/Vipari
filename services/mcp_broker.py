@@ -6,7 +6,7 @@ import json
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
@@ -954,6 +954,7 @@ def _tool_get_repo_casefile(arguments: dict[str, Any], *, context: McpBrokerPrin
         "repo_full": repo_full,
         "posture": posture,
         "summary": _repo_casefile_summary(view, posture, leading),
+        "audit_brief": asdict(view.audit_brief) if view.audit_brief is not None else None,
         "baseline_review": (
             {
                 "is_pending_review": view.baseline_review.is_pending_review,

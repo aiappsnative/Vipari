@@ -39,6 +39,8 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 def _ensure_audit_job_columns(conn: sqlite3.Connection) -> None:
     audit_job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_jobs)").fetchall()}
+    if not audit_job_columns:
+        return
     if "pr_title" not in audit_job_columns:
         conn.execute("ALTER TABLE audit_jobs ADD COLUMN pr_title TEXT")
     if "pr_state" not in audit_job_columns:
@@ -196,6 +198,7 @@ def create_audit_job(
         pr_updated_at=pr_updated_at,
     )
     with _connect(db_path) as conn:
+        _ensure_audit_job_columns(conn)
         existing = conn.execute(
             "SELECT * FROM audit_jobs WHERE repo_full = ? AND pr_number = ? AND head_sha = ?",
             (repo_full, pr_number, head_sha),
@@ -280,7 +283,7 @@ def update_job_pr_state(
     repo_full: str,
     pr_number: int,
     head_sha: str | None,
-    pr_title: str | None,
+    pr_title: str | None = None,
     pr_state: str | None,
     pr_merged: bool | None,
     pr_closed_at: float | None,
@@ -304,10 +307,11 @@ def update_job_pr_state(
         pr_updated_at=pr_updated_at,
     )
     with _connect(db_path) as conn:
+        _ensure_audit_job_columns(conn)
         conn.execute(
             """
             UPDATE audit_jobs
-            SET pr_title = ?,
+            SET pr_title = COALESCE(?, pr_title),
                 pr_state = ?,
                 pr_merged = ?,
                 pr_closed_at = ?,
