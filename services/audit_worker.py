@@ -1884,7 +1884,7 @@ def _persist_audit_result(
         suggested_risk_level=suggested_risk_level,
         fused_confidence=fused_confidence,
         error_message=error_message,
-        artifact_snapshots=artifact_snapshots or _fetch_artifact_snapshots(job, deterministic_analysis, settings),
+        artifact_snapshots=artifact_snapshots if artifact_snapshots is not None else _fetch_artifact_snapshots(job, deterministic_analysis, settings),
         github_comment_id=github_comment_id,
         github_review_id=github_review_id,
         verifier_mode=verifier_mode,
@@ -2226,11 +2226,37 @@ def _handle_fallback(
 
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     deterministic_analysis = analyze_diff(job.diff_text)
+    pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
+    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
+        try:
+            _persist_audit_result(
+                job,
+                deterministic_analysis,
+                settings,
+                status="completed",
+                completion_mode="completed",
+                output_mode="suppressed",
+                comment_body=None,
+                comment_mode=None,
+                semantic_review_completed=False,
+                suggested_risk_level=deterministic_analysis.suggested_risk_level.value,
+                fused_confidence=None,
+                error_message=None,
+                artifact_snapshots={},
+                pr_feedback_mode=pr_feedback_mode,
+            )
+        except Exception as persist_exc:
+            error_message = f"Persistence failure after silent audit completion: {type(persist_exc).__name__}: {persist_exc}"
+            mark_job_failed(settings.db_path, job.id, error_message=error_message)
+            return "failed"
+
+        mark_job_completed(settings.db_path, job.id, comment_body=None)
+        return "completed"
+
     artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
-    pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
     scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
     scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
     hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)

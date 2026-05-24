@@ -2055,7 +2055,7 @@ def test_worker_suppresses_github_output_when_feedback_mode_off(tmp_path, monkey
     assert audit.status == "completed"
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
-    assert audit.semantic_review_completed is True
+    assert audit.semantic_review_completed is False
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is None
@@ -2127,7 +2127,7 @@ def test_worker_silent_off_mode_persists_fallback_without_github_output(tmp_path
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
     assert audit.semantic_review_completed is False
-    assert audit.error_message == "RuntimeError: model unavailable"
+    assert audit.error_message is None
 
     comment = get_audit_comment_for_audit(db_path, audit.id)
     assert comment is None
@@ -2164,14 +2164,17 @@ def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_review
     reviews = []
     comments = []
     labels = []
+    invoked = []
 
     monkeypatch.setattr(
         "services.audit_worker.build_llm_comment",
-        lambda *args, **kwargs: "Summary: Guardrails weakened.\nRisk Level: High\nConfidence: High\nRecommendation: Escalate before merge.",
+        lambda *args, **kwargs: invoked.append("llm") or "unexpected",
     )
     monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
     monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
-    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: invoked.append("snapshot") or "artifact snapshot")
+    monkeypatch.setattr("services.audit_worker._execute_scenario_eval_for_job", lambda *args, **kwargs: invoked.append("scenario"))
+    monkeypatch.setattr("services.audit_worker._execute_hybrid_analysis_for_job", lambda *args, **kwargs: invoked.append("hybrid"))
     monkeypatch.setattr("services.audit_worker.create_pr_review", lambda *args, **kwargs: reviews.append(args) or 3300)
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: comments.append(args) or 3301)
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: labels.append(args))
@@ -2188,11 +2191,13 @@ def test_worker_suppresses_output_when_workspace_gate_is_off_even_if_mode_review
     assert reviews == []
     assert comments == []
     assert labels == []
+    assert invoked == []
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
     assert audit.output_mode == "suppressed"
     assert audit.pr_feedback_mode == "off"
+    assert audit.semantic_review_completed is False
 
 
 def test_worker_reuses_existing_review_for_requeued_failed_same_sha_job(tmp_path, monkeypatch):
