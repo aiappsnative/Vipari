@@ -90,11 +90,146 @@ from .audit_feedback_records import (
     VALID_TRIAGE_STATES,
     add_audit_feedback,
     add_audit_triage,
+    get_latest_triage_for_audit,
+    list_triage_for_audit,
 )
-from .audit_records import get_pull_request_audit_by_id, list_pre_audit_relevance_decisions
+from .audit_records import (
+    get_pull_request_audit_by_id,
+    list_audit_feedback_events_for_audit,
+    list_changed_artifacts_for_audit,
+    list_findings_for_audit,
+    list_pre_audit_relevance_decisions,
+    list_pull_request_audits_for_repo,
+)
 
 # Module-level constant to avoid allocating a new frozenset on every approve request.
 _HUMAN_ONLY_KINDS: frozenset[str] = frozenset({PRINCIPAL_KIND_HUMAN_OPERATOR})
+
+
+def _build_execution_summary_payload(*, count: int, reason: str | None, executions: list[dict[str, object]] | None) -> dict[str, object] | None:
+    normalized_executions = [dict(item) for item in (executions or []) if isinstance(item, dict)]
+    normalized_count = int(count or 0)
+    normalized_reason = str(reason or "").strip() or None
+    if normalized_count <= 0 and not normalized_executions and normalized_reason is None:
+        return None
+    return {
+        "count": normalized_count,
+        "reason": normalized_reason,
+        "executions": normalized_executions,
+    }
+
+
+def _cp_audit_summary_payload(db_path: str, audit) -> dict[str, object]:
+    latest_triage = get_latest_triage_for_audit(db_path, audit.id)
+    return {
+        "id": audit.id,
+        "repo_full": audit.repo_full,
+        "pr_number": audit.pr_number,
+        "pr_title": audit.pr_title,
+        "head_sha": audit.head_sha,
+        "status": audit.status,
+        "completion_mode": audit.completion_mode,
+        "output_mode": audit.output_mode,
+        "suggested_risk_level": audit.suggested_risk_level,
+        "fused_confidence": audit.fused_confidence,
+        "semantic_review_completed": bool(audit.semantic_review_completed),
+        "created_at": audit.created_at,
+        "updated_at": audit.updated_at,
+        "latest_triage": asdict(latest_triage) if latest_triage is not None else None,
+        "scenario_eval_execution": _build_execution_summary_payload(
+            count=audit.scenario_eval_execution_count,
+            reason=audit.scenario_eval_execution_reason,
+            executions=audit.scenario_eval_executions,
+        ),
+        "hybrid_analysis_execution": _build_execution_summary_payload(
+            count=audit.hybrid_analysis_execution_count,
+            reason=audit.hybrid_analysis_execution_reason,
+            executions=audit.hybrid_analysis_executions,
+        ),
+    }
+
+
+def _parse_audit_recency_seconds(raw_value: str | None) -> float | None:
+    text = str(raw_value or "").strip().lower()
+    if not text:
+        return None
+    multiplier = 86400.0
+    if text.endswith("d"):
+        text = text[:-1]
+    elif text.endswith("h"):
+        text = text[:-1]
+        multiplier = 3600.0
+    if not text.isdigit() or int(text) <= 0:
+        raise ValueError("recency must be a positive integer number of days or hours, for example '7' or '24h'.")
+    return float(int(text)) * multiplier
+
+
+def _severity_rank(value: str | None) -> int:
+    return {
+        "info": 0,
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "critical": 4,
+    }.get(str(value or "").strip().lower(), -1)
+
+
+def _highest_finding_severity(findings: list[object]) -> str | None:
+    highest = None
+    highest_rank = -1
+    for finding in findings:
+        severity = str(getattr(finding, "severity", "") or "").strip().lower()
+        rank = _severity_rank(severity)
+        if rank > highest_rank:
+            highest_rank = rank
+            highest = severity or None
+    return highest
+
+
+def _audit_matches_cp_filters(
+    db_path: str,
+    audit,
+    *,
+    state_filter: str | None,
+    severity_filter: str | None,
+    artifact_id_filter: int | None,
+    recency_seconds: float | None,
+    now: float,
+) -> bool:
+    if recency_seconds is not None:
+        reference_ts = float(audit.updated_at or audit.created_at or 0.0)
+        if reference_ts < (now - recency_seconds):
+            return False
+
+    latest_triage = None
+    if state_filter:
+        latest_triage = get_latest_triage_for_audit(db_path, audit.id)
+        normalized_state = state_filter.lower()
+        if normalized_state == "untriaged":
+            if latest_triage is not None:
+                return False
+        else:
+            candidate_states = {
+                str(audit.status or "").strip().lower(),
+                str(audit.pr_state or "").strip().lower(),
+            }
+            if latest_triage is not None:
+                candidate_states.add(str(latest_triage.state or "").strip().lower())
+            if normalized_state not in candidate_states:
+                return False
+
+    findings = None
+    if severity_filter:
+        findings = list_findings_for_audit(db_path, audit.id)
+        if _highest_finding_severity(findings) != severity_filter.lower():
+            return False
+
+    if artifact_id_filter is not None:
+        changed_artifacts = list_changed_artifacts_for_audit(db_path, audit.id)
+        if all(int(record.id) != artifact_id_filter for record in changed_artifacts):
+            return False
+
+    return True
 
 
 class ComplianceExportRequest(BaseModel):
@@ -680,6 +815,77 @@ def create_api_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
+
+    @app.get("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/audits")
+    def cp_list_repo_audits(workspace_id: int, repo_full: str, request: Request):
+        """Return persisted pull-request audits for a workspace-allocated repo.
+
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        raw_state = (request.query_params.get("state") or "").strip().lower() or None
+        raw_severity = (request.query_params.get("severity") or "").strip().lower() or None
+        raw_artifact_id = (request.query_params.get("artifact_id") or "").strip()
+        raw_recency = (request.query_params.get("recency") or "").strip()
+        artifact_id_filter = None
+        if raw_artifact_id:
+            if not raw_artifact_id.isdigit() or int(raw_artifact_id) <= 0:
+                raise HTTPException(status_code=400, detail="artifact_id must be a positive integer.")
+            artifact_id_filter = int(raw_artifact_id)
+        try:
+            recency_seconds = _parse_audit_recency_seconds(raw_recency)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audits = [
+            audit
+            for audit in list_pull_request_audits_for_repo(db_path, repo_full)
+            if _audit_matches_cp_filters(
+                db_path,
+                audit,
+                state_filter=raw_state,
+                severity_filter=raw_severity,
+                artifact_id_filter=artifact_id_filter,
+                recency_seconds=recency_seconds,
+                now=time.time(),
+            )
+        ]
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "repo_full": repo_full,
+                "audits": [_cp_audit_summary_payload(db_path, audit) for audit in audits],
+            }
+        )
+
+    @app.get("/cp/audits/{audit_id}")
+    def cp_get_audit_detail(audit_id: int, request: Request):
+        """Return audit detail for a workspace-visible audit.
+
+        Requires scope: ``drift.read``.
+        Returns 404 for unknown audits and for audits outside the caller workspace.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        audit = get_pull_request_audit_by_id(db_path, audit_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        allocation = get_repo_allocation_for_workspace(db_path, claims.workspace_id, audit.repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Audit not found.")
+        return JSONResponse(
+            {
+                **_cp_audit_summary_payload(db_path, audit),
+                "changed_artifacts": [asdict(record) for record in list_changed_artifacts_for_audit(db_path, audit_id)],
+                "findings": [asdict(record) for record in list_findings_for_audit(db_path, audit_id)],
+                "feedback_events": [asdict(record) for record in list_audit_feedback_events_for_audit(db_path, audit_id)],
+                "triage_events": [asdict(record) for record in list_triage_for_audit(db_path, audit_id)],
+            }
+        )
 
     @app.post("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/export")
     async def cp_create_export(workspace_id: int, repo_full: str, payload: ComplianceExportRequest, request: Request):

@@ -310,9 +310,11 @@ Current implementation status on `feature/detection-engine-phase-d-execution-rea
 - scenario execution writes bounded execution summaries back into durable audit records, including scenario key, selected artifact paths, package/comparison paths, and assertion summary metadata
 - the hybrid execution slice already merged into `feature/detection-engine-roadmap` at `9cafadb` runs bounded in-memory analyzer passes over already-fetched artifact snapshots, keyed by the persisted hybrid-analysis plan rather than by a second repository crawl
 - hybrid execution now persists summary results for each selected artifact, including analyzer key, finding count, highest severity, and bounded finding metadata, while keeping rollout shadow-only and production-off
-- the current read-model slice exposes scenario and hybrid execution summaries on the repo PR-review routes payload so reviewers can inspect the shadow-mode evidence already stored on the audit record without adding a new route family
+- the Phase D read-model slice merged into `feature/detection-engine-roadmap` at `b801b4a`, completing the downstream exposure of persisted execution summaries for dashboard and machine-consumable read paths
+- the current read-model slice exposes scenario and hybrid execution summaries on the repo PR-review routes payload, the shared repo audit brief, the machine-auth control-plane repo dashboard response, the standalone machine-auth control-plane audit list/detail responses with state/severity/artifact/recency filtering, and the MCP repo casefile response so both dashboard and machine-consumable read paths can inspect the shadow-mode evidence already stored on the audit record without adding a new route family
 - runtime guardrails continue to keep `SCENARIO_EVAL_ROLLOUT_MODE` and `HYBRID_STATIC_ANALYSIS_ROLLOUT_MODE` off in production and limited to `worker` or `monolith` roles elsewhere
-- latest targeted validation on this branch is green at `45 passed` across `tests/test_dashboard_api.py`, with the focused PR-review payload regression also green at `1 passed`
+- latest Phase D gate on this branch is green at `228 passed` across `tests/test_audit_worker.py`, `tests/test_hybrid_analysis.py`, `tests/test_hybrid_execution.py`, `tests/test_dashboard_api.py`, `tests/test_mcp_broker.py`, `tests/test_customer_control_plane.py`, `tests/test_cp_low_risk_actions.py`, and `tests/test_control_plane_auth.py`, covering disabled-path behavior, shadow-mode execution persistence, workspace-scoped read surfaces, and the standalone machine-auth control-plane audit list/detail filters
+- the parent branch now satisfies the integrated validation prerequisite for the final PR to `main`
 
 ### Phase D Execution Checklist
 
@@ -351,3 +353,11 @@ Current implementation status on `feature/detection-engine-phase-d-execution-rea
 5. Merge the parent PR when reviewed and green.
 6. Delete the parent branch locally and remotely.
 7. Final update step: update this document with the parent PR status, final merge commit, full validation summary, and any deferred follow-up issues.
+
+### Parent PR Readiness Update
+
+- parent branch: `feature/detection-engine-roadmap`
+- parent PR status: ready to open against `main`
+- merged phase SHAs on the parent branch: Phase A `a7a0f79`, Phase B `3887bd5`, Phase C `967cbc2`, Phase D planning/persistence `dae81b2`, Phase D scenario execution `ed8b807`, Phase D hybrid execution `9cafadb`, Phase D read-model exposure `b801b4a`
+- integrated validation summary: `228 passed` across `tests/test_audit_worker.py`, `tests/test_hybrid_analysis.py`, `tests/test_hybrid_execution.py`, `tests/test_dashboard_api.py`, `tests/test_mcp_broker.py`, `tests/test_customer_control_plane.py`, `tests/test_cp_low_risk_actions.py`, and `tests/test_control_plane_auth.py`
+- deferred follow-up issues after the parent PR: `#46` Railway launch hardening, `#14` attribute-profile UI, and `#15` governance signals

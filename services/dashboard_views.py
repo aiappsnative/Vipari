@@ -970,6 +970,7 @@ class RepoAuditBrief:
     baseline_reference: str = "none-yet"
     baseline_status: str = "unknown"
     confidence_label: str = "mixed"
+    latest_execution: dict[str, Any] | None = None
     affected_dimensions: list[str] = None
     actions: list[RepoAuditBriefAction] = None
     findings: list[RepoAuditBriefFinding] = None
@@ -1840,6 +1841,45 @@ def _extract_audit_brief_dimensions(insight: RepoDashboardInsightEntry | None) -
     return dimensions[:3]
 
 
+def _latest_completed_repo_audit(repo_audits: list[object]) -> object | None:
+    completed_audits = [audit for audit in repo_audits if getattr(audit, "status", None) == "completed"]
+    if not completed_audits:
+        return None
+    return sorted(
+        completed_audits,
+        key=lambda audit: (
+            float(getattr(audit, "updated_at", 0.0) or 0.0),
+            float(getattr(audit, "created_at", 0.0) or 0.0),
+            int(getattr(audit, "id", 0) or 0),
+        ),
+        reverse=True,
+    )[0]
+
+
+def _build_repo_audit_brief_execution_payload(audit: object | None) -> dict[str, Any] | None:
+    if audit is None:
+        return None
+    scenario_eval_execution = _build_execution_summary_payload(
+        count=getattr(audit, "scenario_eval_execution_count", 0),
+        reason=getattr(audit, "scenario_eval_execution_reason", None),
+        executions=getattr(audit, "scenario_eval_executions", None),
+    ) or {"count": 0, "reason": None, "executions": []}
+    hybrid_analysis_execution = _build_execution_summary_payload(
+        count=getattr(audit, "hybrid_analysis_execution_count", 0),
+        reason=getattr(audit, "hybrid_analysis_execution_reason", None),
+        executions=getattr(audit, "hybrid_analysis_executions", None),
+    ) or {"count": 0, "reason": None, "executions": []}
+    if scenario_eval_execution["count"] <= 0 and hybrid_analysis_execution["count"] <= 0:
+        return None
+    return {
+        "audit_id": int(getattr(audit, "id", 0) or 0),
+        "pr_number": int(getattr(audit, "pr_number", 0) or 0),
+        "head_sha": str(getattr(audit, "head_sha", "") or ""),
+        "scenario_eval_execution": scenario_eval_execution,
+        "hybrid_analysis_execution": hybrid_analysis_execution,
+    }
+
+
 def _baseline_reference_for_audit_brief(insight: RepoDashboardInsightEntry | None, fallback: str | None = None) -> str:
     if insight is None:
         return fallback or "none-yet"
@@ -1881,6 +1921,7 @@ def _build_repo_audit_brief(
     baseline_review: RepoBaselineReviewPanel | None,
     insights: list[RepoDashboardInsightEntry],
     lower_confidence_insights: list[RepoDashboardInsightEntry],
+    repo_audits: list[object] | None = None,
     fallback_baseline_reference: str | None = None,
 ) -> RepoAuditBrief:
     sorted_insights = sorted(
@@ -1895,6 +1936,7 @@ def _build_repo_audit_brief(
     baseline_status = _baseline_status_for_audit_brief(onboarding, baseline_review)
     baseline_reference = _baseline_reference_for_audit_brief(top_insight, fallback_baseline_reference)
     affected_dimensions = _extract_audit_brief_dimensions(top_insight)
+    latest_execution = _build_repo_audit_brief_execution_payload(_latest_completed_repo_audit(repo_audits or []))
 
     actions: list[RepoAuditBriefAction] = [
         RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "secondary"),
@@ -1929,6 +1971,7 @@ def _build_repo_audit_brief(
             baseline_reference="none-yet",
             baseline_status=baseline_status,
             confidence_label="limited coverage",
+            latest_execution=latest_execution,
             affected_dimensions=[],
             actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
             findings=[],
@@ -1948,6 +1991,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label=top_insight.confidence_label or "mixed",
+            latest_execution=latest_execution,
             affected_dimensions=affected_dimensions,
             actions=actions,
             findings=findings,
@@ -1967,6 +2011,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label=top_insight.confidence_label or "mixed",
+            latest_execution=latest_execution,
             affected_dimensions=affected_dimensions,
             actions=actions,
             findings=findings,
@@ -1986,6 +2031,7 @@ def _build_repo_audit_brief(
             baseline_reference=baseline_reference,
             baseline_status=baseline_status,
             confidence_label="baseline pending",
+            latest_execution=latest_execution,
             affected_dimensions=[],
             actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
             findings=[],
@@ -2004,6 +2050,7 @@ def _build_repo_audit_brief(
         baseline_reference=baseline_reference,
         baseline_status=baseline_status,
         confidence_label="baseline aligned",
+        latest_execution=latest_execution,
         affected_dimensions=[],
         actions=[RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "primary")],
         findings=[],
@@ -2074,6 +2121,7 @@ def _build_repo_dashboard_view_uncached(
             baseline_review=None,
             insights=[],
             lower_confidence_insights=[],
+            repo_audits=repo_audits,
         )
         return RepoDashboardView(
             repo_full=repo_full,
@@ -2255,6 +2303,7 @@ def _build_repo_dashboard_view_uncached(
             baseline_review=baseline_review,
             insights=insights,
             lower_confidence_insights=lower_confidence_insights,
+            repo_audits=repo_audits,
             fallback_baseline_reference=_baseline_reference_from_versions(latest_approved_baseline_versions or latest_baseline_versions),
         ),
     )

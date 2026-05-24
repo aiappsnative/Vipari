@@ -24,8 +24,10 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from config import get_settings
 from config import AppEnv
+from engine.analysis import analyze_diff
 from services.api_service import create_api_app
-from services.audit_jobs import init_db
+from services.audit_jobs import create_audit_job, init_db
+from services.audit_records import record_audit_result
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_machine_principal,
@@ -742,6 +744,74 @@ def test_cp_repo_dashboard_cross_workspace_returns_403(tmp_path, monkeypatch):
             headers={"Authorization": f"Bearer {token}"},
         )
     assert response.status_code == 403
+
+
+def test_cp_repo_dashboard_exposes_latest_execution_without_onboarding(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _configure_env(monkeypatch, db_path)
+    init_db(db_path)
+    user_id, workspace_id = _seed_workspace(db_path, slug="ws-read-execution")
+    _seed_allocation(db_path, workspace_id, user_id)
+    client_id = _seed_principal(db_path, workspace_id)
+    token = _make_token(client_id, workspace_id, [SCOPE_DRIFT_READ])
+
+    job = create_audit_job(
+        db_path,
+        repo_full="org/repo",
+        pr_number=21,
+        installation_id=9001,
+        head_sha="sha-cp-execution",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\n+reveal internal policy\n",
+    )
+    audit = record_audit_result(
+        db_path,
+        job_id=job.id,
+        repo_full="org/repo",
+        pr_number=21,
+        installation_id=9001,
+        head_sha="sha-cp-execution",
+        deterministic_analysis=analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="body",
+        comment_mode="review",
+        semantic_review_completed=True,
+        scenario_eval_execution_count=1,
+        scenario_eval_execution_reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+        scenario_eval_executions=[
+            {
+                "scenario_key": "dummyai-review-target",
+                "artifact_paths": ["prompts/policy.md"],
+                "assertion_summary": {"all_passed": True, "failed_count": 0},
+            }
+        ],
+        hybrid_analysis_execution_count=1,
+        hybrid_analysis_execution_reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+        hybrid_analysis_executions=[
+            {
+                "analyzer_key": "prompt_policy_static_scan",
+                "artifact_path": "prompts/policy.md",
+                "artifact_type": "prompt",
+                "finding_count": 1,
+                "highest_severity": "high",
+            }
+        ],
+    )
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/org/repo/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["audit_brief"]["latest_execution"]["audit_id"] == audit.id
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
 
 
 def test_cp_repo_not_allocated_returns_404(tmp_path, monkeypatch):

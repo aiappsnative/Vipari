@@ -1002,6 +1002,11 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["reason"] == "Shadow-mode hybrid static analysis executed 1 artifact."
     assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
     assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["executions"][0]["highest_severity"] == "high"
+    assert payload["audit_brief"]["latest_execution"]["audit_id"] == selected_audit.id
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["count"] == 1
+    assert payload["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
     comparison_summary = payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["summary"]
     assert comparison_summary["touched_artifact_count"] == 1
     assert comparison_summary["flagged_artifact_count"] == payload["pr_review_routes"]["selected_route"]["finding_count"]
