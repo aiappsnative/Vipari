@@ -363,6 +363,24 @@ def _extract_pr_review_excerpt(comment_body: str | None) -> str | None:
     return " ".join(excerpt_lines)
 
 
+def _build_execution_summary_payload(
+    *,
+    count: int,
+    reason: str | None,
+    executions: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    normalized_count = max(0, int(count or 0))
+    normalized_reason = str(reason or "").strip() or None
+    normalized_executions = [dict(item) for item in (executions or []) if isinstance(item, dict)]
+    if normalized_count == 0 and normalized_reason is None and not normalized_executions:
+        return None
+    return {
+        "count": normalized_count,
+        "reason": normalized_reason,
+        "executions": normalized_executions,
+    }
+
+
 def _pr_review_lifecycle_label(pr_state: str | None, pr_merged: bool | None) -> str:
     if pr_merged:
         return "Merged"
@@ -558,6 +576,16 @@ def build_repo_pr_review_routes_payload(
                 "governance_decision": _governance_decision_payload(governance_decision),
                 "feedback": _summarize_pr_review_feedback(feedback_events),
                 "recent_feedback": _build_recent_pr_review_feedback(feedback_events),
+                "scenario_eval_execution": _build_execution_summary_payload(
+                    count=audit.scenario_eval_execution_count,
+                    reason=audit.scenario_eval_execution_reason,
+                    executions=audit.scenario_eval_executions,
+                ),
+                "hybrid_analysis_execution": _build_execution_summary_payload(
+                    count=audit.hybrid_analysis_execution_count,
+                    reason=audit.hybrid_analysis_execution_reason,
+                    executions=audit.hybrid_analysis_executions,
+                ),
                 "dashboard_url": _dashboard_pr_route_url(repo_full, audit.pr_number, audit.head_sha),
                 "pull_request_url": f"https://github.com/{repo_full}/pull/{audit.pr_number}",
             }

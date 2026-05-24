@@ -909,6 +909,32 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
         semantic_review_completed=True,
         suggested_risk_level="High",
         fused_confidence="High",
+        scenario_eval_execution_count=1,
+        scenario_eval_execution_reason="Shadow-mode scenario eval executed seeded scenario 'dummyai-review-target'.",
+        scenario_eval_executions=[
+            {
+                "scenario_key": "dummyai-review-target",
+                "artifact_paths": ["prompts/refund.txt"],
+                "package_path": "artifacts/eval-runs/pr-21/doria90-dummyai/audit-job-102/run-package.json",
+                "comparison_path": "artifacts/eval-runs/pr-21/doria90-dummyai/audit-job-102/comparison-summary.json",
+                "assertion_summary": {"all_passed": True, "failed_count": 0},
+                "candidate_source": "seeded",
+            }
+        ],
+        hybrid_analysis_execution_count=1,
+        hybrid_analysis_execution_reason="Shadow-mode hybrid static analysis executed 1 artifact.",
+        hybrid_analysis_executions=[
+            {
+                "analyzer_key": "prompt_policy_static_scan",
+                "artifact_path": "prompts/refund.txt",
+                "artifact_type": "prompt",
+                "finding_count": 2,
+                "highest_severity": "high",
+                "findings": [
+                    {"finding_key": "internal_policy_disclosure", "severity": "high", "evidence": "reveal internal policy"}
+                ],
+            }
+        ],
         artifact_snapshots={"prompts/refund.txt": PROMPT_CURRENT},
     )
     record_audit_feedback_event(
@@ -969,6 +995,13 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["feedback"]["outcome_count"] == 1
     assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][0]["title"] == "PR outcome: merged despite warning"
     assert payload["pr_review_routes"]["selected_route"]["recent_feedback"][1]["title"] == "Marked helpful"
+    assert payload["pr_review_routes"]["selected_route"]["scenario_eval_execution"]["count"] == 1
+    assert payload["pr_review_routes"]["selected_route"]["scenario_eval_execution"]["executions"][0]["scenario_key"] == "dummyai-review-target"
+    assert payload["pr_review_routes"]["selected_route"]["scenario_eval_execution"]["executions"][0]["assertion_summary"]["all_passed"] is True
+    assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["count"] == 1
+    assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["reason"] == "Shadow-mode hybrid static analysis executed 1 artifact."
+    assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
+    assert payload["pr_review_routes"]["selected_route"]["hybrid_analysis_execution"]["executions"][0]["highest_severity"] == "high"
     comparison_summary = payload["pr_review_routes"]["selected_route"]["baseline_comparison"]["summary"]
     assert comparison_summary["touched_artifact_count"] == 1
     assert comparison_summary["flagged_artifact_count"] == payload["pr_review_routes"]["selected_route"]["finding_count"]
