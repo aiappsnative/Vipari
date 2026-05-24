@@ -65,12 +65,13 @@ def _repo_dashboard_build_options(active_tab: str | None) -> dict[str, object]:
 	if active_tab is None:
 		return {}
 	options: dict[str, object] = {
+		"include_detail_sections": False,
 		"include_repo_summary_metrics": active_tab not in {"version-control", "pr-reviews"},
 		"include_journey": active_tab == "version-control",
-		"include_featured_storyline": active_tab == "baseline",
+		"include_featured_storyline": active_tab == "audit",
 		"include_history_timelines": False,
 		"include_history_cues": active_tab == "compliance",
-		"include_design_profiles": False,
+		"include_design_profiles": active_tab in {"audit", "drift"},
 		"attribute_profile_mode": "ranked",
 	}
 	if active_tab == "drift":

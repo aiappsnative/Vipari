@@ -430,6 +430,18 @@ async def _reconcile_pull_request_lifecycle(settings: Settings, logger) -> int:
 
 async def _process_message(queue: QueueBackend, message: QueueMessage, settings: Settings, logger, llm_client) -> None:
     payload = message.payload
+    logger.info(
+        "Processing queued webhook message",
+        extra={
+            "event_type": payload.get("event_type"),
+            "action": payload.get("action"),
+            "repo": payload.get("repo_full"),
+            "pr_number": payload.get("pr_number"),
+            "head_sha": payload.get("head_sha"),
+            "delivery_id": payload.get("delivery_id"),
+            "attempt_count": message.attempt_count,
+        },
+    )
     if payload.get("event_type") == "push":
         commit_sha = payload.get("commit_sha")
         branch_ref = payload.get("branch_ref")
@@ -444,6 +456,15 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
             commit_sha=str(commit_sha),
             branch_ref=str(branch_ref),
             triggered_by=str(payload.get("triggered_by") or "push_webhook"),
+        )
+        logger.info(
+            "Queued branch scan from push webhook",
+            extra={
+                "repo": payload.get("repo_full"),
+                "installation_id": payload.get("installation_id"),
+                "commit_sha": commit_sha,
+                "branch_ref": branch_ref,
+            },
         )
         JOBS_PROCESSED.labels(status="success").inc()
         await queue.ack(message.receipt_handle)
@@ -516,13 +537,37 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
                 default_branch=onboarding.default_branch,
                 triggered_by="pr_merged_webhook",
             )
+            logger.info(
+                "Processed lifecycle webhook and queued merge branch scan",
+                extra={
+                    "repo": repo_full,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "merge_commit_sha": pr_merge_commit_sha,
+                },
+            )
             JOBS_PROCESSED.labels(status="success").inc()
         else:
+            logger.info(
+                "Processed lifecycle webhook without audit enqueue",
+                extra={
+                    "repo": repo_full,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "action": payload.get("action"),
+                    "pr_state": pr_state,
+                    "pr_merged": pr_merged,
+                },
+            )
             JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return
 
     if head_sha and has_completed_audit(settings.resolved_db_path, repo_full=repo_full, pr_number=pr_number, head_sha=head_sha):
+        logger.info(
+            "Skipped webhook because the PR head SHA was already audited",
+            extra={"repo": repo_full, "pr_number": pr_number, "head_sha": head_sha},
+        )
         JOBS_PROCESSED.labels(status="skipped").inc()
         await queue.ack(message.receipt_handle)
         return
@@ -565,8 +610,32 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         timeout_seconds=min(settings.llm_timeout_seconds, 5.0),
         provider=settings.resolved_ai_provider.value,
     )
+    logger.info(
+        "Completed pre-audit relevance review",
+        extra={
+            "repo": repo_full,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "should_audit": audit_decision.should_audit,
+            "relevant_artifact_count": len(audit_decision.relevant_results),
+            "skipped_artifact_count": len(audit_decision.skipped_results),
+            "relevant_artifact_paths": [result.path for result in audit_decision.relevant_results[:5]],
+            "skipped_artifact_paths": [result.path for result in audit_decision.skipped_results[:5]],
+        },
+    )
 
     if not audit_decision.should_audit:
+        logger.info(
+            "Skipped full audit after pre-audit relevance review",
+            extra={
+                "repo": repo_full,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "relevant_artifact_count": len(audit_decision.relevant_results),
+                "skipped_artifact_count": len(audit_decision.skipped_results),
+                "skipped_artifact_paths": [result.path for result in audit_decision.skipped_results[:5]],
+            },
+        )
         try:
             await _maybe_post_skipped_governance_check_run(
                 settings=settings,
@@ -593,6 +662,16 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         pr_merged_at=payload.get("pr_merged_at"),
         pr_merge_commit_sha=payload.get("pr_merge_commit_sha"),
         pr_updated_at=payload.get("pr_updated_at"),
+    )
+    logger.info(
+        "Created audit job from PR webhook",
+        extra={
+            "repo": repo_full,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "job_id": created_job.id,
+            "action": payload.get("action"),
+        },
     )
     job = claim_job_by_id(settings.resolved_db_path, created_job.id)
     if job is None:
@@ -646,6 +725,16 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         return
 
     status = "success" if result in {"completed", "fallback_posted"} else "failed"
+    logger.info(
+        "Finished processing PR webhook audit job",
+        extra={
+            "repo": repo_full,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "job_id": job.id,
+            "result": result,
+        },
+    )
     JOBS_PROCESSED.labels(status=status).inc()
     await queue.ack(message.receipt_handle)
 

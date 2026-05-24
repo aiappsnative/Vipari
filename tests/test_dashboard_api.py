@@ -1077,6 +1077,63 @@ def test_repo_dashboard_api_scopes_version_control_tab_payload(tmp_path):
     assert payload["pre_audit_relevance"] is None
 
 
+def test_repo_dashboard_api_scopes_audit_tab_payload(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-audit-tab.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    plan_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        commit_limit_per_artifact=5,
+        list_file_commits_fn=lambda repo, path, token, branch, limit: ["sha-2", "sha-1"][:limit],
+    )
+    execute_repository_history_backfill(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "sha-1": PROMPT_BASELINE,
+            "sha-2": PROMPT_CURRENT,
+        }[ref],
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?tab=audit",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["journey_snapshots"] == []
+    assert payload["journey_comparison"] is None
+    assert payload["history_timelines"] == []
+    assert payload["history_cues"] == []
+    assert payload["featured_storyline"]["artifact_path"] == "prompts/refund.txt"
+    assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
+    assert payload["pr_review_routes"] is None
+    assert payload["pre_audit_relevance"] is None
+
+
 def test_repo_dashboard_api_scopes_pr_review_tab_payload(tmp_path):
     db_path = str(tmp_path / "api-dashboard-pr-review-tab.db")
     init_db(db_path)
