@@ -782,6 +782,7 @@ def compare_eval_package_files(current_package_path: str, baseline_package_path:
 def run_oss_evaluation(
     db_path: str,
     *,
+    workspace_id: int | None = None,
     repo_full: str,
     installation_id: int,
     token: str,
@@ -860,6 +861,7 @@ def run_oss_evaluation(
     package = {
         "run_id": effective_run_label,
         "package_type": "evaluation_run",
+        "workspace_id": workspace_id,
         "repo_full": repo_full,
         "installation_id": installation_id,
         "candidate_key": candidate_key,

@@ -19,6 +19,7 @@ def test_execute_scenario_eval_plan_returns_plan_reason_when_disabled():
     summary = execute_scenario_eval_plan(
         plan,
         db_path="jobs.db",
+        workspace_id=None,
         repo_full="doria90/dummyAI",
         installation_id=123,
         token="token",
@@ -45,6 +46,7 @@ def test_execute_scenario_eval_plan_skips_when_repo_has_no_seeded_scenario():
     summary = execute_scenario_eval_plan(
         plan,
         db_path="jobs.db",
+        workspace_id=None,
         repo_full="example/unknown-repo",
         installation_id=123,
         token="token",
@@ -84,6 +86,7 @@ def test_execute_scenario_eval_plan_runs_seeded_scenario_for_repo():
     summary = execute_scenario_eval_plan(
         plan,
         db_path="jobs.db",
+        workspace_id=42,
         repo_full="doria90/dummyAI",
         installation_id=123,
         token="token",
@@ -101,5 +104,6 @@ def test_execute_scenario_eval_plan_runs_seeded_scenario_for_repo():
     assert summary.executions[0].artifact_paths == ("prompts/policy.md",)
     assert summary.executions[0].assertion_summary["all_passed"] is True
     assert captured["db_path"] == "jobs.db"
+    assert captured["kwargs"]["workspace_id"] == 42
     assert captured["kwargs"]["scenario_key"] == "dummyai-review-target"
     assert captured["kwargs"]["run_label"] == "audit-job-3"

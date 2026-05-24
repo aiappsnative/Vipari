@@ -846,9 +846,11 @@ def _execute_scenario_eval_for_job(
         )
 
     try:
+        allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
         return execute_scenario_eval_plan(
             scenario_eval_plan,
             db_path=settings.db_path,
+            workspace_id=allocation.workspace_id if allocation is not None else None,
             repo_full=job.repo_full,
             installation_id=job.installation_id,
             token=installation_token,

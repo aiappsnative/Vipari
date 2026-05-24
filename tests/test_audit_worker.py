@@ -188,6 +188,7 @@ def test_worker_persists_shadow_scenario_eval_plan_metadata(tmp_path, monkeypatc
 def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkeypatch):
     db_path = str(tmp_path / "jobs.db")
     init_db(db_path)
+    _bind_repo_to_workspace(db_path, workspace_mode="reviews")
     job = create_audit_job(
         db_path,
         repo_full="doria90/dummyAI",
@@ -205,9 +206,11 @@ def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkey
     monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda *args, **kwargs: "artifact snapshot")
     monkeypatch.setattr("services.audit_worker.upsert_pr_comment", lambda *args, **kwargs: 9003)
     monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "services.audit_worker.execute_scenario_eval_plan",
-        lambda *args, **kwargs: ScenarioEvalExecutionSummary(
+    captured = {}
+
+    def fake_execute_scenario_eval_plan(*args, **kwargs):
+        captured["workspace_id"] = kwargs.get("workspace_id")
+        return ScenarioEvalExecutionSummary(
             rollout_mode="shadow",
             attempted=True,
             executed=True,
@@ -222,8 +225,9 @@ def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkey
                     candidate_source="seeded",
                 ),
             ),
-        ),
-    )
+        )
+
+    monkeypatch.setattr("services.audit_worker.execute_scenario_eval_plan", fake_execute_scenario_eval_plan)
 
     llm_client = SimpleNamespace(
         chat=SimpleNamespace(
@@ -266,6 +270,7 @@ def test_worker_persists_shadow_scenario_eval_execution_summary(tmp_path, monkey
 
     audit = get_pull_request_audit_for_job(db_path, job.id)
     assert audit is not None
+    assert captured["workspace_id"] == 1
     assert audit.scenario_eval_execution_count == 1
     assert "executed seeded scenario" in (audit.scenario_eval_execution_reason or "")
     assert audit.scenario_eval_executions[0]["scenario_key"] == "dummyai-review-target"

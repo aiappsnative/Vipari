@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import StringIO
+import tokenize
 
 from .hybrid_analysis import HybridAnalysisPlan
 
@@ -59,9 +61,24 @@ class HybridExecutionSummary:
         return len(self.executions)
 
 
-def _scan_snapshot(analyzer_key: str, snapshot_text: str) -> tuple[HybridExecutionFinding, ...]:
+def _normalized_snapshot_for_scan(snapshot_text: str, artifact_path: str) -> str:
+    if not artifact_path.lower().endswith(".py"):
+        return snapshot_text
+
+    try:
+        filtered_tokens = [
+            token_info
+            for token_info in tokenize.generate_tokens(StringIO(snapshot_text).readline)
+            if token_info.type not in {tokenize.COMMENT, tokenize.STRING}
+        ]
+        return tokenize.untokenize(filtered_tokens)
+    except (tokenize.TokenError, IndentationError):
+        return snapshot_text
+
+
+def _scan_snapshot(analyzer_key: str, snapshot_text: str, artifact_path: str) -> tuple[HybridExecutionFinding, ...]:
     findings: list[HybridExecutionFinding] = []
-    lowered_snapshot = snapshot_text.lower()
+    lowered_snapshot = _normalized_snapshot_for_scan(snapshot_text, artifact_path).lower()
     for severity, finding_key, needle in _ANALYZER_PATTERNS.get(analyzer_key, ()): 
         if needle in lowered_snapshot:
             findings.append(
@@ -101,7 +118,7 @@ def execute_hybrid_analysis_plan(
         if not snapshot_text:
             skipped_paths.append(request.artifact_path)
             continue
-        findings = _scan_snapshot(request.analyzer_key, snapshot_text)
+        findings = _scan_snapshot(request.analyzer_key, snapshot_text, request.artifact_path)
         executions.append(
             HybridExecutionResult(
                 analyzer_key=request.analyzer_key,

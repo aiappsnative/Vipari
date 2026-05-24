@@ -46,6 +46,7 @@ def execute_scenario_eval_plan(
     plan: ScenarioEvalPlan,
     *,
     db_path: str,
+    workspace_id: int | None,
     repo_full: str,
     installation_id: int,
     token: str,
@@ -81,6 +82,7 @@ def execute_scenario_eval_plan(
 
     result = run_evaluation_fn(
         db_path,
+        workspace_id=workspace_id,
         repo_full=repo_full,
         installation_id=installation_id,
         token=token,

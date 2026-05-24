@@ -79,3 +79,35 @@ def test_execute_hybrid_analysis_plan_scans_snapshots_by_analyzer_key():
     assert summary.executions[0].findings[0].finding_key == "internal_policy_disclosure"
     assert summary.executions[1].finding_count == 2
     assert summary.executions[1].highest_severity == "high"
+
+
+def test_execute_hybrid_analysis_plan_ignores_python_comments_and_string_literals():
+    plan = HybridAnalysisPlan(
+        rollout_mode="shadow",
+        should_run=True,
+        reason="Shadow-mode hybrid static analysis would inspect 1 artifact on this PR.",
+        requests=(
+            HybridAnalyzerRequest(
+                analyzer_key="tooling_surface_scan",
+                artifact_path="worker/tasks.py",
+                artifact_type="tooling",
+                rationale="selected",
+            ),
+        ),
+    )
+
+    summary = execute_hybrid_analysis_plan(
+        plan,
+        artifact_snapshots={
+            "worker/tasks.py": (
+                "# Do not use shell=True in subprocess calls\n"
+                "example = 'shell=True should never be used'\n"
+                "message = \"requests.post( should be reviewed separately\"\n"
+            ),
+        },
+    )
+
+    assert summary.executed is True
+    assert summary.execution_count == 1
+    assert summary.executions[0].finding_count == 0
+    assert summary.executions[0].highest_severity is None
