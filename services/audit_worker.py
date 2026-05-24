@@ -1992,7 +1992,7 @@ def _handle_fallback(
     )
     if effective_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
-            audit = _persist_audit_result(
+            _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,
