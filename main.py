@@ -6290,6 +6290,9 @@ async def webhook(request: Request):
         model=(AI_MODEL if client is not None else None),
         timeout_seconds=RELEVANCE_MICRO_CLASSIFIER_TIMEOUT_SECONDS,
         provider=AI_PROVIDER,
+        workspace_id=(
+            allocation.workspace_id if (allocation := get_repo_allocation_for_installation(AUDIT_DB_PATH, installation_id, repo_full)) is not None else None
+        ),
     )
 
     if not audit_decision.should_audit:

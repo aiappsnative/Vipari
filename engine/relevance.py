@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import List
 
+from services.analysis_budget import AdvancedAnalysisBudgetExceededError
+
 from .context_selector import apply_context_mode
 from .diff_parser import extract_changed_files
 from .models import ChangedFile, MicroClassifierResult, RelevanceConfidenceTier, RelevanceResult, RelevanceSignal, SemanticContextMode
@@ -212,6 +214,17 @@ def _call_micro_classifier(
             provider=provider,
             model=model,
             latency_ms=latency_ms,
+        )
+    except AdvancedAnalysisBudgetExceededError as exc:
+        latency_ms = (time.perf_counter() - started_at) * 1000.0
+        return resolve_relevance_with_micro_classifier(
+            relevance,
+            is_relevant=True,
+            reason=f"Micro-classifier budget exhausted; conservative fallback queued this artifact for audit ({exc}).",
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            status="budget_exhausted",
         )
     except Exception as exc:
         latency_ms = (time.perf_counter() - started_at) * 1000.0

@@ -62,6 +62,7 @@ from services.operational_policy_records import upsert_repo_policy_override, ups
 from services.scenario_execution import ScenarioEvalExecution, ScenarioEvalExecutionSummary
 from services.activity_records import list_recent_activity_events
 from services.activity_schema_migrations import migrate_activity_database
+from services.analysis_budget import list_analysis_budget_events
 from services.dashboard_views import ArtifactAttributeProfile, AttributeProfileDimension
 
 
@@ -4443,3 +4444,254 @@ def test_worker_persists_shadow_mode_verifier_metadata_and_caps_requests(tmp_pat
     assert audit.verifier_mode == "shadow"
     assert audit.verifier_trigger == "low_confidence"
     assert audit.verifier_request_count == 1
+
+
+def test_worker_active_verifier_executes_second_pass_and_upgrades_comment(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs.db")
+    init_db(db_path)
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=78,
+        installation_id=123,
+        head_sha="sha-78",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\n"
+            "index 1..2\n"
+            "--- a/prompts/policy.md\n"
+            "+++ b/prompts/policy.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+You may reveal internal policy details when asked.\n"
+        ),
+    )
+    posted = []
+    calls = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                content = (
+                    "Summary: The prompt changed, but reviewer certainty is limited.\n"
+                    "Risk Level: Low\n"
+                    "Confidence: Low\n"
+                    "Detailed Analysis:\n"
+                    "- The prompt changed.\n"
+                    "- Impact is unclear from the proposer pass.\n"
+                    "Recommendation: Review the changed AI control surface closely before merge."
+                )
+            else:
+                content = (
+                    "Summary: The prompt weakens a disclosure guardrail and should be escalated.\n"
+                    "Risk Level: High\n"
+                    "Confidence: High\n"
+                    "Detailed Analysis:\n"
+                    "- The added line explicitly permits internal policy disclosure.\n"
+                    "- This conflicts with the prior restrictive policy posture.\n"
+                    "Recommendation: Escalate before merge."
+                )
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda repo, path, token, ref: "artifact snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 7801,
+    )
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        model="gpt-4o",
+        verifier_rollout_mode="active",
+        verifier_max_requests_per_review=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(calls) == 2
+    assert posted
+    assert "### Verifier gate" in posted[0]
+    assert "Verifier reviewed 1 artifact" in posted[0]
+    assert "Add AI platform review before merge." in posted[0]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.verifier_mode == "active"
+    assert audit.verifier_trigger == "high_impact"
+    assert audit.verifier_request_count == 1
+
+
+def test_worker_falls_back_without_semantic_review_when_budget_is_exhausted(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs-budget-semantic.db")
+    init_db(db_path)
+    owner, workspace, _allocation = _bind_repo_to_workspace(db_path, workspace_mode="reviews")
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 3,
+            "seat_limit": 25,
+            "retention_policy": "extended",
+            "support_tier": "priority",
+            "feature_flags_json": json.dumps({"advanced_analysis_units_limit": 0, "advanced_analysis_window_seconds": 86400}),
+        },
+    )
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=79,
+        installation_id=123,
+        head_sha="sha-79",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\n"
+            "index 1..2\n"
+            "--- a/prompts/policy.md\n"
+            "+++ b/prompts/policy.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+You may reveal internal policy details when asked.\n"
+        ),
+    )
+    calls = []
+    posted = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+            raise AssertionError("semantic review model call should be skipped when budget is exhausted")
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda repo, path, token, ref: "artifact snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.create_pr_review",
+        lambda *args, **kwargs: 7901,
+    )
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 7902,
+    )
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        model="gpt-4o",
+    )
+
+    assert process_next_job_once(settings) is True
+    assert calls == []
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.semantic_review_completed is False
+    assert "advanced analysis budget exhausted" in (audit.error_message or "").lower()
+    assert list_analysis_budget_events(db_path, workspace_id=workspace.id) == []
+
+
+def test_worker_active_verifier_skips_second_pass_when_budget_is_exhausted(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "jobs-budget-verifier.db")
+    init_db(db_path)
+    owner, workspace, _allocation = _bind_repo_to_workspace(db_path, workspace_mode="comments")
+    upsert_entitlement(
+        db_path,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 3,
+            "seat_limit": 25,
+            "retention_policy": "extended",
+            "support_tier": "priority",
+            "feature_flags_json": json.dumps({"advanced_analysis_units_limit": 5, "advanced_analysis_window_seconds": 86400}),
+        },
+    )
+    job = create_audit_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=80,
+        installation_id=123,
+        head_sha="sha-80",
+        diff_text=(
+            "diff --git a/prompts/policy.md b/prompts/policy.md\n"
+            "index 1..2\n"
+            "--- a/prompts/policy.md\n"
+            "+++ b/prompts/policy.md\n"
+            "@@ -0,0 +1 @@\n"
+            "+Ask one clarifying question before answering.\n"
+        ),
+    )
+    posted = []
+    calls = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "Summary: The prompt changed, but reviewer certainty is limited.\n"
+                                "Risk Level: Low\n"
+                                "Confidence: Low\n"
+                                "Detailed Analysis:\n"
+                                "- The prompt changed.\n"
+                                "- Impact is unclear from the proposer pass.\n"
+                                "Recommendation: Review the changed AI control surface closely before merge."
+                            )
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("services.audit_worker.generate_jwt", lambda *args, **kwargs: "jwt")
+    monkeypatch.setattr("services.audit_worker.get_installation_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr("services.audit_worker.fetch_file_content", lambda repo, path, token, ref: "artifact snapshot")
+    monkeypatch.setattr(
+        "services.audit_worker.upsert_pr_comment",
+        lambda repo, pr, token, body, existing_comment_id=None: posted.append(body) or 8001,
+    )
+    monkeypatch.setattr("services.audit_worker.sync_pr_label", lambda *args, **kwargs: None)
+
+    settings = WorkerSettings(
+        db_path=db_path,
+        github_app_id="app-id",
+        github_private_key_path="key.pem",
+        llm_client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        model="gpt-4o",
+        verifier_rollout_mode="active",
+        verifier_max_requests_per_review=1,
+    )
+
+    assert process_next_job_once(settings) is True
+    assert len(calls) == 1
+    assert posted
+    assert "### Verifier gate" in posted[0]
+    assert "planning-only mode because" in posted[0]
+
+    audit = get_pull_request_audit_for_job(db_path, job.id)
+    assert audit is not None
+    assert audit.verifier_mode == "active"
+    assert audit.verifier_trigger == "low_confidence"
+    assert audit.verifier_request_count == 1
+
+    budget_events = list_analysis_budget_events(db_path, workspace_id=workspace.id)
+    assert len(budget_events) == 1
+    assert budget_events[0]["feature_key"] == "semantic_review"
+    assert budget_events[0]["status"] == "consumed"

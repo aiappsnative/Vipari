@@ -1820,6 +1820,8 @@ def test_worker_completed_pr_audit_survives_restart_for_postgres_locator_simulat
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
     ), patch(
+        "services.control_plane_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
         "services.cloud_worker._message_still_authorized",
         return_value=True,
     ), patch(
@@ -1935,6 +1937,8 @@ def test_audit_comment_episode_survives_restart_for_postgres_locator_simulation(
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
     ), patch(
+        "services.control_plane_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
         "services.cloud_worker._message_still_authorized",
         return_value=True,
     ), patch(
@@ -2039,6 +2043,8 @@ def test_audit_job_retry_wait_survives_restart_for_postgres_locator_simulation(t
 
     with patch("services.audit_jobs.connect_sqlite", side_effect=fake_connect_sqlite), patch(
         "services.audit_records.connect_sqlite", side_effect=fake_connect_sqlite
+    ), patch(
+        "services.control_plane_records.connect_sqlite", side_effect=fake_connect_sqlite
     ), patch(
         "services.cloud_worker._message_still_authorized",
         return_value=True,
@@ -2267,6 +2273,90 @@ def test_worker_skips_uncertain_diff_when_micro_classifier_rejects_and_persists_
             },
         )
     ]
+
+
+def test_worker_queues_uncertain_diff_when_micro_classifier_budget_is_exhausted(tmp_path, monkeypatch):
+    from services.analysis_budget import list_analysis_budget_events
+    from services.control_plane_records import get_workspace_entitlement, upsert_entitlement, get_github_installation_by_installation_id
+
+    db_path = str(tmp_path / "worker-uncertain-budget.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("GOVERNANCE_CHECK_RUN_ROLLOUT_MODE", "dry_run")
+    _reset_settings_cache()
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=123, repo_full="doria90/dummyAI")
+    installation = get_github_installation_by_installation_id(db_path, 123)
+    assert installation is not None and installation.workspace_id is not None
+    upsert_entitlement(
+        db_path,
+        workspace_id=installation.workspace_id,
+        payload={
+            **derive_entitlement_payload("team", "active"),
+            "feature_flags_json": json.dumps({"advanced_analysis_units_limit": 0, "advanced_analysis_window_seconds": 86400}),
+        },
+    )
+
+    class AckQueue:
+        def __init__(self):
+            self.acked = []
+            self.nacked = []
+            self.dlq = []
+
+        async def ack(self, receipt_handle):
+            self.acked.append(receipt_handle)
+
+        async def nack(self, receipt_handle, delay_seconds):
+            self.nacked.append((receipt_handle, delay_seconds))
+
+        async def move_to_dlq(self, receipt_handle):
+            self.dlq.append(receipt_handle)
+
+    message = QueueMessage(
+        message_id="msg-uncertain-budget-1",
+        receipt_handle="receipt-uncertain-budget-1",
+        payload={
+            "action": "opened",
+            "installation_id": 123,
+            "repo_full": "doria90/dummyAI",
+            "pr_number": 21,
+            "head_sha": "worker-uncertain-budget-head",
+        },
+        attempt_count=1,
+    )
+
+    queue = AckQueue()
+
+    class FailingClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    raise AssertionError("micro-classifier model call should be skipped when budget is exhausted")
+
+    with patch("services.cloud_worker._message_still_authorized", return_value=True), patch(
+        "services.cloud_worker._get_installation_token_for_worker", return_value="installation-token"
+    ), patch(
+        "services.cloud_worker.fetch_diff_with_retry",
+        return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
+    ), patch("services.cloud_worker.process_job", return_value="completed") as process_job:
+        asyncio.run(_process_message(queue, message, get_settings(), configure_logging("worker-test"), FailingClient()))
+
+    assert queue.acked == ["receipt-uncertain-budget-1"]
+    assert queue.nacked == []
+    assert queue.dlq == []
+    process_job.assert_called_once()
+    decisions = list_pre_audit_relevance_decisions(
+        db_path,
+        repo_full="doria90/dummyAI",
+        pr_number=21,
+        head_sha="worker-uncertain-budget-head",
+    )
+    assert len(decisions) == 1
+    assert decisions[0].classifier_status == "budget_exhausted"
+    assert decisions[0].classifier_is_relevant is True
+    assert "budget exhausted" in (decisions[0].classifier_reason or "").lower()
+    assert list_analysis_budget_events(db_path, workspace_id=installation.workspace_id) == []
 
 
 def test_worker_still_skips_uncertain_diff_when_skipped_governance_check_fails(tmp_path, monkeypatch):

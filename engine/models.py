@@ -159,3 +159,4 @@ class VerifierReviewResult:
     summary: str
     rationale: List[str] = field(default_factory=list)
     requires_escalation: bool = False
+    recommendation: str = ""

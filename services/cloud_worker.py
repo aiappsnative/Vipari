@@ -645,6 +645,11 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         model=settings.ai_model,
         timeout_seconds=min(settings.llm_timeout_seconds, 5.0),
         provider=settings.resolved_ai_provider.value,
+        workspace_id=(
+            allocation.workspace_id
+            if (allocation := get_repo_allocation_for_installation(settings.resolved_db_path, payload["installation_id"], repo_full)) is not None
+            else None
+        ),
     )
     logger.info(
         "Completed pre-audit relevance review",

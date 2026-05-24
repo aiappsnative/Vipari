@@ -17,9 +17,25 @@ from config import get_settings
 from engine.analysis import DiffAnalysis, analyze_diff
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile, compare_attribute_profiles
+from engine.models import VerifierReviewRequest, VerifierReviewResult
 from engine.policy import PolicyContext, default_policy_rules, evaluate_policy_rules
 from engine.semantic_review import build_semantic_review_packages, format_semantic_review_packages
-from engine.verifier import build_verifier_review_requests, should_invoke_verifier
+from engine.verifier import (
+    build_verifier_review_requests,
+    build_verifier_system_prompt,
+    build_verifier_user_prompt,
+    parse_verifier_review_result,
+    should_invoke_verifier,
+)
+from .analysis_budget import (
+    AdvancedAnalysisBudgetExceededError,
+    compute_feature_units,
+    consume_analysis_budget,
+    estimate_feature_units,
+    extract_llm_usage,
+    release_analysis_budget,
+    reserve_analysis_budget,
+)
 from .dashboard_views import ArtifactAttributeProfile, build_artifact_attribute_profile
 from .governance_signals import GovernanceFinding, build_pr_comment_governance_findings
 from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normalize_risk_level
@@ -138,6 +154,8 @@ class VerifierPlan:
     trigger: str | None
     reason: str
     request_count: int
+    requests: tuple[VerifierReviewRequest, ...] = ()
+    results: tuple[VerifierReviewResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +205,9 @@ def build_llm_comment(
     verifier_rollout_mode: str = "off",
     verifier_max_requests_per_review: int = 3,
     policy_verifier_strategy: VerifierRunStrategy | None = None,
+    analysis_budget_db_path: str | None = None,
+    analysis_budget_workspace_id: int | None = None,
+    analysis_budget_audit_job_id: int | None = None,
     return_metadata: bool = False,
 ) -> str | LlmCommentBuildResult:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
@@ -203,21 +224,52 @@ def build_llm_comment(
         "Include a short 'Recommendation:' line. "
         "Keep the detailed section compact but substantive, and do not use code fences."
     )
-    response = llm_client.chat.completions.create(
+    semantic_budget_reservation_key = None
+    if analysis_budget_db_path and analysis_budget_workspace_id is not None and analysis_budget_audit_job_id is not None:
+        semantic_budget = reserve_analysis_budget(
+            analysis_budget_db_path,
+            workspace_id=analysis_budget_workspace_id,
+            feature_key="semantic_review",
+            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:semantic-review",
+            estimated_units=estimate_feature_units("semantic_review"),
+            audit_job_id=analysis_budget_audit_job_id,
+        )
+        if not semantic_budget.allowed:
+            raise AdvancedAnalysisBudgetExceededError(semantic_budget.reason or "semantic review budget unavailable")
+        semantic_budget_reservation_key = semantic_budget.reservation_key
+    try:
+        response = llm_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"{deterministic_analysis.format_for_prompt()}\n\n"
+                        f"{format_semantic_review_packages(semantic_packages)}\n\n"
+                        f"Raw diff:\n{diff_text}"
+                    ),
+                },
+            ],
+            temperature=0.0,
+            timeout=timeout_seconds,
+        )
+    except Exception:
+        release_analysis_budget(
+            analysis_budget_db_path or "",
+            reservation_key=semantic_budget_reservation_key,
+            note="semantic review call failed before completion",
+        )
+        raise
+    semantic_usage = extract_llm_usage(response)
+    consume_analysis_budget(
+        analysis_budget_db_path or "",
+        reservation_key=semantic_budget_reservation_key,
+        consumed_units=compute_feature_units("semantic_review", semantic_usage),
+        usage=semantic_usage,
         model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    f"{deterministic_analysis.format_for_prompt()}\n\n"
-                    f"{format_semantic_review_packages(semantic_packages)}\n\n"
-                    f"Raw diff:\n{diff_text}"
-                ),
-            },
-        ],
-        temperature=0.0,
-        timeout=timeout_seconds,
+        provider="openai",
+        note="semantic review completed",
     )
     raw_comment = response.choices[0].message.content or "Audit failed: empty response from AI model."
     summary = _extract_summary(
@@ -243,6 +295,22 @@ def build_llm_comment(
         rollout_mode=verifier_rollout_mode,
         max_requests_per_review=verifier_max_requests_per_review,
         policy_verifier_strategy=policy_verifier_strategy,
+    )
+    verifier_plan = _execute_verifier_plan(
+        verifier_plan,
+        llm_client=llm_client,
+        model=model,
+        timeout_seconds=timeout_seconds,
+        analysis_budget_db_path=analysis_budget_db_path,
+        analysis_budget_workspace_id=analysis_budget_workspace_id,
+        analysis_budget_audit_job_id=analysis_budget_audit_job_id,
+    )
+    fusion_assessment = _apply_verifier_to_fusion_assessment(fusion_assessment, verifier_plan)
+    summary = _apply_verifier_to_summary(summary, verifier_plan)
+    canonical_details = _apply_verifier_to_canonical_details(
+        canonical_details,
+        verifier_plan,
+        risk_level=fusion_assessment.risk_level,
     )
     review = _build_pr_comment_review(
         deterministic_analysis,
@@ -738,6 +806,8 @@ def _normalize_verifier_rollout_mode(mode: str | None) -> str:
     candidate = str(mode or "off").strip().lower()
     if candidate == "shadow":
         return "shadow"
+    if candidate in {"active", "enforce", "live"}:
+        return "active"
     return "off"
 
 
@@ -851,6 +921,171 @@ def _build_verifier_plan(
         trigger=decision.trigger.value if decision.trigger is not None else None,
         reason=decision.reason,
         request_count=len(requested),
+        requests=tuple(requested),
+    )
+
+
+def _execute_verifier_plan(
+    verifier_plan: VerifierPlan,
+    *,
+    llm_client: object,
+    model: str,
+    timeout_seconds: float,
+    analysis_budget_db_path: str | None = None,
+    analysis_budget_workspace_id: int | None = None,
+    analysis_budget_audit_job_id: int | None = None,
+) -> VerifierPlan:
+    if verifier_plan.rollout_mode != "active" or not verifier_plan.should_invoke or not verifier_plan.requests:
+        return verifier_plan
+
+    verifier_budget_reservation_key = None
+    if analysis_budget_db_path and analysis_budget_workspace_id is not None and analysis_budget_audit_job_id is not None:
+        verifier_budget = reserve_analysis_budget(
+            analysis_budget_db_path,
+            workspace_id=analysis_budget_workspace_id,
+            feature_key="verifier",
+            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:verifier",
+            estimated_units=estimate_feature_units("verifier", request_count=len(verifier_plan.requests)),
+            audit_job_id=analysis_budget_audit_job_id,
+        )
+        if not verifier_budget.allowed:
+            return VerifierPlan(
+                rollout_mode=verifier_plan.rollout_mode,
+                should_invoke=verifier_plan.should_invoke,
+                trigger=verifier_plan.trigger,
+                reason=f"{verifier_plan.reason.rstrip('.')} and active verifier execution was skipped because {verifier_budget.reason}.",
+                request_count=verifier_plan.request_count,
+                requests=verifier_plan.requests,
+                results=(),
+            )
+        verifier_budget_reservation_key = verifier_budget.reservation_key
+
+    results: list[VerifierReviewResult] = []
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    consumed_units = 0
+    for request in verifier_plan.requests:
+        try:
+            response = llm_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": build_verifier_system_prompt()},
+                    {"role": "user", "content": build_verifier_user_prompt(request)},
+                ],
+                temperature=0.0,
+                timeout=timeout_seconds,
+            )
+        except Exception:
+            release_analysis_budget(
+                analysis_budget_db_path or "",
+                reservation_key=verifier_budget_reservation_key,
+                note="verifier call failed before completion",
+            )
+            raise
+        usage = extract_llm_usage(response)
+        if usage is not None:
+            total_prompt_tokens += usage.prompt_tokens
+            total_completion_tokens += usage.completion_tokens
+        consumed_units += compute_feature_units("verifier", usage)
+        raw_result = response.choices[0].message.content or ""
+        results.append(parse_verifier_review_result(raw_result, request=request))
+
+    consume_analysis_budget(
+        analysis_budget_db_path or "",
+        reservation_key=verifier_budget_reservation_key,
+        consumed_units=consumed_units,
+        usage=(
+            None
+            if total_prompt_tokens == 0 and total_completion_tokens == 0
+            else SimpleNamespace(prompt_tokens=total_prompt_tokens, completion_tokens=total_completion_tokens)
+        ),
+        model=model,
+        provider="openai",
+        note="verifier execution completed",
+    )
+
+    return VerifierPlan(
+        rollout_mode=verifier_plan.rollout_mode,
+        should_invoke=verifier_plan.should_invoke,
+        trigger=verifier_plan.trigger,
+        reason=verifier_plan.reason,
+        request_count=verifier_plan.request_count,
+        requests=verifier_plan.requests,
+        results=tuple(results),
+    )
+
+
+def _risk_level_rank(value: str) -> int:
+    return {"Low": 0, "Medium": 1, "High": 2}.get(_normalize_risk_level(value), 2)
+
+
+def _choose_effective_verifier_result(verifier_plan: VerifierPlan) -> VerifierReviewResult | None:
+    if not verifier_plan.results:
+        return None
+    return max(
+        verifier_plan.results,
+        key=lambda result: (_risk_level_rank(result.risk_level.value), {"Low": 0, "Medium": 1, "High": 2}.get(result.confidence, 1)),
+    )
+
+
+def _apply_verifier_to_fusion_assessment(
+    fusion_assessment: SignalFusionAssessment,
+    verifier_plan: VerifierPlan,
+) -> SignalFusionAssessment:
+    effective_result = _choose_effective_verifier_result(verifier_plan)
+    if verifier_plan.rollout_mode != "active" or effective_result is None:
+        return fusion_assessment
+
+    final_risk = fusion_assessment.risk_level
+    if _risk_level_rank(effective_result.risk_level.value) > _risk_level_rank(fusion_assessment.risk_level):
+        final_risk = effective_result.risk_level.value
+
+    escalation_recommendation = fusion_assessment.escalation_recommendation
+    if effective_result.requires_escalation and escalation_recommendation.decision != "escalate_before_merge":
+        escalation_recommendation = EscalationRecommendation(
+            decision="escalate_before_merge",
+            reasons=tuple(list(escalation_recommendation.reasons) + ["verifier confirmed merge-blocking risk"]),
+            label_name="vipari: escalate-before-merge",
+        )
+
+    return SignalFusionAssessment(
+        risk_level=final_risk,
+        confidence=effective_result.confidence,
+        semantic_risk=effective_result.risk_level.value,
+        semantic_requires_escalation=effective_result.requires_escalation,
+        escalation_recommendation=escalation_recommendation,
+        policy_floor=fusion_assessment.policy_floor,
+        policy_reasons=fusion_assessment.policy_reasons,
+    )
+
+
+def _apply_verifier_to_summary(summary: str, verifier_plan: VerifierPlan) -> str:
+    effective_result = _choose_effective_verifier_result(verifier_plan)
+    if verifier_plan.rollout_mode != "active" or effective_result is None:
+        return summary
+    return effective_result.summary
+
+
+def _apply_verifier_to_canonical_details(
+    canonical_details: CanonicalCommentDetails,
+    verifier_plan: VerifierPlan,
+    *,
+    risk_level: str,
+) -> CanonicalCommentDetails:
+    effective_result = _choose_effective_verifier_result(verifier_plan)
+    if verifier_plan.rollout_mode != "active" or effective_result is None:
+        return CanonicalCommentDetails(
+            risk_level=_normalize_risk_level(risk_level),
+            analysis_bullets=canonical_details.analysis_bullets,
+            recommendation=canonical_details.recommendation,
+        )
+
+    analysis_bullets = tuple(effective_result.rationale[:4]) or canonical_details.analysis_bullets
+    recommendation = effective_result.recommendation or canonical_details.recommendation
+    return CanonicalCommentDetails(
+        risk_level=_normalize_risk_level(risk_level),
+        analysis_bullets=analysis_bullets,
+        recommendation=recommendation,
     )
 
 
@@ -859,12 +1094,20 @@ def _build_verifier_note(verifier_plan: VerifierPlan | None) -> str | None:
         return None
     if verifier_plan.should_invoke:
         request_label = "artifact" if verifier_plan.request_count == 1 else "artifacts"
+        effective_result = _choose_effective_verifier_result(verifier_plan)
+        if effective_result is not None:
+            return (
+                f"Verifier reviewed {verifier_plan.request_count} {request_label} via `{verifier_plan.trigger or 'unknown'}` "
+                f"because {verifier_plan.reason.rstrip('.').lower()}; final verifier verdict was "
+                f"{effective_result.risk_level.value} risk with {effective_result.confidence.lower()} confidence."
+            )
+        if "budget exhausted" in verifier_plan.reason.lower():
+            return f"Verifier stayed in planning-only mode because {verifier_plan.reason.rstrip('.').lower()}."
         return (
-            f"Shadow-mode verifier would review {verifier_plan.request_count} {request_label} "
-            f"via `{verifier_plan.trigger or 'unknown'}` because {verifier_plan.reason.rstrip('.').lower()}; "
-            "this does not change the merge lane until verifier rollout is promoted beyond shadow mode."
+            f"Verifier was eligible to review {verifier_plan.request_count} {request_label} via `{verifier_plan.trigger or 'unknown'}` "
+            f"because {verifier_plan.reason.rstrip('.').lower()}, but no usable verifier result was returned."
         )
-    return f"Shadow-mode verifier stayed idle because {verifier_plan.reason.rstrip('.').lower()}."
+    return f"Verifier stayed idle because {verifier_plan.reason.rstrip('.').lower()}."
 
 
 def _select_primary_attribute_profile(attribute_profiles: list[ArtifactAttributeProfile]) -> ArtifactAttributeProfile | None:
@@ -2039,6 +2282,13 @@ def _resolve_job_pr_feedback_mode(job: AuditJob, settings: WorkerSettings) -> st
     return resolve_pr_feedback_mode(workspace_mode, allocation.pr_feedback_mode)
 
 
+def _resolve_job_workspace_id(job: AuditJob, settings: WorkerSettings) -> int | None:
+    allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+    if allocation is None:
+        return None
+    return allocation.workspace_id
+
+
 def _review_event_for_risk_level(risk_level: str) -> str | None:
     normalized_risk = _normalize_risk_level(risk_level)
     if normalized_risk == "High":
@@ -2468,6 +2718,11 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     )
     should_run_semantic = _should_run_semantic_review(deterministic_analysis, semantic_strategy)
     semantic_review_completed = should_run_semantic
+    workspace_id = _resolve_job_workspace_id(job, settings)
+    scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
+    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
+    hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
     try:
         phase_started = time.perf_counter()
         if should_run_semantic:
@@ -2485,6 +2740,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 verifier_rollout_mode=settings.verifier_rollout_mode,
                 verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
                 policy_verifier_strategy=verifier_strategy,
+                analysis_budget_db_path=settings.db_path,
+                analysis_budget_workspace_id=workspace_id,
+                analysis_budget_audit_job_id=job.id,
                 return_metadata=True,
             )
             if isinstance(comment_result, LlmCommentBuildResult):
@@ -2538,6 +2796,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 max_requests_per_review=settings.verifier_max_requests_per_review,
                 policy_verifier_strategy=verifier_strategy,
             )
+        log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
         log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"

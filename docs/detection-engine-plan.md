@@ -6,6 +6,8 @@ This document defines the target architecture for the next-generation Vipari det
 
 This document is intentionally architecture-focused. Roadmap sequencing lives in [Plan.MD](../Plan.MD), while product and local-usage guidance lives in [README.md](../README.md).
 
+Budgeting design for optional deeper analysis now lives in [advanced-analysis-budgeting-design.md](advanced-analysis-budgeting-design.md).
+
 It should be read together with [SOUL.md](../SOUL.md), which captures the stable product thesis: Vipari is a GitHub-native design drift engine for AI systems, not a runtime observability product.
 
 The core design principle is a **hybrid engine**:
@@ -123,6 +125,35 @@ Still intentionally incomplete:
 - richer merged-commit provenance and reviewer-target linkage beyond the current PR/history source links
 - expanded OSS evaluation coverage beyond the current saved-package and comparison groundwork
 - live PostgreSQL-backed environment validation and final Railway/operator rollout confidence beyond the current adapter-level and simulated lifecycle coverage
+
+### Verifier architecture note
+
+Phase B introduced verifier contracts, gating, and calibration storage, and the current branch now completes that path with an active verifier execution mode in the worker.
+
+What is implemented today:
+
+- `engine/verifier.py` contains verifier invocation decisions, request-building helpers, verifier prompts, and structured result parsing
+- `engine/models.py` contains the verifier decision, request, and result contracts
+- `services/audit_worker.py` computes verifier plans, executes a second verifier model pass when `verifier_rollout_mode=active`, merges the verifier result into the final reviewer-facing output, and persists verifier metadata for audits
+- `services/oss_eval_harness.py` emits synthetic verifier release-gate reporting for calibration
+
+What remains intentionally incomplete:
+
+- richer persistence and reporting of verifier verdict content beyond the current mode, trigger, and request-count metadata
+- broader budget enforcement beyond the current micro-classifier, semantic-review, and active-verifier paths
+
+This means the verifier is now present as a real proposer-verifier runtime path, but still rollout-gated and intentionally conservative by default.
+
+### Advanced analysis budgeting note
+
+The live budgeting mechanism for deeper optional analysis now starts with a workspace-scoped `advanced_analysis_units` model rather than a token-only limiter.
+
+Architecturally, that budget should combine:
+
+- actual LLM token usage for direct model-bearing paths such as the relevance micro-classifier and semantic review
+- deterministic unit surcharges for non-LLM expensive paths such as scenario evaluation and hybrid analysis
+
+The current implementation already gates shared-ingress micro-classifier calls plus worker-side semantic review and active verifier execution through this model using workspace entitlement feature flags and a durable budget ledger, while scenario and hybrid paths are still follow-on work. The detailed design, charging model, and reservation flow are defined in [advanced-analysis-budgeting-design.md](advanced-analysis-budgeting-design.md).
 
 ### Compliance export architecture note
 

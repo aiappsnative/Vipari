@@ -12,7 +12,7 @@ from config import get_settings
 from scripts import db_migrate as db_migrate_script
 from services.audit_jobs import init_db
 from services.persistence import PostgresConnection, get_persistence_status, persistence_status_payload, resolve_db_path
-from services.schema_migrations import list_applied_migrations, migrate_database
+from services.schema_migrations import MIGRATIONS, list_applied_migrations, migrate_database
 
 
 def test_init_db_persists_backend_metadata_and_table_groups(tmp_path):
@@ -69,23 +69,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
     result = migrate_database(db_path)
     applied = list_applied_migrations(db_path)
 
-    _all_versions = [
-        "0001_bootstrap_relational_schema",
-        "0002_add_pull_request_audits_fused_confidence",
-        "0003_add_onboarding_approval_columns",
-        "0004_add_machine_principals",
-        "0005_add_session_flash",
-        "0006_add_audit_feedback_and_triage_tables",
-        "0007_add_high_risk_proposal_tables",
-        "0008_ensure_ai_system_registry_schema",
-        "0009_ensure_export_jobs_snapshot_columns",
-        "0010_ensure_relevance_decision_tables",
-        "0011_ensure_audit_jobs_lifecycle_columns",
-        "0012_ensure_pull_request_audit_lifecycle_columns",
-        "0013_ensure_audit_comment_writeback_columns",
-        "0014_add_operational_policy_tables",
-        "0015_add_pull_request_audit_policy_provenance",
-    ]
+        _all_versions = [version for version, _description, _handler in MIGRATIONS]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
     assert result.pending_versions == []
@@ -497,6 +481,25 @@ def test_migrate_database_repairs_missing_pull_request_audit_policy_provenance_c
     assert "effective_policy_hash" in columns
     assert "effective_policy_source" in columns
     assert "policy_decision_json" in columns
+
+
+def test_migrate_database_creates_analysis_budget_tables(tmp_path):
+    db_path = str(tmp_path / "analysis-budget-migration.db")
+
+    result = migrate_database(db_path)
+
+    assert "0016_add_analysis_budget_tables" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        window_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_analysis_budget_windows'"
+        ).fetchone()
+        event_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_analysis_budget_events'"
+        ).fetchone()
+
+    assert window_row == ("workspace_analysis_budget_windows",)
+    assert event_row == ("workspace_analysis_budget_events",)
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

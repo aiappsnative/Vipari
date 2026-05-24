@@ -237,6 +237,7 @@ Phase B merge update:
 - merged PR: `#23` (`Complete Phase B verifier shadow gate`)
 - merged parent commit: `3887bd5`
 - rollout state: verifier planning remains shadow-mode only in the worker, with reviewer-facing PR comments intentionally kept free of rollout-internal verifier notes
+- implementation note: Phase B landed verifier contracts, gating, persisted calibration metadata, and eval-harness reporting; the current parent branch has since extended that foundation with an active verifier execution mode in the worker while keeping rollout control explicit
 - validation summary before merge: `104 passed` across `tests/test_verifier.py`, `tests/test_engine.py`, `tests/test_audit_worker.py`, `tests/test_oss_eval_harness.py`, and `tests/test_persistence.py`
 - Phase C prerequisite adjustment: governance decision consumers should treat stored verifier metadata as calibration input and rollout evidence, not as an end-user policy decision on its own
 
@@ -314,6 +315,7 @@ Current implementation status on `feature/detection-engine-phase-d-execution-rea
 - the current read-model slice exposes scenario and hybrid execution summaries on the repo PR-review routes payload, the shared repo audit brief, the machine-auth control-plane repo dashboard response, the standalone machine-auth control-plane audit list/detail responses with state/severity/artifact/recency filtering, and the MCP repo casefile response so both dashboard and machine-consumable read paths can inspect the shadow-mode evidence already stored on the audit record without adding a new route family
 - runtime guardrails continue to keep `SCENARIO_EVAL_ROLLOUT_MODE` and `HYBRID_STATIC_ANALYSIS_ROLLOUT_MODE` off in production and limited to `worker` or `monolith` roles elsewhere
 - latest Phase D gate on this branch is green at `228 passed` across `tests/test_audit_worker.py`, `tests/test_hybrid_analysis.py`, `tests/test_hybrid_execution.py`, `tests/test_dashboard_api.py`, `tests/test_mcp_broker.py`, `tests/test_customer_control_plane.py`, `tests/test_cp_low_risk_actions.py`, and `tests/test_control_plane_auth.py`, covering disabled-path behavior, shadow-mode execution persistence, workspace-scoped read surfaces, and the standalone machine-auth control-plane audit list/detail filters
+- next design follow-on: optional deeper analysis is now partially governed by the live workspace-scoped `advanced_analysis_units` mechanism documented in [advanced-analysis-budgeting-design.md](advanced-analysis-budgeting-design.md), covering shared-ingress micro-classifier calls plus worker-side semantic review and active verifier execution, with scenario and hybrid execution still pending deterministic surcharge enforcement
 - the parent branch now satisfies the integrated validation prerequisite for the final PR to `main`
 
 ### Phase D Execution Checklist
