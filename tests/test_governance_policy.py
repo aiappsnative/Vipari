@@ -16,38 +16,52 @@ from services.governance_policy import (
 )
 
 
+def _base_audit_kwargs(**overrides):
+    payload = {
+        "id": 1,
+        "job_id": 1,
+        "repo_full": "doria90/dummyAI",
+        "pr_number": 42,
+        "pr_title": None,
+        "installation_id": 123,
+        "head_sha": "sha-42",
+        "pr_state": "open",
+        "pr_merged": False,
+        "pr_closed_at": None,
+        "pr_merged_at": None,
+        "pr_merge_commit_sha": None,
+        "pr_updated_at": 10.0,
+        "status": "completed",
+        "completion_mode": "completed",
+        "output_mode": "formal_review",
+        "pr_feedback_mode": "reviews",
+        "deterministic_score": 90,
+        "suggested_risk_level": "High",
+        "fused_confidence": "High",
+        "semantic_review_completed": True,
+        "verifier_mode": "shadow",
+        "verifier_trigger": "high_impact",
+        "verifier_request_count": 1,
+        "scenario_eval_mode": None,
+        "scenario_eval_artifact_count": 0,
+        "scenario_eval_selection_reason": None,
+        "scenario_eval_artifact_paths": [],
+        "hybrid_analysis_mode": None,
+        "hybrid_analysis_request_count": 0,
+        "hybrid_analysis_selection_reason": None,
+        "hybrid_analysis_requests": [],
+        "error_message": None,
+        "created_at": 10.0,
+        "updated_at": 10.0,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_evaluate_governance_decision_escalates_high_risk_audit_without_auto_blocking_in_dry_run():
     from services.audit_records import PullRequestAuditRecord
 
-    audit = PullRequestAuditRecord(
-        id=1,
-        job_id=1,
-        repo_full="doria90/dummyAI",
-        pr_number=42,
-        pr_title=None,
-        installation_id=123,
-        head_sha="sha-42",
-        pr_state="open",
-        pr_merged=False,
-        pr_closed_at=None,
-        pr_merged_at=None,
-        pr_merge_commit_sha=None,
-        pr_updated_at=10.0,
-        status="completed",
-        completion_mode="completed",
-        output_mode="formal_review",
-        pr_feedback_mode="reviews",
-        deterministic_score=90,
-        suggested_risk_level="High",
-        fused_confidence="High",
-        semantic_review_completed=True,
-        verifier_mode="shadow",
-        verifier_trigger="high_impact",
-        verifier_request_count=1,
-        error_message=None,
-        created_at=10.0,
-        updated_at=10.0,
-    )
+    audit = PullRequestAuditRecord(**_base_audit_kwargs())
 
     decision = evaluate_governance_decision(audit, rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN)
 
@@ -62,33 +76,19 @@ def test_evaluate_governance_decision_blocks_merge_in_enforce_mode_for_high_risk
     from services.audit_records import PullRequestAuditRecord
 
     audit = PullRequestAuditRecord(
-        id=2,
-        job_id=2,
-        repo_full="doria90/dummyAI",
-        pr_number=43,
-        pr_title=None,
-        installation_id=123,
-        head_sha="sha-43",
-        pr_state="open",
-        pr_merged=False,
-        pr_closed_at=None,
-        pr_merged_at=None,
-        pr_merge_commit_sha=None,
-        pr_updated_at=20.0,
-        status="completed",
-        completion_mode="completed",
-        output_mode="formal_review",
-        pr_feedback_mode="reviews",
-        deterministic_score=95,
-        suggested_risk_level="High",
-        fused_confidence="High",
-        semantic_review_completed=True,
-        verifier_mode="off",
-        verifier_trigger=None,
-        verifier_request_count=0,
-        error_message=None,
-        created_at=20.0,
-        updated_at=20.0,
+        **_base_audit_kwargs(
+            id=2,
+            job_id=2,
+            pr_number=43,
+            head_sha="sha-43",
+            pr_updated_at=20.0,
+            deterministic_score=95,
+            verifier_mode="off",
+            verifier_trigger=None,
+            verifier_request_count=0,
+            created_at=20.0,
+            updated_at=20.0,
+        )
     )
 
     decision = evaluate_governance_decision(audit, rollout_mode=GOVERNANCE_ROLLOUT_ENFORCE)
