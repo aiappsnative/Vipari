@@ -545,7 +545,7 @@ def test_build_signal_fusion_assessment_does_not_combine_policy_deltas_across_ar
     assert assessment.policy_reasons == ()
 
 
-def test_build_signal_fusion_assessment_keeps_finding_based_policy_floor_conservative_for_multi_artifact_changes():
+def test_build_signal_fusion_assessment_applies_finding_based_policy_floor_for_multi_artifact_changes():
     from services.audit_worker import _build_signal_fusion_assessment
 
     deterministic_analysis = SimpleNamespace(
@@ -581,8 +581,8 @@ def test_build_signal_fusion_assessment_keeps_finding_based_policy_floor_conserv
     )
 
     assert assessment.risk_level == "High"
-    assert assessment.policy_floor is None
-    assert assessment.policy_reasons == ()
+    assert assessment.policy_floor == "High"
+    assert assessment.policy_reasons
 
 
 def test_claim_next_job_marks_job_processing_and_prevents_reclaim(tmp_path):

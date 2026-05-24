@@ -1212,7 +1212,7 @@ def _build_policy_evaluation(
             evaluate_policy_rules(
                 PolicyContext(
                     attribute_deltas=attribute_deltas,
-                    findings=tuple(deterministic_analysis.findings) if len(profiles) == 1 else tuple(),
+                    findings=tuple(deterministic_analysis.findings),
                 ),
                 policy_rules,
             )

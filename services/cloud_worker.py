@@ -219,6 +219,9 @@ def _message_still_authorized(payload: dict[str, object], settings: Settings) ->
     onboarding = _get_latest_onboarding_if_available(settings.resolved_db_path, str(payload["repo_full"]))
     installation = get_github_installation_by_installation_id(settings.resolved_db_path, int(payload["installation_id"]))
 
+    if installation is not None and installation.workspace_id is not None and installation.status != "active":
+        return False
+
     if event_type == "push":
         if allocation is None:
             return False

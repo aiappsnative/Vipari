@@ -36,6 +36,7 @@ from services.control_plane_records import (
     create_workspace,
     init_control_plane_db,
     replace_repo_connections,
+    update_github_installation_status,
     update_repo_allocation_status,
     update_workspace_pr_comments_setting,
     upsert_entitlement,
@@ -866,6 +867,28 @@ def test_message_authorization_allows_closed_pull_request_events_when_dashboard_
 
     update_workspace_pr_comments_setting(db_path, 1, enabled=False)
     assert _message_still_authorized(payload, settings) is True
+
+
+def test_message_authorization_denies_inactive_installation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "worker-inactive-installation.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUDIT_DB_PATH", db_path)
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+    _reset_settings_cache()
+
+    init_db(db_path)
+    _seed_worker_control_plane_state(db_path, installation_id=888, repo_full="doria90/dummyAI")
+    update_github_installation_status(db_path, installation_id=888, status="inactive")
+
+    settings = get_settings()
+    payload = {
+        "installation_id": 888,
+        "repo_full": "doria90/dummyAI",
+        "event_type": "pull_request",
+    }
+
+    assert _message_still_authorized(payload, settings) is False
 
 
 def test_webhook_push_enqueues_default_branch_scan_delivery(tmp_path, monkeypatch):

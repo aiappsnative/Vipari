@@ -5327,7 +5327,9 @@ async def webhook(request: Request):
 
         onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
         managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
-        if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
+        if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None:
+            if managed_installation.status != "active":
+                return JSONResponse({"message": "ignored: installation inactive"})
             allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
             if allocation is None and onboarding is None:
                 return JSONResponse({"message": "ignored: repo not allocated"})
@@ -5375,7 +5377,9 @@ async def webhook(request: Request):
 
     onboarding = get_latest_repository_onboarding(AUDIT_DB_PATH, str(repo_full))
     managed_installation = get_github_installation_by_installation_id(AUDIT_DB_PATH, int(installation_id))
-    if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None and managed_installation.status == "active":
+    if _control_plane_active() and managed_installation is not None and managed_installation.workspace_id is not None:
+        if managed_installation.status != "active":
+            return JSONResponse({"message": "ignored: installation inactive"})
         allocation = get_repo_allocation_for_installation(AUDIT_DB_PATH, int(installation_id), str(repo_full))
         if action in ("closed", "reopened"):
             workspace_id = allocation.workspace_id if allocation is not None else managed_installation.workspace_id
