@@ -296,25 +296,18 @@ def test_build_workspace_escalation_queue_workspace_posture_reasons_type(tmp_pat
         assert isinstance(reason, str)
 
 
-def test_build_workspace_escalation_queue_reuses_repo_views_for_posture_reasons(tmp_path):
+def test_build_workspace_escalation_queue_uses_batched_overview_repo_views(tmp_path):
     db_path = str(tmp_path / "reused-views.db")
     init_db(db_path)
     _seed_repo_with_drift(db_path)
 
     from services import dashboard_views
 
-    original = dashboard_views.build_repo_dashboard_view
-    call_count = 0
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("escalation queue should use the batched overview path instead of full repo dashboard views")
 
-    def counted_build_repo_dashboard_view(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return original(*args, **kwargs)
-
-    with patch.object(dashboard_views, "build_repo_dashboard_view", side_effect=counted_build_repo_dashboard_view):
+    with patch.object(dashboard_views, "build_repo_dashboard_view", side_effect=fail_if_called):
         build_workspace_escalation_queue(db_path)
-
-    assert call_count == 1
 
 
 # ---------------------------------------------------------------------------

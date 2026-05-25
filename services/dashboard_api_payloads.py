@@ -93,9 +93,26 @@ def build_dashboard_overview_payload(
         allowed_repo_fulls=owned_repo_fulls,
     )
     payload = asdict(filtered_overview_view)
-    nav_repos = filtered_overview_view.repos if normalized_filter == "mine" else overview_view.repos
+    _strip_dashboard_overview_payload_duplicates(payload)
+    nav_repos = filtered_overview_view.repos if normalized_filter == "mine" else []
     payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
     return payload
+
+
+def _strip_dashboard_overview_payload_duplicates(payload: dict[str, object]) -> None:
+    overview_sections = payload.get("overview_sections")
+    if not isinstance(overview_sections, dict):
+        return
+    for section_key in ("urgent_queue", "recent_changes"):
+        section = overview_sections.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        repos = section.get("repos")
+        if not isinstance(repos, list):
+            continue
+        for repo in repos:
+            if isinstance(repo, dict):
+                repo.pop("matched_risk_item", None)
 
 
 def build_dashboard_escalation_queue_payload(

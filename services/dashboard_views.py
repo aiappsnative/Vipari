@@ -1204,15 +1204,14 @@ def build_workspace_escalation_queue(
     """
     repos = list_repo_dashboard_index(db_path, allowed_repo_fulls=allowed_repo_fulls)
     items: list[EscalationQueueItem] = []
-    repo_views: dict[str, RepoDashboardView] = {}
+    repo_views = {
+        view.repo_full: view
+        for view in _build_overview_repo_views(db_path, repos)
+    }
     for repo_entry in repos:
-        view = build_repo_dashboard_view(
-            db_path,
-            repo_entry.repo_full,
-            include_journey=False,
-            include_detail_sections=False,
-        )
-        repo_views[repo_entry.repo_full] = view
+        view = repo_views.get(repo_entry.repo_full)
+        if view is None:
+            continue
         for insight in (view.insights or []):
             if insight.priority == "review_now" or (include_watch and insight.priority == "watch"):
                 # Collect top-2 changed attribute dimensions
