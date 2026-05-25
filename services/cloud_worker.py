@@ -594,6 +594,10 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
         return
 
     if not head_sha:
+        logger.info(
+            "Moved queued message to DLQ because the PR head SHA was missing",
+            extra={"repo": repo_full, "pr_number": pr_number, "delivery_id": payload.get("delivery_id")},
+        )
         await queue.move_to_dlq(message.receipt_handle)
         JOBS_PROCESSED.labels(status="failed").inc()
         return
@@ -613,6 +617,17 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
             )
     except Exception as exc:
         if is_transient_error(exc) and message.attempt_count < settings.worker_max_retries:
+            logger.info(
+                "Requeued message after transient diff fetch failure",
+                extra={
+                    "repo": repo_full,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "delivery_id": payload.get("delivery_id"),
+                    "attempt_count": message.attempt_count,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
             await queue.nack(message.receipt_handle, _retry_delay_seconds(message.attempt_count))
             return
         await queue.move_to_dlq(message.receipt_handle)
@@ -698,9 +713,33 @@ async def _process_message(queue: QueueBackend, message: QueueMessage, settings:
     if job is None:
         existing = get_job(settings.resolved_db_path, created_job.id)
         if existing is not None and existing.status == "completed":
+            logger.info(
+                "Skipped duplicate webhook because the audit job already completed",
+                extra={
+                    "repo": repo_full,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "job_id": created_job.id,
+                    "delivery_id": payload.get("delivery_id"),
+                },
+            )
             JOBS_PROCESSED.labels(status="skipped").inc()
             await queue.ack(message.receipt_handle)
             return
+        logger.info(
+            "Requeued duplicate or deferred webhook because the audit job could not be claimed yet",
+            extra={
+                "repo": repo_full,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "job_id": created_job.id,
+                "delivery_id": payload.get("delivery_id"),
+                "existing_job_status": (existing.status if existing is not None else None),
+                "existing_attempt_count": (existing.attempt_count if existing is not None else None),
+                "existing_next_attempt_at": (existing.next_attempt_at if existing is not None else None),
+                "message_attempt_count": message.attempt_count,
+            },
+        )
         await queue.nack(message.receipt_handle, _retry_delay_seconds(message.attempt_count))
         return
 
