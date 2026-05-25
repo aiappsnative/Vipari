@@ -800,6 +800,13 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     queue = queue_backend or build_queue_backend(settings)
     llm_client = OpenAI(api_key=settings.ai_api_key, base_url=settings.ai_base_url)
 
+    logger.info(
+        "Worker runtime initializing",
+        extra={
+            "installation_id": None,
+        },
+    )
+
     init_db(settings.resolved_db_path)
     cleanup_webhook_deliveries(settings.resolved_db_path)
     if settings.enable_metrics:
@@ -874,6 +881,7 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
     workers.append(asyncio.create_task(queue_depth_poller()))
     workers.append(asyncio.create_task(branch_scan_loop()))
     workers.append(asyncio.create_task(pr_lifecycle_reconcile_loop()))
+    logger.info("Worker runtime initialized")
     try:
         await asyncio.gather(*workers)
     finally:
