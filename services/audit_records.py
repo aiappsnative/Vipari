@@ -1317,6 +1317,24 @@ def list_audit_feedback_events_for_repo(
     return [_row_to_audit_feedback_event(row) for row in rows]
 
 
+def list_recent_audit_feedback_events(
+    db_path: str,
+    *,
+    limit: int = 100,
+) -> list[AuditFeedbackEventRecord]:
+    safe_limit = max(1, min(int(limit), 1000))
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM audit_feedback_events
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_row_to_audit_feedback_event(row) for row in rows]
+
+
 def record_pr_outcome_feedback_events(
     db_path: str,
     *,

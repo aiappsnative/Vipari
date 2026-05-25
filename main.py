@@ -33,6 +33,7 @@ from services.audit_records import (
     get_audit_comment_episode_for_pr_head_sha,
     get_latest_audit_comment_for_pr,
     get_pull_request_audit_by_id,
+    list_recent_audit_feedback_events,
     list_pull_request_audits_for_repo,
     record_audit_result,
     record_pr_outcome_feedback_events,
@@ -983,6 +984,7 @@ def _admin_redirect(status: str) -> RedirectResponse:
 
 
 _ADMIN_LOG_PAGE_SIZE = 50
+_ADMIN_FEEDBACK_PAGE_SIZE = 50
 
 
 def _parse_admin_log_date(raw_value: str | None, *, inclusive_end: bool = False) -> float | None:
@@ -1296,6 +1298,259 @@ def _build_admin_logs_view(request: Request, *, admin_rows: list[dict[str, objec
         "has_next": end < len(filtered),
         "prev_href": _page_href(page - 1) if page > 1 else None,
         "next_href": _page_href(page + 1) if end < len(filtered) else None,
+    }
+
+
+def _normalize_feedback_kind_label(kind: str) -> str:
+    normalized = str(kind or "").strip().lower()
+    return {
+        "explicit_feedback": "Explicit feedback",
+        "reaction": "Reaction",
+        "github_reaction": "GitHub reaction",
+        "pr_outcome": "PR outcome",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _normalize_feedback_sentiment_label(sentiment: str) -> str:
+    normalized = str(sentiment or "").strip().lower()
+    return {
+        "helpful": "Helpful",
+        "noisy": "Noisy",
+        "strongly_disagree": "Strongly disagree",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
+def _parse_feedback_event_payload(payload_json: str | None) -> dict[str, object]:
+    try:
+        payload = json.loads(payload_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _admin_feedback_dashboard_href(repo_full: str, pr_number: int, head_sha: str) -> str | None:
+    normalized_repo_full = str(repo_full or "").strip()
+    normalized_head_sha = str(head_sha or "").strip()
+    if not normalized_repo_full or pr_number <= 0 or not normalized_head_sha:
+        return None
+    return f"/dashboard/{quote(normalized_repo_full, safe='')}?tab=pr-reviews&pr={pr_number}&head_sha={quote(normalized_head_sha, safe='')}"
+
+
+def _build_admin_feedback_view(request: Request, *, admin_rows: list[dict[str, object]]) -> dict[str, object]:
+    feedback_kind = (request.query_params.get("feedback_kind") or "").strip().lower()
+    workspace = (request.query_params.get("workspace") or "").strip().lower()
+    repo_full = (request.query_params.get("repo_full") or "").strip()
+    sentiment = (request.query_params.get("sentiment") or "").strip().lower()
+    from_date = (request.query_params.get("from_date") or "").strip()
+    to_date = (request.query_params.get("to_date") or "").strip()
+    query = (request.query_params.get("query") or "").strip().lower()
+    try:
+        page = max(int(request.query_params.get("page") or "1"), 1)
+    except ValueError:
+        page = 1
+    query_value = (request.query_params.get("query") or "").strip()
+
+    from_ts = _parse_admin_log_date(from_date)
+    to_ts = _parse_admin_log_date(to_date, inclusive_end=True)
+    fetch_limit = max(250, page * _ADMIN_FEEDBACK_PAGE_SIZE * 4)
+
+    workspace_labels = {
+        int(row.get("workspace_id") or 0): str(row.get("workspace_display_name") or f"Workspace #{int(row.get('workspace_id') or 0)}")
+        for row in admin_rows
+        if row.get("workspace_id") is not None
+    }
+
+    events = list_recent_audit_feedback_events(AUDIT_DB_PATH, limit=fetch_limit)
+    normalized_rows: list[dict[str, object]] = []
+    repo_values: set[str] = set()
+    kind_values: set[str] = set()
+    sentiment_values: set[str] = set()
+    workspace_values: set[str] = set()
+
+    for event in events:
+        payload = _parse_feedback_event_payload(event.payload_json)
+        event_kind = str(event.kind or "").strip().lower()
+        event_sentiment = str(payload.get("sentiment") or "").strip().lower()
+        workspace_value = "global"
+        if event.repo_full:
+            repo_values.add(event.repo_full)
+        if event_kind:
+            kind_values.add(event_kind)
+        if event_sentiment:
+            sentiment_values.add(event_sentiment)
+        if event.audit_id:
+            workspace_value = "global"
+        if event_kind == "explicit_feedback":
+            summary = str(payload.get("notes") or "").strip() or f"Customer marked this review as {event_sentiment.replace('_', ' ') or 'feedback'}."
+        elif event_kind in {"reaction", "github_reaction"}:
+            summary = str(payload.get("content") or "reaction").strip() or "reaction"
+        elif event_kind == "pr_outcome":
+            outcome = str(payload.get("outcome") or "unknown").strip().replace("_", " ") or "unknown"
+            lane = str(payload.get("recommendation_lane") or "unknown").strip().replace("_", " ") or "unknown"
+            summary = f"PR outcome recorded as {outcome} against the {lane} recommendation lane."
+        else:
+            summary = str(payload.get("notes") or payload.get("comment") or "").strip() or event_kind.replace("_", " ") or "Feedback recorded."
+        normalized_rows.append(
+            {
+                "id": event.id,
+                "audit_id": event.audit_id,
+                "repo_full": event.repo_full,
+                "pr_number": event.pr_number,
+                "head_sha": event.head_sha,
+                "kind": event_kind,
+                "kind_label": _normalize_feedback_kind_label(event_kind),
+                "sentiment": event_sentiment,
+                "sentiment_label": _normalize_feedback_sentiment_label(event_sentiment) if event_sentiment else "System",
+                "source": str(event.source or "system").strip() or "system",
+                "actor_label": str(event.actor_github_login or event.source or "System").strip() or "System",
+                "workspace_id": None,
+                "workspace_label": "Global",
+                "created_at": event.created_at,
+                "summary": summary,
+                "dashboard_href": _admin_feedback_dashboard_href(event.repo_full, event.pr_number, event.head_sha),
+            }
+        )
+
+    for row in normalized_rows:
+        audit = get_pull_request_audit_by_id(AUDIT_DB_PATH, int(row["audit_id"]))
+        if audit is not None:
+            allocation = get_active_repo_allocation_for_repo(AUDIT_DB_PATH, audit.repo_full)
+            if allocation is not None:
+                workspace_id = allocation.workspace_id
+                row["workspace_id"] = workspace_id
+                row["workspace_label"] = workspace_labels.get(workspace_id, f"Workspace #{workspace_id}")
+                workspace_values.add(str(workspace_id))
+
+    filtered = []
+    for row in normalized_rows:
+        if feedback_kind and row["kind"] != feedback_kind:
+            continue
+        workspace_id = row["workspace_id"]
+        row_workspace = "global" if workspace_id is None else str(workspace_id)
+        if workspace and row_workspace != workspace:
+            continue
+        if repo_full and str(row["repo_full"]) != repo_full:
+            continue
+        if sentiment and str(row["sentiment"]) != sentiment:
+            continue
+        if from_ts is not None and float(row["created_at"] or 0) < from_ts:
+            continue
+        if to_ts is not None and float(row["created_at"] or 0) > to_ts:
+            continue
+        if query:
+            haystack = " ".join(
+                filter(
+                    None,
+                    [
+                        str(row["repo_full"] or ""),
+                        str(row["kind_label"] or ""),
+                        str(row["sentiment_label"] or ""),
+                        str(row["actor_label"] or ""),
+                        str(row["summary"] or ""),
+                        str(row["pr_number"] or ""),
+                        str(row["head_sha"] or ""),
+                    ],
+                )
+            ).lower()
+            if query not in haystack:
+                continue
+        filtered.append(row)
+
+    start = (page - 1) * _ADMIN_FEEDBACK_PAGE_SIZE
+    end = start + _ADMIN_FEEDBACK_PAGE_SIZE
+
+    base_params = {"tab": "feedback"}
+    if feedback_kind:
+        base_params["feedback_kind"] = feedback_kind
+    if workspace:
+        base_params["workspace"] = workspace
+    if repo_full:
+        base_params["repo_full"] = repo_full
+    if sentiment:
+        base_params["sentiment"] = sentiment
+    if from_date:
+        base_params["from_date"] = from_date
+    if to_date:
+        base_params["to_date"] = to_date
+    if query:
+        base_params["query"] = query
+
+    def _page_href(target_page: int) -> str:
+        return f"/app/admin?{urlencode({**base_params, 'page': target_page})}"
+
+    explicit_feedback_count = sum(1 for row in filtered if row["kind"] == "explicit_feedback")
+    helpful_count = sum(1 for row in filtered if row["sentiment"] == "helpful")
+    noisy_count = sum(1 for row in filtered if row["sentiment"] == "noisy")
+    disagree_count = sum(1 for row in filtered if row["sentiment"] == "strongly_disagree")
+    chart_total = helpful_count + noisy_count + disagree_count
+    sentiment_chart = []
+    for sentiment_key, label, count in [
+        ("helpful", "Helpful", helpful_count),
+        ("noisy", "Noisy", noisy_count),
+        ("strongly_disagree", "Strongly disagree", disagree_count),
+    ]:
+        width_percent = 0 if chart_total <= 0 else round((count / chart_total) * 100, 1)
+        sentiment_chart.append(
+            {
+                "key": sentiment_key,
+                "label": label,
+                "count": count,
+                "width_percent": width_percent,
+            }
+        )
+    repo_counts: dict[str, int] = {}
+    for row in filtered:
+        repo_name = str(row["repo_full"] or "").strip()
+        if not repo_name:
+            continue
+        repo_counts[repo_name] = repo_counts.get(repo_name, 0) + 1
+    top_repo_max = max(repo_counts.values(), default=0)
+    repo_chart = [
+        {
+            "repo_full": repo_name,
+            "count": count,
+            "width_percent": 0 if top_repo_max <= 0 else round((count / top_repo_max) * 100, 1),
+        }
+        for repo_name, count in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+
+    return {
+        "rows": filtered[start:end],
+        "filters": {
+            "feedback_kind": feedback_kind,
+            "workspace": workspace,
+            "repo_full": repo_full,
+            "sentiment": sentiment,
+            "from_date": from_date,
+            "to_date": to_date,
+            "query": query_value,
+        },
+        "kind_options": sorted(kind_values),
+        "workspace_options": [
+            {"value": "global", "label": "Global"},
+            *[
+                {"value": str(workspace_id), "label": workspace_labels.get(workspace_id, f"Workspace #{workspace_id}")}
+                for workspace_id in sorted({int(value) for value in workspace_values if value.isdigit()})
+            ],
+        ],
+        "repo_options": sorted(repo_values),
+        "sentiment_options": sorted(sentiment_values),
+        "result_count": len(filtered),
+        "page": page,
+        "has_prev": page > 1,
+        "has_next": end < len(filtered),
+        "prev_href": _page_href(page - 1) if page > 1 else None,
+        "next_href": _page_href(page + 1) if end < len(filtered) else None,
+        "summary": {
+            "explicit_feedback_count": explicit_feedback_count,
+            "helpful_count": helpful_count,
+            "noisy_count": noisy_count,
+            "strongly_disagree_count": disagree_count,
+        },
+        "charts": {
+            "sentiment": sentiment_chart,
+            "repos": repo_chart,
+        },
     }
 
 
@@ -3719,7 +3974,7 @@ async def compliance_export_page_submit(
 async def admin_page(request: Request):
     admin_context = _require_owner_access(request)
     active_tab = (request.query_params.get("tab") or "overview").strip().lower()
-    if active_tab not in {"overview", "logs"}:
+    if active_tab not in {"overview", "logs", "feedback"}:
         active_tab = "overview"
     admin_rows = [asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)]
     return HTMLResponse(
@@ -3732,6 +3987,7 @@ async def admin_page(request: Request):
             csrf_token=admin_context["session"].csrf_secret,
             active_tab=active_tab,
             logs_view=_build_admin_logs_view(request, admin_rows=admin_rows) if active_tab == "logs" else None,
+            feedback_view=_build_admin_feedback_view(request, admin_rows=admin_rows) if active_tab == "feedback" else None,
             status_note=(request.query_params.get("updated") or "").replace("_", " ").strip().capitalize() or None,
         )
     )

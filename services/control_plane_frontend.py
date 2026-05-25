@@ -2324,6 +2324,7 @@ def render_control_plane_admin_page(
     csrf_token: str,
     active_tab: str = "overview",
     logs_view: dict[str, object] | None = None,
+    feedback_view: dict[str, object] | None = None,
     status_note: str | None = None,
 ) -> str:
     template = _load_template("control_plane_admin.html")
@@ -2672,10 +2673,147 @@ def render_control_plane_admin_page(
             </div>
         </section>
     '''
+    feedback_state = feedback_view or {}
+    feedback_filters = feedback_state.get("filters") or {}
+    feedback_charts = feedback_state.get("charts") or {}
+    feedback_rows = _render_table(
+        ["When", "Workspace", "Repository", "PR", "Kind", "Signal", "Actor", "Summary"],
+        [
+            [
+                html_escape(_format_timestamp(row.get("created_at") if isinstance(row.get("created_at"), (int, float)) else None)),
+                html_escape(str(row.get("workspace_label") or "Global")),
+                (
+                    f'<a class="admin-feedback-link" href="{html_escape(str(row.get("dashboard_href") or ""))}">{html_escape(str(row.get("repo_full") or ""))}</a>'
+                    if row.get("dashboard_href") and row.get("repo_full")
+                    else html_escape(str(row.get("repo_full") or ""))
+                ),
+                (
+                    f'<a class="admin-feedback-link" href="{html_escape(str(row.get("dashboard_href") or ""))}">{html_escape(f"#{int(row.get("pr_number") or 0)}")}</a>'
+                    if row.get("dashboard_href") and int(row.get("pr_number") or 0) > 0
+                    else html_escape(f"#{int(row.get('pr_number') or 0)}" if int(row.get("pr_number") or 0) > 0 else "-")
+                ),
+                html_escape(str(row.get("kind_label") or "")),
+                html_escape(str(row.get("sentiment_label") or "System")),
+                html_escape(str(row.get("actor_label") or "System")),
+                html_escape(str(row.get("summary") or "")),
+            ]
+            for row in feedback_state.get("rows") or []
+        ],
+    )
+    feedback_sentiment_chart_markup = "".join(
+        f'''
+            <div class="admin-chart-row">
+                <div class="admin-chart-row-copy">
+                    <span class="admin-chart-label">{html_escape(str(item.get("label") or ""))}</span>
+                    <span class="admin-chart-value">{int(item.get("count") or 0)}</span>
+                </div>
+                <div class="admin-chart-track" aria-hidden="true">
+                    <span class="admin-chart-bar admin-chart-bar-{html_escape(str(item.get("key") or "neutral"))}" style="width: {float(item.get("width_percent") or 0):.1f}%;"></span>
+                </div>
+            </div>
+        '''
+        for item in feedback_charts.get("sentiment") or []
+    ) or '<div class="page-note">No explicit sentiment feedback in the current filter.</div>'
+    feedback_repo_chart_markup = "".join(
+        f'''
+            <div class="admin-chart-row">
+                <div class="admin-chart-row-copy">
+                    <span class="admin-chart-label">{html_escape(str(item.get("repo_full") or ""))}</span>
+                    <span class="admin-chart-value">{int(item.get("count") or 0)}</span>
+                </div>
+                <div class="admin-chart-track" aria-hidden="true">
+                    <span class="admin-chart-bar admin-chart-bar-neutral" style="width: {float(item.get("width_percent") or 0):.1f}%;"></span>
+                </div>
+            </div>
+        '''
+        for item in feedback_charts.get("repos") or []
+    ) or '<div class="page-note">No repository feedback counts in the current filter.</div>'
+    feedback_kind_options_markup = "".join(
+        f'<option value="{html_escape(option)}" {"selected" if option == feedback_filters.get("feedback_kind") else ""}>{html_escape(option.replace("_", " ").title())}</option>'
+        for option in feedback_state.get("kind_options") or []
+    )
+    feedback_workspace_options_markup = "".join(
+        f'<option value="{html_escape(str(option.get("value") or ""))}" {"selected" if str(option.get("value") or "") == str(feedback_filters.get("workspace") or "") else ""}>{html_escape(str(option.get("label") or ""))}</option>'
+        for option in feedback_state.get("workspace_options") or []
+    )
+    feedback_repo_options_markup = "".join(
+        f'<option value="{html_escape(option)}" {"selected" if option == feedback_filters.get("repo_full") else ""}>{html_escape(option)}</option>'
+        for option in feedback_state.get("repo_options") or []
+    )
+    feedback_sentiment_options_markup = "".join(
+        f'<option value="{html_escape(option)}" {"selected" if option == feedback_filters.get("sentiment") else ""}>{html_escape(option.replace("_", " ").title())}</option>'
+        for option in feedback_state.get("sentiment_options") or []
+    )
+    feedback_summary = feedback_state.get("summary") or {}
+    feedback_content = f'''
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Customer signal</p>
+                <h2>Feedback inbox</h2>
+            </div>
+            <p class="page-note">This inbox collects explicit reviewer sentiment, PR outcome feedback, and GitHub reaction-derived signals in one owner-only view.</p>
+            <div class="admin-log-summary">
+                <span>Explicit feedback: {int(feedback_summary.get("explicit_feedback_count") or 0)}</span>
+                <span>Helpful: {int(feedback_summary.get("helpful_count") or 0)}</span>
+                <span>Noisy: {int(feedback_summary.get("noisy_count") or 0)}</span>
+                <span>Strongly disagree: {int(feedback_summary.get("strongly_disagree_count") or 0)}</span>
+            </div>
+            <div class="admin-feedback-chart-grid">
+                <section class="admin-feedback-chart-card">
+                    <div class="section-heading">
+                        <p class="eyebrow">Distribution</p>
+                        <h3>Sentiment mix</h3>
+                    </div>
+                    {feedback_sentiment_chart_markup}
+                </section>
+                <section class="admin-feedback-chart-card">
+                    <div class="section-heading">
+                        <p class="eyebrow">Concentration</p>
+                        <h3>Most active repositories</h3>
+                    </div>
+                    {feedback_repo_chart_markup}
+                </section>
+            </div>
+            <form method="get" action="/admin" class="admin-log-filters">
+                <input type="hidden" name="tab" value="feedback" />
+                <select class="field-input" name="feedback_kind">
+                    <option value="">All feedback kinds</option>
+                    {feedback_kind_options_markup}
+                </select>
+                <select class="field-input" name="workspace">
+                    <option value="">All workspaces</option>
+                    {feedback_workspace_options_markup}
+                </select>
+                <select class="field-input" name="repo_full">
+                    <option value="">All repositories</option>
+                    {feedback_repo_options_markup}
+                </select>
+                <select class="field-input" name="sentiment">
+                    <option value="">All sentiment</option>
+                    {feedback_sentiment_options_markup}
+                </select>
+                <input class="field-input" type="date" name="from_date" value="{html_escape(str(feedback_filters.get("from_date") or ""))}" />
+                <input class="field-input" type="date" name="to_date" value="{html_escape(str(feedback_filters.get("to_date") or ""))}" />
+                <input class="field-input admin-log-search" type="search" name="query" value="{html_escape(str(feedback_filters.get("query") or ""))}" placeholder="Search repo, PR, actor, or note body" />
+                <button type="submit" class="button">Apply filters</button>
+                <a class="subtle-link" href="/admin?tab=feedback">Reset</a>
+            </form>
+            <div class="admin-log-summary">
+                <span>{int(feedback_state.get("result_count") or 0)} matching feedback rows</span>
+                <span>Page {int(feedback_state.get("page") or 1)}</span>
+            </div>
+            {feedback_rows}
+            <div class="admin-log-pagination">
+                {f'<a class="subtle-link" href="{html_escape(str(feedback_state.get("prev_href") or ""))}">Previous</a>' if feedback_state.get("has_prev") and feedback_state.get("prev_href") else '<span class="page-note">Previous</span>'}
+                {f'<a class="subtle-link" href="{html_escape(str(feedback_state.get("next_href") or ""))}">Next</a>' if feedback_state.get("has_next") and feedback_state.get("next_href") else '<span class="page-note">Next</span>'}
+            </div>
+        </section>
+    '''
     tabs_markup = f'''
         <nav class="admin-tabs" aria-label="Admin navigation">
             <a href="/admin?tab=overview" class="admin-tab-link {"admin-tab-link-active" if active_tab == "overview" else ""}">Overview</a>
             <a href="/admin?tab=logs" class="admin-tab-link {"admin-tab-link-active" if active_tab == "logs" else ""}">Logs</a>
+            <a href="/admin?tab=feedback" class="admin-tab-link {"admin-tab-link-active" if active_tab == "feedback" else ""}">Feedback</a>
         </nav>
     '''
 
@@ -2684,7 +2822,7 @@ def render_control_plane_admin_page(
         .replace("{{QUICK_LINKS}}", _render_quick_links(profile_url="/profile", admin_url="/admin"))
         .replace("{{ADMIN_TABS}}", tabs_markup)
         .replace("{{STATUS_NOTE}}", status_markup)
-        .replace("{{ADMIN_CONTENT}}", logs_content if active_tab == "logs" else overview_content)
+        .replace("{{ADMIN_CONTENT}}", feedback_content if active_tab == "feedback" else logs_content if active_tab == "logs" else overview_content)
     )
 
 

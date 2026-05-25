@@ -3267,6 +3267,301 @@ def test_admin_logs_tab_applies_query_filters(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_feedback_tab_renders_explicit_feedback_notes(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-feedback.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.audit_jobs import create_audit_job
+    from services.audit_records import record_audit_feedback_event, record_audit_result
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity, upsert_subscription, upsert_entitlement, upsert_github_installation, replace_repo_connections, allocate_repo_to_workspace
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="977",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=admin_user.id,
+        display_name="Feedback Workspace",
+        slug="feedback-workspace",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:feedback",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-feedback",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=321,
+        account_id="321",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=321,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=321,
+        repo_github_id="1",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=admin_user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-feedback-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-feedback",
+        expires_at=time.time() + 3600,
+    )
+    job = create_audit_job(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        pr_number=42,
+        installation_id=321,
+        head_sha="feedbacksha",
+        diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+hello\n",
+    )
+    audit = record_audit_result(
+        main.AUDIT_DB_PATH,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=42,
+        installation_id=321,
+        head_sha="feedbacksha",
+        deterministic_analysis=main.analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="formal_review",
+        comment_body="Vipari review body",
+        comment_mode="review_request_changes",
+        semantic_review_completed=True,
+    )
+    record_audit_feedback_event(
+        main.AUDIT_DB_PATH,
+        audit_id=audit.id,
+        kind="explicit_feedback",
+        source="feedback_link",
+        payload_json=json.dumps({"sentiment": "helpful", "notes": "This flag was right and the note was actionable."}),
+        actor_github_login="repo-owner",
+    )
+
+    response = client.get("/admin?tab=feedback", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Feedback inbox" in response.text
+    assert "Explicit feedback: 1" in response.text
+    assert "Helpful: 1" in response.text
+    assert "Sentiment mix" in response.text
+    assert "Most active repositories" in response.text
+    assert "Feedback Workspace" in response.text
+    assert "doria90/dummyAI" in response.text
+    assert "This flag was right and the note was actionable." in response.text
+    assert "repo-owner" in response.text
+    assert "/dashboard/doria90%2FdummyAI?tab=pr-reviews&amp;pr=42&amp;head_sha=feedbacksha" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_admin_feedback_tab_applies_query_filters(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-feedback-filter.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.audit_jobs import create_audit_job
+    from services.audit_records import record_audit_feedback_event, record_audit_result
+    from services.control_plane_records import create_user_session, create_workspace, upsert_github_identity, upsert_subscription, upsert_entitlement, upsert_github_installation, replace_repo_connections, allocate_repo_to_workspace
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="978",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=admin_user.id,
+        display_name="Feedback Filter Workspace",
+        slug="feedback-filter-workspace",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:feedback-filter",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-feedback-filter",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=322,
+        account_id="322",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=322,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=322,
+        repo_github_id="1",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=admin_user.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-feedback-filter-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-feedback-filter",
+        expires_at=time.time() + 3600,
+    )
+    for pr_number, sentiment, notes in [
+        (42, "helpful", "This is the visible note"),
+        (43, "noisy", "This should stay hidden"),
+    ]:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=pr_number,
+            installation_id=322,
+            head_sha=f"feedback{pr_number}",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+hello\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=pr_number,
+            installation_id=322,
+            head_sha=f"feedback{pr_number}",
+            deterministic_analysis=main.analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+        record_audit_feedback_event(
+            main.AUDIT_DB_PATH,
+            audit_id=audit.id,
+            kind="explicit_feedback",
+            source="feedback_link",
+            payload_json=json.dumps({"sentiment": sentiment, "notes": notes}),
+            actor_github_login="repo-owner",
+        )
+
+    response = client.get(
+        "/admin?tab=feedback&query=visible+note&sentiment=helpful",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert "This is the visible note" in response.text
+    assert "This should stay hidden" not in response.text
+    assert "1 matching feedback rows" in response.text
+    assert "Helpful" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_admin_logs_tab_summarizes_mcp_denial_activity(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login

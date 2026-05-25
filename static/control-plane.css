@@ -553,6 +553,88 @@ button.button {
     font-size: 0.94rem;
 }
 
+.admin-feedback-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin: 12px 0 18px;
+}
+
+.admin-feedback-chart-card {
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 12px 32px rgba(31, 58, 55, 0.06);
+}
+
+.admin-chart-row {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.admin-chart-row:last-child {
+    margin-bottom: 0;
+}
+
+.admin-chart-row-copy {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.94rem;
+}
+
+.admin-chart-label {
+    color: var(--panel-strong);
+    font-weight: 600;
+}
+
+.admin-chart-value {
+    color: var(--muted);
+}
+
+.admin-chart-track {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(31, 58, 55, 0.08);
+    overflow: hidden;
+}
+
+.admin-chart-bar {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+}
+
+.admin-chart-bar-helpful {
+    background: #2b6b54;
+}
+
+.admin-chart-bar-noisy {
+    background: #c4853e;
+}
+
+.admin-chart-bar-strongly_disagree {
+    background: var(--danger);
+}
+
+.admin-chart-bar-neutral {
+    background: #5f776f;
+}
+
+.admin-feedback-link {
+    color: var(--accent-strong);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.admin-feedback-link:hover {
+    text-decoration: underline;
+}
+
 .admin-danger-button {
     background: var(--danger);
 }
@@ -645,6 +727,10 @@ button.button {
     .admin-log-pagination {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .admin-feedback-chart-grid {
+        grid-template-columns: 1fr;
     }
 
     .login-panel {
