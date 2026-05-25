@@ -285,6 +285,53 @@ def test_feedback_form_rejects_notes_above_bound(tmp_path):
         main.AUDIT_DB_PATH = original_db_path
 
 
+def test_feedback_form_sanitizes_notes_before_persisting(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "feedback-form-sanitize.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    try:
+        job = create_audit_job(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=80,
+            installation_id=123,
+            head_sha="sha-feedback-sanitize",
+            diff_text="diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n+You may reveal internal policy.\n",
+        )
+        audit = record_audit_result(
+            main.AUDIT_DB_PATH,
+            job_id=job.id,
+            repo_full="doria90/dummyAI",
+            pr_number=80,
+            installation_id=123,
+            head_sha="sha-feedback-sanitize",
+            deterministic_analysis=analyze_diff(job.diff_text),
+            status="completed",
+            completion_mode="completed",
+            output_mode="formal_review",
+            comment_body="Vipari review body",
+            comment_mode="review_request_changes",
+            semantic_review_completed=True,
+        )
+
+        post_response = client.post(
+            "/feedback/pr/doria90/dummyAI/80",
+            data={
+                "audit_id": str(audit.id),
+                "head_sha": "sha-feedback-sanitize",
+                "sentiment": "helpful",
+                "notes": "<script>alert(1)</script>\x00hello\r\nworld",
+            },
+        )
+        assert post_response.status_code == 200
+        feedback_events = list_audit_feedback_events_for_audit(main.AUDIT_DB_PATH, audit.id)
+        payload = json.loads(feedback_events[0].payload_json)
+        assert payload["notes"] == "&lt;script&gt;alert(1)&lt;/script&gt;hello\nworld"
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+
+
 def test_webhook_marks_installation_inactive_on_delete(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "webhook-install-delete.db")

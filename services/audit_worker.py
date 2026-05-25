@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape as html_escape
 import logging
 import re
 import threading
@@ -398,7 +399,7 @@ def _render_pr_comment_review(review: PrCommentReview) -> str:
         lines.extend(
             [
                 "",
-                f"[Open this review in Vipari dashboard]({review.dashboard_deep_link})",
+                f'<a href="{html_escape(review.dashboard_deep_link)}" target="_blank" rel="noopener noreferrer">Open this review in Vipari dashboard</a>',
             ]
         )
     if review.feedback_link:

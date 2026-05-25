@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
@@ -247,6 +248,7 @@ SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active
 logger = logging.getLogger(__name__)
 
 _SLOW_DASHBOARD_API_WARN_MS = 2000.0
+_FEEDBACK_NOTES_MAX_LENGTH = 2000
 
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL) if AI_API_KEY else None
 worker: AuditWorker | None = None
@@ -2212,6 +2214,230 @@ def _attach_server_timing(response, metrics: list[tuple[str, float]]):
             f"{metric_name};dur={max(duration_ms, 0.0):.2f}" for metric_name, duration_ms in metrics
         )
     return response
+
+
+def _sanitize_feedback_notes(notes: str | None) -> str:
+    normalized = unicodedata.normalize("NFKC", notes or "")
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned_characters: list[str] = []
+    for character in normalized:
+        if character in {"\n", "\t"}:
+            cleaned_characters.append(character)
+            continue
+        if unicodedata.category(character).startswith("C"):
+            continue
+        cleaned_characters.append(character)
+    sanitized = "".join(cleaned_characters).strip()
+    if len(sanitized) > _FEEDBACK_NOTES_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Feedback notes must be {_FEEDBACK_NOTES_MAX_LENGTH} characters or fewer.")
+    return html.escape(sanitized, quote=False)
+
+
+def _render_feedback_page(
+    *,
+    owner: str,
+    repo: str,
+    resolved_audit,
+    notes_value: str = "",
+    success_message: str | None = None,
+) -> HTMLResponse:
+    escaped_repo_full = html.escape(resolved_audit.repo_full)
+    escaped_head_sha = html.escape(resolved_audit.head_sha)
+    escaped_notes_value = html.escape(notes_value)
+    success_markup = ""
+    if success_message:
+        success_markup = (
+            '<div class="feedback-status-card" role="status" aria-live="polite">'
+            f"<div class=\"secondary-panel-title\">Saved</div><p class=\"control-page-copy\">{html.escape(success_message)}</p></div>"
+        )
+    return HTMLResponse(
+        f"""
+        <!DOCTYPE html>
+        <html lang=\"en\">
+        <head>
+            <meta charset=\"utf-8\">
+            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+            <title>Vipari Feedback</title>
+            <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
+            <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
+            <link href=\"https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">
+            <link rel=\"stylesheet\" href=\"/static/dashboard.css\">
+            <style>
+                body.feedback-page {{
+                    font-family: 'Manrope', var(--font-body);
+                }}
+
+                .feedback-shell {{
+                    max-width: 980px;
+                    margin: 0 auto;
+                    padding: 32px 20px 56px;
+                }}
+
+                .feedback-grid {{
+                    display: grid;
+                    gap: 18px;
+                    grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+                }}
+
+                .feedback-status-card {{
+                    padding: 18px 20px;
+                    border: 1px solid var(--color-primary-outline);
+                    border-radius: 18px;
+                    background: linear-gradient(180deg, var(--color-primary-soft-strong), var(--color-surface));
+                    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+                }}
+
+                .feedback-context-list {{
+                    display: grid;
+                    gap: 12px;
+                    margin: 0;
+                    padding: 0;
+                    list-style: none;
+                }}
+
+                .feedback-context-list li {{
+                    padding: 14px 16px;
+                    border: 1px solid var(--color-border);
+                    border-radius: 16px;
+                    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+                }}
+
+                .feedback-context-label {{
+                    display: block;
+                    margin-bottom: 6px;
+                    color: var(--color-text-faint);
+                    font-size: var(--text-sm);
+                    font-weight: 700;
+                    letter-spacing: 0.12em;
+                    text-transform: uppercase;
+                }}
+
+                .feedback-textarea {{
+                    min-height: 168px;
+                    resize: vertical;
+                }}
+
+                .feedback-actions {{
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 12px;
+                    align-items: center;
+                }}
+
+                .feedback-button-secondary {{
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 999px;
+                    padding: 12px 18px;
+                    border: 1px solid var(--color-border-strong);
+                    background: var(--color-surface-2);
+                    color: var(--color-text);
+                    font-weight: 700;
+                    text-decoration: none;
+                }}
+
+                .feedback-button-secondary:hover {{
+                    border-color: var(--color-primary-outline);
+                    color: var(--color-primary);
+                }}
+
+                .feedback-footnote {{
+                    margin: 0;
+                    color: var(--color-text-faint);
+                    font-size: var(--text-md);
+                    line-height: 1.6;
+                }}
+
+                @media (max-width: 860px) {{
+                    .feedback-grid {{
+                        grid-template-columns: 1fr;
+                    }}
+                }}
+            </style>
+            <script defer src=\"/static/theme-toggle.js\"></script>
+        </head>
+        <body class=\"control-page feedback-page\" data-theme=\"dark\">
+            <main class=\"feedback-shell\">
+                <section class=\"control-page-tab-intro\">
+                    <div class=\"control-page-tab-intro-copy\">
+                        <p class=\"control-page-eyebrow\">Vipari review feedback</p>
+                        <h1 class=\"control-page-tab-intro-title\">Tell us whether this review was useful.</h1>
+                        <p class=\"control-page-tab-intro-description\">Your feedback helps us tune review quality, reduce noise, and prioritize the right governance signals for future PR comments.</p>
+                    </div>
+                    <div class=\"control-page-tab-intro-note\">
+                        <div class=\"secondary-panel-title\">Review target</div>
+                        <p class=\"control-page-copy\">PR #{resolved_audit.pr_number} for {escaped_repo_full}</p>
+                    </div>
+                </section>
+                <div class=\"control-page-section-spacer control-page-section-spacer-lg\"></div>
+                {success_markup}
+                <div class=\"feedback-grid\">
+                    <section class=\"control-page-section\">
+                        <div class=\"secondary-panel-title\">Feedback form</div>
+                        <h2 class=\"control-page-section-title\">Share what worked and what did not.</h2>
+                        <p class=\"control-page-copy\">We normalize and sanitize submitted notes before they are stored or processed so this channel stays safe for internal analysis workflows.</p>
+                        <form method=\"post\" action=\"/feedback/pr/{html.escape(owner)}/{html.escape(repo)}/{resolved_audit.pr_number}\" class=\"control-page-form\" novalidate>
+                            <input type=\"hidden\" name=\"audit_id\" value=\"{resolved_audit.id}\">
+                            <input type=\"hidden\" name=\"head_sha\" value=\"{escaped_head_sha}\">
+                            <fieldset class=\"control-page-choice-group\" aria-labelledby=\"feedback-sentiment-title\">
+                                <legend class=\"control-page-label\" id=\"feedback-sentiment-title\">How did this review feel?</legend>
+                                <div class=\"control-page-choice-grid\">
+                                    <label class=\"control-page-choice\">
+                                        <input type=\"radio\" name=\"sentiment\" value=\"helpful\" checked>
+                                        <span class=\"control-page-choice-card\">
+                                            <span class=\"control-page-choice-title\">Helpful</span>
+                                            <span class=\"control-page-choice-copy\">The review surfaced the right signals and saved time.</span>
+                                        </span>
+                                    </label>
+                                    <label class=\"control-page-choice\">
+                                        <input type=\"radio\" name=\"sentiment\" value=\"noisy\">
+                                        <span class=\"control-page-choice-card\">
+                                            <span class=\"control-page-choice-title\">Too noisy</span>
+                                            <span class=\"control-page-choice-copy\">The review overreached, lacked precision, or created extra triage work.</span>
+                                        </span>
+                                    </label>
+                                    <label class=\"control-page-choice\">
+                                        <input type=\"radio\" name=\"sentiment\" value=\"strongly_disagree\">
+                                        <span class=\"control-page-choice-card\">
+                                            <span class=\"control-page-choice-title\">Strongly disagree</span>
+                                            <span class=\"control-page-choice-copy\">The conclusion or recommendation was materially wrong for this PR.</span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </fieldset>
+                            <label class=\"control-page-label\" for=\"notes\">Notes</label>
+                            <textarea class=\"control-page-input feedback-textarea\" id=\"notes\" name=\"notes\" maxlength=\"{_FEEDBACK_NOTES_MAX_LENGTH}\" placeholder=\"Optional context. For example: which claim was wrong, what evidence was missing, or what would make this more useful next time?\">{escaped_notes_value}</textarea>
+                            <p class=\"feedback-footnote\">Maximum {_FEEDBACK_NOTES_MAX_LENGTH} characters. We strip control characters, normalize Unicode, and escape markup before storing this text.</p>
+                            <div class=\"feedback-actions\">
+                                <button type=\"submit\" class=\"control-page-button\">Send feedback</button>
+                                <a href=\"/dashboard/{quote(resolved_audit.repo_full, safe='')}?tab=pr-reviews&pr={resolved_audit.pr_number}&head_sha={quote(resolved_audit.head_sha, safe='')}\" class=\"feedback-button-secondary\">Return to dashboard</a>
+                            </div>
+                        </form>
+                    </section>
+                    <aside class=\"control-page-section\">
+                        <div class=\"secondary-panel-title\">Review context</div>
+                        <h2 class=\"control-page-section-title\">What we attach to this feedback</h2>
+                        <ul class=\"feedback-context-list\">
+                            <li><span class=\"feedback-context-label\">Repository</span><strong>{escaped_repo_full}</strong></li>
+                            <li><span class=\"feedback-context-label\">Pull request</span><strong>#{resolved_audit.pr_number}</strong></li>
+                            <li><span class=\"feedback-context-label\">Head SHA</span><strong>{escaped_head_sha}</strong></li>
+                            <li><span class=\"feedback-context-label\">Audit record</span><strong>{resolved_audit.id}</strong></li>
+                        </ul>
+                    </aside>
+                </div>
+            </main>
+            <div class=\"theme-toggle-shell\">
+                <button type=\"button\" class=\"theme-toggle\" data-theme-toggle aria-label=\"Switch to light mode\" aria-pressed=\"true\">
+                    <span class=\"theme-toggle-icon\" aria-hidden=\"true\">☀</span>
+                    <span class=\"theme-toggle-label\" data-theme-toggle-label>Dark mode</span>
+                    <span class=\"theme-toggle-icon\" aria-hidden=\"true\">☾</span>
+                </button>
+            </div>
+        </body>
+        </html>
+        """
+    )
 
 
 def _log_slow_dashboard_api(route_name: str, metrics: list[tuple[str, float]], **context: object) -> None:
@@ -5212,6 +5438,10 @@ async def pr_feedback_form(owner: str, repo: str, pr_number: int, head_sha: str 
 
     escaped_repo_full = html.escape(resolved_audit.repo_full)
     escaped_head_sha = html.escape(resolved_audit.head_sha)
+    return _render_feedback_page(owner=owner, repo=repo, resolved_audit=resolved_audit)
+
+    escaped_repo_full = html.escape(resolved_audit.repo_full)
+    escaped_head_sha = html.escape(resolved_audit.head_sha)
     return HTMLResponse(
         f"""
         <!DOCTYPE html>
@@ -5248,11 +5478,9 @@ async def pr_feedback_submit(
     notes: str | None = Form(default=None),
     head_sha: str | None = Form(default=None),
 ):
-    bounded_notes = (notes or "").strip()
     if sentiment not in {"helpful", "noisy", "strongly_disagree"}:
         raise HTTPException(status_code=400, detail="Invalid feedback sentiment.")
-    if len(bounded_notes) > 2000:
-        raise HTTPException(status_code=400, detail="Feedback notes must be 2000 characters or fewer.")
+    bounded_notes = _sanitize_feedback_notes(notes)
 
     audit = _resolve_feedback_target_audit(owner, repo, pr_number, audit_id=audit_id, head_sha=head_sha)
     if audit is None:
@@ -5272,7 +5500,12 @@ async def pr_feedback_submit(
             }
         ),
     )
-    return HTMLResponse("<html><body><p>Thanks. Your feedback was recorded.</p></body></html>")
+    return _render_feedback_page(
+        owner=owner,
+        repo=repo,
+        resolved_audit=audit,
+        success_message="Thanks. Your feedback was recorded.",
+    )
 
 
 def _resolve_feedback_target_audit(

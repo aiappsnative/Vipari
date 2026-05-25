@@ -2545,6 +2545,7 @@ index 1..2
     try:
         expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?tab=pr-reviews&pr=42&head_sha=abc123456"
         expected_feedback_link = f"{settings.app_base_url.rstrip('/')}/feedback/pr/doria90/dummyAI/42?head_sha=abc123456"
+        expected_html_link = expected_link.replace("&", "&amp;")
 
         comment = build_fallback_comment(
             analysis,
@@ -2564,7 +2565,7 @@ index 1..2
         assert "Add AI platform review before merge." in comment
         assert "RateLimitError" not in comment
         assert "head `abc1234`" in comment
-        assert f"[Open this review in Vipari dashboard]({expected_link})" in comment
+        assert f'<a href="{expected_html_link}" target="_blank" rel="noopener noreferrer">Open this review in Vipari dashboard</a>' in comment
         assert f"[Send feedback on this Vipari review]({expected_feedback_link})" in comment
     finally:
         settings.app_base_url = original_app_base_url
@@ -2604,6 +2605,7 @@ index 1..2
 
     try:
         expected_link = f"{settings.app_base_url.rstrip('/')}/dashboard/doria90%2FdummyAI?tab=pr-reviews&pr=42&head_sha=abc123456"
+        expected_html_link = expected_link.replace("&", "&amp;")
 
         comment = build_llm_comment(
             "diff --git a/prompts/policy.md b/prompts/policy.md\nindex 1..2\n",
@@ -2624,7 +2626,7 @@ index 1..2
         assert "### Evidence" in comment
         assert "### Recommended next step" in comment
         assert "Add AI platform review before merge." in comment
-        assert f"[Open this review in Vipari dashboard]({expected_link})" in comment
+        assert f'<a href="{expected_html_link}" target="_blank" rel="noopener noreferrer">Open this review in Vipari dashboard</a>' in comment
     finally:
         settings.app_base_url = original_app_base_url
 
