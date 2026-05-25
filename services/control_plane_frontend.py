@@ -2688,7 +2688,7 @@ def render_control_plane_admin_page(
                     else html_escape(str(row.get("repo_full") or ""))
                 ),
                 (
-                    f'<a class="admin-feedback-link" href="{html_escape(str(row.get("dashboard_href") or ""))}">{html_escape(f"#{int(row.get("pr_number") or 0)}")}</a>'
+                    f'<a class="admin-feedback-link" href="{html_escape(str(row.get("dashboard_href") or ""))}">{html_escape("#{}".format(int(row.get("pr_number") or 0)))}</a>'
                     if row.get("dashboard_href") and int(row.get("pr_number") or 0) > 0
                     else html_escape(f"#{int(row.get('pr_number') or 0)}" if int(row.get("pr_number") or 0) > 0 else "-")
                 ),
