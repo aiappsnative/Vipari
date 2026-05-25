@@ -162,8 +162,9 @@ def test_get_installation_token_reuses_cached_token_until_expiry(monkeypatch):
         def read(self):
             return b'{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}'
 
-    def fake_urlopen(request: Request):
+    def fake_urlopen(request: Request, timeout=None):
         requests.append(request.full_url)
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         return DummyResponse()
 
     monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
@@ -198,8 +199,9 @@ def test_get_installation_token_refreshes_after_cached_expiry(monkeypatch):
         def read(self):
             return self._body
 
-    def fake_urlopen(request: Request):
+    def fake_urlopen(request: Request, timeout=None):
         requests.append(request.full_url)
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         return DummyResponse(next(payloads))
 
     monkeypatch.setattr(github_integration.time, "time", lambda: next(time_values))
@@ -229,10 +231,11 @@ def test_fetch_compare_diff_uses_compare_endpoint(monkeypatch):
         def read(self):
             return b"diff --git a/prompts/test.txt b/prompts/test.txt\n"
 
-    def fake_urlopen(request: Request):
+    def fake_urlopen(request: Request, timeout=None):
         captured["url"] = request.full_url
         captured["authorization"] = request.get_header("Authorization")
         captured["accept"] = request.get_header("Accept")
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         return DummyResponse()
 
     monkeypatch.setattr(github_integration.urllib.request, "urlopen", fake_urlopen)
@@ -913,9 +916,10 @@ def test_post_check_run_posts_completed_check_run(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request):
+    def fake_urlopen(request, timeout=None):
         if request.get_method() == "GET":
             return FakeResponse(io.BytesIO(json.dumps({"check_runs": []}).encode("utf-8")))
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         captured["url"] = request.full_url
         captured["authorization"] = request.get_header("Authorization")
         captured["accept"] = request.get_header("Accept")
@@ -972,9 +976,10 @@ def test_post_check_run_posts_in_progress_check_run_without_conclusion(monkeypat
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request):
+    def fake_urlopen(request, timeout=None):
         if request.get_method() == "GET":
             return FakeResponse(io.BytesIO(json.dumps({"check_runs": []}).encode("utf-8")))
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         captured["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse()
 
@@ -1019,8 +1024,9 @@ def test_post_check_run_reuses_existing_in_progress_check_run(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request):
+    def fake_urlopen(request, timeout=None):
         requests.append((request.get_method(), request.full_url, request.data))
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         if request.get_method() == "GET":
             payload = {
                 "check_runs": [
@@ -1077,8 +1083,9 @@ def test_post_check_run_completes_existing_in_progress_check_run(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request):
+    def fake_urlopen(request, timeout=None):
         requests.append((request.get_method(), request.full_url, request.data))
+        assert timeout == github_integration.GITHUB_HTTP_TIMEOUT_SECONDS
         if request.get_method() == "GET":
             payload = {
                 "check_runs": [

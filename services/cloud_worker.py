@@ -137,6 +137,27 @@ async def _update_queue_depth(queue: QueueBackend) -> None:
         QUEUE_DEPTH.set(await queue.depth())  # type: ignore[attr-defined]
 
 
+async def _run_resilient_poll_loop(
+    *,
+    logger,
+    loop_name: str,
+    idle_sleep_seconds: float,
+    poll_once,
+) -> None:
+    while True:
+        try:
+            processed = await poll_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Worker background loop failed", extra={"loop": loop_name})
+            await asyncio.sleep(idle_sleep_seconds)
+            continue
+        if processed:
+            continue
+        await asyncio.sleep(idle_sleep_seconds)
+
+
 def _control_plane_active(db_path: str) -> bool:
     try:
         return count_workspaces(db_path) > 0
@@ -785,9 +806,17 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
         start_http_server(settings.worker_metrics_port)
 
     async def queue_depth_poller() -> None:
-        while True:
+        async def poll_once() -> bool:
             await _update_queue_depth(queue)
-            await asyncio.sleep(30)
+
+            return False
+
+        await _run_resilient_poll_loop(
+            logger=logger,
+            loop_name="queue_depth_poller",
+            idle_sleep_seconds=30,
+            poll_once=poll_once,
+        )
 
     async def worker_loop() -> None:
         while True:
@@ -817,16 +846,29 @@ async def run_worker(queue_backend: QueueBackend | None = None) -> None:
             max_retry_window_seconds=settings.audit_max_retry_window_seconds,
             poll_interval_seconds=settings.audit_worker_poll_seconds,
         )
-        while True:
-            processed = await asyncio.to_thread(process_next_branch_scan_job_once, branch_scan_settings)
-            if processed:
-                continue
-            await asyncio.sleep(settings.audit_worker_poll_seconds)
+
+        async def poll_once() -> bool:
+            return await asyncio.to_thread(process_next_branch_scan_job_once, branch_scan_settings)
+
+        await _run_resilient_poll_loop(
+            logger=logger,
+            loop_name="branch_scan_loop",
+            idle_sleep_seconds=settings.audit_worker_poll_seconds,
+            poll_once=poll_once,
+        )
 
     async def pr_lifecycle_reconcile_loop() -> None:
-        while True:
+        async def poll_once() -> bool:
             await _reconcile_pull_request_lifecycle(settings, logger)
-            await asyncio.sleep(PULL_REQUEST_LIFECYCLE_RECONCILE_SECONDS)
+
+            return False
+
+        await _run_resilient_poll_loop(
+            logger=logger,
+            loop_name="pr_lifecycle_reconcile_loop",
+            idle_sleep_seconds=PULL_REQUEST_LIFECYCLE_RECONCILE_SECONDS,
+            poll_once=poll_once,
+        )
 
     workers = [asyncio.create_task(worker_loop()) for _ in range(max(1, settings.worker_concurrency))]
     workers.append(asyncio.create_task(queue_depth_poller()))

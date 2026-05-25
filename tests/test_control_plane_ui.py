@@ -7601,15 +7601,30 @@ def test_dashboard_api_endpoints_emit_server_timing_headers():
         },
     ), patch("main.list_repo_dashboard_index", return_value=[]), patch(
         "main.build_dashboard_overview_view", return_value=overview_view
+    ), patch("main.build_workspace_escalation_queue", return_value={
+        "workspace_posture": "healthy",
+        "items": [],
+        "escalation_count": 0,
+        "watch_count": 0,
+    }), patch(
+        "main.build_dashboard_escalation_queue_payload",
+        return_value={
+            "workspace_posture": "healthy",
+            "items": [],
+            "escalation_count": 0,
+            "watch_count": 0,
+        },
     ), patch("main._require_repo_dashboard_read_access", return_value={"workspace": object()}), patch(
         "main.build_repo_dashboard_view", return_value=repo_view
     ):
         repos_response = client.get("/api/repos")
         overview_response = client.get("/api/dashboard/overview")
+        escalation_response = client.get("/api/dashboard/escalation-queue")
         repo_response = client.get("/api/repos/doria90/dummyAI/dashboard")
 
     assert repos_response.status_code == 200
     assert overview_response.status_code == 200
+    assert escalation_response.status_code == 200
     assert repo_response.status_code == 200
     assert "access;dur=" in repos_response.headers["server-timing"]
     assert "visibility;dur=" in repos_response.headers["server-timing"]
@@ -7620,6 +7635,11 @@ def test_dashboard_api_endpoints_emit_server_timing_headers():
     assert "build;dur=" in overview_response.headers["server-timing"]
     assert "json;dur=" in overview_response.headers["server-timing"]
     assert "total;dur=" in overview_response.headers["server-timing"]
+    assert "access;dur=" in escalation_response.headers["server-timing"]
+    assert "visibility;dur=" in escalation_response.headers["server-timing"]
+    assert "build;dur=" in escalation_response.headers["server-timing"]
+    assert "json;dur=" in escalation_response.headers["server-timing"]
+    assert "total;dur=" in escalation_response.headers["server-timing"]
     assert "access;dur=" in repo_response.headers["server-timing"]
     assert "build;dur=" in repo_response.headers["server-timing"]
     assert "json;dur=" in repo_response.headers["server-timing"]

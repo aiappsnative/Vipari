@@ -156,6 +156,12 @@ def _ensure_pull_request_audit_lifecycle_columns(db_path: str) -> None:
     ensure_pull_request_audit_schema(db_path)
 
 
+def _ensure_audit_comment_writeback_columns(db_path: str) -> None:
+    from .audit_records import init_audit_record_db
+
+    init_audit_record_db(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -217,6 +223,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0012_ensure_pull_request_audit_lifecycle_columns",
         "Repair legacy pull_request_audits tables so pull-request lifecycle columns like pr_title exist even when earlier repair migrations were recorded before those columns were added.",
         _ensure_pull_request_audit_lifecycle_columns,
+    ),
+    (
+        "0013_ensure_audit_comment_writeback_columns",
+        "Repair legacy audit_comments tables so github_comment_id and github_review_id exist for PR comment and review writeback on long-lived databases.",
+        _ensure_audit_comment_writeback_columns,
     ),
 )
 

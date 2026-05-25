@@ -82,6 +82,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0010_ensure_relevance_decision_tables",
         "0011_ensure_audit_jobs_lifecycle_columns",
         "0012_ensure_pull_request_audit_lifecycle_columns",
+        "0013_ensure_audit_comment_writeback_columns",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
@@ -307,6 +308,91 @@ def test_migrate_database_repairs_missing_pull_request_audit_lifecycle_columns_f
     assert "pr_updated_at" in columns
     assert "fused_confidence" in columns
     assert "pr_feedback_mode" in columns
+
+
+def test_migrate_database_repairs_missing_audit_comment_writeback_columns_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-audit-comments.db")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        for index, version in enumerate(
+            [
+                "0001_bootstrap_relational_schema",
+                "0002_add_pull_request_audits_fused_confidence",
+                "0003_add_onboarding_approval_columns",
+                "0004_add_machine_principals",
+                "0005_add_session_flash",
+                "0006_add_audit_feedback_and_triage_tables",
+                "0007_add_high_risk_proposal_tables",
+                "0008_ensure_ai_system_registry_schema",
+                "0009_ensure_export_jobs_snapshot_columns",
+                "0010_ensure_relevance_decision_tables",
+                "0011_ensure_audit_jobs_lifecycle_columns",
+                "0012_ensure_pull_request_audit_lifecycle_columns",
+            ],
+            start=1,
+        ):
+            conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                (version, f"legacy {version}", float(index)),
+            )
+        conn.execute(
+            """
+            CREATE TABLE pull_request_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completion_mode TEXT NOT NULL,
+                output_mode TEXT NOT NULL,
+                deterministic_score INTEGER NOT NULL,
+                suggested_risk_level TEXT NOT NULL,
+                semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, pr_number, head_sha)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE audit_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audit_id INTEGER NOT NULL UNIQUE,
+                comment_mode TEXT NOT NULL,
+                comment_body TEXT NOT NULL,
+                posted_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(audit_id) REFERENCES pull_request_audits(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    result = migrate_database(db_path)
+
+    assert "0013_ensure_audit_comment_writeback_columns" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(audit_comments)").fetchall()
+        }
+
+    assert "github_comment_id" in columns
+    assert "github_review_id" in columns
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

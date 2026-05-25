@@ -33,6 +33,11 @@ _REPOSITORY_FILE_LIST_CACHE_LOCK = threading.RLock()
 _REPOSITORY_FILE_LIST_CACHE: dict[tuple[str, str | None], tuple[float, tuple[str, ...]]] = {}
 _INSTALLATION_TOKEN_CACHE_LOCK = threading.RLock()
 _INSTALLATION_TOKEN_CACHE: dict[int, tuple[str, float]] = {}
+GITHUB_HTTP_TIMEOUT_SECONDS = 30.0
+
+
+def _urlopen_with_timeout(request: urllib.request.Request):
+    return urllib.request.urlopen(request, timeout=GITHUB_HTTP_TIMEOUT_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,7 @@ def get_installation_token(jwt_token: str, installation_id: int) -> str:
     req = urllib.request.Request(url, method="POST")
     req.add_header("Authorization", f"Bearer {jwt_token}")
     req.add_header("Accept", "application/vnd.github+json")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         data = json.load(response)
     token = data.get("token")
     if not token:
@@ -165,7 +170,7 @@ def fetch_pull_request_lifecycle(repo_full: str, pr_number: int, token: str) -> 
     req = urllib.request.Request(pr_url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github+json")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         payload = json.load(response)
 
     pull_request_number = int(payload.get("number") or pr_number)
@@ -190,7 +195,7 @@ def fetch_pr_diff(repo_full: str, pr_number: int, token: str) -> str:
     req = urllib.request.Request(diff_url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github.v3.diff")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         return response.read().decode("utf-8")
 
 
@@ -199,7 +204,7 @@ def fetch_compare_diff(repo_full: str, base_sha: str, head_sha: str, token: str)
     req = urllib.request.Request(diff_url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github.v3.diff")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         return response.read().decode("utf-8")
 
 
@@ -266,7 +271,7 @@ def fetch_file_content(repo_full: str, file_path: str, token: str, *, ref: str) 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github.raw")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         return response.read().decode("utf-8", errors="replace")
 
 
@@ -524,7 +529,7 @@ def post_check_run(
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Accept", "application/vnd.github+json")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req):
+        with _urlopen_with_timeout(req):
             return None
 
     req = urllib.request.Request(
@@ -535,7 +540,7 @@ def post_check_run(
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req):
+    with _urlopen_with_timeout(req):
         return None
 
 
@@ -553,7 +558,7 @@ def _find_reusable_check_run_id(
     )
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github+json")
-    with urllib.request.urlopen(req) as response:
+    with _urlopen_with_timeout(req) as response:
         payload = json.load(response)
 
     check_runs = payload.get("check_runs") if isinstance(payload, dict) else None

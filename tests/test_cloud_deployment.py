@@ -27,6 +27,7 @@ from services.audit_records import (
 )
 from services.cloud_worker import _message_still_authorized, _process_message, run_worker
 from services.cloud_worker import _reconcile_pull_request_lifecycle_for_repo
+from services.cloud_worker import _run_resilient_poll_loop
 from services.github_integration import _cache_installation_token, delete_cached_installation_token
 from services.observability import configure_logging
 from services.onboarding import onboard_repository
@@ -2490,6 +2491,46 @@ def test_close_queue_backend_ignores_none_and_closes_when_supported():
     asyncio.run(exercise_cleanup())
 
     assert queue.closed is True
+
+
+def test_run_resilient_poll_loop_logs_and_recovers_from_transient_failure():
+    events: list[str] = []
+
+    class Logger:
+        def __init__(self):
+            self.logged: list[str] = []
+
+        def exception(self, message, *, extra=None):
+            self.logged.append(f"{message}:{extra['loop']}")
+
+    logger = Logger()
+    state = {"calls": 0}
+
+    async def poll_once() -> bool:
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError("boom")
+        events.append(f"call-{state['calls']}")
+        if state["calls"] >= 3:
+            raise asyncio.CancelledError()
+        return False
+
+    async def fake_sleep(_seconds: float) -> None:
+        events.append("sleep")
+
+    with patch("services.cloud_worker.asyncio.sleep", side_effect=fake_sleep):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                _run_resilient_poll_loop(
+                    logger=logger,
+                    loop_name="test-loop",
+                    idle_sleep_seconds=1.0,
+                    poll_once=poll_once,
+                )
+            )
+
+    assert logger.logged == ["Worker background loop failed:test-loop"]
+    assert events == ["sleep", "call-2", "sleep", "call-3"]
 
 
 def test_api_service_initializes_schema_for_fresh_database(tmp_path, monkeypatch):

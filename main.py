@@ -246,6 +246,8 @@ SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active
 
 logger = logging.getLogger(__name__)
 
+_SLOW_DASHBOARD_API_WARN_MS = 2000.0
+
 client = OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL) if AI_API_KEY else None
 worker: AuditWorker | None = None
 branch_scan_worker: BranchScanWorker | None = None
@@ -2210,6 +2212,20 @@ def _attach_server_timing(response, metrics: list[tuple[str, float]]):
             f"{metric_name};dur={max(duration_ms, 0.0):.2f}" for metric_name, duration_ms in metrics
         )
     return response
+
+
+def _log_slow_dashboard_api(route_name: str, metrics: list[tuple[str, float]], **context: object) -> None:
+    total_duration_ms = next((duration_ms for metric_name, duration_ms in metrics if metric_name == "total"), None)
+    if total_duration_ms is None or total_duration_ms < _SLOW_DASHBOARD_API_WARN_MS:
+        return
+    metric_summary = {metric_name: round(duration_ms, 2) for metric_name, duration_ms in metrics}
+    logger.warning(
+        "Slow dashboard API route=%s total_ms=%.2f metrics=%s context=%s",
+        route_name,
+        total_duration_ms,
+        metric_summary,
+        context,
+    )
 
 
 def _verify_billing_handoff_signature(raw_body: bytes, signature_header: str | None) -> bool:
@@ -4518,22 +4534,28 @@ def dashboard_overview(request: Request, range: str = "7d", filter: str = "all")
     visibility = _dashboard_repo_visibility(access_context)
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     build_started = time.perf_counter()
+    payload = build_dashboard_overview_payload(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visibility["allowed_repo_fulls"],
+        repo_scope_by_full=visibility["repo_scope_by_full"],
+        allocation_status_by_full=visibility["allocation_status_by_full"],
+        active_filter=filter,
+        active_range=range,
+        access_context=access_context,
+        build_dashboard_overview_view_fn=build_dashboard_overview_view,
+    )
     _record_server_timing_metric(timing_metrics, "build", build_started)
     json_started = time.perf_counter()
-    response = JSONResponse(
-        build_dashboard_overview_payload(
-            AUDIT_DB_PATH,
-            allowed_repo_fulls=visibility["allowed_repo_fulls"],
-            repo_scope_by_full=visibility["repo_scope_by_full"],
-            allocation_status_by_full=visibility["allocation_status_by_full"],
-            active_filter=filter,
-            active_range=range,
-            access_context=access_context,
-            build_dashboard_overview_view_fn=build_dashboard_overview_view,
-        )
-    )
+    response = JSONResponse(payload)
     _record_server_timing_metric(timing_metrics, "json", json_started)
     timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    _log_slow_dashboard_api(
+        "dashboard_overview",
+        timing_metrics,
+        active_filter=filter,
+        active_range=range,
+        allowed_repo_count=len(visibility["allowed_repo_fulls"]),
+    )
     return _attach_server_timing(response, timing_metrics)
 
 
@@ -4543,15 +4565,33 @@ def persistence_status(request: Request):
 
 
 def dashboard_escalation_queue(request: Request, include_watch: bool = False):
+    request_started = time.perf_counter()
+    timing_metrics: list[tuple[str, float]] = []
+    access_started = time.perf_counter()
     access_context = _require_dashboard_read_access(request)
+    _record_server_timing_metric(timing_metrics, "access", access_started)
+    visibility_started = time.perf_counter()
     visibility = _dashboard_repo_visibility(access_context)
+    _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
+    build_started = time.perf_counter()
     result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
         build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
-    return JSONResponse(result)
+    _record_server_timing_metric(timing_metrics, "build", build_started)
+    json_started = time.perf_counter()
+    response = JSONResponse(result)
+    _record_server_timing_metric(timing_metrics, "json", json_started)
+    timing_metrics.append(("total", (time.perf_counter() - request_started) * 1000.0))
+    _log_slow_dashboard_api(
+        "dashboard_escalation_queue",
+        timing_metrics,
+        include_watch=include_watch,
+        allowed_repo_count=len(visibility["allowed_repo_fulls"]),
+    )
+    return _attach_server_timing(response, timing_metrics)
 
 
 app.include_router(
