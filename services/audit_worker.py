@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -2227,19 +2228,78 @@ def _handle_fallback(
 
 
 def process_job(job: AuditJob, settings: WorkerSettings) -> str:
+    logger = logging.getLogger("worker")
+
+    def log_phase(message: str, *, step: str, started_at: float | None = None, **extra: object) -> None:
+        payload = {
+            "repo": job.repo_full,
+            "pr_number": job.pr_number,
+            "head_sha": job.head_sha,
+            "job_id": job.id,
+            "step": step,
+            **extra,
+        }
+        if started_at is not None:
+            payload["duration_ms"] = round((time.perf_counter() - started_at) * 1000.0, 2)
+        logger.info(message, extra=payload)
+
+    job_started = time.perf_counter()
+    log_phase("Audit job execution started", step="process_job")
+
+    phase_started = time.perf_counter()
     deterministic_analysis = analyze_diff(job.diff_text)
+    log_phase("Audit job phase completed", step="analyze_diff", started_at=phase_started)
+
     pr_feedback_mode = _resolve_job_pr_feedback_mode(job, settings)
+
+    phase_started = time.perf_counter()
     scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
+    log_phase(
+        "Audit job phase completed",
+        step="scenario_eval_plan",
+        started_at=phase_started,
+        enabled=scenario_eval_plan.should_run,
+        artifact_count=scenario_eval_plan.artifact_count,
+    )
     scenario_eval_execution_summary = None
     if scenario_eval_plan.should_run:
+        phase_started = time.perf_counter()
         scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
+        log_phase(
+            "Audit job phase completed",
+            step="scenario_eval_execute",
+            started_at=phase_started,
+            execution_count=scenario_eval_execution_summary.execution_count,
+        )
 
+    phase_started = time.perf_counter()
     hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
+    log_phase(
+        "Audit job phase completed",
+        step="hybrid_analysis_plan",
+        started_at=phase_started,
+        enabled=hybrid_analysis_plan.should_run,
+        request_count=hybrid_analysis_plan.request_count,
+    )
     artifact_snapshots = {}
     hybrid_execution_summary = None
     if hybrid_analysis_plan.should_run:
+        phase_started = time.perf_counter()
         artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+        log_phase(
+            "Audit job phase completed",
+            step="fetch_artifact_snapshots",
+            started_at=phase_started,
+            snapshot_count=len(artifact_snapshots),
+        )
+        phase_started = time.perf_counter()
         hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
+        log_phase(
+            "Audit job phase completed",
+            step="hybrid_analysis_execute",
+            started_at=phase_started,
+            execution_count=hybrid_execution_summary.execution_count,
+        )
 
     if pr_feedback_mode == PR_FEEDBACK_MODE_OFF:
         try:
@@ -2272,11 +2332,27 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         return "completed"
 
     if not artifact_snapshots:
+        phase_started = time.perf_counter()
         artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
+        log_phase(
+            "Audit job phase completed",
+            step="fetch_artifact_snapshots",
+            started_at=phase_started,
+            snapshot_count=len(artifact_snapshots),
+        )
+
+    phase_started = time.perf_counter()
     attribute_profiles = _build_comment_attribute_profiles(job, deterministic_analysis, artifact_snapshots, settings)
+    log_phase(
+        "Audit job phase completed",
+        step="build_attribute_profiles",
+        started_at=phase_started,
+        profile_count=len(attribute_profiles),
+    )
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
     try:
+        phase_started = time.perf_counter()
         comment_result = build_llm_comment(
             job.diff_text,
             deterministic_analysis,
@@ -2315,6 +2391,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 rollout_mode=settings.verifier_rollout_mode,
                 max_requests_per_review=settings.verifier_max_requests_per_review,
             )
+            log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -2359,6 +2436,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
 
         if review_event is not None:
             try:
+                phase_started = time.perf_counter()
                 github_review_id = _post_review_for_job(
                     job,
                     comment_body,
@@ -2366,6 +2444,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                     settings,
                     installation_token=installation_token,
                 )
+                log_phase("Audit job phase completed", step="post_review", started_at=phase_started)
             except Exception as exc:
                 error_message = f"{type(exc).__name__}: {exc}"
                 return _handle_fallback(
@@ -2432,6 +2511,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             )
 
         try:
+            phase_started = time.perf_counter()
             _persist_audit_result(
                 job,
                 deterministic_analysis,
@@ -2456,6 +2536,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 hybrid_analysis_plan=hybrid_analysis_plan,
                 hybrid_execution_summary=hybrid_execution_summary,
             )
+            log_phase("Audit job phase completed", step="persist_audit_result", started_at=phase_started)
         except Exception as persist_exc:
             error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
             mark_job_failed(settings.db_path, job.id, error_message=error_message)
@@ -2468,11 +2549,14 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 pass
 
         mark_job_completed(settings.db_path, job.id, comment_body=comment_body if review_event is not None else None)
+        log_phase("Audit job execution finished", step="process_job", started_at=job_started, result="completed")
         return "completed"
 
     try:
         installation_token = _get_installation_token_for_job(job, settings)
+        phase_started = time.perf_counter()
         github_comment_id = _post_comment_for_job(job, comment_body, settings, installation_token=installation_token)
+        log_phase("Audit job phase completed", step="post_comment", started_at=phase_started)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         return _handle_fallback(
@@ -2538,6 +2622,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             f"Governance check run not applied: {type(exc).__name__}: {exc}",
         )
 
+    phase_started = time.perf_counter()
     try:
         audit = _persist_audit_result(
             job,
@@ -2563,6 +2648,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             hybrid_analysis_plan=hybrid_analysis_plan,
             hybrid_execution_summary=hybrid_execution_summary,
         )
+        log_phase("Audit job phase completed", step="persist_audit_result", started_at=phase_started)
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
         mark_job_failed(settings.db_path, job.id, error_message=error_message)
@@ -2574,6 +2660,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         pass
 
     mark_job_completed(settings.db_path, job.id, comment_body=comment_body)
+    log_phase("Audit job execution finished", step="process_job", started_at=job_started, result="completed")
     return "completed"
 
 
