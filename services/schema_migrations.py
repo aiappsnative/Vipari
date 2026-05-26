@@ -162,6 +162,18 @@ def _ensure_audit_comment_writeback_columns(db_path: str) -> None:
     init_audit_record_db(db_path)
 
 
+def _ensure_operational_policy_tables(db_path: str) -> None:
+    from .operational_policy_records import bootstrap_operational_policy_tables
+
+    bootstrap_operational_policy_tables(db_path)
+
+
+def _ensure_pull_request_audit_policy_provenance(db_path: str) -> None:
+    from .operational_policy_records import ensure_pull_request_audit_policy_provenance
+
+    ensure_pull_request_audit_policy_provenance(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -228,6 +240,16 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0013_ensure_audit_comment_writeback_columns",
         "Repair legacy audit_comments tables so github_comment_id and github_review_id exist for PR comment and review writeback on long-lived databases.",
         _ensure_audit_comment_writeback_columns,
+    ),
+    (
+        "0014_add_operational_policy_tables",
+        "Create workspace_policies, repo_policy_overrides, and policy_versions tables for operational AI guardrails and append-only policy versioning.",
+        _ensure_operational_policy_tables,
+    ),
+    (
+        "0015_add_pull_request_audit_policy_provenance",
+        "Repair legacy pull_request_audits tables so operational policy provenance columns exist for effective policy reconstruction.",
+        _ensure_pull_request_audit_policy_provenance,
     ),
 )
 

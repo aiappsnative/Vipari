@@ -83,6 +83,8 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
         "0011_ensure_audit_jobs_lifecycle_columns",
         "0012_ensure_pull_request_audit_lifecycle_columns",
         "0013_ensure_audit_comment_writeback_columns",
+        "0014_add_operational_policy_tables",
+        "0015_add_pull_request_audit_policy_provenance",
     ]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
@@ -393,6 +395,108 @@ def test_migrate_database_repairs_missing_audit_comment_writeback_columns_for_le
 
     assert "github_comment_id" in columns
     assert "github_review_id" in columns
+
+
+def test_migrate_database_repairs_missing_operational_policy_tables_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-operational-policy.db")
+
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE workspace_policies")
+        conn.execute("DROP TABLE repo_policy_overrides")
+        conn.execute("DROP TABLE policy_versions")
+        conn.execute("DELETE FROM schema_migrations WHERE version = ?", ("0014_add_operational_policy_tables",))
+
+    result = migrate_database(db_path)
+
+    assert "0014_add_operational_policy_tables" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('workspace_policies', 'repo_policy_overrides', 'policy_versions')"
+            ).fetchall()
+        }
+
+    assert tables == {"workspace_policies", "repo_policy_overrides", "policy_versions"}
+
+
+def test_migrate_database_repairs_missing_pull_request_audit_policy_provenance_columns_for_legacy_db(tmp_path):
+    db_path = str(tmp_path / "legacy-policy-provenance.db")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        for index, version in enumerate(
+            [
+                "0001_bootstrap_relational_schema",
+                "0002_add_pull_request_audits_fused_confidence",
+                "0003_add_onboarding_approval_columns",
+                "0004_add_machine_principals",
+                "0005_add_session_flash",
+                "0006_add_audit_feedback_and_triage_tables",
+                "0007_add_high_risk_proposal_tables",
+                "0008_ensure_ai_system_registry_schema",
+                "0009_ensure_export_jobs_snapshot_columns",
+                "0010_ensure_relevance_decision_tables",
+                "0011_ensure_audit_jobs_lifecycle_columns",
+                "0012_ensure_pull_request_audit_lifecycle_columns",
+                "0013_ensure_audit_comment_writeback_columns",
+                "0014_add_operational_policy_tables",
+            ],
+            start=1,
+        ):
+            conn.execute(
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
+                (version, f"legacy {version}", float(index)),
+            )
+        conn.execute(
+            """
+            CREATE TABLE pull_request_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                repo_full TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                installation_id INTEGER NOT NULL,
+                head_sha TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completion_mode TEXT NOT NULL,
+                output_mode TEXT NOT NULL,
+                deterministic_score INTEGER NOT NULL,
+                suggested_risk_level TEXT NOT NULL,
+                semantic_review_completed INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(repo_full, pr_number, head_sha)
+            )
+            """
+        )
+
+    result = migrate_database(db_path)
+
+    assert "0015_add_pull_request_audit_policy_provenance" in result.applied_versions
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(pull_request_audits)").fetchall()
+        }
+
+    assert "workspace_policy_version_id" in columns
+    assert "repo_policy_version_id" in columns
+    assert "effective_policy_hash" in columns
+    assert "effective_policy_source" in columns
+    assert "policy_decision_json" in columns
 
 
 def test_db_migrate_rejects_sqlite_target_in_production(monkeypatch):

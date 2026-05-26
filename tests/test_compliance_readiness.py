@@ -291,7 +291,7 @@ def test_build_compliance_workspace_view_surfaces_ai_system_classification_gap(t
     assert "1 repo still relies on auto-prefilled registry context." in eu_ai_act_card.bullets
     assert "1 repo still relies on auto-prefilled registry context and needs reviewer confirmation." in view.verdict.detail
     assert view.top_gaps[0].key == "ai_act_classification"
-    assert view.repo_rows[0].action_href == "/policies"
+    assert view.repo_rows[0].action_href == "/compliance/ai-systems"
 
     update_ai_system_classification(
         db_path,

@@ -49,6 +49,8 @@ from .governance_policy import (
 from .hybrid_analysis import HybridAnalysisPlan, build_hybrid_analysis_plan
 from .hybrid_execution import HybridExecutionSummary, execute_hybrid_analysis_plan
 from .onboarding_records import get_latest_onboarding_baseline_for_repo_artifact
+from .operational_policy import SemanticRunStrategy, VerifierRunStrategy
+from .operational_policy_records import resolve_effective_policy_record
 from .pr_feedback_mode import PR_FEEDBACK_MODE_OFF, PR_FEEDBACK_MODE_REVIEWS, resolve_pr_feedback_mode
 from .scenario_execution import ScenarioEvalExecutionSummary, execute_scenario_eval_plan
 from .scenario_evaluation import ScenarioEvalPlan, build_scenario_eval_plan
@@ -184,6 +186,7 @@ def build_llm_comment(
     pr_number: int | None = None,
     verifier_rollout_mode: str = "off",
     verifier_max_requests_per_review: int = 3,
+    policy_verifier_strategy: VerifierRunStrategy | None = None,
     return_metadata: bool = False,
 ) -> str | LlmCommentBuildResult:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
@@ -239,6 +242,7 @@ def build_llm_comment(
         proposed_recommendation=canonical_details.recommendation,
         rollout_mode=verifier_rollout_mode,
         max_requests_per_review=verifier_max_requests_per_review,
+        policy_verifier_strategy=policy_verifier_strategy,
     )
     review = _build_pr_comment_review(
         deterministic_analysis,
@@ -292,6 +296,32 @@ def build_fallback_comment(
         summary=summary,
         fusion_summary=None,
         semantic_recommendation=canonical_details.recommendation,
+        escalation_recommendation=recommendation,
+        attribute_profiles=attribute_profiles,
+        episode_context=episode_context,
+        repo_full=repo_full,
+        pr_number=pr_number,
+    )
+    return _render_pr_comment_review(review)
+
+
+def _build_policy_limited_comment(
+    deterministic_analysis: DiffAnalysis,
+    *,
+    escalation_recommendation: EscalationRecommendation | None = None,
+    attribute_profiles: list[ArtifactAttributeProfile] | None = None,
+    episode_context: PrCommentEpisodeContext | None = None,
+    repo_full: str | None = None,
+    pr_number: int | None = None,
+) -> str:
+    recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
+    review = _build_pr_comment_review(
+        deterministic_analysis,
+        risk_level=_normalize_risk_level(deterministic_analysis.suggested_risk_level.value),
+        confidence=None,
+        summary=_build_fallback_summary(deterministic_analysis),
+        fusion_summary="Operational policy skipped semantic model review for this repo, so this review uses deterministic signals and baseline comparisons only.",
+        semantic_recommendation=_default_recommendation_for_risk(deterministic_analysis.suggested_risk_level.value),
         escalation_recommendation=recommendation,
         attribute_profiles=attribute_profiles,
         episode_context=episode_context,
@@ -711,6 +741,47 @@ def _normalize_verifier_rollout_mode(mode: str | None) -> str:
     return "off"
 
 
+def _should_run_semantic_review(
+    deterministic_analysis: DiffAnalysis,
+    semantic_strategy: SemanticRunStrategy,
+) -> bool:
+    if semantic_strategy == SemanticRunStrategy.NEVER:
+        return False
+    if semantic_strategy == SemanticRunStrategy.ON_MEDIUM_PLUS:
+        return _normalize_risk_level(deterministic_analysis.suggested_risk_level.value) in {"Medium", "High"}
+    return True
+
+
+def _verifier_policy_gate_reason(
+    deterministic_risk: str,
+    semantic_risk: str,
+    strategy: VerifierRunStrategy,
+) -> str | None:
+    if strategy == VerifierRunStrategy.NEVER:
+        return "Operational policy disables verifier review for this repo."
+
+    highest_risk = max(
+        (_normalize_risk_level(deterministic_risk), _normalize_risk_level(semantic_risk)),
+        key=lambda value: {"Low": 0, "Medium": 1, "High": 2}[value],
+    )
+    if strategy == VerifierRunStrategy.ON_HIGH_ONLY and highest_risk != "High":
+        return "Operational policy limits verifier review to high-risk changes."
+    if strategy == VerifierRunStrategy.ON_MEDIUM_PLUS and highest_risk == "Low":
+        return "Operational policy limits verifier review to medium-risk or higher changes."
+    return None
+
+
+def _resolve_effective_policy_for_job(job: AuditJob, settings: WorkerSettings):
+    allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+    if allocation is None:
+        return None
+    return resolve_effective_policy_record(
+        settings.db_path,
+        workspace_id=allocation.workspace_id,
+        repo_allocation_id=allocation.id,
+    )
+
+
 def _build_verifier_plan(
     deterministic_analysis: DiffAnalysis,
     comment_body: str,
@@ -720,6 +791,7 @@ def _build_verifier_plan(
     proposed_recommendation: str,
     rollout_mode: str,
     max_requests_per_review: int,
+    policy_verifier_strategy: VerifierRunStrategy | None = None,
 ) -> VerifierPlan:
     normalized_mode = _normalize_verifier_rollout_mode(rollout_mode)
     if normalized_mode == "off":
@@ -737,6 +809,20 @@ def _build_verifier_plan(
         comment_body,
         default=proposed_recommendation,
     )
+    if policy_verifier_strategy is not None:
+        policy_gate_reason = _verifier_policy_gate_reason(
+            deterministic_analysis.suggested_risk_level.value,
+            semantic_risk,
+            policy_verifier_strategy,
+        )
+        if policy_gate_reason is not None:
+            return VerifierPlan(
+                rollout_mode=normalized_mode,
+                should_invoke=False,
+                trigger=None,
+                reason=policy_gate_reason,
+                request_count=0,
+            )
     decision = should_invoke_verifier(
         deterministic_analysis.suggested_risk_level.value,
         semantic_risk,
@@ -1863,6 +1949,16 @@ def _persist_audit_result(
         reason=hybrid_analysis_plan.reason,
         executions=(),
     )
+    allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+    effective_policy_record = (
+        resolve_effective_policy_record(
+            settings.db_path,
+            workspace_id=allocation.workspace_id,
+            repo_allocation_id=allocation.id,
+        )
+        if allocation is not None
+        else None
+    )
     return record_audit_result(
         settings.db_path,
         job_id=job.id,
@@ -1908,6 +2004,13 @@ def _persist_audit_result(
         hybrid_analysis_execution_count=hybrid_execution_summary.execution_count,
         hybrid_analysis_execution_reason=hybrid_execution_summary.reason,
         hybrid_analysis_executions=[execution.__dict__ for execution in hybrid_execution_summary.executions],
+        workspace_policy_version_id=(
+            effective_policy_record.workspace_policy_version_id if effective_policy_record is not None else None
+        ),
+        repo_policy_version_id=(effective_policy_record.repo_policy_version_id if effective_policy_record is not None else None),
+        effective_policy_hash=(effective_policy_record.effective_policy_hash if effective_policy_record is not None else None),
+        effective_policy_source=(effective_policy_record.effective_policy_source if effective_policy_record is not None else None),
+        policy_decision_json=(effective_policy_record.policy_decision_json if effective_policy_record is not None else None),
     )
 
 
@@ -2352,29 +2455,71 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     )
     escalation_recommendation = _build_escalation_recommendation(deterministic_analysis)
     episode_context = _build_episode_context(job, settings)
+    effective_policy_record = _resolve_effective_policy_for_job(job, settings)
+    semantic_strategy = (
+        effective_policy_record.policy.llm_strategy.when_to_run_semantic
+        if effective_policy_record is not None
+        else SemanticRunStrategy.ON_ALL_AI_RELEVANT
+    )
+    verifier_strategy = (
+        effective_policy_record.policy.llm_strategy.when_to_run_verifier
+        if effective_policy_record is not None
+        else None
+    )
+    should_run_semantic = _should_run_semantic_review(deterministic_analysis, semantic_strategy)
+    semantic_review_completed = should_run_semantic
     try:
         phase_started = time.perf_counter()
-        comment_result = build_llm_comment(
-            job.diff_text,
-            deterministic_analysis,
-            llm_client=settings.llm_client,
-            model=settings.model,
-            timeout_seconds=settings.llm_timeout_seconds,
-            escalation_recommendation=escalation_recommendation,
-            attribute_profiles=attribute_profiles,
-            episode_context=episode_context,
-            repo_full=job.repo_full,
-            pr_number=job.pr_number,
-            verifier_rollout_mode=settings.verifier_rollout_mode,
-            verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
-            return_metadata=True,
-        )
-        if isinstance(comment_result, LlmCommentBuildResult):
-            comment_body = comment_result.comment_body
-            fusion_assessment = comment_result.fusion_assessment
-            verifier_plan = comment_result.verifier_plan
+        if should_run_semantic:
+            comment_result = build_llm_comment(
+                job.diff_text,
+                deterministic_analysis,
+                llm_client=settings.llm_client,
+                model=settings.model,
+                timeout_seconds=settings.llm_timeout_seconds,
+                escalation_recommendation=escalation_recommendation,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                repo_full=job.repo_full,
+                pr_number=job.pr_number,
+                verifier_rollout_mode=settings.verifier_rollout_mode,
+                verifier_max_requests_per_review=settings.verifier_max_requests_per_review,
+                policy_verifier_strategy=verifier_strategy,
+                return_metadata=True,
+            )
+            if isinstance(comment_result, LlmCommentBuildResult):
+                comment_body = comment_result.comment_body
+                fusion_assessment = comment_result.fusion_assessment
+                verifier_plan = comment_result.verifier_plan
+            else:
+                comment_body = comment_result
+                fusion_assessment = _build_signal_fusion_assessment(
+                    comment_body,
+                    deterministic_analysis,
+                    attribute_profiles=attribute_profiles,
+                )
+                verifier_plan = _build_verifier_plan(
+                    deterministic_analysis,
+                    comment_body,
+                    semantic_packages=build_semantic_review_packages(deterministic_analysis),
+                    proposed_summary=_extract_summary(comment_body, default=_build_fallback_summary(deterministic_analysis)),
+                    proposed_recommendation=_extract_recommendation(
+                        comment_body,
+                        default=_default_recommendation_for_risk(fusion_assessment.risk_level),
+                    ),
+                    rollout_mode=settings.verifier_rollout_mode,
+                    max_requests_per_review=settings.verifier_max_requests_per_review,
+                    policy_verifier_strategy=verifier_strategy,
+                )
         else:
-            comment_body = comment_result
+            comment_body = _build_policy_limited_comment(
+                deterministic_analysis,
+                escalation_recommendation=escalation_recommendation,
+                attribute_profiles=attribute_profiles,
+                episode_context=episode_context,
+                repo_full=job.repo_full,
+                pr_number=job.pr_number,
+            )
             fusion_assessment = _build_signal_fusion_assessment(
                 comment_body,
                 deterministic_analysis,
@@ -2391,8 +2536,9 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 ),
                 rollout_mode=settings.verifier_rollout_mode,
                 max_requests_per_review=settings.verifier_max_requests_per_review,
+                policy_verifier_strategy=verifier_strategy,
             )
-            log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
+        log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"
         if _is_retryable_llm_error(exc) and _should_retry(job, settings):
@@ -2522,7 +2668,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 output_mode="formal_review" if review_event is not None else "suppressed",
                 comment_body=comment_body if review_event is not None else None,
                 comment_mode=_review_comment_mode(review_event) if review_event is not None else None,
-                semantic_review_completed=True,
+                semantic_review_completed=semantic_review_completed,
                 suggested_risk_level=fusion_assessment.risk_level,
                 fused_confidence=fusion_assessment.confidence,
                 error_message=audit_error_message,
@@ -2634,7 +2780,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             output_mode="full_review",
             comment_body=comment_body,
             comment_mode="full_review",
-            semantic_review_completed=True,
+            semantic_review_completed=semantic_review_completed,
             suggested_risk_level=fusion_assessment.risk_level,
             fused_confidence=fusion_assessment.confidence,
             error_message=audit_error_message,

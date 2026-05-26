@@ -196,7 +196,7 @@ def _repo_action(row_href: str, repo_full: str, gap_keys: Sequence[str]) -> tupl
     if "baseline_review" in gap_keys:
         return ("Review baseline", _repo_gap_cta_href(repo_full, "baseline_review"), "Approve the pending baseline before exporting evidence.")
     if "ai_act_classification" in gap_keys:
-        return ("Classify AI system", "/policies", "Add a risk level and domain so EU AI Act readiness is reviewable.")
+        return ("Classify AI system", "/compliance/ai-systems", "Add a risk level and domain so EU AI Act readiness is reviewable.")
     if "missing_governance" in gap_keys:
         return ("Add governance evidence", _repo_gap_cta_href(repo_full, "missing_governance"), "Capture policy or approval artifacts for this repo.")
     if "stale_evidence" in gap_keys:
@@ -353,7 +353,7 @@ def _gap_items(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[Complia
             "Classify AI systems",
             "At least one registered AI system is still missing an EU AI Act risk classification.",
             "Open registry",
-            "/policies",
+            "/compliance/ai-systems",
         ),
         "missing_governance": (
             "Add governance artifacts",

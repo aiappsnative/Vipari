@@ -200,6 +200,8 @@ from services.github_provisioning import get_live_github_install_url, sync_insta
 from services.ai_system_registry import sync_ai_system_for_repo
 from services.onboarding import add_repo_artifact_to_onboarding, execute_repository_history_backfill, infer_artifact_type_from_path, onboard_repository, plan_repository_history_backfill, remove_repo_artifact_from_onboarding, tracked_artifact_type_options, update_repo_artifact_type
 from services.onboarding_records import get_latest_repository_onboarding, list_onboarded_artifacts_for_onboarding, promote_latest_source_to_onboarding_baseline
+from services.operational_policy import canonical_policy_dict, canonical_repo_policy_override_json, default_policy_for_preset, normalize_repo_policy_override
+from services.operational_policy_records import get_repo_policy_override, get_workspace_policy, resolve_effective_policy_record, upsert_repo_policy_override, upsert_workspace_policy
 from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
@@ -3581,10 +3583,61 @@ async def policies_page(request: Request):
     user = access_context["user"]
     identity = access_context["identity"]
     membership = access_context["membership"]
-    session = access_context["session"]
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     can_manage = membership is not None and membership.role in {"owner", "admin"}
+    summary_cards, workspace_policy_view, repo_policy_rows = _build_operational_policy_context(access_context)
+    status_note = None
+    if request.query_params.get("policy_saved") == "1":
+        status_note = "Workspace operational policy saved. New audits will use this default unless a repository override is present."
+    elif request.query_params.get("repo_policy_saved") == "1":
+        status_note = "Repository policy override saved. New audits for that repository will use the updated effective policy."
+    return HTMLResponse(
+        render_control_plane_policies_page(
+            workspace_name=workspace.display_name,
+            audit_href="/dashboard",
+            plan_label=get_plan_definition(plan_code).label,
+            theme_preference=user.theme_preference if user else "dark",
+            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
+            summary_cards=summary_cards,
+            workspace_policy=workspace_policy_view,
+            repo_policy_rows=repo_policy_rows,
+            status_note=status_note,
+            can_manage=can_manage,
+            csrf_token=access_context["session"].csrf_secret,
+            sidebar_profile_initial=_sidebar_profile_initial(
+                display_name=user.display_name if user else None,
+                github_login=identity.github_login if identity else None,
+            ),
+        )
+    )
 
+
+def _labelize_policy_value(value: str | None) -> str:
+    if not value:
+        return "Not set"
+    return value.replace("_", " ").replace("-", " ").title()
+
+
+def _policy_override_for_preset(preset_key: str):
+    payload = canonical_policy_dict(default_policy_for_preset(preset_key))
+    payload.pop("preset_key", None)
+    return normalize_repo_policy_override(payload)
+
+
+def _repo_policy_override_selection(override_json: str | None) -> tuple[str, str]:
+    empty_override_json = canonical_repo_policy_override_json(normalize_repo_policy_override({}))
+    normalized_json = str(override_json or empty_override_json)
+    if normalized_json == empty_override_json:
+        return "inherit", "Workspace default"
+    for preset_key in ("conservative", "balanced", "permissive"):
+        if canonical_repo_policy_override_json(_policy_override_for_preset(preset_key)) == normalized_json:
+            return preset_key, f"{_labelize_policy_value(preset_key)} override"
+    return "inherit", "Custom override"
+
+
+def _build_ai_system_registry_context(access_context: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
+    workspace = access_context["workspace"]
+    session = access_context["session"]
     for allocation in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id):
         if allocation.allocation_status in {"active", "onboarded"}:
             sync_ai_system_for_repo(
@@ -3593,11 +3646,6 @@ async def policies_page(request: Request):
                 repo_full=allocation.repo_full,
                 created_by_user_id=session.user_id,
             )
-
-    def _labelize(value: str | None) -> str:
-        if not value:
-            return "Not set"
-        return value.replace("_", " ").replace("-", " ").title()
 
     systems = list_ai_systems_for_workspace(AUDIT_DB_PATH, workspace.id)
     summary_cards = [
@@ -3622,7 +3670,7 @@ async def policies_page(request: Request):
             "detail": "Systems currently marked for the higher-control operating path.",
         },
     ]
-    system_rows = []
+    system_rows: list[dict[str, object]] = []
     for system in systems:
         try:
             artifact_families = json.loads(system.artifact_families_json or "[]")
@@ -3635,37 +3683,161 @@ async def policies_page(request: Request):
                 "display_name": system.display_name,
                 "repo_full": system.repo_full,
                 "evidence_summary": evidence_summary,
-                "onboarding_status": _labelize(system.latest_onboarding_status),
+                "onboarding_status": _labelize_policy_value(system.latest_onboarding_status),
                 "risk_level": system.risk_level,
-                "risk_level_label": _labelize(system.risk_level),
+                "risk_level_label": _labelize_policy_value(system.risk_level),
                 "eu_ai_act_domain": system.eu_ai_act_domain or "",
-                "eu_ai_act_domain_label": _labelize(system.eu_ai_act_domain),
+                "eu_ai_act_domain_label": _labelize_policy_value(system.eu_ai_act_domain),
                 "purpose_summary": system.purpose_summary or "",
                 "last_reviewed_at": datetime.fromtimestamp(system.last_reviewed_at).strftime("%Y-%m-%d %H:%M UTC") if system.last_reviewed_at else "Not reviewed",
             }
         )
+    return summary_cards, system_rows
 
-    status_note = None
-    if request.query_params.get("classification_saved") == "1":
-        status_note = "AI system classification saved. The registry remains deterministic; human review controls the final policy state."
-    return HTMLResponse(
-        render_control_plane_policies_page(
-            workspace_name=workspace.display_name,
-            audit_href="/dashboard",
-            plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
-            admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
-            summary_cards=summary_cards,
-            system_rows=system_rows,
-            status_note=status_note,
-            can_manage=can_manage,
-            csrf_token=session.csrf_secret,
-            sidebar_profile_initial=_sidebar_profile_initial(
-                display_name=user.display_name if user else None,
-                github_login=identity.github_login if identity else None,
-            ),
+
+def _build_operational_policy_context(access_context: dict[str, object]) -> tuple[list[dict[str, str]], dict[str, object], list[dict[str, object]]]:
+    workspace = access_context["workspace"]
+    workspace_resolution = resolve_effective_policy_record(AUDIT_DB_PATH, workspace_id=workspace.id)
+    workspace_record = get_workspace_policy(AUDIT_DB_PATH, workspace.id)
+    workspace_policy = workspace_resolution.policy
+    allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+    repo_rows: list[dict[str, object]] = []
+    override_count = 0
+
+    for allocation in allocations:
+        repo_override_record = get_repo_policy_override(AUDIT_DB_PATH, allocation.id)
+        selected_override, override_label = _repo_policy_override_selection(
+            repo_override_record.override_json if repo_override_record is not None else None
         )
+        if selected_override != "inherit":
+            override_count += 1
+        effective = resolve_effective_policy_record(
+            AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            repo_allocation_id=allocation.id,
+        )
+        repo_rows.append(
+            {
+                "allocation_id": allocation.id,
+                "repo_full": allocation.repo_full,
+                "allocation_status": allocation.allocation_status,
+                "selected_override": selected_override,
+                "override_label": override_label,
+                "version_label": (
+                    f"Override version #{repo_override_record.active_version_id}" if repo_override_record is not None and repo_override_record.active_version_id is not None else "Inheriting workspace policy"
+                ),
+                "semantic_strategy_label": _labelize_policy_value(effective.policy.llm_strategy.when_to_run_semantic.value),
+                "verifier_strategy_label": _labelize_policy_value(effective.policy.llm_strategy.when_to_run_verifier.value),
+                "medium_risk_action_label": _labelize_policy_value(effective.policy.gating.medium_risk_action.value),
+                "high_risk_action_label": _labelize_policy_value(effective.policy.gating.high_risk_action.value),
+            }
+        )
+
+    summary_cards = [
+        {
+            "label": "Connected repos",
+            "value": str(sum(1 for allocation in allocations if allocation.allocation_status in {"active", "onboarded"})),
+            "detail": "Repositories currently inheriting or overriding this workspace operational policy.",
+        },
+        {
+            "label": "Repo overrides",
+            "value": str(override_count),
+            "detail": "Repositories with a repo-specific policy instead of the workspace default.",
+        },
+        {
+            "label": "Semantic review",
+            "value": _labelize_policy_value(workspace_policy.llm_strategy.when_to_run_semantic.value),
+            "detail": "When the semantic model review path is allowed to run for this workspace.",
+        },
+        {
+            "label": "Verifier",
+            "value": _labelize_policy_value(workspace_policy.llm_strategy.when_to_run_verifier.value),
+            "detail": "When verifier shadowing is allowed once semantic review has produced a proposal.",
+        },
+    ]
+    workspace_policy_view = {
+        "preset_key": workspace_record.preset_key if workspace_record is not None else "balanced",
+        "preset_label": _labelize_policy_value(workspace_record.preset_key if workspace_record is not None else "balanced"),
+        "semantic_strategy_label": _labelize_policy_value(workspace_policy.llm_strategy.when_to_run_semantic.value),
+        "verifier_strategy_label": _labelize_policy_value(workspace_policy.llm_strategy.when_to_run_verifier.value),
+        "medium_risk_action_label": _labelize_policy_value(workspace_policy.gating.medium_risk_action.value),
+        "high_risk_action_label": _labelize_policy_value(workspace_policy.gating.high_risk_action.value),
+        "version_label": f"Policy version #{workspace_record.active_version_id}" if workspace_record is not None and workspace_record.active_version_id is not None else "Policy version pending",
+        "description": "Workspace defaults define the baseline operational review lane. Repo overrides can inherit this default or replace it with a preset-specific posture.",
+    }
+    return summary_cards, workspace_policy_view, repo_rows
+
+
+@app.post("/policies/workspace")
+@app.post("/app/policies/workspace")
+async def update_workspace_operational_policy(
+    request: Request,
+    preset_key: str = Form(...),
+    csrf_token: str | None = Form(default=None),
+):
+    access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    workspace = access_context["workspace"]
+    try:
+        record = upsert_workspace_policy(
+            AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            policy=default_policy_for_preset(preset_key),
+            created_by_user_id=access_context["session"].user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=access_context["session"].user_id,
+        event_type="workspace_policy_updated",
+        subject_type="workspace",
+        subject_id=str(workspace.id),
+        payload={"preset_key": record.preset_key, "policy_version_id": record.active_version_id},
     )
+    return RedirectResponse("/policies?policy_saved=1", status_code=303)
+
+
+@app.post("/policies/repositories/{allocation_id}")
+@app.post("/app/policies/repositories/{allocation_id}")
+async def update_repo_operational_policy(
+    request: Request,
+    allocation_id: int,
+    preset_key: str = Form(...),
+    csrf_token: str | None = Form(default=None),
+):
+    access_context = _current_workspace_context(request)
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    workspace = access_context["workspace"]
+    allocation = next((item for item in list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id) if item.id == allocation_id), None)
+    if allocation is None:
+        raise HTTPException(status_code=404, detail="Repository allocation not found for this workspace.")
+    try:
+        policy_override = normalize_repo_policy_override({}) if preset_key == "inherit" else _policy_override_for_preset(preset_key)
+        record = upsert_repo_policy_override(
+            AUDIT_DB_PATH,
+            workspace_id=workspace.id,
+            repo_allocation_id=allocation.id,
+            policy_override=policy_override,
+            created_by_user_id=access_context["session"].user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    create_control_plane_audit_log(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        actor_user_id=access_context["session"].user_id,
+        event_type="repo_policy_override_updated",
+        subject_type="repo_allocation",
+        subject_id=str(allocation.id),
+        payload={"repo_full": allocation.repo_full, "preset_key": preset_key, "policy_version_id": record.active_version_id},
+    )
+    return RedirectResponse("/policies?repo_policy_saved=1", status_code=303)
 
 
 @app.post("/policies/systems/{ai_system_id}")
@@ -3712,7 +3884,7 @@ async def classify_policy_system(
             "eu_ai_act_domain": updated.eu_ai_act_domain,
         },
     )
-    return RedirectResponse("/policies?classification_saved=1", status_code=303)
+    return RedirectResponse("/compliance/ai-systems?classification_saved=1", status_code=303)
 
 
 @app.get("/compliance", response_class=HTMLResponse)
@@ -3736,6 +3908,18 @@ async def compliance_frameworks_page(request: Request):
         page_title="Framework mapping",
         page_description="Review how the monitored repositories map to EU AI Act, SOC 2, and ISO 27001 expectations without the operational export controls competing for attention.",
         page_note="These cards summarize the framework story for the current workspace evidence set.",
+    )
+
+
+@app.get("/compliance/ai-systems", response_class=HTMLResponse)
+@app.get("/app/compliance/ai-systems", response_class=HTMLResponse)
+async def compliance_ai_systems_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="ai-systems",
+        page_title="AI System Registry",
+        page_description="Review and confirm repository-backed AI system classifications for the current workspace.",
+        page_note="This tab keeps AI system registry review under Compliance while the Policies page focuses on operational guardrails.",
     )
 
 
@@ -3789,6 +3973,12 @@ def _render_compliance_tab_page(
     if blocked_free_tier:
         shell_title, shell_body, shell_cta_href, shell_cta_label = _free_tier_upgrade_shell_copy("the Compliance workspace")
     status_note = request.query_params.get("status") or ""
+    ai_system_summary_cards: list[dict[str, str]] = []
+    ai_system_rows: list[dict[str, object]] = []
+    if active_tab == "ai-systems":
+        ai_system_summary_cards, ai_system_rows = _build_ai_system_registry_context(access_context)
+        if request.query_params.get("classification_saved") == "1":
+            status_note = "AI system classification saved. The registry remains deterministic; human review controls the final policy state."
     evidence_filter = request.query_params.get("gap") or ""
     evidence_repo = request.query_params.get("repo") or ""
     return HTMLResponse(
@@ -3812,6 +4002,9 @@ def _render_compliance_tab_page(
             shell_body=shell_body,
             shell_cta_href=shell_cta_href,
             shell_cta_label=shell_cta_label,
+            ai_system_summary_cards=ai_system_summary_cards,
+            ai_system_rows=ai_system_rows,
+            can_manage_ai_systems=bool(access_context.get("membership") is not None and access_context["membership"].role in {"owner", "admin"}),
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
                 github_login=identity.github_login if identity else None,
