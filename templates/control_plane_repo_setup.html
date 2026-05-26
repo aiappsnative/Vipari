@@ -116,6 +116,7 @@
             const summarySort = document.querySelector('[data-repo-summary-sort]');
             const summaryGrid = document.querySelector('.repo-setup-summary-grid');
             const summaryCards = Array.from(document.querySelectorAll('[data-repo-summary-card="true"]'));
+            const onboardingForms = Array.from(document.querySelectorAll('[data-repo-onboarding-form="true"]'));
 
             const statusRank = {
                 onboarded: 0,
@@ -161,6 +162,27 @@
                 summarySort.addEventListener('change', () => sortSummaryCards(summarySort.value));
                 sortSummaryCards(summarySort.value);
             }
+
+            onboardingForms.forEach((form) => {
+                if (!(form instanceof HTMLFormElement)) {
+                    return;
+                }
+                form.addEventListener('submit', () => {
+                    const actionCell = form.closest('.repo-setup-inventory-action');
+                    const progress = actionCell instanceof HTMLElement
+                        ? actionCell.querySelector('[data-repo-onboarding-progress="true"]')
+                        : null;
+                    const submitButton = form.querySelector('button[type="submit"]');
+                    if (submitButton instanceof HTMLButtonElement) {
+                        submitButton.disabled = true;
+                        submitButton.textContent = 'Allocating...';
+                    }
+                    if (progress instanceof HTMLElement) {
+                        form.hidden = true;
+                        progress.hidden = false;
+                    }
+                }, { once: true });
+            });
         })();
     </script>
 </body>

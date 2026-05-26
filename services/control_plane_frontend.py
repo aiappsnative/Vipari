@@ -714,6 +714,21 @@ def _repo_disconnect_href(repo_full: str) -> str:
     return f'/repos/disconnect?repo_full={quote(repo_full, safe="/")}'
 
 
+def _repo_onboarding_progress_markup(repo_full: str) -> str:
+    repo_label = html_escape(repo_full)
+    return f'''
+    <div class="repo-setup-progress" data-repo-onboarding-progress="true" role="status" aria-live="polite" aria-label="Onboarding {repo_label}" hidden>
+        <div class="repo-setup-progress-head">
+            <span class="repo-setup-chip repo-setup-chip-cool">Onboarding in progress</span>
+            <span class="repo-setup-progress-label">Scanning repository and building the baseline</span>
+        </div>
+        <div class="repo-setup-progress-bar" aria-hidden="true">
+            <span class="repo-setup-progress-fill"></span>
+        </div>
+    </div>
+    '''
+
+
 def render_control_plane_repo_setup_page(*, workspace_name: str, inventory_summary: str, inventory_cards: str, onboarding_metrics: str, onboarding_summary_cards: str, audit_href: str, theme_preference: str = "dark", sidebar_profile_initial: str = "V") -> str:
     template = _load_template("control_plane_repo_setup.html")
     return (
@@ -867,10 +882,11 @@ def render_repo_inventory_cards(
                 status = "upgrade_required"
             else:
                 action = f'''
-                <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form">
+                <form method="post" action="{html_escape(_repo_allocate_href(repo_full))}" class="repo-setup-inline-form" data-repo-onboarding-form="true" data-repo-full="{html_escape(repo_full)}">
                     {_csrf_input(csrf_token)}
                     <button type="submit" class="repo-setup-button">Allocate and onboard</button>
                 </form>
+                {_repo_onboarding_progress_markup(repo_full)}
                 '''
                 status = "connected"
         else:

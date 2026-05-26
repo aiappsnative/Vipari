@@ -4974,7 +4974,7 @@ async def repo_allocate(request: Request, repo_full: str, csrf_token: str | None
         repo_full=allocation.repo_full,
         created_by_user_id=access_context["session"].user_id,
     )
-    return RedirectResponse("/workspace", status_code=303)
+    return RedirectResponse(f"/dashboard/{quote(allocation.repo_full, safe='')}", status_code=303)
 
 
 @app.get("/api/auth/session")

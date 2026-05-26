@@ -2469,6 +2469,8 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert "Settings" in help_response.text
     assert "Operational policies" in policies_response.text
     assert 'class="sidebar-nav-item sidebar-nav-item-active" aria-label="Policies"' in policies_response.text
+    assert 'class="sidebar-logo-glyph"' in policies_response.text
+    assert 'class="sidebar-nav-icon"' in policies_response.text
     assert 'href="/dashboard"' in policies_response.text
     assert 'href="#policies-overview"' in policies_response.text
     assert 'href="#policies-workspace-default"' in policies_response.text
@@ -2479,6 +2481,7 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert "Save override" in policies_response.text
     assert "Semantic review" in policies_response.text
     assert "Verifier" in policies_response.text
+    assert "not for separate business-priority ranking" in policies_response.text
     assert "placeholder-org/repo-approved" in policies_response.text
     assert "placeholder-org/repo-pending" in policies_response.text
     assert 'href="/compliance"' in help_response.text
@@ -4833,7 +4836,7 @@ def test_billing_install_allocation_flow_unlocks_dashboard(tmp_path):
         )
 
     assert allocate_response.status_code == 303
-    assert allocate_response.headers["location"] == "/workspace"
+    assert allocate_response.headers["location"] == "/dashboard/doria90%2FdummyAI"
 
     access_after_allocation = client.get(
         "/api/auth/session",
@@ -5238,6 +5241,9 @@ def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path)
     assert "Allocate and onboard" in response.text
     assert "Open audit" not in response.text
     assert "Onboarding active" not in response.text
+    assert 'data-repo-onboarding-form="true"' in response.text
+    assert 'data-repo-onboarding-progress="true"' in response.text
+    assert "Scanning repository and building the baseline" in response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -5552,7 +5558,7 @@ def test_repo_disconnect_frees_slot_and_exposes_restore_action(tmp_path):
     assert "doria90/current-repo" in repo_setup_response.text
     assert "No onboarded repositories yet" in repo_setup_response.text
     assert next_repo_response.status_code == 303
-    assert next_repo_response.headers["location"] == "/workspace"
+    assert next_repo_response.headers["location"] == "/dashboard/doria90%2Fnext-repo"
 
 
 def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
@@ -5669,7 +5675,7 @@ def test_repo_restore_reuses_inactive_allocation_row(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
     assert restore_response.status_code == 303
-    assert restore_response.headers["location"] == "/workspace"
+    assert restore_response.headers["location"] == "/dashboard/doria90%2Fcurrent-repo"
     assert len(allocations) == 1
     assert allocations[0].id == allocation.id
     assert allocations[0].allocation_status == "onboarded"
