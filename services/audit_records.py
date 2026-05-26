@@ -69,6 +69,11 @@ class PullRequestAuditRecord:
     hybrid_analysis_execution_count: int = 0
     hybrid_analysis_execution_reason: str | None = None
     hybrid_analysis_executions: list[dict[str, object]] | None = None
+    workspace_policy_version_id: int | None = None
+    repo_policy_version_id: int | None = None
+    effective_policy_hash: str | None = None
+    effective_policy_source: str | None = None
+    policy_decision_json: str = "{}"
 
 
 @dataclass(frozen=True)
@@ -629,6 +634,11 @@ def record_audit_result(
     hybrid_analysis_execution_count: int = 0,
     hybrid_analysis_execution_reason: str | None = None,
     hybrid_analysis_executions: list[dict[str, object]] | None = None,
+    workspace_policy_version_id: int | None = None,
+    repo_policy_version_id: int | None = None,
+    effective_policy_hash: str | None = None,
+    effective_policy_source: str | None = None,
+    policy_decision_json: str | None = None,
     error_message: str | None = None,
     artifact_snapshots: dict[str, str] | None = None,
     github_comment_id: int | None = None,
@@ -657,8 +667,12 @@ def record_audit_result(
         pr_updated_at=pr_updated_at,
     )
     persisted_feedback_mode = normalize_pr_feedback_mode(pr_feedback_mode)
+    persisted_policy_decision_json = str(policy_decision_json or "{}")
     with _connect(db_path) as conn:
         _ensure_pull_request_audit_columns(conn)
+        from .operational_policy_records import ensure_pull_request_audit_policy_provenance
+
+        ensure_pull_request_audit_policy_provenance(db_path)
         existing = conn.execute(
             """
             SELECT id, created_at, pr_state, pr_merged, pr_closed_at, pr_merged_at, pr_merge_commit_sha, pr_updated_at
@@ -681,8 +695,9 @@ def record_audit_result(
                     scenario_eval_execution_count, scenario_eval_execution_reason, scenario_eval_executions_json,
                     hybrid_analysis_mode, hybrid_analysis_request_count, hybrid_analysis_selection_reason, hybrid_analysis_requests_json,
                     hybrid_analysis_execution_count, hybrid_analysis_execution_reason, hybrid_analysis_executions_json,
+                    workspace_policy_version_id, repo_policy_version_id, effective_policy_hash, effective_policy_source, policy_decision_json,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -722,6 +737,11 @@ def record_audit_result(
                     hybrid_analysis_execution_count,
                     hybrid_analysis_execution_reason,
                     json.dumps(hybrid_analysis_executions),
+                    workspace_policy_version_id,
+                    repo_policy_version_id,
+                    effective_policy_hash,
+                    effective_policy_source,
+                    persisted_policy_decision_json,
                     error_message,
                     now,
                     now,
@@ -769,6 +789,11 @@ def record_audit_result(
                     hybrid_analysis_execution_count = ?,
                     hybrid_analysis_execution_reason = ?,
                     hybrid_analysis_executions_json = ?,
+                    workspace_policy_version_id = ?,
+                    repo_policy_version_id = ?,
+                    effective_policy_hash = ?,
+                    effective_policy_source = ?,
+                    policy_decision_json = ?,
                     error_message = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -810,6 +835,11 @@ def record_audit_result(
                     hybrid_analysis_execution_count,
                     hybrid_analysis_execution_reason,
                     json.dumps(hybrid_analysis_executions),
+                    workspace_policy_version_id,
+                    repo_policy_version_id,
+                    effective_policy_hash,
+                    effective_policy_source,
+                    persisted_policy_decision_json,
                     error_message,
                     now,
                     audit_id,
@@ -1864,6 +1894,11 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
     hybrid_analysis_execution_count = row["hybrid_analysis_execution_count"] if "hybrid_analysis_execution_count" in row.keys() else 0
     hybrid_analysis_execution_reason = row["hybrid_analysis_execution_reason"] if "hybrid_analysis_execution_reason" in row.keys() else None
     hybrid_analysis_executions_json = row["hybrid_analysis_executions_json"] if "hybrid_analysis_executions_json" in row.keys() else "[]"
+    workspace_policy_version_id = row["workspace_policy_version_id"] if "workspace_policy_version_id" in row.keys() else None
+    repo_policy_version_id = row["repo_policy_version_id"] if "repo_policy_version_id" in row.keys() else None
+    effective_policy_hash = row["effective_policy_hash"] if "effective_policy_hash" in row.keys() else None
+    effective_policy_source = row["effective_policy_source"] if "effective_policy_source" in row.keys() else None
+    policy_decision_json = row["policy_decision_json"] if "policy_decision_json" in row.keys() else "{}"
     try:
         scenario_eval_artifact_paths = json.loads(scenario_eval_artifact_paths_json or "[]")
     except json.JSONDecodeError:
@@ -1922,6 +1957,11 @@ def _row_to_pull_request_audit(row: sqlite3.Row) -> PullRequestAuditRecord:
         hybrid_analysis_execution_count=int(hybrid_analysis_execution_count or 0),
         hybrid_analysis_execution_reason=hybrid_analysis_execution_reason,
         hybrid_analysis_executions=[dict(item) for item in hybrid_analysis_executions if isinstance(item, dict)],
+        workspace_policy_version_id=int(workspace_policy_version_id) if workspace_policy_version_id is not None else None,
+        repo_policy_version_id=int(repo_policy_version_id) if repo_policy_version_id is not None else None,
+        effective_policy_hash=str(effective_policy_hash) if effective_policy_hash is not None else None,
+        effective_policy_source=str(effective_policy_source) if effective_policy_source is not None else None,
+        policy_decision_json=str(policy_decision_json or "{}"),
     )
 
 

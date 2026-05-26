@@ -1322,6 +1322,150 @@ def _render_policies_system_rows(system_rows: list[dict[str, object]], *, csrf_t
     return "".join(rows)
 
 
+def _render_operational_policy_summary_cards(cards: list[dict[str, str]]) -> str:
+    return "".join(
+        f'''
+        <article class="secondary-panel secondary-panel-flat">
+            <div class="secondary-panel-title">{html_escape(card["label"])}</div>
+            <p><strong>{html_escape(card["value"])}</strong></p>
+            <p class="muted">{html_escape(card["detail"])}</p>
+        </article>
+        '''
+        for card in cards
+    )
+
+
+def _render_policy_preset_options(selected: str, *, include_inherit: bool = False, include_custom_placeholder: bool = False) -> str:
+    options = []
+    if include_custom_placeholder:
+        options.append(("", "Choose replacement preset"))
+    if include_inherit:
+        options.append(("inherit", "Inherit workspace default"))
+    options.extend(
+        (
+            ("conservative", "Conservative"),
+            ("balanced", "Balanced"),
+            ("permissive", "Permissive"),
+        )
+    )
+    return "".join(
+        f'<option value="{html_escape(value)}"{" selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in options
+    )
+
+
+def _render_workspace_policy_panel(workspace_policy: dict[str, object], *, csrf_token: str, can_manage: bool) -> str:
+    form_markup = '<p class="muted">Owners and admins can change the workspace default policy.</p>'
+    if can_manage:
+        form_markup = f'''
+            <form method="post" action="/policies/workspace" class="control-page-inline-form policies-review-form">
+                {_csrf_input(csrf_token)}
+                <label class="policies-form-field">
+                    <span class="secondary-panel-title">Workspace preset</span>
+                    <select class="control-page-select policies-form-select" name="preset_key">{_render_policy_preset_options(str(workspace_policy.get("preset_key") or "balanced"))}</select>
+                </label>
+                <p class="muted">This updates the baseline operational policy for every connected repository unless a repo-specific override is present.</p>
+                <button type="submit" class="button">Save workspace policy</button>
+            </form>
+        '''
+
+    return f'''
+        <article class="control-page-section control-page-section-wide control-page-anchor-section" id="policies-workspace-default">
+            <div class="secondary-panel-title">Workspace default policy</div>
+            <div class="control-page-meta-grid compliance-inline-stat-grid">
+                <article class="control-page-stat-card"><span class="control-page-stat-label">Preset</span><strong>{html_escape(str(workspace_policy.get("preset_label") or "Balanced"))}</strong></article>
+                <article class="control-page-stat-card"><span class="control-page-stat-label">Semantic review</span><strong>{html_escape(str(workspace_policy.get("semantic_strategy_label") or "On medium+"))}</strong></article>
+                <article class="control-page-stat-card"><span class="control-page-stat-label">Verifier</span><strong>{html_escape(str(workspace_policy.get("verifier_strategy_label") or "High only"))}</strong></article>
+                <article class="control-page-stat-card"><span class="control-page-stat-label">Active version</span><strong>{html_escape(str(workspace_policy.get("version_label") or "v1"))}</strong></article>
+            </div>
+            <p class="control-page-copy">{html_escape(str(workspace_policy.get("description") or "This policy controls when semantic review runs, when verifier shadowing is allowed, and the minimum merge lane used for operational risk review."))}</p>
+            <div class="control-page-table-wrap">
+                <table class="control-page-table control-page-table-wide">
+                    <thead>
+                        <tr>
+                            <th>Merge lane</th>
+                            <th>Configured action</th>
+                            <th>Policy meaning</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Medium risk</td>
+                            <td>{html_escape(str(workspace_policy.get("medium_risk_action_label") or "Require escalation"))}</td>
+                            <td>How medium-risk pull requests are handled before merge.</td>
+                        </tr>
+                        <tr>
+                            <td>High risk</td>
+                            <td>{html_escape(str(workspace_policy.get("high_risk_action_label") or "Block"))}</td>
+                            <td>How high-risk pull requests are handled before merge.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            {form_markup}
+        </article>
+    '''
+
+
+def _render_repo_policy_rows(repo_policy_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
+    if not repo_policy_rows:
+        return '<div class="empty-state"><strong>No connected repositories yet.</strong><p>Allocate and onboard a repository first so repo-specific overrides have a target.</p></div>'
+
+    rows: list[str] = []
+    for row in repo_policy_rows:
+        form_markup = '<p class="muted">Owners and admins can set repo-specific overrides.</p>'
+        if can_manage:
+            selected_override = str(row.get("selected_override") or "inherit")
+            is_custom_override = selected_override == "custom"
+            select_markup = _render_policy_preset_options(
+                selected_override if not is_custom_override else "",
+                include_inherit=True,
+                include_custom_placeholder=is_custom_override,
+            )
+            helper_markup = ""
+            button_label = "Replace override"
+            select_attrs = ' required' if is_custom_override else ''
+            if is_custom_override:
+                helper_markup = '<p class="muted">Choose a preset or inherit to replace this custom repo override. Saving without a new selection is disabled.</p>'
+            else:
+                button_label = "Save override"
+            form_markup = f'''
+                <form method="post" action="/policies/repositories/{int(row["allocation_id"])}" class="control-page-inline-form policies-review-form">
+                    {_csrf_input(csrf_token)}
+                    <label class="policies-form-field">
+                        <span class="secondary-panel-title">Repo policy</span>
+                        <select class="control-page-select policies-form-select" name="preset_key"{select_attrs}>{select_markup}</select>
+                    </label>
+                    {helper_markup}
+                    <button type="submit" class="button">{html_escape(button_label)}</button>
+                </form>
+            '''
+        rows.append(
+            f'''
+            <tr>
+                <td>
+                    <strong>{html_escape(str(row.get("repo_full") or "Unknown"))}</strong>
+                    <div class="muted">{html_escape(str(row.get("allocation_status") or "unknown").replace("_", " ").title())}</div>
+                </td>
+                <td>
+                    <div>{html_escape(str(row.get("override_label") or "Workspace default"))}</div>
+                    <div class="muted">{html_escape(str(row.get("version_label") or "No override version yet"))}</div>
+                </td>
+                <td>
+                    <div>Semantic: {html_escape(str(row.get("semantic_strategy_label") or "On medium+"))}</div>
+                    <div class="muted">Verifier: {html_escape(str(row.get("verifier_strategy_label") or "High only"))}</div>
+                </td>
+                <td>
+                    <div>Medium: {html_escape(str(row.get("medium_risk_action_label") or "Require escalation"))}</div>
+                    <div class="muted">High: {html_escape(str(row.get("high_risk_action_label") or "Block"))}</div>
+                </td>
+                <td>{form_markup}</td>
+            </tr>
+            '''
+        )
+    return "".join(rows)
+
+
 def render_control_plane_policies_page(
     *,
     workspace_name: str,
@@ -1330,7 +1474,8 @@ def render_control_plane_policies_page(
     theme_preference: str,
     admin_url: str | None,
     summary_cards: list[dict[str, str]],
-    system_rows: list[dict[str, object]],
+    workspace_policy: dict[str, object],
+    repo_policy_rows: list[dict[str, object]],
     status_note: str | None,
     can_manage: bool,
     csrf_token: str,
@@ -1341,12 +1486,13 @@ def render_control_plane_policies_page(
     return (
         template.replace("{{WORKSPACE_NAME}}", html_escape(workspace_name))
         .replace("{{AUDIT_HREF}}", html_escape(audit_href))
+        .replace("{{PLAN_LABEL}}", html_escape(plan_label))
         .replace("{{THEME_PREFERENCE}}", html_escape(theme_preference))
         .replace("{{SIDEBAR_PROFILE_INITIAL}}", html_escape(sidebar_profile_initial or "V"))
         .replace("{{STATUS_NOTE}}", status_markup)
-        .replace("{{SUMMARY_CARDS}}", _render_policies_summary_cards(summary_cards))
-        .replace("{{REVIEW_QUEUE}}", _render_policies_review_queue(system_rows, csrf_token=csrf_token, can_manage=can_manage))
-        .replace("{{SYSTEM_ROWS}}", _render_policies_system_rows(system_rows, csrf_token=csrf_token, can_manage=can_manage))
+        .replace("{{SUMMARY_CARDS}}", _render_operational_policy_summary_cards(summary_cards))
+        .replace("{{WORKSPACE_POLICY_PANEL}}", _render_workspace_policy_panel(workspace_policy, csrf_token=csrf_token, can_manage=can_manage))
+        .replace("{{REPO_POLICY_ROWS}}", _render_repo_policy_rows(repo_policy_rows, csrf_token=csrf_token, can_manage=can_manage))
     )
 
 
@@ -1818,6 +1964,7 @@ def _render_compliance_tab_bar(active_tab: str) -> str:
     items = (
         ("readiness", "Readiness", "/compliance"),
         ("frameworks", "Frameworks", "/compliance/frameworks"),
+        ("ai-systems", "AI systems", "/compliance/ai-systems"),
         ("exports", "Exports", "/compliance/exports"),
         ("evidence", "Evidence", "/compliance/evidence"),
     )
@@ -2209,11 +2356,39 @@ def _render_compliance_page_content(
     export_jobs: tuple[ExportJob, ...],
     evidence_filter: str = "",
     evidence_repo: str = "",
+    ai_system_summary_cards: list[dict[str, str]] | None = None,
+    ai_system_rows: list[dict[str, object]] | None = None,
+    can_manage_ai_systems: bool = False,
 ) -> str:
     if active_tab == "frameworks":
         return f'''
             <section class="control-page-section stack compact-stack">
                 <div class="compliance-framework-grid">{_render_compliance_framework_cards(view.framework_cards)}</div>
+            </section>
+        '''
+    if active_tab == "ai-systems":
+        cards = ai_system_summary_cards or []
+        rows = ai_system_rows or []
+        return f'''
+            <section class="control-page-section stack compact-stack">
+                <div class="control-page-stat-grid compliance-stat-grid">{_render_policies_summary_cards(cards)}</div>
+                {_render_policies_review_queue(rows, csrf_token=csrf_token, can_manage=can_manage_ai_systems)}
+                <article class="control-page-section control-page-section-wide control-page-anchor-section">
+                    <div class="secondary-panel-title">Registered systems</div>
+                    <div class="control-page-table-wrap">
+                        <table class="control-page-table control-page-table-wide">
+                            <thead>
+                                <tr>
+                                    <th>System</th>
+                                    <th>Evidence</th>
+                                    <th>Status</th>
+                                    <th>Classification</th>
+                                </tr>
+                            </thead>
+                            <tbody>{_render_policies_system_rows(rows, csrf_token=csrf_token, can_manage=can_manage_ai_systems)}</tbody>
+                        </table>
+                    </div>
+                </article>
             </section>
         '''
     if active_tab == "exports":
@@ -2282,6 +2457,9 @@ def render_control_plane_compliance_page(
     shell_body: str = "",
     shell_cta_href: str | None = None,
     shell_cta_label: str | None = None,
+    ai_system_summary_cards: list[dict[str, str]] | None = None,
+    ai_system_rows: list[dict[str, object]] | None = None,
+    can_manage_ai_systems: bool = False,
     sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
@@ -2310,7 +2488,7 @@ def render_control_plane_compliance_page(
         .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
-        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter, evidence_repo))
+        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter, evidence_repo, ai_system_summary_cards, ai_system_rows, can_manage_ai_systems))
     )
 
 

@@ -2445,9 +2445,11 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
 
     help_response = client.get("/help", cookies={main.settings.session_cookie_name: session.session_id})
     policies_response = client.get("/policies", cookies={main.settings.session_cookie_name: session.session_id})
+    ai_systems_response = client.get("/compliance/ai-systems", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert help_response.status_code == 200
     assert policies_response.status_code == 200
+    assert ai_systems_response.status_code == 200
     assert "Vipari Help Center" in help_response.text
     assert "Visible repos" in help_response.text
     assert "Onboarded repos" in help_response.text
@@ -2465,42 +2467,96 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert help_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < help_response.text.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
     assert 'class="sidebar-nav-item sidebar-nav-item-active" aria-label="Help"' in help_response.text
     assert "Settings" in help_response.text
-    assert "AI System Registry" in policies_response.text
+    assert "Operational policies" in policies_response.text
     assert 'class="sidebar-nav-item sidebar-nav-item-active" aria-label="Policies"' in policies_response.text
-    assert policies_response.text.index('href="/integrations/mcp" class="sidebar-nav-item" aria-label="Agent Integrations"') < policies_response.text.index('href="/settings" class="sidebar-nav-item" aria-label="Settings"')
-    assert 'class="sidebar-nav-icon"' in policies_response.text
     assert 'href="/dashboard"' in policies_response.text
     assert 'href="#policies-overview"' in policies_response.text
-    assert 'href="#policies-review-queue"' in policies_response.text
-    assert 'href="#policies-registry"' in policies_response.text
-    assert 'href="#policies-glossary"' in policies_response.text
-    assert "Registered systems" in policies_response.text
-    assert "Needs review now" in policies_response.text
-    assert "2 systems still rely on auto-prefilled registry context and should be confirmed before they are used in compliance decisions." in policies_response.text
-    assert "Open repo dashboard" in policies_response.text
-    assert "Open compliance workspace view" in policies_response.text
-    assert "Baseline evidence is approved, so this system is ready for reviewer confirmation now." in policies_response.text
-    assert "EU AI Act risk classification" in policies_response.text
-    assert "Minimal risk" in policies_response.text
-    assert "High risk" in policies_response.text
-    assert "Prohibited" in policies_response.text
-    assert 'target="_blank"' in policies_response.text
-    assert 'aria-label="Open the official EU AI Act text in a new tab"' in policies_response.text
-    assert "Registry entries are derived from repositories already attached to this workspace." not in policies_response.text
-    assert "is on the Starter plan" not in policies_response.text
-    assert "Reviewer-confirmed" in policies_response.text
-    assert "Auto-prefilled" in policies_response.text
+    assert 'href="#policies-workspace-default"' in policies_response.text
+    assert 'href="#policies-repo-overrides"' in policies_response.text
+    assert "Workspace default policy" in policies_response.text
+    assert "Repository overrides" in policies_response.text
+    assert "Save workspace policy" in policies_response.text
+    assert "Save override" in policies_response.text
+    assert "Semantic review" in policies_response.text
+    assert "Verifier" in policies_response.text
     assert "placeholder-org/repo-approved" in policies_response.text
     assert "placeholder-org/repo-pending" in policies_response.text
-    assert "Save classification" in policies_response.text
-    assert "Auto-prefilled from deterministic repository evidence." in policies_response.text
-    assert "We are working on this" not in policies_response.text
-    assert "Deterministic evidence first" not in policies_response.text
-    assert "LLM assistance stays advisory" not in policies_response.text
     assert 'href="/compliance"' in help_response.text
     assert 'href="/compliance"' in policies_response.text
     assert 'data-theme-toggle' in help_response.text
     assert 'data-theme-toggle' in policies_response.text
+    assert "AI System Registry" in ai_systems_response.text
+    assert "Registered systems" in ai_systems_response.text
+    assert "Needs review now" in ai_systems_response.text
+    assert "2 systems still rely on auto-prefilled registry context and should be confirmed before they are used in compliance decisions." in ai_systems_response.text
+    assert "Save classification" in ai_systems_response.text
+    assert 'href="/compliance/ai-systems"' in ai_systems_response.text
+    assert main.get_workspace_policy(main.AUDIT_DB_PATH, workspace.id) is None
+
+    workspace_policy_update_response = client.post(
+        "/policies/workspace",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"csrf_token": session.csrf_secret, "preset_key": "conservative"},
+        follow_redirects=False,
+    )
+
+    assert workspace_policy_update_response.status_code == 303
+    assert workspace_policy_update_response.headers["location"] == "/policies?policy_saved=1"
+
+    refreshed_policy_response = client.get(
+        "/policies?policy_saved=1",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert refreshed_policy_response.status_code == 200
+    assert "Workspace operational policy saved" in refreshed_policy_response.text
+    assert "Conservative" in refreshed_policy_response.text
+
+    allocation = main.get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "placeholder-org/repo-pending")
+    assert allocation is not None
+
+    repo_policy_update_response = client.post(
+        f"/policies/repositories/{allocation.id}",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={"csrf_token": session.csrf_secret, "preset_key": "permissive"},
+        follow_redirects=False,
+    )
+
+    assert repo_policy_update_response.status_code == 303
+    assert repo_policy_update_response.headers["location"] == "/policies?repo_policy_saved=1"
+
+    refreshed_repo_policy_response = client.get(
+        "/policies?repo_policy_saved=1",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert refreshed_repo_policy_response.status_code == 200
+    assert "Repository policy override saved" in refreshed_repo_policy_response.text
+    assert "Permissive override" in refreshed_repo_policy_response.text
+
+    custom_override = main.normalize_repo_policy_override(
+        {
+            "gating": {"medium_risk_action": "warn"},
+            "llm_strategy": {"when_to_run_verifier": "on_medium_plus"},
+        }
+    )
+    main.upsert_repo_policy_override(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        repo_allocation_id=allocation.id,
+        policy_override=custom_override,
+        created_by_user_id=user.id,
+    )
+
+    custom_override_response = client.get(
+        "/policies",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert custom_override_response.status_code == 200
+    assert "Custom override" in custom_override_response.text
+    assert "Choose replacement preset" in custom_override_response.text
+    assert "Replace override" in custom_override_response.text
 
     systems = list_ai_systems_for_workspace(main.AUDIT_DB_PATH, workspace.id)
     approved_system = next(system for system in systems if system.repo_full == "placeholder-org/repo-approved")
@@ -2518,7 +2574,7 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     )
 
     assert update_response.status_code == 303
-    assert update_response.headers["location"] == "/policies?classification_saved=1"
+    assert update_response.headers["location"] == "/compliance/ai-systems?classification_saved=1"
 
     updated_system = get_ai_system_by_id(main.AUDIT_DB_PATH, approved_system.id)
     assert updated_system is not None
@@ -2526,18 +2582,18 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert updated_system.eu_ai_act_domain == "employment"
     assert updated_system.purpose_summary == "Assists hiring reviewers with prompt-based triage."
 
-    refreshed_policies_response = client.get(
-        "/policies?classification_saved=1",
+    refreshed_ai_systems_response = client.get(
+        "/compliance/ai-systems?classification_saved=1",
         cookies={main.settings.session_cookie_name: session.session_id},
     )
 
-    assert refreshed_policies_response.status_code == 200
-    assert "AI system classification saved" in refreshed_policies_response.text
-    assert "1 system still relies on auto-prefilled registry context and should be confirmed before it is used in compliance decisions." in refreshed_policies_response.text
-    assert "High Risk" in refreshed_policies_response.text or "High risk" in refreshed_policies_response.text
-    assert "Reviewer-confirmed classification stored in the workspace registry." in refreshed_policies_response.text
-    assert "Reviewer-confirmed" in refreshed_policies_response.text
-    assert "Auto-prefilled" in refreshed_policies_response.text
+    assert refreshed_ai_systems_response.status_code == 200
+    assert "AI system classification saved" in refreshed_ai_systems_response.text
+    assert "1 system still relies on auto-prefilled registry context and should be confirmed before it is used in compliance decisions." in refreshed_ai_systems_response.text
+    assert "High Risk" in refreshed_ai_systems_response.text or "High risk" in refreshed_ai_systems_response.text
+    assert "Reviewer-confirmed classification stored in the workspace registry." in refreshed_ai_systems_response.text
+    assert "Reviewer-confirmed" in refreshed_ai_systems_response.text
+    assert "Auto-prefilled" in refreshed_ai_systems_response.text
 
     invalid_update_response = client.post(
         f"/policies/systems/{approved_system.id}",
@@ -6870,7 +6926,7 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Baseline Review" in evidence_response.text
     assert "Missing Governance" in evidence_response.text
     assert "Classify AI systems" in response.text
-    assert 'href="/policies"' in response.text
+    assert 'href="/compliance/ai-systems"' in response.text
     assert '/compliance/evidence?gap=missing_governance' in response.text
     assert '/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
 
