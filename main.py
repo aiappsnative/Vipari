@@ -69,6 +69,7 @@ from services.auth_service import (
     GITHUB_REQUIRED_REPO_SCOPES,
     GithubOAuthToken,
     GithubUserProfile,
+    GithubUserRepository,
     build_github_oauth_authorize_url,
     exchange_code_for_access_token,
     fetch_github_user_profile,
@@ -247,6 +248,9 @@ CONTROL_PLANE_OAUTH_CONTEXT_COOKIE = "promptdrift_oauth_context"
 CONTROL_PLANE_PENDING_INSTALL_COOKIE = "promptdrift_pending_install"
 CONTROL_PLANE_INSTALL_STATE_COOKIE = "promptdrift_install_state"
 SUPPORTED_ACTIVE_PLAN_STATUSES = {"active", "trialing", "canceled", "free_active"}
+REPO_INVENTORY_SYNC_TTL_SECONDS = 60.0
+OAUTH_REPO_INVENTORY_CACHE_TTL_SECONDS = 60.0
+_SESSION_OAUTH_REPO_CACHE: dict[str, tuple[float, list[GithubUserRepository]]] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -1729,10 +1733,14 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
     workspace = access_context.get("workspace")
     installation = access_context.get("installation")
     user = access_context.get("user")
+    session = access_context.get("session")
     if workspace is None:
         return []
 
-    if installation is not None and settings.has_github_app_credentials:
+    connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)
+    allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
+
+    if installation is not None and settings.has_github_app_credentials and _repo_inventory_sync_due(installation, connections):
         try:
             _installation_payload, repositories = sync_installation_repositories(
                 app_id=settings.github_app_id,
@@ -1746,11 +1754,9 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
                 installation_id=installation.installation_id,
                 repositories=repositories,
             )
+            connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)
         except (HTTPError, OSError, RuntimeError, ValueError, InvalidKeyError):
             pass
-
-    connections = list_repo_connections_for_workspace(AUDIT_DB_PATH, workspace.id)
-    allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
     connected_repo_fulls = {connection.repo_full for connection in connections}
     active_allocated_repo_fulls = {
         allocation.repo_full
@@ -1804,9 +1810,14 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
         identity = get_github_identity_for_user(AUDIT_DB_PATH, user.id)
         access_token_encrypted = identity.access_token_encrypted if identity is not None else None
         if access_token_encrypted:
+            cache_key = str(getattr(session, "session_id", "") or f"user:{user.id}:workspace:{workspace.id}")
             try:
-                access_token = decrypt_text(access_token_encrypted, settings.app_encryption_key)
-                for repository in list_github_user_repositories(access_token):
+                repositories = _get_cached_oauth_repo_inventory(cache_key)
+                if repositories is None:
+                    access_token = decrypt_text(access_token_encrypted, settings.app_encryption_key)
+                    repositories = list_github_user_repositories(access_token)
+                    _store_cached_oauth_repo_inventory(cache_key, repositories)
+                for repository in repositories:
                     repo_full = repository.full_name.strip()
                     if not repo_full:
                         continue
@@ -1831,6 +1842,41 @@ def _github_account_repo_inventory(access_context: dict[str, object]) -> list[di
                 pass
 
     return sorted(inventory_by_full.values(), key=lambda item: str(item.get("repo_full") or "").lower())
+
+
+def _repo_inventory_sync_due(installation, connections: list[object], *, now: float | None = None) -> bool:
+    current_time = time.time() if now is None else now
+    last_synced_at = getattr(installation, "last_synced_at", None)
+    for connection in connections:
+        if getattr(connection, "installation_id", None) != getattr(installation, "installation_id", None):
+            continue
+        connection_synced_at = getattr(connection, "last_synced_at", None)
+        if isinstance(connection_synced_at, (int, float)) and (last_synced_at is None or connection_synced_at > last_synced_at):
+            last_synced_at = float(connection_synced_at)
+    if not isinstance(last_synced_at, (int, float)):
+        return True
+    return (current_time - float(last_synced_at)) >= REPO_INVENTORY_SYNC_TTL_SECONDS
+
+
+def _get_cached_oauth_repo_inventory(cache_key: str, *, now: float | None = None) -> list[GithubUserRepository] | None:
+    if not cache_key:
+        return None
+    current_time = time.time() if now is None else now
+    cached_entry = _SESSION_OAUTH_REPO_CACHE.get(cache_key)
+    if cached_entry is None:
+        return None
+    cached_at, repositories = cached_entry
+    if (current_time - cached_at) >= OAUTH_REPO_INVENTORY_CACHE_TTL_SECONDS:
+        _SESSION_OAUTH_REPO_CACHE.pop(cache_key, None)
+        return None
+    return repositories
+
+
+def _store_cached_oauth_repo_inventory(cache_key: str, repositories: list[GithubUserRepository], *, now: float | None = None) -> None:
+    if not cache_key:
+        return
+    current_time = time.time() if now is None else now
+    _SESSION_OAUTH_REPO_CACHE[cache_key] = (current_time, list(repositories))
 
 
 def _require_repo_dashboard_read_access(request: Request, repo_full: str) -> dict[str, object]:

@@ -4340,62 +4340,6 @@ body.dashboard-index-page[data-theme="light"] {
     align-items: center;
 }
 
-.repo-setup-page .repo-setup-progress {
-    display: grid;
-    gap: 8px;
-    min-width: min(280px, 100%);
-}
-
-.repo-setup-page .repo-setup-progress[hidden] {
-    display: none;
-}
-
-.repo-setup-page .repo-setup-progress-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.repo-setup-page .repo-setup-progress-label {
-    color: var(--color-text-muted);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.repo-setup-page .repo-setup-progress-bar {
-    position: relative;
-    overflow: hidden;
-    width: 100%;
-    height: 10px;
-    border-radius: 999px;
-    background: var(--color-surface-3);
-    border: 1px solid var(--color-border);
-}
-
-.repo-setup-page .repo-setup-progress-fill {
-    position: absolute;
-    inset: 0;
-    width: 42%;
-    border-radius: inherit;
-    background: linear-gradient(90deg, rgba(84, 238, 228, 0.94), rgba(76, 198, 205, 0.94));
-    animation: repo-setup-progress-slide 1.15s ease-in-out infinite;
-    transform-origin: left center;
-}
-
-@keyframes repo-setup-progress-slide {
-    0% {
-        transform: translateX(-110%) scaleX(0.85);
-    }
-    55% {
-        transform: translateX(115%) scaleX(1);
-    }
-    100% {
-        transform: translateX(220%) scaleX(0.9);
-    }
-}
-
 .repo-setup-page .repo-setup-inventory-action-group {
     display: inline-flex;
     align-items: center;

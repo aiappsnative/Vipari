@@ -168,18 +168,10 @@
                     return;
                 }
                 form.addEventListener('submit', () => {
-                    const actionCell = form.closest('.repo-setup-inventory-action');
-                    const progress = actionCell instanceof HTMLElement
-                        ? actionCell.querySelector('[data-repo-onboarding-progress="true"]')
-                        : null;
                     const submitButton = form.querySelector('button[type="submit"]');
                     if (submitButton instanceof HTMLButtonElement) {
                         submitButton.disabled = true;
                         submitButton.textContent = 'Allocating...';
-                    }
-                    if (progress instanceof HTMLElement) {
-                        form.hidden = true;
-                        progress.hidden = false;
                     }
                 }, { once: true });
             });

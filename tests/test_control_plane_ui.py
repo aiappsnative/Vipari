@@ -19,7 +19,7 @@ import main
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
 from services.billing_service import build_stripe_signature
-from services.auth_service import GithubOAuthToken, GithubUserProfile
+from services.auth_service import GithubOAuthToken, GithubUserProfile, GithubUserRepository
 from services.secure_store import decrypt_text, encrypt_text
 from services.persistence import DatabaseRow
 
@@ -48,8 +48,10 @@ client = CookieCompatTestClient(main.app)
 @pytest.fixture(autouse=True)
 def reset_test_client_cookies():
     client.cookies.clear()
+    main._SESSION_OAUTH_REPO_CACHE.clear()
     yield
     client.cookies.clear()
+    main._SESSION_OAUTH_REPO_CACHE.clear()
 
 
 def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path):
@@ -5242,8 +5244,8 @@ def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path)
     assert "Open audit" not in response.text
     assert "Onboarding active" not in response.text
     assert 'data-repo-onboarding-form="true"' in response.text
-    assert 'data-repo-onboarding-progress="true"' in response.text
-    assert "Scanning repository and building the baseline" in response.text
+    assert 'data-repo-onboarding-progress="true"' not in response.text
+    assert "Scanning repository and building the baseline" not in response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -8276,8 +8278,6 @@ def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
         upsert_github_identity,
         upsert_subscription,
     )
-    from services.auth_service import GithubUserRepository
-
     main.settings.app_encryption_key = "very-secret"
     encrypted_token = encrypt_text("oauth-token", main.settings.app_encryption_key)
 
@@ -8362,6 +8362,207 @@ def test_repo_setup_page_falls_back_to_github_oauth_repo_inventory(tmp_path):
     assert "Available Repositories" in response.text
     assert "doria90/dummyAI" in response.text
     assert "doria90/PromptDrift" in response.text
+
+
+def test_repo_setup_skips_live_installation_sync_when_recent_inventory_exists(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-setup-recent-install-cache.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="901",
+        github_login="recent-install-owner",
+        display_name="Recent Install Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="recent-install-workspace",
+        display_name="Recent Install Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="recent-install-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="local:team:recent-install",
+        stripe_price_id="local:team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=None,
+        next_payment_at=None,
+        trial_ends_at=None,
+        last_webhook_event_id="test-recent-install",
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 5,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "email",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+
+    with patch("main.sync_installation_repositories", side_effect=AssertionError("live installation sync should not run")):
+        response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    assert "doria90/dummyAI" in response.text
+
+
+def test_repo_setup_reuses_oauth_repo_inventory_within_session(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_encryption_key = main.settings.app_encryption_key
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-setup-oauth-cache.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import (
+        create_user_session,
+        create_workspace,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_subscription,
+    )
+
+    main.settings.app_encryption_key = "very-secret"
+    encrypted_token = encrypt_text("oauth-token", main.settings.app_encryption_key)
+
+    user, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="963",
+        github_login="repo-cache-viewer",
+        display_name="Repo Cache Viewer",
+        primary_email="repo-cache@example.com",
+        avatar_url=None,
+        granted_scopes=["repo"],
+        access_token_encrypted=encrypted_token,
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        billing_owner_user_id=user.id,
+        display_name="OAuth Repo Cache Workspace",
+        slug="oauth-repo-cache-workspace",
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_repo_oauth_cache",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-setup-oauth-cache-session",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+
+    with patch("main.list_github_user_repositories") as list_repositories:
+        list_repositories.return_value = [
+            GithubUserRepository(
+                github_repo_id="1",
+                full_name="doria90/dummyAI",
+                default_branch="main",
+                is_private=True,
+                html_url="https://github.com/doria90/dummyAI",
+            ),
+        ]
+        first_response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    with patch("main.list_github_user_repositories", side_effect=AssertionError("oauth repo listing should come from cache")):
+        second_response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.settings.app_encryption_key = original_encryption_key
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert "doria90/dummyAI" in first_response.text
+    assert "doria90/dummyAI" in second_response.text
 
     main.settings.app_encryption_key = original_encryption_key
     main.AUDIT_DB_PATH = original_db_path
