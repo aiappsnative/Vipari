@@ -6921,8 +6921,11 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "1 repo still relies on auto-prefilled registry context." in frameworks_response.text
     assert "SOC 2" in frameworks_response.text
     assert "ISO 27001" in frameworks_response.text
+    assert "These cards summarize the framework story" not in frameworks_response.text
     assert "Risk classification guide" in frameworks_response.text
     assert "How to interpret the current AI Act risk bands" in frameworks_response.text
+    assert 'href="https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"' in frameworks_response.text
+    assert 'class="policies-glossary-link"' in frameworks_response.text
     assert "Unclassified" in frameworks_response.text
     assert "Minimal risk" in frameworks_response.text
     assert "Limited risk" in frameworks_response.text

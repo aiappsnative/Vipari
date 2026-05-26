@@ -3958,7 +3958,7 @@ async def compliance_frameworks_page(request: Request):
         active_tab="frameworks",
         page_title="Framework mapping",
         page_description="Review how the monitored repositories map to EU AI Act, SOC 2, and ISO 27001 expectations without the operational export controls competing for attention.",
-        page_note="These cards summarize the framework story for the current workspace evidence set and end with a reference guide for AI Act risk classification.",
+        page_note="",
     )
 
 

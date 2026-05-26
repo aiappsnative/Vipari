@@ -1323,59 +1323,43 @@ def _render_policies_system_rows(system_rows: list[dict[str, object]], *, csrf_t
 
 
 def _render_compliance_risk_classification_guide() -> str:
-    rows = [
-        (
-            "unclassified",
-            "Unclassified",
-            "A repository-backed AI system still needs reviewer confirmation before it should be used in readiness or export decisions.",
-            "Use the Risk Classification tab to confirm the risk level, domain, and purpose summary.",
-        ),
-        (
-            "minimal",
-            "Minimal risk",
-            "Low-impact AI support with limited rights or safety implications under the current evidence set.",
-            "Keep the purpose summary current and re-review when the repo gains user-facing automation or new decision authority.",
-        ),
-        (
-            "limited",
-            "Limited risk",
-            "AI features that still need transparency or human-context checks, but do not currently meet the high-risk threshold.",
-            "Confirm the system purpose and any disclosure obligations before relying on this classification in downstream reviews.",
-        ),
-        (
-            "high",
-            "High risk",
-            "AI capability mapped to a regulated high-risk use case or evidence set that warrants heightened compliance follow-up.",
-            "Treat this as a priority review lane: confirm the domain, baseline evidence, and governance artifacts before export or audit follow-up.",
-        ),
-        (
-            "prohibited",
-            "Prohibited",
-            "The current evidence suggests the system may fall into a prohibited AI practice and needs immediate escalation.",
-            "Escalate for legal and policy review before the workspace relies on this system in production or compliance reporting.",
-        ),
-    ]
     cards = "".join(
-        f'''
-        <article class="compliance-risk-guide-card compliance-risk-guide-card-{html_escape(tone)}" data-risk-band="{html_escape(tone)}">
-            <div class="compliance-risk-guide-card-head">
-                <span class="compliance-status-pill compliance-risk-guide-pill compliance-risk-guide-pill-{html_escape(tone)}">{html_escape(label)}</span>
-                <span class="control-page-microcopy">{html_escape(str(index).zfill(2))}</span>
-            </div>
-            <p>{html_escape(summary)}</p>
-            <p class="control-page-microcopy">{html_escape(operator_note)}</p>
-        </article>
-        '''
-        for index, (tone, label, summary, operator_note) in enumerate(rows, start=1)
+        (
+            '<article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-unclassified">'
+            '<div class="secondary-panel-title">Unclassified</div>'
+            '<p class="muted">This system still needs a formal EU AI Act review. Treat it as confirmation debt until a reviewer records a category and domain.</p>'
+            '</article>',
+            '<article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-minimal">'
+            '<div class="secondary-panel-title">Minimal risk</div>'
+            '<p class="muted">Most internal productivity and low-impact assistive systems land here. The focus stays on clear ownership, normal oversight, and keeping the evidence trail current.</p>'
+            '</article>',
+            '<article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-limited">'
+            '<div class="secondary-panel-title">Limited risk</div>'
+            '<p class="muted">These systems may trigger transparency duties, such as disclosing AI-generated content or making it clear when a person is interacting with AI assistance.</p>'
+            '</article>',
+            '<article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-high">'
+            '<div class="secondary-panel-title">High risk</div>'
+            '<p class="muted">These uses demand the strongest operating discipline: documented controls, risk management, human oversight, and a defensible evidence package before relying on the system.</p>'
+            '</article>',
+            '<article class="secondary-panel secondary-panel-flat policies-glossary-card policies-glossary-card-prohibited">'
+            '<div class="secondary-panel-title">Prohibited</div>'
+            '<p class="muted">These uses are not a ship-with-guardrails scenario. If a system falls here, the correct response is to stop and escalate rather than package it as compliant.</p>'
+            '</article>'
+        )
     )
     return f'''
         <section class="control-page-section stack compact-stack">
-            <div>
-                <p class="secondary-panel-title">Risk classification guide</p>
-                <h2 class="control-page-section-title">How to interpret the current AI Act risk bands</h2>
-                <p>Use this reference when confirming the workspace risk classification for repository-backed AI systems. The guide progresses from the lightest review posture to the most severe escalation lane.</p>
+            <div class="policies-glossary-header">
+                <div>
+                    <p class="secondary-panel-title">Risk classification guide</p>
+                    <h2 class="control-page-section-title">How to interpret the current AI Act risk bands</h2>
+                </div>
+                <a class="policies-glossary-link" href="https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng" target="_blank" rel="noopener noreferrer" aria-label="Open the official EU AI Act text in a new tab">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5A2.5 2.5 0 0 0 3.5 7v10A2.5 2.5 0 0 0 6 19.5h12A2.5 2.5 0 0 0 20.5 17V7A2.5 2.5 0 0 0 18 4.5Zm0 1.5h5v12H6A1 1 0 0 1 5 17V7a1 1 0 0 1 1-1Zm6.5 0H18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-5.5Z"/></svg>
+                </a>
             </div>
-            <div class="compliance-risk-guide-grid">{cards}</div>
+            <p class="control-page-copy">Use this glossary to keep registry labels aligned with the Act's risk-based structure. Final legal interpretation still belongs with your counsel and compliance owners.</p>
+            <div class="control-page-sections policies-glossary-grid">{cards}</div>
         </section>
     '''
 
@@ -2525,6 +2509,7 @@ def render_control_plane_compliance_page(
     export_job_items = export_jobs or tuple()
     show_status_note = bool(status_note)
     status_markup = f'<div class="control-page-inline-note control-page-inline-note-compact compliance-inline-note">{html_escape(status_note)}</div>' if show_status_note else ""
+    page_note_markup = f'<p class="control-page-tab-intro-note">{html_escape(page_note)}</p>' if page_note else ""
     blocked_class = " dashboard-shell-blocked" if shell_state != "active" else ""
     shell_notice = ""
     if shell_state != "active":
@@ -2543,7 +2528,7 @@ def render_control_plane_compliance_page(
         .replace("{{STATUS_NOTE}}", status_markup)
         .replace("{{PAGE_TITLE}}", html_escape(page_title))
         .replace("{{PAGE_DESCRIPTION}}", html_escape(page_description))
-        .replace("{{PAGE_NOTE}}", html_escape(page_note))
+        .replace("{{PAGE_NOTE_BLOCK}}", page_note_markup)
         .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
