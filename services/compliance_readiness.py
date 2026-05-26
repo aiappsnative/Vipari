@@ -350,9 +350,9 @@ def _gap_items(repo_rows: Sequence[ComplianceRepoReadinessRow]) -> tuple[Complia
             _gap_cta_href("baseline_review"),
         ),
         "ai_act_classification": (
-            "Classify AI systems",
+            "Review risk classification",
             "At least one registered AI system is still missing an EU AI Act risk classification.",
-            "Open registry",
+            "Open Risk Classification",
             "/compliance/ai-systems",
         ),
         "missing_governance": (

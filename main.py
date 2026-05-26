@@ -3958,7 +3958,7 @@ async def compliance_frameworks_page(request: Request):
         active_tab="frameworks",
         page_title="Framework mapping",
         page_description="Review how the monitored repositories map to EU AI Act, SOC 2, and ISO 27001 expectations without the operational export controls competing for attention.",
-        page_note="These cards summarize the framework story for the current workspace evidence set.",
+        page_note="These cards summarize the framework story for the current workspace evidence set and end with a reference guide for AI Act risk classification.",
     )
 
 
@@ -3968,9 +3968,9 @@ async def compliance_ai_systems_page(request: Request):
     return _render_compliance_tab_page(
         request,
         active_tab="ai-systems",
-        page_title="AI System Registry",
-        page_description="Review and confirm repository-backed AI system classifications for the current workspace.",
-        page_note="This tab keeps AI system registry review under Compliance while the Policies page focuses on operational guardrails.",
+        page_title="Risk Classification",
+        page_description="Review and confirm repository-backed AI system risk classifications for the current workspace.",
+        page_note="This tab keeps AI system risk classification under Compliance while the Policies page focuses on operational guardrails.",
     )
 
 

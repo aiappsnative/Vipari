@@ -2490,7 +2490,7 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert 'href="/compliance"' in policies_response.text
     assert 'data-theme-toggle' in help_response.text
     assert 'data-theme-toggle' in policies_response.text
-    assert "AI System Registry" in ai_systems_response.text
+    assert "Risk Classification" in ai_systems_response.text
     assert "Registered systems" in ai_systems_response.text
     assert "Needs review now" in ai_systems_response.text
     assert "2 systems still rely on auto-prefilled registry context and should be confirmed before they are used in compliance decisions." in ai_systems_response.text
@@ -6921,6 +6921,13 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "1 repo still relies on auto-prefilled registry context." in frameworks_response.text
     assert "SOC 2" in frameworks_response.text
     assert "ISO 27001" in frameworks_response.text
+    assert "Risk classification guide" in frameworks_response.text
+    assert "How to interpret the current AI Act risk bands" in frameworks_response.text
+    assert "Unclassified" in frameworks_response.text
+    assert "Minimal risk" in frameworks_response.text
+    assert "Limited risk" in frameworks_response.text
+    assert "High risk" in frameworks_response.text
+    assert "Prohibited" in frameworks_response.text
     assert "Run compliance exports" in exports_response.text
     assert "Export history" in exports_response.text
     assert "Review-ready preset" in exports_response.text
@@ -6933,7 +6940,7 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Stale (45d)" in evidence_response.text
     assert "Baseline Review" in evidence_response.text
     assert "Missing Governance" in evidence_response.text
-    assert "Classify AI systems" in response.text
+    assert "Review risk classification" in response.text
     assert 'href="/compliance/ai-systems"' in response.text
     assert '/compliance/evidence?gap=missing_governance' in response.text
     assert '/compliance/evidence?gap=baseline_review&amp;repo=compliance-org%2Frepo-two' in response.text
