@@ -1325,60 +1325,57 @@ def _render_policies_system_rows(system_rows: list[dict[str, object]], *, csrf_t
 def _render_compliance_risk_classification_guide() -> str:
     rows = [
         (
+            "unclassified",
             "Unclassified",
             "A repository-backed AI system still needs reviewer confirmation before it should be used in readiness or export decisions.",
             "Use the Risk Classification tab to confirm the risk level, domain, and purpose summary.",
         ),
         (
+            "minimal",
             "Minimal risk",
             "Low-impact AI support with limited rights or safety implications under the current evidence set.",
             "Keep the purpose summary current and re-review when the repo gains user-facing automation or new decision authority.",
         ),
         (
+            "limited",
             "Limited risk",
             "AI features that still need transparency or human-context checks, but do not currently meet the high-risk threshold.",
             "Confirm the system purpose and any disclosure obligations before relying on this classification in downstream reviews.",
         ),
         (
+            "high",
             "High risk",
             "AI capability mapped to a regulated high-risk use case or evidence set that warrants heightened compliance follow-up.",
             "Treat this as a priority review lane: confirm the domain, baseline evidence, and governance artifacts before export or audit follow-up.",
         ),
         (
+            "prohibited",
             "Prohibited",
             "The current evidence suggests the system may fall into a prohibited AI practice and needs immediate escalation.",
             "Escalate for legal and policy review before the workspace relies on this system in production or compliance reporting.",
         ),
     ]
-    body = "".join(
+    cards = "".join(
         f'''
-        <tr>
-            <td><strong>{html_escape(label)}</strong></td>
-            <td>{html_escape(summary)}</td>
-            <td>{html_escape(operator_note)}</td>
-        </tr>
+        <article class="compliance-risk-guide-card compliance-risk-guide-card-{html_escape(tone)}" data-risk-band="{html_escape(tone)}">
+            <div class="compliance-risk-guide-card-head">
+                <span class="compliance-status-pill compliance-risk-guide-pill compliance-risk-guide-pill-{html_escape(tone)}">{html_escape(label)}</span>
+                <span class="control-page-microcopy">{html_escape(str(index).zfill(2))}</span>
+            </div>
+            <p>{html_escape(summary)}</p>
+            <p class="control-page-microcopy">{html_escape(operator_note)}</p>
+        </article>
         '''
-        for label, summary, operator_note in rows
+        for index, (tone, label, summary, operator_note) in enumerate(rows, start=1)
     )
     return f'''
         <section class="control-page-section stack compact-stack">
             <div>
                 <p class="secondary-panel-title">Risk classification guide</p>
                 <h2 class="control-page-section-title">How to interpret the current AI Act risk bands</h2>
-                <p>Use this reference when confirming the workspace risk classification for repository-backed AI systems.</p>
+                <p>Use this reference when confirming the workspace risk classification for repository-backed AI systems. The guide progresses from the lightest review posture to the most severe escalation lane.</p>
             </div>
-            <div class="control-page-table-wrap">
-                <table class="control-page-table control-page-table-wide">
-                    <thead>
-                        <tr>
-                            <th>Risk level</th>
-                            <th>What it means</th>
-                            <th>What to do next</th>
-                        </tr>
-                    </thead>
-                    <tbody>{body}</tbody>
-                </table>
-            </div>
+            <div class="compliance-risk-guide-grid">{cards}</div>
         </section>
     '''
 

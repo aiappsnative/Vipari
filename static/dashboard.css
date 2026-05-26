@@ -6656,6 +6656,141 @@ body.control-page[data-theme="light"] .policies-form-select {
     color: var(--color-text-muted);
 }
 
+.compliance-risk-guide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.compliance-risk-guide-card {
+    display: grid;
+    gap: 12px;
+    padding: 18px;
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.compliance-risk-guide-card p {
+    margin: 0;
+}
+
+.compliance-risk-guide-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.compliance-risk-guide-pill {
+    border-width: 0;
+}
+
+.compliance-risk-guide-card-unclassified {
+    border-color: rgba(156, 163, 175, 0.22);
+    background: linear-gradient(180deg, rgba(101, 109, 123, 0.16), rgba(21, 28, 34, 0.96));
+}
+
+.compliance-risk-guide-pill-unclassified {
+    background: rgba(148, 163, 184, 0.16);
+    color: #d5dbe6;
+}
+
+.compliance-risk-guide-card-minimal {
+    border-color: rgba(84, 238, 228, 0.24);
+    background: linear-gradient(180deg, rgba(84, 238, 228, 0.12), rgba(18, 29, 31, 0.98));
+}
+
+.compliance-risk-guide-pill-minimal {
+    background: rgba(84, 238, 228, 0.18);
+    color: #8ff6ee;
+}
+
+.compliance-risk-guide-card-limited {
+    border-color: rgba(244, 200, 96, 0.26);
+    background: linear-gradient(180deg, rgba(244, 200, 96, 0.14), rgba(35, 29, 17, 0.98));
+}
+
+.compliance-risk-guide-pill-limited {
+    background: rgba(244, 200, 96, 0.18);
+    color: #ffe2a0;
+}
+
+.compliance-risk-guide-card-high {
+    border-color: rgba(255, 146, 87, 0.3);
+    background: linear-gradient(180deg, rgba(255, 146, 87, 0.16), rgba(42, 24, 19, 0.98));
+}
+
+.compliance-risk-guide-pill-high {
+    background: rgba(255, 146, 87, 0.22);
+    color: #ffc09c;
+}
+
+.compliance-risk-guide-card-prohibited {
+    border-color: rgba(255, 102, 102, 0.32);
+    background: linear-gradient(180deg, rgba(255, 102, 102, 0.18), rgba(46, 18, 24, 0.98));
+}
+
+.compliance-risk-guide-pill-prohibited {
+    background: rgba(255, 102, 102, 0.24);
+    color: #ffb5b5;
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card-unclassified {
+    border-color: rgba(107, 114, 128, 0.18);
+    background: linear-gradient(180deg, rgba(226, 232, 240, 0.92), rgba(241, 245, 249, 0.98));
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-pill-unclassified {
+    background: rgba(148, 163, 184, 0.18);
+    color: #475569;
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card-minimal {
+    border-color: rgba(45, 212, 191, 0.22);
+    background: linear-gradient(180deg, rgba(204, 251, 241, 0.96), rgba(240, 253, 250, 0.98));
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-pill-minimal {
+    background: rgba(45, 212, 191, 0.2);
+    color: #0f766e;
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card-limited {
+    border-color: rgba(245, 158, 11, 0.24);
+    background: linear-gradient(180deg, rgba(254, 243, 199, 0.96), rgba(255, 251, 235, 0.98));
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-pill-limited {
+    background: rgba(245, 158, 11, 0.18);
+    color: #b45309;
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card-high {
+    border-color: rgba(249, 115, 22, 0.24);
+    background: linear-gradient(180deg, rgba(255, 237, 213, 0.96), rgba(255, 247, 237, 0.98));
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-pill-high {
+    background: rgba(249, 115, 22, 0.18);
+    color: #c2410c;
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-card-prohibited {
+    border-color: rgba(239, 68, 68, 0.24);
+    background: linear-gradient(180deg, rgba(254, 226, 226, 0.96), rgba(254, 242, 242, 0.98));
+}
+
+.compliance-page[data-theme="light"] .compliance-risk-guide-pill-prohibited {
+    background: rgba(239, 68, 68, 0.18);
+    color: #b91c1c;
+}
+
 .compliance-repo-list {
     display: grid;
     gap: 12px;
