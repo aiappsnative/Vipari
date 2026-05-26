@@ -2491,6 +2491,7 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert "2 systems still rely on auto-prefilled registry context and should be confirmed before they are used in compliance decisions." in ai_systems_response.text
     assert "Save classification" in ai_systems_response.text
     assert 'href="/compliance/ai-systems"' in ai_systems_response.text
+    assert main.get_workspace_policy(main.AUDIT_DB_PATH, workspace.id) is None
 
     workspace_policy_update_response = client.post(
         "/policies/workspace",
@@ -2532,6 +2533,30 @@ def test_help_page_renders_help_center_and_policies_registry_and_classification_
     assert refreshed_repo_policy_response.status_code == 200
     assert "Repository policy override saved" in refreshed_repo_policy_response.text
     assert "Permissive override" in refreshed_repo_policy_response.text
+
+    custom_override = main.normalize_repo_policy_override(
+        {
+            "gating": {"medium_risk_action": "warn"},
+            "llm_strategy": {"when_to_run_verifier": "on_medium_plus"},
+        }
+    )
+    main.upsert_repo_policy_override(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        repo_allocation_id=allocation.id,
+        policy_override=custom_override,
+        created_by_user_id=user.id,
+    )
+
+    custom_override_response = client.get(
+        "/policies",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert custom_override_response.status_code == 200
+    assert "Custom override" in custom_override_response.text
+    assert "Choose replacement preset" in custom_override_response.text
+    assert "Replace override" in custom_override_response.text
 
     systems = list_ai_systems_for_workspace(main.AUDIT_DB_PATH, workspace.id)
     approved_system = next(system for system in systems if system.repo_full == "placeholder-org/repo-approved")

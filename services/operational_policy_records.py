@@ -278,9 +278,11 @@ def upsert_workspace_policy(
     return _row_to_workspace_policy(updated)
 
 
-def get_repo_policy_override(db_path: str, repo_allocation_id: int) -> RepoPolicyOverrideRecord | None:
+def get_repo_policy_override(db_path: str, repo_allocation_id: int, *, workspace_id: int | None = None) -> RepoPolicyOverrideRecord | None:
     with connect_sqlite(db_path) as conn:
         row = conn.execute("SELECT * FROM repo_policy_overrides WHERE repo_allocation_id = ?", (repo_allocation_id,)).fetchone()
+    if row is not None and workspace_id is not None and int(row["workspace_id"]) != workspace_id:
+        raise ValueError("Repository policy override does not belong to workspace.")
     return _row_to_repo_policy_override(row) if row is not None else None
 
 
@@ -289,18 +291,35 @@ def resolve_effective_policy_record(
     *,
     workspace_id: int,
     repo_allocation_id: int | None = None,
+    persist_missing_workspace_policy: bool = True,
 ) -> EffectivePolicyResolutionRecord:
     workspace_record = get_workspace_policy(db_path, workspace_id)
+    workspace_policy_version_id: int | None = workspace_record.active_version_id if workspace_record is not None else None
     if workspace_record is None:
-        workspace_record = upsert_workspace_policy(
-            db_path,
-            workspace_id=workspace_id,
-            policy=default_policy_for_preset(),
-            created_by_user_id=None,
-        )
+        if persist_missing_workspace_policy:
+            workspace_record = upsert_workspace_policy(
+                db_path,
+                workspace_id=workspace_id,
+                policy=default_policy_for_preset(),
+                created_by_user_id=None,
+            )
+            workspace_policy_version_id = workspace_record.active_version_id
+            workspace_policy = normalize_operational_policy(json.loads(workspace_record.policy_json))
+        else:
+            workspace_policy = default_policy_for_preset()
+    else:
+        workspace_policy = normalize_operational_policy(json.loads(workspace_record.policy_json))
 
-    workspace_policy = normalize_operational_policy(json.loads(workspace_record.policy_json))
-    repo_record = get_repo_policy_override(db_path, repo_allocation_id) if repo_allocation_id is not None else None
+    repo_record = None
+    if repo_allocation_id is not None:
+        with connect_sqlite(db_path) as conn:
+            allocation_row = conn.execute("SELECT workspace_id FROM repo_allocations WHERE id = ?", (repo_allocation_id,)).fetchone()
+        if allocation_row is None:
+            raise ValueError("Repository allocation not found.")
+        if int(allocation_row["workspace_id"]) != workspace_id:
+            raise ValueError("Repository allocation does not belong to workspace.")
+        repo_record = get_repo_policy_override(db_path, repo_allocation_id, workspace_id=workspace_id)
+
     repo_override = normalize_repo_policy_override(json.loads(repo_record.override_json)) if repo_record is not None else None
     resolved = resolve_effective_policy(workspace_policy, repo_override)
     policy_decision_json = json.dumps(
@@ -308,14 +327,14 @@ def resolve_effective_policy_record(
             "effective_policy": canonical_policy_dict(resolved.policy),
             "effective_policy_source": resolved.source,
             "repo_policy_version_id": repo_record.active_version_id if repo_record is not None else None,
-            "workspace_policy_version_id": workspace_record.active_version_id,
+            "workspace_policy_version_id": workspace_policy_version_id,
         },
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
     )
     return EffectivePolicyResolutionRecord(
-        workspace_policy_version_id=workspace_record.active_version_id,
+        workspace_policy_version_id=workspace_policy_version_id,
         repo_policy_version_id=repo_record.active_version_id if repo_record is not None else None,
         effective_policy_hash=compute_policy_hash(resolved.policy),
         effective_policy_source=resolved.source,
@@ -337,7 +356,14 @@ def upsert_repo_policy_override(
     override_json = canonical_repo_policy_override_json(policy_override)
     override_hash = compute_repo_policy_override_hash(policy_override)
     with connect_sqlite(db_path) as conn:
+        allocation_row = conn.execute("SELECT workspace_id FROM repo_allocations WHERE id = ?", (repo_allocation_id,)).fetchone()
+        if allocation_row is None:
+            raise ValueError("Repository allocation not found.")
+        if int(allocation_row["workspace_id"]) != workspace_id:
+            raise ValueError("Repository allocation does not belong to workspace.")
         row = conn.execute("SELECT * FROM repo_policy_overrides WHERE repo_allocation_id = ?", (repo_allocation_id,)).fetchone()
+        if row is not None and int(row["workspace_id"]) != workspace_id:
+            raise ValueError("Repository policy override does not belong to workspace.")
         previous_json = None
         if row is None:
             conn.execute(

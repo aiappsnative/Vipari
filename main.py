@@ -3632,7 +3632,7 @@ def _repo_policy_override_selection(override_json: str | None) -> tuple[str, str
     for preset_key in ("conservative", "balanced", "permissive"):
         if canonical_repo_policy_override_json(_policy_override_for_preset(preset_key)) == normalized_json:
             return preset_key, f"{_labelize_policy_value(preset_key)} override"
-    return "inherit", "Custom override"
+    return "custom", "Custom override"
 
 
 def _build_ai_system_registry_context(access_context: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
@@ -3697,7 +3697,11 @@ def _build_ai_system_registry_context(access_context: dict[str, object]) -> tupl
 
 def _build_operational_policy_context(access_context: dict[str, object]) -> tuple[list[dict[str, str]], dict[str, object], list[dict[str, object]]]:
     workspace = access_context["workspace"]
-    workspace_resolution = resolve_effective_policy_record(AUDIT_DB_PATH, workspace_id=workspace.id)
+    workspace_resolution = resolve_effective_policy_record(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        persist_missing_workspace_policy=False,
+    )
     workspace_record = get_workspace_policy(AUDIT_DB_PATH, workspace.id)
     workspace_policy = workspace_resolution.policy
     allocations = list_repo_allocations_for_workspace(AUDIT_DB_PATH, workspace.id)
@@ -3715,6 +3719,7 @@ def _build_operational_policy_context(access_context: dict[str, object]) -> tupl
             AUDIT_DB_PATH,
             workspace_id=workspace.id,
             repo_allocation_id=allocation.id,
+            persist_missing_workspace_policy=False,
         )
         repo_rows.append(
             {

@@ -1335,8 +1335,10 @@ def _render_operational_policy_summary_cards(cards: list[dict[str, str]]) -> str
     )
 
 
-def _render_policy_preset_options(selected: str, *, include_inherit: bool = False) -> str:
+def _render_policy_preset_options(selected: str, *, include_inherit: bool = False, include_custom_placeholder: bool = False) -> str:
     options = []
+    if include_custom_placeholder:
+        options.append(("", "Choose replacement preset"))
     if include_inherit:
         options.append(("inherit", "Inherit workspace default"))
     options.extend(
@@ -1413,14 +1415,29 @@ def _render_repo_policy_rows(repo_policy_rows: list[dict[str, object]], *, csrf_
     for row in repo_policy_rows:
         form_markup = '<p class="muted">Owners and admins can set repo-specific overrides.</p>'
         if can_manage:
+            selected_override = str(row.get("selected_override") or "inherit")
+            is_custom_override = selected_override == "custom"
+            select_markup = _render_policy_preset_options(
+                selected_override if not is_custom_override else "",
+                include_inherit=True,
+                include_custom_placeholder=is_custom_override,
+            )
+            helper_markup = ""
+            button_label = "Replace override"
+            select_attrs = ' required' if is_custom_override else ''
+            if is_custom_override:
+                helper_markup = '<p class="muted">Choose a preset or inherit to replace this custom repo override. Saving without a new selection is disabled.</p>'
+            else:
+                button_label = "Save override"
             form_markup = f'''
                 <form method="post" action="/policies/repositories/{int(row["allocation_id"])}" class="control-page-inline-form policies-review-form">
                     {_csrf_input(csrf_token)}
                     <label class="policies-form-field">
                         <span class="secondary-panel-title">Repo policy</span>
-                        <select class="control-page-select policies-form-select" name="preset_key">{_render_policy_preset_options(str(row.get("selected_override") or "inherit"), include_inherit=True)}</select>
+                        <select class="control-page-select policies-form-select" name="preset_key"{select_attrs}>{select_markup}</select>
                     </label>
-                    <button type="submit" class="button">Save override</button>
+                    {helper_markup}
+                    <button type="submit" class="button">{html_escape(button_label)}</button>
                 </form>
             '''
         rows.append(

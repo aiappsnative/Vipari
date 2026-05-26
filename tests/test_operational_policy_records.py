@@ -178,3 +178,66 @@ def test_resolve_effective_policy_record_uses_repo_override_and_creates_default_
     assert policy_decision["repo_policy_version_id"] == resolved.repo_policy_version_id
     assert policy_decision["effective_policy"]["llm_strategy"]["when_to_run_verifier"] == "on_medium_plus"
     assert policy_decision["effective_policy"]["gating"]["medium_risk_action"] == "require_escalation"
+
+
+def test_resolve_effective_policy_record_can_skip_default_policy_persistence(tmp_path):
+    db_path = str(tmp_path / "effective-policy-read-only.db")
+    init_db(db_path)
+
+    user = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace = create_workspace(db_path, slug="ops-team", display_name="Ops Team", billing_owner_user_id=user.id)
+
+    assert get_workspace_policy(db_path, workspace.id) is None
+
+    resolved = resolve_effective_policy_record(
+        db_path,
+        workspace_id=workspace.id,
+        persist_missing_workspace_policy=False,
+    )
+
+    assert resolved.workspace_policy_version_id is None
+    assert resolved.repo_policy_version_id is None
+    assert resolved.effective_policy_source == "workspace"
+    assert get_workspace_policy(db_path, workspace.id) is None
+    assert json.loads(resolved.policy_decision_json)["workspace_policy_version_id"] is None
+
+
+def test_upsert_repo_policy_override_rejects_cross_workspace_allocation(tmp_path):
+    db_path = str(tmp_path / "repo-policy-cross-workspace.db")
+    init_db(db_path)
+
+    user = create_user(db_path, display_name="Owner", primary_email="owner@example.com")
+    workspace_one = create_workspace(db_path, slug="ops-one", display_name="Ops One", billing_owner_user_id=user.id)
+    workspace_two = create_workspace(db_path, slug="ops-two", display_name="Ops Two", billing_owner_user_id=user.id)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace_one.id,
+        installation_id=101,
+        account_id="101",
+        account_login="example-org",
+        account_type="Organization",
+        target_type="Organization",
+        status="active",
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace_one.id,
+        installation_id=101,
+        repo_github_id="repo-101",
+        repo_full="example/repo-101",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+
+    try:
+        upsert_repo_policy_override(
+            db_path,
+            workspace_id=workspace_two.id,
+            repo_allocation_id=allocation.id,
+            policy_override=normalize_repo_policy_override({"gating": {"medium_risk_action": "warn"}}),
+            created_by_user_id=user.id,
+        )
+    except ValueError as exc:
+        assert str(exc) == "Repository allocation does not belong to workspace."
+    else:
+        raise AssertionError("Expected workspace/allocation mismatch to be rejected.")
