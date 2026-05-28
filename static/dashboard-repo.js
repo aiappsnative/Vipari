@@ -1979,6 +1979,39 @@ function flashArtifactTopologyNode(artifactPath) {
     }, ARTIFACT_TOPOLOGY_FLASH_MS);
 }
 
+function layoutArtifactTopologyAroundNode(cy, node) {
+    if (!cy || !node || node.empty()) {
+        return;
+    }
+    const detailNodes = cy.nodes('[kind = "artifact"]');
+    const detailEdges = cy.edges('[kind = "artifact-edge"]');
+    if (!detailNodes.length) {
+        return;
+    }
+    const distanceMap = detailNodes.dijkstra({ root: node, directed: false, weight: () => 1 });
+    detailNodes.union(detailEdges).layout({
+        name: "concentric",
+        fit: false,
+        animate: true,
+        animationDuration: 320,
+        padding: 72,
+        avoidOverlap: true,
+        spacingFactor: 1.08,
+        nodeDimensionsIncludeLabels: true,
+        concentric: (element) => {
+            if (element.id() === node.id()) {
+                return 1000;
+            }
+            const distance = distanceMap.distanceTo(element);
+            if (!Number.isFinite(distance)) {
+                return 1;
+            }
+            return Math.max(2, 24 - distance * 4);
+        },
+        levelWidth: () => 1,
+    }).run();
+}
+
 function focusArtifactTopologyNode(artifactPath) {
     const cy = window.__artifactTopologyGraph;
     if (!cy || !artifactPath) {
@@ -1994,9 +2027,13 @@ function focusArtifactTopologyNode(artifactPath) {
         window.__artifactTopologyGroup = groupKey;
     }
     cy.stop();
+    const targetZoom = Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.14, cy.zoom(), 1.38));
+    cy.zoom(targetZoom);
+    applyArtifactTopologyGraphMode(cy);
+    layoutArtifactTopologyAroundNode(cy, node);
     cy.animate({
         center: { eles: node },
-        zoom: Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.12, cy.zoom(), 1.34)),
+        zoom: targetZoom,
         duration: 320,
         easing: "ease-out-cubic",
     });
