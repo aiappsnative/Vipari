@@ -1793,6 +1793,7 @@ def build_repo_dashboard_view(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -1812,6 +1813,7 @@ def build_repo_dashboard_view(
         include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
+        include_artifact_topology,
         include_featured_storyline,
         include_history_timelines,
         include_history_cues,
@@ -1828,6 +1830,7 @@ def build_repo_dashboard_view(
         include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_artifact_topology=include_artifact_topology,
         include_featured_storyline=include_featured_storyline,
         include_history_timelines=include_history_timelines,
         include_history_cues=include_history_cues,
@@ -1844,6 +1847,7 @@ def build_repo_dashboard_view_with_timings(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -1863,6 +1867,7 @@ def build_repo_dashboard_view_with_timings(
         include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
+        include_artifact_topology,
         include_featured_storyline,
         include_history_timelines,
         include_history_cues,
@@ -1880,6 +1885,7 @@ def build_repo_dashboard_view_with_timings(
         include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_artifact_topology=include_artifact_topology,
         include_featured_storyline=include_featured_storyline,
         include_history_timelines=include_history_timelines,
         include_history_cues=include_history_cues,
@@ -2135,6 +2141,7 @@ def _build_repo_dashboard_view_uncached(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -2408,11 +2415,15 @@ def _build_repo_dashboard_view_uncached(
         governance_decision=governance_decision,
         audit_brief=audit_brief,
         artifacts=artifact_entries,
-        artifact_topology=_build_repo_artifact_topology(
-            artifact_entries,
-            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
-            baseline_snapshot_artifact_state=baseline_snapshot_artifact_state,
-            journey_comparison=journey_comparison,
+        artifact_topology=(
+            _build_repo_artifact_topology(
+                artifact_entries,
+                selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+                baseline_snapshot_artifact_state=baseline_snapshot_artifact_state,
+                journey_comparison=journey_comparison,
+            )
+            if include_artifact_topology
+            else None
         ),
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
@@ -2693,10 +2704,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                     else None
                 ),
                 artifacts=artifact_entries,
-                artifact_topology=_build_repo_artifact_topology(
-                    artifact_entries,
-                    selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),
-                ),
+                artifact_topology=None,
                 journey_snapshots=[],
                 journey_comparison=None,
                 selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),

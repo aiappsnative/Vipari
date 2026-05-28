@@ -264,6 +264,33 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.history_timelines[0].points[-1].review_context == "Historical snapshot from backfill"
 
 
+def test_build_repo_dashboard_view_can_skip_artifact_topology(tmp_path):
+    db_path = str(tmp_path / "dashboard-no-topology.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    dashboard = build_repo_dashboard_view(
+        db_path,
+        "doria90/dummyAI",
+        include_detail_sections=False,
+        include_repo_summary_metrics=False,
+        include_journey=False,
+        include_artifact_topology=False,
+    )
+
+    assert dashboard.artifact_topology is None
+    assert dashboard.artifacts[0].artifact_path == "prompts/refund.txt"
+
+
 def test_build_repo_governance_posture_stays_neutral_when_repo_has_no_design_profiles():
     posture = build_repo_governance_posture(
         "doria90/empty-repo",

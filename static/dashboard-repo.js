@@ -3438,20 +3438,22 @@ function applyDashboardPayload(payload) {
     setSectionHtml("lower-confidence-insights", lowerConfidenceInsights.length
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
-    window.__artifactEntries = artifacts;
-    window.__artifactTopology = artifactTopology;
-    if (!asArray(artifactTopology?.modes).some((mode) => String(mode.mode_key || mode.modeKey || "") === window.__artifactTopologyMode)) {
-        window.__artifactTopologyMode = String(artifactTopology?.default_mode_key || artifactTopology?.defaultModeKey || "current");
-    }
-    if (window.__artifactEditPath && !artifacts.some((item) => item.artifact_path === window.__artifactEditPath)) {
-        window.__artifactEditPath = "";
-    }
-    const types = artifactTypeOptions();
-    refreshArtifactsSection();
-    bindArtifactControls();
-    const artifactHandoffNotice = consumeArtifactHandoffNotice();
-    if (artifactHandoffNotice && activeRepoTab === "artifacts") {
-        setArtifactActionStatus(artifactHandoffNotice.message, artifactHandoffNotice.tone);
+    if (activeRepoTab === "artifacts") {
+        window.__artifactEntries = artifacts;
+        window.__artifactTopology = artifactTopology;
+        if (!asArray(artifactTopology?.modes).some((mode) => String(mode.mode_key || mode.modeKey || "") === window.__artifactTopologyMode)) {
+            window.__artifactTopologyMode = String(artifactTopology?.default_mode_key || artifactTopology?.defaultModeKey || "current");
+        }
+        if (window.__artifactEditPath && !artifacts.some((item) => item.artifact_path === window.__artifactEditPath)) {
+            window.__artifactEditPath = "";
+        }
+        artifactTypeOptions();
+        refreshArtifactsSection();
+        bindArtifactControls();
+        const artifactHandoffNotice = consumeArtifactHandoffNotice();
+        if (artifactHandoffNotice) {
+            setArtifactActionStatus(artifactHandoffNotice.message, artifactHandoffNotice.tone);
+        }
     }
     bindBaselineReviewActions();
     bindRebaselineButtons(journeySnapshots);

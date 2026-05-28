@@ -1083,6 +1083,7 @@ def test_repo_dashboard_api_scopes_version_control_tab_payload(tmp_path):
     assert payload["featured_storyline"] is None
     assert payload["history_cues"] == []
     assert payload["design_profiles"] == []
+    assert payload["artifact_topology"] is None
     assert payload["pr_review_routes"] is None
     assert payload["pre_audit_relevance"] is None
 
