@@ -149,6 +149,8 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.artifacts[0].provenance_label == "AI control surface"
     assert dashboard.artifact_topology is not None
     assert dashboard.artifact_topology.view_basis == "current_tracked_state"
+    assert dashboard.artifact_topology.default_mode_key == "current"
+    assert [mode.mode_key for mode in dashboard.artifact_topology.modes] == ["current", "reference-baseline"]
     assert [group.key for group in dashboard.artifact_topology.groups] == ["prompts"]
     assert dashboard.artifact_topology.groups[0].top_artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.baseline_version_count == 1
@@ -1009,6 +1011,7 @@ def test_repo_artifact_topology_updates_for_manual_mutations(tmp_path):
 
     initial = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert [group.key for group in initial.artifact_topology.groups] == ["prompts"]
+    assert [mode.mode_key for mode in initial.artifact_topology.modes] == ["current", "reference-baseline"]
 
     add_repo_artifact_to_onboarding(
         db_path,
@@ -1020,6 +1023,7 @@ def test_repo_artifact_topology_updates_for_manual_mutations(tmp_path):
     )
     with_policy = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert {group.key for group in with_policy.artifact_topology.groups} == {"governance", "prompts"}
+    assert any(mode.mode_key == "reference-baseline" for mode in with_policy.artifact_topology.modes)
     assert any(
         relation.source_artifact_path == "policies/usage.md"
         and relation.target_artifact_path == "prompts/system.txt"
@@ -1061,6 +1065,7 @@ def test_repo_artifact_topology_updates_for_merge_synced_artifacts(tmp_path):
 
     initial = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert [group.key for group in initial.artifact_topology.groups] == ["prompts"]
+    assert [mode.mode_key for mode in initial.artifact_topology.modes] == ["current", "reference-baseline"]
 
     sync_on_pr_merge_artifact_changes(
         db_path,

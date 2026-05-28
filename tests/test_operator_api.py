@@ -12,6 +12,12 @@ from services.audit_records import RepoStaticDriftSummary
 from services.dashboard_views import (
     DashboardProfileVector,
     RepoDashboardArtifactEntry,
+    RepoArtifactTopologyMode,
+    RepoArtifactTopologyNode,
+    RepoArtifactTopologyArtifact,
+    RepoArtifactTopologyEdge,
+    RepoArtifactTopologyRelation,
+    RepoArtifactTopologyView,
     RepoArtifactHistoryTimeline,
     RepoArtifactDesignProfile,
     RepoArtifactProvenance,
@@ -191,6 +197,112 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 leaderboard_drift_magnitude=0.0,
             )
         ],
+        artifact_topology=RepoArtifactTopologyView(
+            view_basis="current_tracked_state",
+            groups=[
+                RepoArtifactTopologyNode(
+                    key="prompts",
+                    label="Prompts",
+                    short_label="Prompts",
+                    x=60,
+                    y=18,
+                    description="Prompt surfaces",
+                    count=1,
+                    drift_magnitude=0.7,
+                    artifacts=[
+                        RepoArtifactTopologyArtifact(
+                            artifact_path="prompts/system.txt",
+                            artifact_type="prompt",
+                            provenance_label="AI control surface",
+                            drift_magnitude=0.7,
+                        )
+                    ],
+                    top_artifacts=[
+                        RepoArtifactTopologyArtifact(
+                            artifact_path="prompts/system.txt",
+                            artifact_type="prompt",
+                            provenance_label="AI control surface",
+                            drift_magnitude=0.7,
+                        )
+                    ],
+                )
+            ],
+            edges=[],
+            artifact_relations=[],
+            modes=[
+                RepoArtifactTopologyMode(
+                    mode_key="current",
+                    label="Current state",
+                    summary="Latest tracked repository state and inferred current relationships.",
+                    groups=[
+                        RepoArtifactTopologyNode(
+                            key="prompts",
+                            label="Prompts",
+                            short_label="Prompts",
+                            x=60,
+                            y=18,
+                            description="Prompt surfaces",
+                            count=1,
+                            drift_magnitude=0.7,
+                            artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.7,
+                                )
+                            ],
+                            top_artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.7,
+                                )
+                            ],
+                        )
+                    ],
+                    edges=[],
+                    artifact_relations=[],
+                ),
+                RepoArtifactTopologyMode(
+                    mode_key="reference-baseline",
+                    label="Reference baseline",
+                    summary="Reference baseline compared with current: +0 added, -0 removed, 0 changed.",
+                    groups=[
+                        RepoArtifactTopologyNode(
+                            key="prompts",
+                            label="Prompts",
+                            short_label="Prompts",
+                            x=60,
+                            y=18,
+                            description="Prompt surfaces",
+                            count=1,
+                            drift_magnitude=0.0,
+                            artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.0,
+                                )
+                            ],
+                            top_artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.0,
+                                )
+                            ],
+                        )
+                    ],
+                    edges=[],
+                    artifact_relations=[],
+                ),
+            ],
+            default_mode_key="current",
+        ),
     )
 
 

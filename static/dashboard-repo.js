@@ -47,6 +47,7 @@ window.__artifactActionStatusMessage = "";
 window.__artifactActionStatusTone = "info";
 window.__artifactTopologyGroup = "";
 window.__artifactTopology = null;
+window.__artifactTopologyMode = "current";
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
@@ -1278,6 +1279,8 @@ function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber 
         }
         return false;
     }
+            modes: [],
+            default_mode_key: String(topologyPayload.default_mode_key || "current"),
     if (preferredHeadSha) {
         const preferredIndex = items.findIndex((item) => insightMatchesHeadSha(item, preferredHeadSha));
         if (preferredIndex >= 0 && rows[preferredIndex]) {
@@ -1621,25 +1624,66 @@ function normalizeTopologyPayload(topologyPayload) {
             label: String(relation.label || ""),
             evidence: String(relation.evidence || ""),
         })).filter((relation) => relation.sourceArtifactPath && relation.targetArtifactPath),
+        modes: asArray(topologyPayload.modes).map((mode) => ({
+            modeKey: String(mode.mode_key || mode.modeKey || "current"),
+            label: String(mode.label || "Current state"),
+            summary: String(mode.summary || ""),
+            groups: asArray(mode.groups).map((group) => ({
+                ...group,
+                count: Number(group.count || 0),
+                driftMagnitude: Number(group.drift_magnitude || group.driftMagnitude || 0),
+                artifacts: asArray(group.artifacts),
+                topArtifacts: asArray(group.top_artifacts || group.topArtifacts),
+            })),
+            edges: asArray(mode.edges).map((edge) => ({
+                from: String(edge.source_key || edge.from || ""),
+                to: String(edge.target_key || edge.to || ""),
+                label: String(edge.label || ""),
+            })).filter((edge) => edge.from && edge.to),
+            artifactRelations: asArray(mode.artifact_relations).map((relation) => ({
+                sourceArtifactPath: String(relation.source_artifact_path || relation.sourceArtifactPath || ""),
+                sourceGroupKey: String(relation.source_group_key || relation.sourceGroupKey || ""),
+                targetArtifactPath: String(relation.target_artifact_path || relation.targetArtifactPath || ""),
+                targetGroupKey: String(relation.target_group_key || relation.targetGroupKey || ""),
+                label: String(relation.label || ""),
+                evidence: String(relation.evidence || ""),
+            })).filter((relation) => relation.sourceArtifactPath && relation.targetArtifactPath),
+        })),
+        default_mode_key: String(topologyPayload.default_mode_key || "current"),
         selected_baseline_source_snapshot_id: topologyPayload.selected_baseline_source_snapshot_id || null,
     };
 }
 
 function buildArtifactTopologyModel(items = [], topologyPayload = null) {
     const normalizedTopology = normalizeTopologyPayload(topologyPayload);
-    const payloadCount = normalizedTopology
-        ? normalizedTopology.groups.reduce((sum, group) => sum + Number(group.count || 0), 0)
-        : -1;
-    if (normalizedTopology && payloadCount === asArray(items).length) {
-        const groupKeys = new Set(normalizedTopology.groups.map((group) => group.key));
+    if (normalizedTopology) {
+        const availableModes = normalizedTopology.modes.length
+            ? normalizedTopology.modes
+            : [{
+                modeKey: normalizedTopology.default_mode_key || "current",
+                label: "Current state",
+                summary: "Latest tracked repository state and inferred current relationships.",
+                groups: normalizedTopology.groups,
+                edges: normalizedTopology.edges,
+                artifactRelations: normalizedTopology.artifact_relations,
+            }];
+        const selectedMode = availableModes.find((mode) => mode.modeKey === window.__artifactTopologyMode)
+            || availableModes.find((mode) => mode.modeKey === normalizedTopology.default_mode_key)
+            || availableModes[0];
+        window.__artifactTopologyMode = selectedMode?.modeKey || "current";
+        const groupKeys = new Set(asArray(selectedMode?.groups).map((group) => group.key));
         const selectedKey = groupKeys.has(window.__artifactTopologyGroup)
             ? window.__artifactTopologyGroup
-            : (normalizedTopology.groups.slice().sort((left, right) => right.count - left.count)[0]?.key || "");
+            : (asArray(selectedMode?.groups).slice().sort((left, right) => right.count - left.count)[0]?.key || "");
         window.__artifactTopologyGroup = selectedKey;
         return {
-            groups: normalizedTopology.groups,
-            edges: normalizedTopology.edges.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
-            artifactRelations: normalizedTopology.artifact_relations.filter((relation) => groupKeys.has(relation.sourceGroupKey) && groupKeys.has(relation.targetGroupKey)),
+            groups: asArray(selectedMode?.groups),
+            edges: asArray(selectedMode?.edges).filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
+            artifactRelations: asArray(selectedMode?.artifactRelations).filter((relation) => groupKeys.has(relation.sourceGroupKey) && groupKeys.has(relation.targetGroupKey)),
+            availableModes,
+            activeModeKey: selectedMode?.modeKey || "current",
+            activeModeLabel: selectedMode?.label || "Current state",
+            activeModeSummary: selectedMode?.summary || "",
             selectedKey,
             viewBasis: normalizedTopology.view_basis,
         };
@@ -1675,9 +1719,37 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
         groups,
         edges: ARTIFACT_TOPOLOGY_EDGES.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
         artifactRelations: [],
+        availableModes: [{
+            modeKey: "current",
+            label: "Current state",
+            summary: "Latest tracked repository state and inferred current relationships.",
+        }],
+        activeModeKey: "current",
+        activeModeLabel: "Current state",
+        activeModeSummary: "Latest tracked repository state and inferred current relationships.",
         selectedKey,
         viewBasis: "current_tracked_state",
     };
+}
+
+function renderArtifactTopologyModeToggle(model) {
+    const modes = asArray(model.availableModes);
+    if (!modes.length) {
+        return "";
+    }
+    return `
+        <div class="artifact-topology-mode-buttons" role="group" aria-label="Relationship graph mode">
+            ${modes.map((mode) => `
+                <button
+                    type="button"
+                    class="artifact-topology-mode-button"
+                    data-artifact-topology-mode="${escapeHtml(mode.modeKey)}"
+                    aria-pressed="${mode.modeKey === model.activeModeKey ? "true" : "false"}"
+                >${escapeHtml(mode.label)}</button>
+            `).join("")}
+        </div>
+        ${model.activeModeSummary ? `<div class="artifact-topology-mode-summary">${escapeHtml(model.activeModeSummary)}</div>` : ""}
+    `;
 }
 
 function renderArtifactTopologyMap(model) {
@@ -2023,6 +2095,7 @@ function refreshArtifactsSection() {
     const items = asArray(window.__artifactEntries);
     const filtered = filteredArtifactEntries(items);
     const topologyModel = buildArtifactTopologyModel(items, window.__artifactTopology);
+    setSectionHtml("artifact-topology-mode-toggle", renderArtifactTopologyModeToggle(topologyModel));
     setSectionHtml("artifact-topology-map", renderArtifactTopologyMap(topologyModel));
     setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus(topologyModel));
     setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
@@ -2094,6 +2167,20 @@ function bindArtifactControls() {
         });
     }
 
+    const topologyModeToggle = document.getElementById("artifact-topology-mode-toggle");
+    if (topologyModeToggle && topologyModeToggle.dataset.boundArtifactTopologyMode !== "true") {
+        topologyModeToggle.dataset.boundArtifactTopologyMode = "true";
+        topologyModeToggle.addEventListener("click", (event) => {
+            const target = event.target instanceof HTMLElement ? event.target.closest("[data-artifact-topology-mode]") : null;
+            if (!target) {
+                return;
+            }
+            window.__artifactTopologyMode = target.getAttribute("data-artifact-topology-mode") || "current";
+            window.__artifactTopologyGroup = "";
+            refreshArtifactsSection();
+        });
+    }
+
     if (shouldPrefetchArtifactOptions() && !window.__artifactOptionsLoaded && !window.__artifactOptionsLoading) {
         void loadArtifactOptions();
     }
@@ -2120,6 +2207,7 @@ async function addTrackedArtifact() {
         const payload = await response.json();
         const inferredType = payload?.artifact?.artifact_type || inferredArtifactTypeForPath(window.__artifactAddPath);
         window.__artifactTopology = null;
+        window.__artifactTopologyMode = "current";
         window.__artifactEntries = [
             ...asArray(window.__artifactEntries),
             {
@@ -2167,6 +2255,7 @@ async function removeTrackedArtifact(artifactPath) {
         const payload = await response.json();
         window.__artifactEditPath = "";
         window.__artifactTopology = null;
+        window.__artifactTopologyMode = "current";
         removeArtifactEntryLocal(artifactPath);
         refreshArtifactsSection();
         if (payload?.dashboard) {
@@ -2201,6 +2290,7 @@ async function saveTrackedArtifactType(artifactPath, artifactType) {
         const payload = await response.json();
         window.__artifactEditPath = "";
         window.__artifactTopology = null;
+        window.__artifactTopologyMode = "current";
         replaceArtifactEntryLocal(artifactPath, { artifact_type: payload?.artifact?.artifact_type || artifactType });
         refreshArtifactsSection();
         if (payload?.dashboard) {
@@ -3311,6 +3401,9 @@ function applyDashboardPayload(payload) {
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
     window.__artifactEntries = artifacts;
     window.__artifactTopology = artifactTopology;
+    if (!asArray(artifactTopology?.modes).some((mode) => String(mode.mode_key || mode.modeKey || "") === window.__artifactTopologyMode)) {
+        window.__artifactTopologyMode = String(artifactTopology?.default_mode_key || artifactTopology?.defaultModeKey || "current");
+    }
     if (window.__artifactEditPath && !artifacts.some((item) => item.artifact_path === window.__artifactEditPath)) {
         window.__artifactEditPath = "";
     }

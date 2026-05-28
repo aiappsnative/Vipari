@@ -952,11 +952,23 @@ class RepoArtifactTopologyRelation:
 
 
 @dataclass(frozen=True)
+class RepoArtifactTopologyMode:
+    mode_key: str
+    label: str
+    summary: str
+    groups: list[RepoArtifactTopologyNode]
+    edges: list[RepoArtifactTopologyEdge]
+    artifact_relations: list[RepoArtifactTopologyRelation]
+
+
+@dataclass(frozen=True)
 class RepoArtifactTopologyView:
     view_basis: str
     groups: list[RepoArtifactTopologyNode]
     edges: list[RepoArtifactTopologyEdge]
     artifact_relations: list[RepoArtifactTopologyRelation]
+    modes: list[RepoArtifactTopologyMode]
+    default_mode_key: str = "current"
     selected_baseline_source_snapshot_id: int | None = None
 
 
@@ -2144,6 +2156,7 @@ def _build_repo_dashboard_view_uncached(
         pull_request_audit_count = 0
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
+    baseline_snapshot_artifact_state: dict[str, dict[str, object]] | None = None
     selected_baseline_source_snapshot_id: int | None = None
     if onboarding is not None:
         selected_baseline_source_snapshot_id = timed_stage(
@@ -2151,7 +2164,7 @@ def _build_repo_dashboard_view_uncached(
             lambda: get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
         )
     if include_journey and onboarding is not None:
-        journey_snapshots, journey_comparison = timed_stage(
+        journey_snapshots, journey_comparison, baseline_snapshot_artifact_state = timed_stage(
             "repo-journey-panel",
             lambda: _build_repo_journey_panel(
                 db_path,
@@ -2386,6 +2399,8 @@ def _build_repo_dashboard_view_uncached(
         artifact_topology=_build_repo_artifact_topology(
             artifact_entries,
             selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+            baseline_snapshot_artifact_state=baseline_snapshot_artifact_state,
+            journey_comparison=journey_comparison,
         ),
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
@@ -2443,7 +2458,7 @@ def _build_repo_journey_panel(
     *,
     onboarding_id: int | None = None,
     selected_baseline_source_snapshot_id: int | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, dict[str, object]] | None]:
     from .repo_journey import _compare_snapshot_records, build_repo_journey, snapshot_to_public_payload
 
     snapshot_records = build_repo_journey(db_path, repo_full)
@@ -2484,12 +2499,14 @@ def _build_repo_journey_panel(
             else None
         )
     comparison = None
+    baseline_artifact_state = None
     if baseline_snapshot is not None and current_snapshot is not None:
         baseline_record = snapshot_record_by_id.get(int(baseline_snapshot["id"]))
         current_record = snapshot_record_by_id.get(int(current_snapshot["id"]))
         if baseline_record is not None and current_record is not None:
+            baseline_artifact_state = dict(baseline_record.artifact_state or {})
             comparison = asdict(_compare_snapshot_records(repo_full, baseline_record, current_record))
-    return snapshots, comparison
+    return snapshots, comparison, baseline_artifact_state
 
 
 def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry]) -> list[RepoDashboardView]:
@@ -3435,11 +3452,48 @@ def _build_repo_artifact_topology_relations(
     return relations
 
 
-def _build_repo_artifact_topology(
+def _snapshot_state_to_artifact_entries(snapshot_artifact_state: dict[str, dict[str, object]] | None) -> list[RepoDashboardArtifactEntry]:
+    entries: list[RepoDashboardArtifactEntry] = []
+    for artifact_path, state in sorted((snapshot_artifact_state or {}).items()):
+        artifact_type = str((state or {}).get("artifact_type") or "unknown")
+        provenance = artifact_provenance_label(artifact_type)
+        entries.append(
+            RepoDashboardArtifactEntry(
+                artifact_path=artifact_path,
+                artifact_type=artifact_type,
+                discovery_reason="Reference baseline checkpoint surface.",
+                discovery_confidence=1.0,
+                baseline_line_count=0,
+                historical_version_count=0,
+                historical_profile_count=0,
+                latest_historical_semantic_distance=0.0,
+                latest_historical_drift_magnitude=0.0,
+                latest_historical_capability_shift=0.0,
+                latest_historical_guardrail_shift=0.0,
+                latest_historical_governance_shift=0.0,
+                latest_historical_autonomy_shift=0.0,
+                pr_profile_count=0,
+                latest_pr_semantic_distance=0.0,
+                latest_pr_capability_shift=0.0,
+                latest_pr_guardrail_shift=0.0,
+                latest_pr_governance_shift=0.0,
+                latest_pr_autonomy_shift=0.0,
+                leaderboard_drift_magnitude=0.0,
+                latest_activity_at=0.0,
+                provenance_kind=provenance.kind,
+                provenance_label=provenance.label,
+            )
+        )
+    return entries
+
+
+def _build_repo_artifact_topology_mode(
     artifact_entries: list[RepoDashboardArtifactEntry],
     *,
-    selected_baseline_source_snapshot_id: int | None,
-) -> RepoArtifactTopologyView:
+    mode_key: str,
+    label: str,
+    summary: str,
+) -> RepoArtifactTopologyMode:
     entries_by_group: dict[str, list[RepoDashboardArtifactEntry]] = {
         str(group["key"]): [] for group in _ARTIFACT_TOPOLOGY_GROUPS
     }
@@ -3495,18 +3549,63 @@ def _build_repo_artifact_topology(
             )
         )
 
-    return RepoArtifactTopologyView(
-        view_basis="current_tracked_state",
+    edges = [
+        edge
+        for edge in _ARTIFACT_TOPOLOGY_EDGES
+        if edge.source_key in active_group_keys and edge.target_key in active_group_keys
+    ]
+    return RepoArtifactTopologyMode(
+        mode_key=mode_key,
+        label=label,
+        summary=summary,
         groups=groups,
-        edges=[
-            edge
-            for edge in _ARTIFACT_TOPOLOGY_EDGES
-            if edge.source_key in active_group_keys and edge.target_key in active_group_keys
-        ],
+        edges=edges,
         artifact_relations=_build_repo_artifact_topology_relations(
             entries_by_group,
             active_group_keys=active_group_keys,
         ),
+    )
+
+
+def _build_repo_artifact_topology(
+    artifact_entries: list[RepoDashboardArtifactEntry],
+    *,
+    selected_baseline_source_snapshot_id: int | None,
+    baseline_snapshot_artifact_state: dict[str, dict[str, object]] | None = None,
+    journey_comparison: dict[str, Any] | None = None,
+) -> RepoArtifactTopologyView:
+    current_mode = _build_repo_artifact_topology_mode(
+        artifact_entries,
+        mode_key="current",
+        label="Current state",
+        summary="Latest tracked repository state and inferred current relationships.",
+    )
+    modes = [current_mode]
+    default_mode_key = "current"
+    if baseline_snapshot_artifact_state:
+        change_breakdown = dict((journey_comparison or {}).get("change_breakdown") or {})
+        baseline_summary = "Reference baseline surface relationships."
+        if change_breakdown:
+            baseline_summary = (
+                f"Reference baseline compared with current: +{int(change_breakdown.get('added_artifact_count', 0))} added, "
+                f"-{int(change_breakdown.get('removed_artifact_count', 0))} removed, "
+                f"{int(change_breakdown.get('changed_artifact_count', 0))} changed."
+            )
+        baseline_mode = _build_repo_artifact_topology_mode(
+            _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state),
+            mode_key="reference-baseline",
+            label="Reference baseline",
+            summary=baseline_summary,
+        )
+        modes.append(baseline_mode)
+
+    return RepoArtifactTopologyView(
+        view_basis="current_tracked_state",
+        groups=current_mode.groups,
+        edges=current_mode.edges,
+        artifact_relations=current_mode.artifact_relations,
+        modes=modes,
+        default_mode_key=default_mode_key,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
     )
 

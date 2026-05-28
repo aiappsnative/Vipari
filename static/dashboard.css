@@ -1526,6 +1526,45 @@ strong {
     gap: 12px;
 }
 
+.artifact-topology-mode-toggle {
+    display: grid;
+    justify-items: end;
+    gap: 8px;
+    min-width: min(100%, 320px);
+}
+
+.artifact-topology-mode-buttons {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.artifact-topology-mode-button {
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.artifact-topology-mode-button:hover,
+.artifact-topology-mode-button[aria-pressed="true"] {
+    border-color: var(--color-primary-outline);
+    background: color-mix(in srgb, var(--color-primary-soft-strong) 45%, var(--color-surface-2));
+    color: var(--color-text);
+}
+
+.artifact-topology-mode-summary {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    text-align: right;
+}
+
 .artifact-topology-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
