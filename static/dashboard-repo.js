@@ -1874,9 +1874,9 @@ function artifactTopologyGraphPalette() {
             artifactEdgeText: "#32281f",
             artifactEdgeBackground: "rgba(249, 244, 238, 0.98)",
             artifactEdgeLine: "#855523",
-            selectedBorder: "#b5761f",
-            selectedShadow: "rgba(181, 118, 31, 0.28)",
-            selectedArtifactBackground: "#ead8bf",
+            selectedBorder: "#21874b",
+            selectedShadow: "rgba(33, 135, 75, 0.30)",
+            selectedArtifactBackground: "#d8f1e0",
         };
     }
     return {
@@ -1892,9 +1892,9 @@ function artifactTopologyGraphPalette() {
         artifactEdgeText: "#d2ccc3",
         artifactEdgeBackground: "#171816",
         artifactEdgeLine: "#d39a55",
-        selectedBorder: "#d9a13d",
-        selectedShadow: "rgba(217, 161, 61, 0.32)",
-        selectedArtifactBackground: "#5a4330",
+        selectedBorder: "#46c26f",
+        selectedShadow: "rgba(70, 194, 111, 0.34)",
+        selectedArtifactBackground: "#214330",
     };
 }
 
@@ -1979,25 +1979,36 @@ function flashArtifactTopologyNode(artifactPath) {
     }, ARTIFACT_TOPOLOGY_FLASH_MS);
 }
 
-function layoutArtifactTopologyAroundNode(cy, node) {
+function layoutArtifactTopologyAroundNode(cy, node, onComplete = () => {}) {
     if (!cy || !node || node.empty()) {
+        onComplete();
         return;
     }
-    const detailNodes = cy.nodes('[kind = "artifact"]');
-    const detailEdges = cy.edges('[kind = "artifact-edge"]');
+    const detailNodes = cy.nodes('[kind = "artifact"]').not('.artifact-topology-hidden');
+    const detailEdges = cy.edges('[kind = "artifact-edge"]').not('.artifact-topology-hidden');
     if (!detailNodes.length) {
+        onComplete();
         return;
     }
     const distanceMap = detailNodes.dijkstra({ root: node, directed: false, weight: () => 1 });
-    detailNodes.union(detailEdges).layout({
+    const layoutBounds = {
+        x1: 68,
+        y1: 68,
+        w: Math.max(ARTIFACT_TOPOLOGY_GRAPH_SIZE.width - 136, 240),
+        h: Math.max(ARTIFACT_TOPOLOGY_GRAPH_SIZE.height - 136, 240),
+    };
+    const layout = detailNodes.union(detailEdges).layout({
         name: "concentric",
+        boundingBox: layoutBounds,
         fit: false,
         animate: true,
-        animationDuration: 320,
-        padding: 72,
+        animationDuration: 340,
+        padding: 84,
         avoidOverlap: true,
-        spacingFactor: 1.08,
+        minNodeSpacing: 28,
+        spacingFactor: 0.92,
         nodeDimensionsIncludeLabels: true,
+        startAngle: -Math.PI / 2,
         concentric: (element) => {
             if (element.id() === node.id()) {
                 return 1000;
@@ -2006,10 +2017,23 @@ function layoutArtifactTopologyAroundNode(cy, node) {
             if (!Number.isFinite(distance)) {
                 return 1;
             }
-            return Math.max(2, 24 - distance * 4);
+            if (distance <= 1) {
+                return 320;
+            }
+            if (distance <= 2) {
+                return 180;
+            }
+            if (distance <= 3) {
+                return 96;
+            }
+            return 32;
         },
-        levelWidth: () => 1,
-    }).run();
+        levelWidth: () => 110,
+    });
+    layout.on("layoutstop", () => {
+        onComplete();
+    });
+    layout.run();
 }
 
 function focusArtifactTopologyNode(artifactPath) {
@@ -2030,14 +2054,15 @@ function focusArtifactTopologyNode(artifactPath) {
     const targetZoom = Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.14, cy.zoom(), 1.38));
     cy.zoom(targetZoom);
     applyArtifactTopologyGraphMode(cy);
-    layoutArtifactTopologyAroundNode(cy, node);
-    cy.animate({
-        center: { eles: node },
-        zoom: targetZoom,
-        duration: 320,
-        easing: "ease-out-cubic",
+    layoutArtifactTopologyAroundNode(cy, node, () => {
+        cy.animate({
+            center: { eles: node },
+            zoom: targetZoom,
+            duration: 280,
+            easing: "ease-out-cubic",
+        });
+        flashArtifactTopologyNode(artifactPath);
     });
-    flashArtifactTopologyNode(artifactPath);
     return true;
 }
 
