@@ -1617,6 +1617,9 @@ def _require_dashboard_read_access(request: Request, *, allow_local_debug: bool 
 
 
 def _current_theme_preference(request: Request) -> str:
+    cookie_theme = _normalize_theme_preference(request.cookies.get("driftguard-theme"))
+    if cookie_theme:
+        return cookie_theme
     if not _control_plane_active():
         return "dark"
     session = _get_session(request)
@@ -3151,7 +3154,15 @@ async def profile_update(request: Request, display_name: str = Form(...), theme_
         display_name=normalized_name,
         theme_preference=normalized_theme or current_user.theme_preference,
     )
-    return RedirectResponse("/profile?updated=1", status_code=303)
+    response = RedirectResponse("/profile?updated=1", status_code=303)
+    response.set_cookie(
+        "driftguard-theme",
+        normalized_theme or current_user.theme_preference,
+        max_age=60 * 60 * 24 * 365,
+        path="/",
+        samesite="lax",
+    )
+    return response
 
 
 @app.get("/settings", response_class=HTMLResponse)

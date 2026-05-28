@@ -1,4 +1,5 @@
 (() => {
+    const cookieKey = 'driftguard-theme';
     const storageKey = 'driftguard-theme';
     const root = document.documentElement;
 
@@ -19,6 +20,10 @@
         } catch {
             return;
         }
+    };
+
+    const storeThemeCookie = (theme) => {
+        document.cookie = `${cookieKey}=${theme}; path=/; max-age=31536000; SameSite=Lax`;
     };
 
     const preferredTheme = () => {
@@ -51,6 +56,7 @@
         }
         if (persist) {
             storeTheme(theme);
+            storeThemeCookie(theme);
         }
         syncThemeInputs(theme);
         toggleButtons.forEach((button) => {
@@ -83,4 +89,5 @@
     });
 
     applyTheme(preferredTheme(), false);
+    storeThemeCookie(preferredTheme());
 })();
