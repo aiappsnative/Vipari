@@ -1282,8 +1282,6 @@ function autoSelectRepoRow(items, preferredArtifactPath = "", preferredPrNumber 
         }
         return false;
     }
-            modes: [],
-            default_mode_key: String(topologyPayload.default_mode_key || "current"),
     if (preferredHeadSha) {
         const preferredIndex = items.findIndex((item) => insightMatchesHeadSha(item, preferredHeadSha));
         if (preferredIndex >= 0 && rows[preferredIndex]) {
