@@ -1890,8 +1890,15 @@ def build_repo_dashboard_view_with_timings(
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view), stage_timings
 
 
-def _repo_dashboard_tab_href(repo_full: str, tab: str) -> str:
-    return f'/dashboard/{quote(repo_full, safe="")}?tab={quote(tab, safe="")}'
+def _repo_dashboard_tab_href(repo_full: str, tab: str, *, fragment: str | None = None) -> str:
+    href = f'/dashboard/{quote(repo_full, safe="")}?tab={quote(tab, safe="")}'
+    if fragment:
+        return f"{href}#{quote(fragment, safe='')}"
+    return href
+
+
+def _repo_baseline_review_href(repo_full: str) -> str:
+    return _repo_dashboard_tab_href(repo_full, "version-control", fragment="baseline-review-panel")
 
 
 def _extract_audit_brief_dimensions(insight: RepoDashboardInsightEntry | None) -> list[str]:
@@ -2004,7 +2011,7 @@ def _build_repo_audit_brief(
 
     actions: list[RepoAuditBriefAction] = [
         RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "secondary"),
-        RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "secondary"),
+        RepoAuditBriefAction("Open Version Control", _repo_baseline_review_href(repo_full), "secondary"),
     ]
     if top_insight is not None and top_insight.review_url:
         actions.insert(0, RepoAuditBriefAction("Open review target", top_insight.review_url, "primary"))
@@ -2037,7 +2044,7 @@ def _build_repo_audit_brief(
             confidence_label="limited coverage",
             latest_execution=latest_execution,
             affected_dimensions=[],
-            actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
+            actions=[RepoAuditBriefAction("Open Version Control", _repo_baseline_review_href(repo_full), "primary")],
             findings=[],
         )
 
@@ -2097,7 +2104,7 @@ def _build_repo_audit_brief(
             confidence_label="baseline pending",
             latest_execution=latest_execution,
             affected_dimensions=[],
-            actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
+            actions=[RepoAuditBriefAction("Open baseline review", _repo_baseline_review_href(repo_full), "primary")],
             findings=[],
         )
 

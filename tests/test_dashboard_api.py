@@ -420,6 +420,11 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
     assert payload["audit_brief"]["recommendation_label"] == "Review now"
     assert payload["audit_brief"]["review_now_count"] >= 1
+    assert any(
+        action["label"] == "Open Version Control"
+        and action["href"] == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
+        for action in payload["audit_brief"]["actions"]
+    )
 
 
 def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):
@@ -486,6 +491,10 @@ def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path)
     assert payload["audit_brief"]["review_now_count"] == 0
     assert payload["audit_brief"]["baseline_status"] == "approved"
     assert payload["audit_brief"]["baseline_reference"] != "none-yet"
+    assert any(
+        action["label"] == "Open audit tab"
+        for action in payload["audit_brief"]["actions"]
+    )
 
 
 def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_audit(tmp_path):
@@ -1298,6 +1307,10 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is True
     assert rebaseline_payload["dashboard"]["baseline_version_count"] == 2
     assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] is None
+    assert any(
+        action["label"] == "Open Version Control" and action["href"] == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
+        for action in rebaseline_payload["dashboard"]["audit_brief"]["actions"]
+    )
 
     with TestClient(main.app) as client:
         approve_rebaseline_response = client.post(

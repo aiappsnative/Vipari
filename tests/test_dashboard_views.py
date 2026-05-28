@@ -202,6 +202,12 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.journey_snapshots[-1]["snapshot_type"] == "current"
     assert dashboard.journey_comparison is not None
     assert dashboard.journey_comparison["comparison_kind"] == "baseline_vs_current"
+    assert dashboard.audit_brief is not None
+    assert any(
+        action.label == "Open Version Control"
+        and action.href == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
+        for action in dashboard.audit_brief.actions
+    )
     assert len(dashboard.design_profiles) == 1
     assert dashboard.design_profiles[0].artifact_path == "prompts/refund.txt"
     assert dashboard.design_profiles[0].baseline_provenance is not None
