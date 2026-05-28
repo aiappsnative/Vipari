@@ -227,13 +227,13 @@ The next dashboard iteration should emphasize:
 - control-surface grouping,
 - and historical storylines for top artifacts.
 
-The first concrete move in that direction is now implemented: repo detail pages include a lightweight artifact history timeline built from historical profile records plus PR drift samples.
+The first concrete move in that direction is now implemented: repo detail pages include a lightweight artifact history timeline built from historical profile records plus PR drift samples, and the repo case file now separates governance work from topology inspection by keeping baseline review in Version Control while Artifacts owns the current-state relationship graph and registry.
 
 The overview page should now also be treated as the landing risk surface, with an explicit portfolio risk-state summary ahead of the deeper repo queue and coverage views.
 
 It should also surface cross-repo hotspots directly, which now includes a first pass of highest-risk drift and control-surface risk panels.
 
-Repo detail pages should now be understood as the place where Vipari explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, lightweight approved-baseline promotion, and provenance derived from Git history and PR records.
+Repo detail pages should now be understood as the place where Vipari explains static design movement explicitly: baseline-vs-current attribute posture, readable risk tags, direct source links, code-level evidence, baseline-review governance inside Version Control, artifact-topology inspection inside Artifacts, and provenance derived from Git history and PR records.
 
 That explanation layer now uses a shared normalized attribute-profile contract so the same surfaced dimensions appear in:
 - overview hotspot chips,

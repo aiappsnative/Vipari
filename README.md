@@ -38,7 +38,7 @@ For the enduring product thesis behind that direction, see [SOUL.md](SOUL.md).
 
 ## Current status
 
-The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, customer control-plane, and dashboard control-tower slices.
+The current `main` branch now includes the merged static-first drift engine milestone plus the follow-on escalation, approved-baseline, repo-provenance, repo-evidence, dashboard audit/performance, live default-branch tracking, baseline approval workflow, repo baseline-governance and artifact-topology case-file slice, customer control-plane, and dashboard control-tower slices.
 
 In practical terms, Vipari currently provides:
 
@@ -50,6 +50,7 @@ In practical terms, Vipari currently provides:
 - a triage-first dashboard surface with portfolio Triage/Coverage modes and repo case-file drill-down pages, including baseline provenance in repo/history views
 - a shared audit-focused dashboard shell across portfolio, repo audit, and repo setup surfaces, with repo-level journey context, direct audit navigation from repository setup, and obscured entitlement-aware deep-link shells that preserve the requested review context when full dashboard access is unavailable
 - explicit repo and artifact baseline approval review, including pending candidate state, approval history, and snapshot-driven rebaseline proposals
+- a repo case-file layout where Version Control owns posture radar, journey, and baseline review while the Artifacts tab owns the artifact registry plus a baseline-aware relationship graph of the current repository state
 - live default-branch posture tracking driven by push-triggered branch scans so landed drift stays current between PRs
 - landed drift views driven by approved baselines plus merged-history evidence, while proposal-only PR audit evidence remains separate from landed-history posture
 - reviewer queues now distinguish `proposal only`, `proposal + history`, and `history only` evidence so the repo case file can route reviewers to the right PR or merged commit without contaminating landed posture
@@ -103,7 +104,7 @@ For detailed roadmap status, see [Plan.MD](Plan.MD). For architecture details, s
 The dashboard should now be read as two linked product surfaces:
 
 - `/dashboard` is the portfolio decision surface for triage, hotspots, and coverage trust, with a secondary coverage mode for inventory and pattern scans
-- `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, lower-confidence findings, artifact-level evidence, and approved-baseline promotion
+- `/dashboard/{owner/repo}` is the repo case file for baseline-relative posture, prioritized review targets, Version Control governance actions, artifact-level evidence, and artifact-topology inspection of the current tracked state
 
 The active repo-evidence slice also sharpens the ranked queue inside those surfaces:
 

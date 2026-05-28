@@ -218,10 +218,11 @@ This document records the first evidence-backed QA slice for issue `#86`.
   - posture radar
   - snapshot journey with approved baseline, historical commit, and branch-head checkpoints
   - baseline-vs-current comparison with `+0.000` drift delta and `0 changed artifacts`
-- `baseline` hydrated after network idle and rendered:
+- `artifacts` hydrated after network idle and rendered:
   - review target card pointing back to the flagged PR-driven change
-  - baseline review summary with `1 approved` artifact and recent `rebaseline` decisions
+  - artifact topology graph and stored-evidence status
   - artifact registry with `system_prompt.md` as the single approved prompt artifact
+- baseline review remained available from `version-control`, alongside the posture radar and journey context
 - `compliance` rendered correctly with repo-level AI-surface counts, audit cues, and no lower-confidence conflicts
 - `reports` rendered the export form and related-audits handoff path correctly; export history remained in loading state until a real history row is available
 

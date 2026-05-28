@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-05-28 — Repo baseline governance and artifact topology merged to main
+
+### Added
+- a graph-first Artifacts tab in the repo case file, including backend-owned artifact topology payloads, baseline-aware graph modes, and subtle node and edge delta states for changed relationships
+- focused regression coverage for repo dashboard API tab scoping, artifact-topology delta semantics, legacy repo-tab compatibility, and repo-shell tab rendering
+
+### Changed
+- Baseline Review now lives in Version Control so rebaseline and approval actions stay in the same governance surface as posture radar and snapshot journey
+- repo artifact add, remove, reclassify, and merged-PR sync flows now invalidate dashboard caches so topology and registry views stay fresh after mutations
+- the canonical repo tab slug is now `artifacts`; legacy `?tab=baseline` requests still resolve to the Artifacts experience for backward compatibility
+- artifact topology work is now gated to the Artifacts tab so Version Control and overview payloads do not pay hidden graph-build costs
+- roadmap and architecture docs now describe the shipped repo case-file layout instead of the older baseline-tab model
+
+### Verified
+- focused repo dashboard regressions passed locally in `tests/test_dashboard_api.py`, `tests/test_dashboard_views.py`, and `tests/test_operator_api.py`
+
+### Product impact
+- repo reviewers can now compare baseline posture, approve baseline changes, and inspect current artifact relationships without bouncing between mismatched dashboard tabs
+- the Artifacts surface has room for the topology-first model without adding hidden work to unrelated repo tabs
+
 ## 2026-05-12 — Pre-audit relevance visibility and PR-scoped dashboard continuity
 
 ### Added
