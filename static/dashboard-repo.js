@@ -1871,6 +1871,7 @@ function buildArtifactTopologyGraphElements(model) {
                 driftMagnitude: Number(group.driftMagnitude || 0),
             },
             position,
+            classes: "artifact-topology-overview",
         });
 
         const relatedArtifactPaths = relatedArtifactPathsByGroup.get(group.key) || new Set();
@@ -1913,7 +1914,7 @@ function buildArtifactTopologyGraphElements(model) {
                 deltaStatus: String(edge.deltaStatus || ""),
                 kind: "group-edge",
             },
-            classes: "group-relationship",
+            classes: "group-relationship artifact-topology-overview",
         });
     });
 
@@ -1960,8 +1961,8 @@ function updateArtifactTopologyZoomHint(cy) {
 function applyArtifactTopologyGraphMode(cy) {
     const detailMode = artifactTopologyGraphDetailMode(cy.zoom());
     cy.batch(() => {
-        cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
-        cy.elements(".group-relationship").toggleClass("artifact-topology-muted", detailMode);
+    cy.elements(".artifact-topology-overview").toggleClass("artifact-topology-hidden", detailMode);
+    cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
     });
     updateArtifactTopologyZoomHint(cy);
 }
