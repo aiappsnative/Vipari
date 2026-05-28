@@ -48,6 +48,7 @@ window.__artifactActionStatusTone = "info";
 window.__artifactTopologyGroup = "";
 window.__artifactTopology = null;
 window.__artifactTopologyMode = "current";
+window.__artifactTopologyGraph = null;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
@@ -76,6 +77,10 @@ const ARTIFACT_TOPOLOGY_EDGES = [
     { from: "retrieval", to: "agents", label: "feeds" },
     { from: "governance", to: "agents", label: "governs" },
 ];
+
+const ARTIFACT_TOPOLOGY_GRAPH_SIZE = { width: 1000, height: 680 };
+const ARTIFACT_TOPOLOGY_DETAIL_ZOOM = 1.18;
+const ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS = 12;
 
 function resolveRepoTab() {
     const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
@@ -1707,6 +1712,7 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
             return {
                 ...group,
                 entries,
+                artifacts: entries,
                 count: entries.length,
                 driftMagnitude: entries.reduce((maxValue, entry) => Math.max(maxValue, Number(entry.leaderboard_drift_magnitude || entry.latest_historical_drift_magnitude || 0)), 0),
                 topArtifacts: [...entries]
@@ -1759,66 +1765,419 @@ function renderArtifactTopologyModeToggle(model) {
     `;
 }
 
+function artifactTopologyGroupNodeId(groupKey) {
+    return `group:${groupKey}`;
+}
+
+function artifactTopologyArtifactNodeId(artifactPath) {
+    return `artifact:${artifactPath}`;
+}
+
+function artifactTopologyShortArtifactLabel(artifactPath) {
+    const path = String(artifactPath || "").trim();
+    if (!path) {
+        return "Artifact";
+    }
+    const fileName = path.split("/").pop() || path;
+    return fileName.length > 22 ? `${fileName.slice(0, 19)}...` : fileName;
+}
+
+function artifactTopologyDeltaSummary(item = {}) {
+    const deltaCounts = item.deltaCounts || {};
+    const parts = [];
+    if (Number(deltaCounts.added || 0) > 0) {
+        parts.push(`+${deltaCounts.added}`);
+    }
+    if (Number(deltaCounts.removed || 0) > 0) {
+        parts.push(`-${deltaCounts.removed}`);
+    }
+    if (Number(deltaCounts.reclassified || 0) > 0) {
+        parts.push(`~${deltaCounts.reclassified}`);
+    }
+    if (Number(deltaCounts.changed || 0) > 0) {
+        parts.push(`${deltaCounts.changed} changed`);
+    }
+    return parts.join(" · ");
+}
+
+function artifactTopologyGraphDetailMode(zoomLevel) {
+    return Number(zoomLevel || 0) >= ARTIFACT_TOPOLOGY_DETAIL_ZOOM;
+}
+
+function artifactTopologyGroupPosition(group) {
+    return {
+        x: (Number(group.x || 50) / 100) * ARTIFACT_TOPOLOGY_GRAPH_SIZE.width,
+        y: (Number(group.y || 50) / 100) * ARTIFACT_TOPOLOGY_GRAPH_SIZE.height,
+    };
+}
+
+function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
+    const prioritized = [];
+    const seen = new Set();
+    const pushArtifact = (artifact) => {
+        const artifactPath = String(artifact?.artifact_path || "");
+        if (!artifactPath || seen.has(artifactPath)) {
+            return;
+        }
+        seen.add(artifactPath);
+        prioritized.push(artifact);
+    };
+
+    asArray(group.artifacts).forEach((artifact) => {
+        if (relationPaths.has(String(artifact?.artifact_path || ""))) {
+            pushArtifact(artifact);
+        }
+    });
+    asArray(group.topArtifacts).forEach(pushArtifact);
+    asArray(group.artifacts).forEach(pushArtifact);
+
+    return prioritized.slice(0, ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS);
+}
+
+function buildArtifactTopologyGraphElements(model) {
+    const elements = [];
+    const visibleArtifactPaths = new Set();
+    const relatedArtifactPathsByGroup = new Map(model.groups.map((group) => [group.key, new Set()]));
+    const groupPositions = new Map(model.groups.map((group) => [group.key, artifactTopologyGroupPosition(group)]));
+
+    asArray(model.artifactRelations).forEach((relation) => {
+        const sourcePath = String(relation.sourceArtifactPath || "");
+        const targetPath = String(relation.targetArtifactPath || "");
+        if (sourcePath) {
+            visibleArtifactPaths.add(sourcePath);
+        }
+        if (targetPath) {
+            visibleArtifactPaths.add(targetPath);
+        }
+        if (relatedArtifactPathsByGroup.has(relation.sourceGroupKey)) {
+            relatedArtifactPathsByGroup.get(relation.sourceGroupKey).add(sourcePath);
+        }
+        if (relatedArtifactPathsByGroup.has(relation.targetGroupKey)) {
+            relatedArtifactPathsByGroup.get(relation.targetGroupKey).add(targetPath);
+        }
+    });
+
+    model.groups.forEach((group) => {
+        const position = groupPositions.get(group.key) || artifactTopologyGroupPosition(group);
+        elements.push({
+            data: {
+                id: artifactTopologyGroupNodeId(group.key),
+                label: `${group.shortLabel || group.label}\n${group.count}`,
+                fullLabel: group.label,
+                subtitle: artifactTopologyDeltaSummary(group),
+                kind: "group",
+                groupKey: group.key,
+                count: group.count,
+                driftMagnitude: Number(group.driftMagnitude || 0),
+            },
+            position,
+        });
+
+        const relatedArtifactPaths = relatedArtifactPathsByGroup.get(group.key) || new Set();
+        const artifacts = artifactTopologyVisibleArtifacts(group, relatedArtifactPaths);
+        const radiusBase = 98;
+        artifacts.forEach((artifact, index) => {
+            const artifactPath = String(artifact.artifact_path || "");
+            const ringIndex = Math.floor(index / 6);
+            const angle = ((index % 6) / 6) * Math.PI * 2 - Math.PI / 2;
+            const radius = radiusBase + ringIndex * 52;
+            const x = position.x + Math.cos(angle) * radius;
+            const y = position.y + Math.sin(angle) * radius;
+            elements.push({
+                data: {
+                    id: artifactTopologyArtifactNodeId(artifactPath),
+                    label: artifactTopologyShortArtifactLabel(artifactPath),
+                    fullPath: artifactPath,
+                    deltaLabel: String(artifact.delta_label || ""),
+                    deltaStatus: String(artifact.delta_status || ""),
+                    kind: "artifact",
+                    groupKey: group.key,
+                },
+                position: {
+                    x: clamp(x, 56, ARTIFACT_TOPOLOGY_GRAPH_SIZE.width - 56),
+                    y: clamp(y, 56, ARTIFACT_TOPOLOGY_GRAPH_SIZE.height - 56),
+                },
+                classes: "artifact-detail",
+            });
+        });
+    });
+
+    asArray(model.edges).forEach((edge, index) => {
+        elements.push({
+            data: {
+                id: `group-edge:${edge.from}:${edge.to}:${index}`,
+                source: artifactTopologyGroupNodeId(edge.from),
+                target: artifactTopologyGroupNodeId(edge.to),
+                label: edge.label,
+                deltaLabel: String(edge.deltaLabel || ""),
+                deltaStatus: String(edge.deltaStatus || ""),
+                kind: "group-edge",
+            },
+            classes: "group-relationship",
+        });
+    });
+
+    asArray(model.artifactRelations).forEach((relation, index) => {
+        const sourceId = artifactTopologyArtifactNodeId(relation.sourceArtifactPath);
+        const targetId = artifactTopologyArtifactNodeId(relation.targetArtifactPath);
+        if (!elements.some((element) => element.data?.id === sourceId) || !elements.some((element) => element.data?.id === targetId)) {
+            return;
+        }
+        elements.push({
+            data: {
+                id: `artifact-edge:${index}`,
+                source: sourceId,
+                target: targetId,
+                label: relation.label,
+                evidence: relation.evidence,
+                kind: "artifact-edge",
+            },
+            classes: "artifact-detail",
+        });
+    });
+
+    return elements;
+}
+
+function artifactTopologyZoomCenter(cy) {
+    const extent = cy.extent();
+    return {
+        x: (extent.x1 + extent.x2) / 2,
+        y: (extent.y1 + extent.y2) / 2,
+    };
+}
+
+function updateArtifactTopologyZoomHint(cy) {
+    const hint = document.getElementById("artifact-topology-zoom-hint");
+    if (!hint) {
+        return;
+    }
+    hint.textContent = artifactTopologyGraphDetailMode(cy.zoom())
+        ? "Detailed view: artifact-level relationships are visible. Zoom out to regroup the graph."
+        : "Overview: grouped control surfaces are visible. Zoom in to reveal artifact-level relationships.";
+}
+
+function applyArtifactTopologyGraphMode(cy) {
+    const detailMode = artifactTopologyGraphDetailMode(cy.zoom());
+    cy.batch(() => {
+        cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
+        cy.elements(".group-relationship").toggleClass("artifact-topology-muted", detailMode);
+    });
+    updateArtifactTopologyZoomHint(cy);
+}
+
+function updateArtifactTopologyGraphSelection(cy, selectedKey) {
+    cy.batch(() => {
+        cy.nodes('[kind = "group"]').removeClass("artifact-topology-selected");
+        cy.nodes('[kind = "artifact"]').removeClass("artifact-topology-selected-child");
+        cy.nodes(`[groupKey = "${selectedKey}"][kind = "artifact"]`).addClass("artifact-topology-selected-child");
+        cy.getElementById(artifactTopologyGroupNodeId(selectedKey)).addClass("artifact-topology-selected");
+    });
+}
+
+function updateArtifactTopologyFocusPanel(model, selectedKey) {
+    window.__artifactTopologyGroup = selectedKey;
+    setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus({ ...model, selectedKey }));
+    bindCueCards();
+}
+
+function destroyArtifactTopologyGraph() {
+    if (window.__artifactTopologyGraph && typeof window.__artifactTopologyGraph.destroy === "function") {
+        window.__artifactTopologyGraph.destroy();
+    }
+    window.__artifactTopologyGraph = null;
+}
+
+function initArtifactTopologyGraph(model) {
+    const container = document.getElementById("artifact-topology-graph");
+    if (!container || typeof window.cytoscape !== "function" || !model.groups.length) {
+        return;
+    }
+
+    const cy = window.cytoscape({
+        container,
+        elements: buildArtifactTopologyGraphElements(model),
+        layout: { name: "preset", fit: true, padding: 48 },
+        wheelSensitivity: 0.18,
+        minZoom: 0.65,
+        maxZoom: 2.1,
+        boxSelectionEnabled: false,
+        style: [
+            {
+                selector: 'node[kind = "group"]',
+                style: {
+                    width: 132,
+                    height: 132,
+                    shape: "round-rectangle",
+                    label: "data(label)",
+                    "text-wrap": "wrap",
+                    "text-max-width": 104,
+                    "font-size": 15,
+                    "font-weight": 700,
+                    color: "#f4f1eb",
+                    "text-valign": "center",
+                    "text-halign": "center",
+                    "background-color": "#355f69",
+                    "background-opacity": 0.96,
+                    "border-width": 1.5,
+                    "border-color": "#6baab4",
+                    "overlay-opacity": 0,
+                    "shadow-blur": 24,
+                    "shadow-color": "rgba(0, 0, 0, 0.22)",
+                    "shadow-opacity": 0.26,
+                    "shadow-offset-x": 0,
+                    "shadow-offset-y": 10,
+                },
+            },
+            {
+                selector: 'node[kind = "artifact"]',
+                style: {
+                    width: 54,
+                    height: 54,
+                    shape: "ellipse",
+                    label: "data(label)",
+                    "font-size": 10,
+                    "font-weight": 600,
+                    color: "#e9e4dd",
+                    "text-wrap": "wrap",
+                    "text-max-width": 86,
+                    "text-valign": "bottom",
+                    "text-margin-y": 28,
+                    "background-color": "#232729",
+                    "border-width": 1,
+                    "border-color": "#87979b",
+                    "overlay-opacity": 0,
+                },
+            },
+            {
+                selector: 'edge[kind = "group-edge"]',
+                style: {
+                    width: 2.1,
+                    label: "data(label)",
+                    color: "#a8b1b3",
+                    "font-size": 11,
+                    "text-background-opacity": 1,
+                    "text-background-color": "#171816",
+                    "text-background-padding": 4,
+                    "curve-style": "bezier",
+                    "line-color": "#707879",
+                    "target-arrow-color": "#707879",
+                    "target-arrow-shape": "triangle",
+                    "arrow-scale": 0.9,
+                    opacity: 0.9,
+                },
+            },
+            {
+                selector: 'edge[kind = "artifact-edge"]',
+                style: {
+                    width: 1.5,
+                    label: "data(label)",
+                    color: "#d2ccc3",
+                    "font-size": 9,
+                    "text-background-opacity": 1,
+                    "text-background-color": "#171816",
+                    "text-background-padding": 3,
+                    "curve-style": "unbundled-bezier",
+                    "line-color": "#d39a55",
+                    "target-arrow-color": "#d39a55",
+                    "target-arrow-shape": "triangle",
+                    "arrow-scale": 0.72,
+                    opacity: 0.78,
+                },
+            },
+            {
+                selector: ".artifact-topology-hidden",
+                style: {
+                    display: "none",
+                },
+            },
+            {
+                selector: ".artifact-topology-muted",
+                style: {
+                    opacity: 0.28,
+                },
+            },
+            {
+                selector: ".artifact-topology-selected",
+                style: {
+                    "border-width": 3,
+                    "border-color": "#d9a13d",
+                    "shadow-opacity": 0.42,
+                    "shadow-color": "rgba(217, 161, 61, 0.32)",
+                },
+            },
+            {
+                selector: ".artifact-topology-selected-child",
+                style: {
+                    "border-width": 2,
+                    "border-color": "#d9a13d",
+                    "background-color": "#5a4330",
+                },
+            },
+        ],
+    });
+
+    window.__artifactTopologyGraph = cy;
+    applyArtifactTopologyGraphMode(cy);
+    updateArtifactTopologyGraphSelection(cy, model.selectedKey);
+
+    cy.on("zoom", () => {
+        applyArtifactTopologyGraphMode(cy);
+    });
+
+    cy.on("tap", 'node[kind = "group"], node[kind = "artifact"]', (event) => {
+        const groupKey = String(event.target.data("groupKey") || "");
+        if (!groupKey) {
+            return;
+        }
+        updateArtifactTopologyFocusPanel(model, groupKey);
+        updateArtifactTopologyGraphSelection(cy, groupKey);
+    });
+
+    const zoomInButton = document.querySelector('[data-artifact-topology-zoom="in"]');
+    const zoomOutButton = document.querySelector('[data-artifact-topology-zoom="out"]');
+    const zoomResetButton = document.querySelector('[data-artifact-topology-zoom="reset"]');
+    const bindZoomButton = (button, handler, marker) => {
+        if (!(button instanceof HTMLButtonElement) || button.dataset[marker] === "true") {
+            return;
+        }
+        button.dataset[marker] = "true";
+        button.addEventListener("click", handler);
+    };
+
+    bindZoomButton(zoomInButton, () => {
+        cy.zoom({
+            level: Math.min(cy.maxZoom(), cy.zoom() * 1.2),
+            renderedPosition: artifactTopologyZoomCenter(cy),
+        });
+    }, "boundArtifactZoomIn");
+    bindZoomButton(zoomOutButton, () => {
+        cy.zoom({
+            level: Math.max(cy.minZoom(), cy.zoom() / 1.2),
+            renderedPosition: artifactTopologyZoomCenter(cy),
+        });
+    }, "boundArtifactZoomOut");
+    bindZoomButton(zoomResetButton, () => {
+        cy.fit(cy.nodes('[kind = "group"]'), 48);
+        applyArtifactTopologyGraphMode(cy);
+    }, "boundArtifactZoomReset");
+}
+
 function renderArtifactTopologyMap(model) {
     if (!model.groups.length) {
         return '<div class="muted">No tracked artifacts are available yet, so Vipari cannot infer a relationship graph for this repository.</div>';
     }
-    const groupByKey = new Map(model.groups.map((group) => [group.key, group]));
     return `
-        <div class="artifact-topology-canvas">
-            <svg class="artifact-topology-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                <defs>
-                    <marker id="artifact-topology-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                        <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"></path>
-                    </marker>
-                </defs>
-                ${model.edges.map((edge) => {
-                    const from = groupByKey.get(edge.from);
-                    const to = groupByKey.get(edge.to);
-                    if (!from || !to) {
-                        return "";
-                    }
-                    const midX = (from.x + to.x) / 2;
-                    const midY = (from.y + to.y) / 2 - 4;
-                    const edgeDeltaClass = edge.deltaStatus ? ` artifact-topology-edge-${escapeHtml(edge.deltaStatus)}` : "";
-                    const edgeLabelDelta = edge.deltaLabel ? ` <tspan class="artifact-topology-edge-label-delta">${escapeHtml(edge.deltaLabel.toLowerCase())}</tspan>` : "";
-                    return `
-                        <line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" class="artifact-topology-edge${edgeDeltaClass}" marker-end="url(#artifact-topology-arrow)"></line>
-                        <text x="${midX}" y="${midY}" class="artifact-topology-edge-label${edgeDeltaClass}" text-anchor="middle">${escapeHtml(edge.label)}${edgeLabelDelta}</text>
-                    `;
-                }).join("")}
-            </svg>
-            ${model.groups.map((group) => `
-                ${(() => {
-                    const badges = [];
-                    const counts = group.deltaCounts || {};
-                    if (Number(counts.added || 0) > 0) {
-                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-added">+${escapeHtml(String(counts.added))}</span>`);
-                    }
-                    if (Number(counts.removed || 0) > 0) {
-                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-removed">-${escapeHtml(String(counts.removed))}</span>`);
-                    }
-                    if (Number(counts.reclassified || 0) > 0) {
-                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-reclassified">~${escapeHtml(String(counts.reclassified))}</span>`);
-                    }
-                    if (Number(counts.changed || 0) > 0) {
-                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-changed">${escapeHtml(String(counts.changed))} changed</span>`);
-                    }
-                    return `
-                <button
-                    type="button"
-                    class="artifact-topology-node${group.key === model.selectedKey ? " artifact-topology-node-active" : ""}"
-                    data-artifact-topology-node="${escapeHtml(group.key)}"
-                    style="left:${group.x}%;top:${group.y}%;"
-                    aria-pressed="${group.key === model.selectedKey ? "true" : "false"}"
-                >
-                    <span class="artifact-topology-node-count">${escapeHtml(String(group.count))}</span>
-                    <span class="artifact-topology-node-label">${escapeHtml(group.shortLabel)}</span>
-                    ${badges.length ? `<span class="artifact-topology-node-deltas">${badges.join("")}</span>` : ""}
-                </button>
-                    `;
-                })()}
-            `).join("")}
+        <div class="artifact-topology-viewport-shell">
+            <div class="artifact-topology-toolbar">
+                <div id="artifact-topology-zoom-hint" class="artifact-topology-zoom-hint">Overview: grouped control surfaces are visible. Zoom in to reveal artifact-level relationships.</div>
+                <div class="artifact-topology-zoom-controls" role="group" aria-label="Relationship graph zoom controls">
+                    <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="out">Zoom out</button>
+                    <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="reset">Reset</button>
+                    <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="in">Zoom in</button>
+                </div>
+            </div>
+            <div id="artifact-topology-graph" class="artifact-topology-graph" role="img" aria-label="Artifact relationship graph"></div>
         </div>
     `;
 }
@@ -2132,9 +2491,11 @@ function refreshArtifactsSection() {
     const items = asArray(window.__artifactEntries);
     const filtered = filteredArtifactEntries(items);
     const topologyModel = buildArtifactTopologyModel(items, window.__artifactTopology);
+    destroyArtifactTopologyGraph();
     setSectionHtml("artifact-topology-mode-toggle", renderArtifactTopologyModeToggle(topologyModel));
     setSectionHtml("artifact-topology-map", renderArtifactTopologyMap(topologyModel));
     setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus(topologyModel));
+    initArtifactTopologyGraph(topologyModel);
     setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
     setSectionHtml("artifact-add-controls", renderArtifactAddControls());
     const filterHost = document.getElementById("artifact-filter-chips");
@@ -2187,19 +2548,6 @@ function bindArtifactControls() {
                 return;
             }
             window.__artifactTypeFilter = target.getAttribute("data-artifact-type-filter") || "all";
-            refreshArtifactsSection();
-        });
-    }
-
-    const topologyMap = document.getElementById("artifact-topology-map");
-    if (topologyMap && topologyMap.dataset.boundArtifactTopology !== "true") {
-        topologyMap.dataset.boundArtifactTopology = "true";
-        topologyMap.addEventListener("click", (event) => {
-            const target = event.target instanceof HTMLElement ? event.target.closest("[data-artifact-topology-node]") : null;
-            if (!target) {
-                return;
-            }
-            window.__artifactTopologyGroup = target.getAttribute("data-artifact-topology-node") || "";
             refreshArtifactsSection();
         });
     }

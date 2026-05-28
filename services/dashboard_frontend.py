@@ -21,6 +21,7 @@ def _asset_url(path: str) -> str:
 def _load_template(name: str) -> str:
     template = (DASHBOARD_TEMPLATES_DIR / name).read_text(encoding="utf-8")
     template = template.replace('/static/dashboard.css', _asset_url('/static/dashboard.css'))
+    template = template.replace('/static/vendor/cytoscape-3.33.4.min.js', _asset_url('/static/vendor/cytoscape-3.33.4.min.js'))
     template = template.replace('/static/dashboard-index.js', _asset_url('/static/dashboard-index.js'))
     template = template.replace('/static/dashboard-repo.js', _asset_url('/static/dashboard-repo.js'))
     template = template.replace('/static/theme-toggle.js', _asset_url('/static/theme-toggle.js'))
