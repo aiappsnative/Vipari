@@ -845,6 +845,7 @@ def test_repo_artifact_mutation_apis_return_refreshed_dashboard(tmp_path):
     assert add_response.json()["baseline"]["artifact_type"] == "policy"
     assert add_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
     assert add_response.json()["dashboard"]["artifact_topology"]["view_basis"] == "current_tracked_state"
+    assert "artifact_relations" in add_response.json()["dashboard"]["artifact_topology"]
 
     assert patch_response.status_code == 200
     assert patch_response.json()["artifact"]["artifact_type"] == "guardrail"

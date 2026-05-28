@@ -930,6 +930,7 @@ class RepoArtifactTopologyNode:
     description: str
     count: int
     drift_magnitude: float
+    artifacts: list[RepoArtifactTopologyArtifact]
     top_artifacts: list[RepoArtifactTopologyArtifact]
 
 
@@ -941,10 +942,21 @@ class RepoArtifactTopologyEdge:
 
 
 @dataclass(frozen=True)
+class RepoArtifactTopologyRelation:
+    source_artifact_path: str
+    source_group_key: str
+    target_artifact_path: str
+    target_group_key: str
+    label: str
+    evidence: str
+
+
+@dataclass(frozen=True)
 class RepoArtifactTopologyView:
     view_basis: str
     groups: list[RepoArtifactTopologyNode]
     edges: list[RepoArtifactTopologyEdge]
+    artifact_relations: list[RepoArtifactTopologyRelation]
     selected_baseline_source_snapshot_id: int | None = None
 
 
@@ -3168,7 +3180,7 @@ def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
         history_cues=[],
         design_profiles=[],
         artifacts=[],
-        artifact_topology=RepoArtifactTopologyView(view_basis="current_tracked_state", groups=[], edges=[]),
+        artifact_topology=RepoArtifactTopologyView(view_basis="current_tracked_state", groups=[], edges=[], artifact_relations=[]),
         journey_snapshots=[],
         journey_comparison=None,
     )
@@ -3268,6 +3280,7 @@ _ARTIFACT_TOPOLOGY_GROUPS: tuple[dict[str, Any], ...] = (
 
 _ARTIFACT_TOPOLOGY_EDGES: tuple[RepoArtifactTopologyEdge, ...] = (
     RepoArtifactTopologyEdge(source_key="governance", target_key="guardrails", label="policy constrains"),
+    RepoArtifactTopologyEdge(source_key="governance", target_key="prompts", label="governs"),
     RepoArtifactTopologyEdge(source_key="guardrails", target_key="prompts", label="constrains"),
     RepoArtifactTopologyEdge(source_key="guardrails", target_key="models", label="bounds"),
     RepoArtifactTopologyEdge(source_key="prompts", target_key="models", label="steers"),
@@ -3278,6 +3291,37 @@ _ARTIFACT_TOPOLOGY_EDGES: tuple[RepoArtifactTopologyEdge, ...] = (
     RepoArtifactTopologyEdge(source_key="retrieval", target_key="agents", label="feeds"),
     RepoArtifactTopologyEdge(source_key="governance", target_key="agents", label="governs"),
 )
+
+
+_ARTIFACT_TOPOLOGY_TOKEN_STOPWORDS = {
+    "agent",
+    "agents",
+    "artifact",
+    "artifacts",
+    "config",
+    "configs",
+    "file",
+    "files",
+    "generic",
+    "instruction",
+    "instructions",
+    "model",
+    "models",
+    "policy",
+    "policies",
+    "prompt",
+    "prompts",
+    "repo",
+    "repository",
+    "tool",
+    "tools",
+    "txt",
+    "json",
+    "yaml",
+    "yml",
+    "py",
+    "md",
+}
 
 
 def _artifact_topology_group_key(entry: RepoDashboardArtifactEntry) -> str:
@@ -3300,6 +3344,95 @@ def _artifact_topology_group_key(entry: RepoDashboardArtifactEntry) -> str:
     if "prompt" in artifact_type or "instruction" in artifact_type or provenance_kind == "ai_control_surface":
         return "prompts"
     return "other"
+
+
+def _artifact_topology_relation_edge_map() -> dict[tuple[str, str], str]:
+    return {(edge.source_key, edge.target_key): edge.label for edge in _ARTIFACT_TOPOLOGY_EDGES}
+
+
+def _artifact_topology_tokens(entry: RepoDashboardArtifactEntry) -> set[str]:
+    normalized = (
+        f"{entry.artifact_path} {entry.artifact_type}"
+        .lower()
+        .replace("\\", "/")
+        .replace("-", "/")
+        .replace("_", "/")
+        .replace(".", "/")
+    )
+    return {
+        token
+        for token in normalized.split("/")
+        if len(token) >= 3 and token not in _ARTIFACT_TOPOLOGY_TOKEN_STOPWORDS
+    }
+
+
+def _build_repo_artifact_topology_relations(
+    entries_by_group: dict[str, list[RepoDashboardArtifactEntry]],
+    *,
+    active_group_keys: set[str],
+) -> list[RepoArtifactTopologyRelation]:
+    relation_labels = _artifact_topology_relation_edge_map()
+    relations: list[RepoArtifactTopologyRelation] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for (source_group_key, target_group_key), label in relation_labels.items():
+        if source_group_key not in active_group_keys or target_group_key not in active_group_keys:
+            continue
+        source_entries = entries_by_group.get(source_group_key, [])
+        target_entries = entries_by_group.get(target_group_key, [])
+        if not source_entries or not target_entries:
+            continue
+
+        candidates: list[tuple[int, float, str, RepoDashboardArtifactEntry, RepoDashboardArtifactEntry]] = []
+        for source_entry in source_entries:
+            source_tokens = _artifact_topology_tokens(source_entry)
+            source_drift = max(float(source_entry.leaderboard_drift_magnitude or 0.0), float(source_entry.latest_historical_drift_magnitude or 0.0))
+            for target_entry in target_entries:
+                target_tokens = _artifact_topology_tokens(target_entry)
+                shared_tokens = sorted(source_tokens & target_tokens)
+                target_drift = max(float(target_entry.leaderboard_drift_magnitude or 0.0), float(target_entry.latest_historical_drift_magnitude or 0.0))
+                if not shared_tokens and not (len(source_entries) == 1 and len(target_entries) == 1):
+                    continue
+                evidence = (
+                    f"Shared context: {', '.join(shared_tokens[:3])}"
+                    if shared_tokens
+                    else "Connected by the current control-surface flow for this repository."
+                )
+                candidates.append((len(shared_tokens), source_drift + target_drift, evidence, source_entry, target_entry))
+
+        candidates.sort(
+            key=lambda item: (
+                -item[0],
+                -item[1],
+                item[3].artifact_path,
+                item[4].artifact_path,
+            )
+        )
+        for _shared_count, _drift_score, evidence, source_entry, target_entry in candidates[:4]:
+            pair_key = (source_entry.artifact_path, target_entry.artifact_path)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            relations.append(
+                RepoArtifactTopologyRelation(
+                    source_artifact_path=source_entry.artifact_path,
+                    source_group_key=source_group_key,
+                    target_artifact_path=target_entry.artifact_path,
+                    target_group_key=target_group_key,
+                    label=label,
+                    evidence=evidence,
+                )
+            )
+
+    relations.sort(
+        key=lambda relation: (
+            relation.source_group_key,
+            relation.target_group_key,
+            relation.source_artifact_path,
+            relation.target_artifact_path,
+        )
+    )
+    return relations
 
 
 def _build_repo_artifact_topology(
@@ -3341,6 +3474,15 @@ def _build_repo_artifact_topology(
                     max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0))
                     for entry in entries
                 ),
+                artifacts=[
+                    RepoArtifactTopologyArtifact(
+                        artifact_path=entry.artifact_path,
+                        artifact_type=entry.artifact_type,
+                        provenance_label=entry.provenance_label,
+                        drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                    )
+                    for entry in ranked_entries
+                ],
                 top_artifacts=[
                     RepoArtifactTopologyArtifact(
                         artifact_path=entry.artifact_path,
@@ -3361,6 +3503,10 @@ def _build_repo_artifact_topology(
             for edge in _ARTIFACT_TOPOLOGY_EDGES
             if edge.source_key in active_group_keys and edge.target_key in active_group_keys
         ],
+        artifact_relations=_build_repo_artifact_topology_relations(
+            entries_by_group,
+            active_group_keys=active_group_keys,
+        ),
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
     )
 

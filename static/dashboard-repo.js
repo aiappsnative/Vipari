@@ -1605,6 +1605,7 @@ function normalizeTopologyPayload(topologyPayload) {
             ...group,
             count: Number(group.count || 0),
             driftMagnitude: Number(group.drift_magnitude || group.driftMagnitude || 0),
+            artifacts: asArray(group.artifacts),
             topArtifacts: asArray(group.top_artifacts || group.topArtifacts),
         })),
         edges: edges.map((edge) => ({
@@ -1612,6 +1613,14 @@ function normalizeTopologyPayload(topologyPayload) {
             to: String(edge.target_key || edge.to || ""),
             label: String(edge.label || ""),
         })).filter((edge) => edge.from && edge.to),
+        artifact_relations: asArray(topologyPayload.artifact_relations).map((relation) => ({
+            sourceArtifactPath: String(relation.source_artifact_path || relation.sourceArtifactPath || ""),
+            sourceGroupKey: String(relation.source_group_key || relation.sourceGroupKey || ""),
+            targetArtifactPath: String(relation.target_artifact_path || relation.targetArtifactPath || ""),
+            targetGroupKey: String(relation.target_group_key || relation.targetGroupKey || ""),
+            label: String(relation.label || ""),
+            evidence: String(relation.evidence || ""),
+        })).filter((relation) => relation.sourceArtifactPath && relation.targetArtifactPath),
         selected_baseline_source_snapshot_id: topologyPayload.selected_baseline_source_snapshot_id || null,
     };
 }
@@ -1630,6 +1639,7 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
         return {
             groups: normalizedTopology.groups,
             edges: normalizedTopology.edges.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
+            artifactRelations: normalizedTopology.artifact_relations.filter((relation) => groupKeys.has(relation.sourceGroupKey) && groupKeys.has(relation.targetGroupKey)),
             selectedKey,
             viewBasis: normalizedTopology.view_basis,
         };
@@ -1664,6 +1674,7 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
     return {
         groups,
         edges: ARTIFACT_TOPOLOGY_EDGES.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
+        artifactRelations: [],
         selectedKey,
         viewBasis: "current_tracked_state",
     };
@@ -1725,6 +1736,7 @@ function renderArtifactTopologyFocus(model) {
         const target = ARTIFACT_TOPOLOGY_GROUPS.find((group) => group.key === edge.to);
         return `${selectedGroup.label} -> ${target?.label || edge.to}`;
     });
+    const artifactRelations = asArray(model.artifactRelations).filter((relation) => relation.sourceGroupKey === selectedGroup.key || relation.targetGroupKey === selectedGroup.key);
     return `
         <div class="stack compact-stack artifact-topology-focus-card">
             <div class="artifact-card-head">
@@ -1734,14 +1746,20 @@ function renderArtifactTopologyFocus(model) {
             <div class="artifact-card-reason">${escapeHtml(selectedGroup.description)}</div>
             <div class="detail-note">Graph basis: ${escapeHtml(model.viewBasis === "current_tracked_state" ? "Latest tracked repository state" : model.viewBasis)}. Highest observed drift in this surface: ${escapeHtml(selectedGroup.driftMagnitude.toFixed(3))}</div>
             <div>
-                <div class="detail-section-label">Top artifacts</div>
-                ${selectedGroup.topArtifacts.length ? `<div class="tag-row">${selectedGroup.topArtifacts.map((artifact) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
+                <div class="detail-section-label">Artifacts in this surface</div>
+                ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
             </div>
             <div>
                 <div class="detail-section-label">Linked relationships</div>
                 ${(incoming.length || outgoing.length)
                     ? `<div class="stack compact-stack">${[...incoming, ...outgoing].map((relationship) => `<div class="artifact-card-reason">${escapeHtml(relationship)}</div>`).join("")}</div>`
                     : '<div class="muted">No inferred relationships are visible for this surface yet.</div>'}
+            </div>
+            <div>
+                <div class="detail-section-label">Connected artifacts</div>
+                ${artifactRelations.length
+                    ? `<div class="stack compact-stack">${artifactRelations.map((relation) => `<div class="artifact-card-reason"><strong>${escapeHtml(relation.sourceArtifactPath)}</strong> ${escapeHtml(relation.label)} <strong>${escapeHtml(relation.targetArtifactPath)}</strong>${relation.evidence ? `<div class="detail-note">${escapeHtml(relation.evidence)}</div>` : ""}</div>`).join("")}</div>`
+                    : '<div class="muted">No specific artifact-to-artifact links are inferred for this surface yet.</div>'}
             </div>
         </div>
     `;

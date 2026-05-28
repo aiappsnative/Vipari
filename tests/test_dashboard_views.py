@@ -1020,6 +1020,12 @@ def test_repo_artifact_topology_updates_for_manual_mutations(tmp_path):
     )
     with_policy = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert {group.key for group in with_policy.artifact_topology.groups} == {"governance", "prompts"}
+    assert any(
+        relation.source_artifact_path == "policies/usage.md"
+        and relation.target_artifact_path == "prompts/system.txt"
+        and relation.label == "governs"
+        for relation in with_policy.artifact_topology.artifact_relations
+    )
 
     update_repo_artifact_type(
         db_path,
