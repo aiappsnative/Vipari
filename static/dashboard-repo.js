@@ -46,6 +46,7 @@ window.__artifactMutationBusyPath = "";
 window.__artifactActionStatusMessage = "";
 window.__artifactActionStatusTone = "info";
 window.__artifactTopologyGroup = "";
+window.__artifactTopologyFocusedArtifact = "";
 window.__artifactTopology = null;
 window.__artifactTopologyMode = "current";
 window.__artifactTopologyGraph = null;
@@ -1829,6 +1830,7 @@ function artifactTopologyGroupPosition(group) {
 function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
     const prioritized = [];
     const seen = new Set();
+    const focusedArtifactPath = String(window.__artifactTopologyFocusedArtifact || "").trim();
     const pushArtifact = (artifact) => {
         const artifactPath = String(artifact?.artifact_path || "");
         if (!artifactPath || seen.has(artifactPath)) {
@@ -1837,6 +1839,13 @@ function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
         seen.add(artifactPath);
         prioritized.push(artifact);
     };
+
+    if (focusedArtifactPath) {
+        const focusedArtifact = asArray(group.artifacts).find((artifact) => String(artifact?.artifact_path || "") === focusedArtifactPath);
+        if (focusedArtifact) {
+            pushArtifact(focusedArtifact);
+        }
+    }
 
     asArray(group.artifacts).forEach((artifact) => {
         if (relationPaths.has(String(artifact?.artifact_path || ""))) {
@@ -2490,7 +2499,13 @@ function bindCueCards() {
             const highlightArtifactPath = button.getAttribute("data-artifact-topology-highlight");
             let graphFocused = false;
             if (highlightArtifactPath) {
-                graphFocused = focusArtifactTopologyNode(decodeURIComponent(highlightArtifactPath));
+                const decodedArtifactPath = decodeURIComponent(highlightArtifactPath);
+                window.__artifactTopologyFocusedArtifact = decodedArtifactPath;
+                graphFocused = focusArtifactTopologyNode(decodedArtifactPath);
+                if (!graphFocused && button.closest("#repo-artifacts-section")) {
+                    refreshArtifactsSection();
+                    graphFocused = focusArtifactTopologyNode(decodedArtifactPath);
+                }
             }
             if (artifactPath) {
                 if (button.closest("#repo-artifacts-section") && !graphFocused) {
