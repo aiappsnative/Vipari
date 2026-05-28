@@ -913,6 +913,71 @@ class RepoDashboardArtifactEntry:
 
 
 @dataclass(frozen=True)
+class RepoArtifactTopologyArtifact:
+    artifact_path: str
+    artifact_type: str
+    provenance_label: str
+    drift_magnitude: float
+    delta_status: str | None = None
+    delta_label: str | None = None
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyNode:
+    key: str
+    label: str
+    short_label: str
+    x: int
+    y: int
+    description: str
+    count: int
+    drift_magnitude: float
+    artifacts: list[RepoArtifactTopologyArtifact]
+    top_artifacts: list[RepoArtifactTopologyArtifact]
+    delta_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyEdge:
+    source_key: str
+    target_key: str
+    label: str
+    delta_status: str | None = None
+    delta_label: str | None = None
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyRelation:
+    source_artifact_path: str
+    source_group_key: str
+    target_artifact_path: str
+    target_group_key: str
+    label: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyMode:
+    mode_key: str
+    label: str
+    summary: str
+    groups: list[RepoArtifactTopologyNode]
+    edges: list[RepoArtifactTopologyEdge]
+    artifact_relations: list[RepoArtifactTopologyRelation]
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyView:
+    view_basis: str
+    groups: list[RepoArtifactTopologyNode]
+    edges: list[RepoArtifactTopologyEdge]
+    artifact_relations: list[RepoArtifactTopologyRelation]
+    modes: list[RepoArtifactTopologyMode]
+    default_mode_key: str = "current"
+    selected_baseline_source_snapshot_id: int | None = None
+
+
+@dataclass(frozen=True)
 class RepoDashboardInsightEntry:
     title: str
     artifact_path: str
@@ -1155,6 +1220,7 @@ class RepoDashboardView:
     governance_decision: RepoGovernanceDecisionSummary | None = None
     audit_brief: RepoAuditBrief | None = None
     artifacts: list[RepoDashboardArtifactEntry] = None
+    artifact_topology: RepoArtifactTopologyView | None = None
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
@@ -1727,6 +1793,7 @@ def build_repo_dashboard_view(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -1746,6 +1813,7 @@ def build_repo_dashboard_view(
         include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
+        include_artifact_topology,
         include_featured_storyline,
         include_history_timelines,
         include_history_cues,
@@ -1762,6 +1830,7 @@ def build_repo_dashboard_view(
         include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_artifact_topology=include_artifact_topology,
         include_featured_storyline=include_featured_storyline,
         include_history_timelines=include_history_timelines,
         include_history_cues=include_history_cues,
@@ -1778,6 +1847,7 @@ def build_repo_dashboard_view_with_timings(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -1797,6 +1867,7 @@ def build_repo_dashboard_view_with_timings(
         include_repo_summary_metrics,
         include_journey,
         include_detail_sections,
+        include_artifact_topology,
         include_featured_storyline,
         include_history_timelines,
         include_history_cues,
@@ -1814,6 +1885,7 @@ def build_repo_dashboard_view_with_timings(
         include_repo_summary_metrics=include_repo_summary_metrics,
         include_journey=include_journey,
         include_detail_sections=include_detail_sections,
+        include_artifact_topology=include_artifact_topology,
         include_featured_storyline=include_featured_storyline,
         include_history_timelines=include_history_timelines,
         include_history_cues=include_history_cues,
@@ -1824,8 +1896,15 @@ def build_repo_dashboard_view_with_timings(
     return _cache_set(_REPO_VIEW_CACHE, cache_key, view), stage_timings
 
 
-def _repo_dashboard_tab_href(repo_full: str, tab: str) -> str:
-    return f'/dashboard/{quote(repo_full, safe="")}?tab={quote(tab, safe="")}'
+def _repo_dashboard_tab_href(repo_full: str, tab: str, *, fragment: str | None = None) -> str:
+    href = f'/dashboard/{quote(repo_full, safe="")}?tab={quote(tab, safe="")}'
+    if fragment:
+        return f"{href}#{quote(fragment, safe='')}"
+    return href
+
+
+def _repo_baseline_review_href(repo_full: str) -> str:
+    return _repo_dashboard_tab_href(repo_full, "version-control", fragment="baseline-review-panel")
 
 
 def _extract_audit_brief_dimensions(insight: RepoDashboardInsightEntry | None) -> list[str]:
@@ -1938,7 +2017,7 @@ def _build_repo_audit_brief(
 
     actions: list[RepoAuditBriefAction] = [
         RepoAuditBriefAction("Open audit tab", _repo_dashboard_tab_href(repo_full, "audit"), "secondary"),
-        RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "secondary"),
+        RepoAuditBriefAction("Open Version Control", _repo_baseline_review_href(repo_full), "secondary"),
     ]
     if top_insight is not None and top_insight.review_url:
         actions.insert(0, RepoAuditBriefAction("Open review target", top_insight.review_url, "primary"))
@@ -1971,7 +2050,7 @@ def _build_repo_audit_brief(
             confidence_label="limited coverage",
             latest_execution=latest_execution,
             affected_dimensions=[],
-            actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
+            actions=[RepoAuditBriefAction("Open Version Control", _repo_baseline_review_href(repo_full), "primary")],
             findings=[],
         )
 
@@ -2031,7 +2110,7 @@ def _build_repo_audit_brief(
             confidence_label="baseline pending",
             latest_execution=latest_execution,
             affected_dimensions=[],
-            actions=[RepoAuditBriefAction("Open baseline", _repo_dashboard_tab_href(repo_full, "baseline"), "primary")],
+            actions=[RepoAuditBriefAction("Open baseline review", _repo_baseline_review_href(repo_full), "primary")],
             findings=[],
         )
 
@@ -2062,6 +2141,7 @@ def _build_repo_dashboard_view_uncached(
     include_repo_summary_metrics: bool = True,
     include_journey: bool = True,
     include_detail_sections: bool = True,
+    include_artifact_topology: bool = True,
     include_featured_storyline: bool | None = None,
     include_history_timelines: bool | None = None,
     include_history_cues: bool | None = None,
@@ -2095,6 +2175,7 @@ def _build_repo_dashboard_view_uncached(
         pull_request_audit_count = 0
     journey_snapshots: list[dict[str, Any]] = []
     journey_comparison: dict[str, Any] | None = None
+    baseline_snapshot_artifact_state: dict[str, dict[str, object]] | None = None
     selected_baseline_source_snapshot_id: int | None = None
     if onboarding is not None:
         selected_baseline_source_snapshot_id = timed_stage(
@@ -2102,7 +2183,7 @@ def _build_repo_dashboard_view_uncached(
             lambda: get_latest_baseline_snapshot_id_for_onboarding(db_path, onboarding.id),
         )
     if include_journey and onboarding is not None:
-        journey_snapshots, journey_comparison = timed_stage(
+        journey_snapshots, journey_comparison, baseline_snapshot_artifact_state = timed_stage(
             "repo-journey-panel",
             lambda: _build_repo_journey_panel(
                 db_path,
@@ -2334,6 +2415,16 @@ def _build_repo_dashboard_view_uncached(
         governance_decision=governance_decision,
         audit_brief=audit_brief,
         artifacts=artifact_entries,
+        artifact_topology=(
+            _build_repo_artifact_topology(
+                artifact_entries,
+                selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+                baseline_snapshot_artifact_state=baseline_snapshot_artifact_state,
+                journey_comparison=journey_comparison,
+            )
+            if include_artifact_topology
+            else None
+        ),
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
@@ -2390,7 +2481,7 @@ def _build_repo_journey_panel(
     *,
     onboarding_id: int | None = None,
     selected_baseline_source_snapshot_id: int | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, dict[str, object]] | None]:
     from .repo_journey import _compare_snapshot_records, build_repo_journey, snapshot_to_public_payload
 
     snapshot_records = build_repo_journey(db_path, repo_full)
@@ -2431,12 +2522,14 @@ def _build_repo_journey_panel(
             else None
         )
     comparison = None
+    baseline_artifact_state = None
     if baseline_snapshot is not None and current_snapshot is not None:
         baseline_record = snapshot_record_by_id.get(int(baseline_snapshot["id"]))
         current_record = snapshot_record_by_id.get(int(current_snapshot["id"]))
         if baseline_record is not None and current_record is not None:
+            baseline_artifact_state = dict(baseline_record.artifact_state or {})
             comparison = asdict(_compare_snapshot_records(repo_full, baseline_record, current_record))
-    return snapshots, comparison
+    return snapshots, comparison, baseline_artifact_state
 
 
 def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry]) -> list[RepoDashboardView]:
@@ -2611,6 +2704,7 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                     else None
                 ),
                 artifacts=artifact_entries,
+                artifact_topology=None,
                 journey_snapshots=[],
                 journey_comparison=None,
                 selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),
@@ -3123,6 +3217,7 @@ def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
         history_cues=[],
         design_profiles=[],
         artifacts=[],
+        artifact_topology=RepoArtifactTopologyView(view_basis="current_tracked_state", groups=[], edges=[], artifact_relations=[]),
         journey_snapshots=[],
         journey_comparison=None,
     )
@@ -3150,6 +3245,505 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "latest_pr_autonomy_shift": 0.0,
         "latest_activity_at": 0.0,
     }
+
+
+_ARTIFACT_TOPOLOGY_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "governance",
+        "label": "Governance",
+        "short_label": "Governance",
+        "x": 14,
+        "y": 18,
+        "description": "Policies and governance artifacts constrain how the rest of the AI surface is allowed to behave.",
+    },
+    {
+        "key": "guardrails",
+        "label": "Guardrails",
+        "short_label": "Guardrails",
+        "x": 37,
+        "y": 18,
+        "description": "Guardrails and safety controls shape what prompts, agents, and model calls are allowed to do.",
+    },
+    {
+        "key": "prompts",
+        "label": "Prompts",
+        "short_label": "Prompts",
+        "x": 60,
+        "y": 18,
+        "description": "Prompt and instruction artifacts steer model behavior and often sit downstream of governance and guardrail decisions.",
+    },
+    {
+        "key": "models",
+        "label": "Models",
+        "short_label": "Models",
+        "x": 83,
+        "y": 18,
+        "description": "Model and generation configuration define the behavior envelope the rest of the repository is orchestrating.",
+    },
+    {
+        "key": "tools",
+        "label": "Tools",
+        "short_label": "Tools",
+        "x": 26,
+        "y": 68,
+        "description": "Tooling surfaces can expand model or agent authority by changing what external actions are available.",
+    },
+    {
+        "key": "agents",
+        "label": "Agents",
+        "short_label": "Agents",
+        "x": 50,
+        "y": 68,
+        "description": "Agent orchestration connects prompts, tools, retrieval, and models into end-to-end runtime behavior.",
+    },
+    {
+        "key": "retrieval",
+        "label": "Retrieval",
+        "short_label": "Retrieval",
+        "x": 74,
+        "y": 68,
+        "description": "Retrieval and knowledge surfaces influence the context injected into prompts and agent workflows.",
+    },
+    {
+        "key": "other",
+        "label": "Other",
+        "short_label": "Other",
+        "x": 90,
+        "y": 68,
+        "description": "Supporting artifacts matter to the AI surface but do not yet map cleanly into a narrower control-surface family.",
+    },
+)
+
+
+_ARTIFACT_TOPOLOGY_EDGES: tuple[RepoArtifactTopologyEdge, ...] = (
+    RepoArtifactTopologyEdge(source_key="governance", target_key="guardrails", label="policy constrains"),
+    RepoArtifactTopologyEdge(source_key="governance", target_key="prompts", label="governs"),
+    RepoArtifactTopologyEdge(source_key="guardrails", target_key="prompts", label="constrains"),
+    RepoArtifactTopologyEdge(source_key="guardrails", target_key="models", label="bounds"),
+    RepoArtifactTopologyEdge(source_key="prompts", target_key="models", label="steers"),
+    RepoArtifactTopologyEdge(source_key="tools", target_key="agents", label="extends"),
+    RepoArtifactTopologyEdge(source_key="tools", target_key="models", label="acts through"),
+    RepoArtifactTopologyEdge(source_key="agents", target_key="models", label="orchestrates"),
+    RepoArtifactTopologyEdge(source_key="retrieval", target_key="prompts", label="grounds"),
+    RepoArtifactTopologyEdge(source_key="retrieval", target_key="agents", label="feeds"),
+    RepoArtifactTopologyEdge(source_key="governance", target_key="agents", label="governs"),
+)
+
+
+_ARTIFACT_TOPOLOGY_TOKEN_STOPWORDS = {
+    "agent",
+    "agents",
+    "artifact",
+    "artifacts",
+    "config",
+    "configs",
+    "file",
+    "files",
+    "generic",
+    "instruction",
+    "instructions",
+    "model",
+    "models",
+    "policy",
+    "policies",
+    "prompt",
+    "prompts",
+    "repo",
+    "repository",
+    "tool",
+    "tools",
+    "txt",
+    "json",
+    "yaml",
+    "yml",
+    "py",
+    "md",
+}
+
+
+def _artifact_topology_group_key(entry: RepoDashboardArtifactEntry) -> str:
+    artifact_type = str(entry.artifact_type or "").lower()
+    artifact_path = str(entry.artifact_path or "").lower()
+    provenance_kind = str(entry.provenance_kind or "").lower()
+
+    if "guardrail" in artifact_type or artifact_path.endswith("guardrails.json") or "/guardrail" in artifact_path:
+        return "guardrails"
+    if "policy" in artifact_type or "govern" in artifact_type or provenance_kind == "human_governance_surface":
+        return "governance"
+    if "model" in artifact_type or "config" in artifact_type or provenance_kind == "model_behavior_surface":
+        return "models"
+    if "tool" in artifact_type or provenance_kind == "ai_tool_surface":
+        return "tools"
+    if "agent" in artifact_type or "workflow" in artifact_type or "agent" in artifact_path:
+        return "agents"
+    if any(token in artifact_type for token in ("retrieval", "knowledge", "rag")) or any(token in artifact_path for token in ("retriev", "knowledge")):
+        return "retrieval"
+    if "prompt" in artifact_type or "instruction" in artifact_type or provenance_kind == "ai_control_surface":
+        return "prompts"
+    return "other"
+
+
+def _artifact_topology_relation_edge_map() -> dict[tuple[str, str], str]:
+    return {(edge.source_key, edge.target_key): edge.label for edge in _ARTIFACT_TOPOLOGY_EDGES}
+
+
+def _artifact_topology_tokens(entry: RepoDashboardArtifactEntry) -> set[str]:
+    normalized = (
+        f"{entry.artifact_path} {entry.artifact_type}"
+        .lower()
+        .replace("\\", "/")
+        .replace("-", "/")
+        .replace("_", "/")
+        .replace(".", "/")
+    )
+    return {
+        token
+        for token in normalized.split("/")
+        if len(token) >= 3 and token not in _ARTIFACT_TOPOLOGY_TOKEN_STOPWORDS
+    }
+
+
+def _build_repo_artifact_topology_relations(
+    entries_by_group: dict[str, list[RepoDashboardArtifactEntry]],
+    *,
+    active_group_keys: set[str],
+) -> list[RepoArtifactTopologyRelation]:
+    relation_labels = _artifact_topology_relation_edge_map()
+    relations: list[RepoArtifactTopologyRelation] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for (source_group_key, target_group_key), label in relation_labels.items():
+        if source_group_key not in active_group_keys or target_group_key not in active_group_keys:
+            continue
+        source_entries = entries_by_group.get(source_group_key, [])
+        target_entries = entries_by_group.get(target_group_key, [])
+        if not source_entries or not target_entries:
+            continue
+
+        candidates: list[tuple[int, float, str, RepoDashboardArtifactEntry, RepoDashboardArtifactEntry]] = []
+        for source_entry in source_entries:
+            source_tokens = _artifact_topology_tokens(source_entry)
+            source_drift = max(float(source_entry.leaderboard_drift_magnitude or 0.0), float(source_entry.latest_historical_drift_magnitude or 0.0))
+            for target_entry in target_entries:
+                target_tokens = _artifact_topology_tokens(target_entry)
+                shared_tokens = sorted(source_tokens & target_tokens)
+                target_drift = max(float(target_entry.leaderboard_drift_magnitude or 0.0), float(target_entry.latest_historical_drift_magnitude or 0.0))
+                if not shared_tokens and not (len(source_entries) == 1 and len(target_entries) == 1):
+                    continue
+                evidence = (
+                    f"Shared context: {', '.join(shared_tokens[:3])}"
+                    if shared_tokens
+                    else "Connected by the current control-surface flow for this repository."
+                )
+                candidates.append((len(shared_tokens), source_drift + target_drift, evidence, source_entry, target_entry))
+
+        candidates.sort(
+            key=lambda item: (
+                -item[0],
+                -item[1],
+                item[3].artifact_path,
+                item[4].artifact_path,
+            )
+        )
+        for _shared_count, _drift_score, evidence, source_entry, target_entry in candidates[:4]:
+            pair_key = (source_entry.artifact_path, target_entry.artifact_path)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            relations.append(
+                RepoArtifactTopologyRelation(
+                    source_artifact_path=source_entry.artifact_path,
+                    source_group_key=source_group_key,
+                    target_artifact_path=target_entry.artifact_path,
+                    target_group_key=target_group_key,
+                    label=label,
+                    evidence=evidence,
+                )
+            )
+
+    relations.sort(
+        key=lambda relation: (
+            relation.source_group_key,
+            relation.target_group_key,
+            relation.source_artifact_path,
+            relation.target_artifact_path,
+        )
+    )
+    return relations
+
+
+def _snapshot_state_to_artifact_entries(snapshot_artifact_state: dict[str, dict[str, object]] | None) -> list[RepoDashboardArtifactEntry]:
+    entries: list[RepoDashboardArtifactEntry] = []
+    for artifact_path, state in sorted((snapshot_artifact_state or {}).items()):
+        artifact_type = str((state or {}).get("artifact_type") or "unknown")
+        provenance = artifact_provenance_label(artifact_type)
+        entries.append(
+            RepoDashboardArtifactEntry(
+                artifact_path=artifact_path,
+                artifact_type=artifact_type,
+                discovery_reason="Reference baseline checkpoint surface.",
+                discovery_confidence=1.0,
+                baseline_line_count=0,
+                historical_version_count=0,
+                historical_profile_count=0,
+                latest_historical_semantic_distance=0.0,
+                latest_historical_drift_magnitude=0.0,
+                latest_historical_capability_shift=0.0,
+                latest_historical_guardrail_shift=0.0,
+                latest_historical_governance_shift=0.0,
+                latest_historical_autonomy_shift=0.0,
+                pr_profile_count=0,
+                latest_pr_semantic_distance=0.0,
+                latest_pr_capability_shift=0.0,
+                latest_pr_guardrail_shift=0.0,
+                latest_pr_governance_shift=0.0,
+                latest_pr_autonomy_shift=0.0,
+                leaderboard_drift_magnitude=0.0,
+                latest_activity_at=0.0,
+                provenance_kind=provenance.kind,
+                provenance_label=provenance.label,
+            )
+        )
+    return entries
+
+
+def _artifact_topology_delta_label(status: str | None) -> str | None:
+    return {
+        "added": "Added",
+        "removed": "Removed",
+        "reclassified": "Reclassified",
+        "changed": "Changed",
+    }.get(str(status or "").lower())
+
+
+def _build_repo_artifact_topology_edge_delta_maps(
+    current_edges: list[RepoArtifactTopologyEdge],
+    baseline_edges: list[RepoArtifactTopologyEdge],
+) -> tuple[dict[tuple[str, str, str], str], dict[tuple[str, str, str], str]]:
+    current_keys = {(edge.source_key, edge.target_key, edge.label) for edge in current_edges}
+    baseline_keys = {(edge.source_key, edge.target_key, edge.label) for edge in baseline_edges}
+    current_deltas = {
+        edge_key: "added"
+        for edge_key in sorted(current_keys - baseline_keys)
+    }
+    baseline_deltas = {
+        edge_key: "removed"
+        for edge_key in sorted(baseline_keys - current_keys)
+    }
+    return current_deltas, baseline_deltas
+
+
+def _build_repo_artifact_topology_delta_maps(
+    current_entries: list[RepoDashboardArtifactEntry],
+    baseline_entries: list[RepoDashboardArtifactEntry],
+    *,
+    changed_artifact_paths: set[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    current_by_path = {entry.artifact_path: entry for entry in current_entries}
+    baseline_by_path = {entry.artifact_path: entry for entry in baseline_entries}
+    current_deltas: dict[str, str] = {}
+    baseline_deltas: dict[str, str] = {}
+
+    for artifact_path in sorted(set(current_by_path) | set(baseline_by_path)):
+        current_entry = current_by_path.get(artifact_path)
+        baseline_entry = baseline_by_path.get(artifact_path)
+        if current_entry is not None and baseline_entry is None:
+            current_deltas[artifact_path] = "added"
+            continue
+        if baseline_entry is not None and current_entry is None:
+            baseline_deltas[artifact_path] = "removed"
+            continue
+        if current_entry is None or baseline_entry is None:
+            continue
+
+        current_group_key = _artifact_topology_group_key(current_entry)
+        baseline_group_key = _artifact_topology_group_key(baseline_entry)
+        if current_entry.artifact_type != baseline_entry.artifact_type or current_group_key != baseline_group_key:
+            current_deltas[artifact_path] = "reclassified"
+            baseline_deltas[artifact_path] = "reclassified"
+            continue
+        if artifact_path in changed_artifact_paths:
+            current_deltas[artifact_path] = "changed"
+            baseline_deltas[artifact_path] = "changed"
+
+    return current_deltas, baseline_deltas
+
+
+def _build_repo_artifact_topology_mode(
+    artifact_entries: list[RepoDashboardArtifactEntry],
+    *,
+    mode_key: str,
+    label: str,
+    summary: str,
+    artifact_delta_by_path: dict[str, str] | None = None,
+    edge_delta_by_key: dict[tuple[str, str, str], str] | None = None,
+) -> RepoArtifactTopologyMode:
+    entries_by_group: dict[str, list[RepoDashboardArtifactEntry]] = {
+        str(group["key"]): [] for group in _ARTIFACT_TOPOLOGY_GROUPS
+    }
+    for entry in artifact_entries:
+        entries_by_group.setdefault(_artifact_topology_group_key(entry), []).append(entry)
+
+    groups: list[RepoArtifactTopologyNode] = []
+    active_group_keys: set[str] = set()
+    for group in _ARTIFACT_TOPOLOGY_GROUPS:
+        group_key = str(group["key"])
+        entries = entries_by_group.get(group_key, [])
+        if not entries:
+            continue
+        active_group_keys.add(group_key)
+        ranked_entries = sorted(
+            entries,
+            key=lambda entry: (
+                -max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                entry.artifact_path,
+            ),
+        )
+        groups.append(
+            RepoArtifactTopologyNode(
+                key=group_key,
+                label=str(group["label"]),
+                short_label=str(group["short_label"]),
+                x=int(group["x"]),
+                y=int(group["y"]),
+                description=str(group["description"]),
+                count=len(entries),
+                drift_magnitude=max(
+                    max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0))
+                    for entry in entries
+                ),
+                artifacts=[
+                    RepoArtifactTopologyArtifact(
+                        artifact_path=entry.artifact_path,
+                        artifact_type=entry.artifact_type,
+                        provenance_label=entry.provenance_label,
+                        drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                        delta_status=(artifact_delta_by_path or {}).get(entry.artifact_path),
+                        delta_label=_artifact_topology_delta_label((artifact_delta_by_path or {}).get(entry.artifact_path)),
+                    )
+                    for entry in ranked_entries
+                ],
+                top_artifacts=[
+                    RepoArtifactTopologyArtifact(
+                        artifact_path=entry.artifact_path,
+                        artifact_type=entry.artifact_type,
+                        provenance_label=entry.provenance_label,
+                        drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                        delta_status=(artifact_delta_by_path or {}).get(entry.artifact_path),
+                        delta_label=_artifact_topology_delta_label((artifact_delta_by_path or {}).get(entry.artifact_path)),
+                    )
+                    for entry in ranked_entries[:3]
+                ],
+                delta_counts={
+                    status: sum(1 for entry in entries if (artifact_delta_by_path or {}).get(entry.artifact_path) == status)
+                    for status in ("added", "removed", "reclassified", "changed")
+                    if any((artifact_delta_by_path or {}).get(entry.artifact_path) == status for entry in entries)
+                },
+            )
+        )
+
+    edges = [
+        RepoArtifactTopologyEdge(
+            source_key=edge.source_key,
+            target_key=edge.target_key,
+            label=edge.label,
+            delta_status=(edge_delta_by_key or {}).get((edge.source_key, edge.target_key, edge.label)),
+            delta_label=_artifact_topology_delta_label((edge_delta_by_key or {}).get((edge.source_key, edge.target_key, edge.label))),
+        )
+        for edge in _ARTIFACT_TOPOLOGY_EDGES
+        if edge.source_key in active_group_keys and edge.target_key in active_group_keys
+    ]
+    return RepoArtifactTopologyMode(
+        mode_key=mode_key,
+        label=label,
+        summary=summary,
+        groups=groups,
+        edges=edges,
+        artifact_relations=_build_repo_artifact_topology_relations(
+            entries_by_group,
+            active_group_keys=active_group_keys,
+        ),
+    )
+
+
+def _build_repo_artifact_topology(
+    artifact_entries: list[RepoDashboardArtifactEntry],
+    *,
+    selected_baseline_source_snapshot_id: int | None,
+    baseline_snapshot_artifact_state: dict[str, dict[str, object]] | None = None,
+    journey_comparison: dict[str, Any] | None = None,
+) -> RepoArtifactTopologyView:
+    baseline_entries = _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state)
+    changed_artifact_paths = {
+        str(path)
+        for path in list(((journey_comparison or {}).get("change_breakdown") or {}).get("changed_artifact_paths") or [])
+    }
+    current_delta_by_path: dict[str, str] = {}
+    baseline_delta_by_path: dict[str, str] = {}
+    current_edge_deltas: dict[tuple[str, str, str], str] = {}
+    baseline_edge_deltas: dict[tuple[str, str, str], str] = {}
+    if baseline_entries:
+        current_delta_by_path, baseline_delta_by_path = _build_repo_artifact_topology_delta_maps(
+            artifact_entries,
+            baseline_entries,
+            changed_artifact_paths=changed_artifact_paths,
+        )
+    current_mode = _build_repo_artifact_topology_mode(
+        artifact_entries,
+        mode_key="current",
+        label="Current state",
+        summary="Latest tracked repository state and inferred current relationships.",
+        artifact_delta_by_path=current_delta_by_path,
+    )
+    modes = [current_mode]
+    default_mode_key = "current"
+    if baseline_snapshot_artifact_state:
+        change_breakdown = dict((journey_comparison or {}).get("change_breakdown") or {})
+        baseline_summary = "Reference baseline surface relationships."
+        if change_breakdown:
+            baseline_summary = (
+                f"Reference baseline compared with current: +{int(change_breakdown.get('added_artifact_count', 0))} added, "
+                f"-{int(change_breakdown.get('removed_artifact_count', 0))} removed, "
+                f"{int(change_breakdown.get('changed_artifact_count', 0))} changed."
+            )
+        baseline_mode = _build_repo_artifact_topology_mode(
+            baseline_entries,
+            mode_key="reference-baseline",
+            label="Reference baseline",
+            summary=baseline_summary,
+            artifact_delta_by_path=baseline_delta_by_path,
+        )
+        current_edge_deltas, baseline_edge_deltas = _build_repo_artifact_topology_edge_delta_maps(
+            current_mode.edges,
+            baseline_mode.edges,
+        )
+        current_mode = _build_repo_artifact_topology_mode(
+            artifact_entries,
+            mode_key="current",
+            label="Current state",
+            summary="Latest tracked repository state and inferred current relationships.",
+            artifact_delta_by_path=current_delta_by_path,
+            edge_delta_by_key=current_edge_deltas,
+        )
+        baseline_mode = _build_repo_artifact_topology_mode(
+            baseline_entries,
+            mode_key="reference-baseline",
+            label="Reference baseline",
+            summary=baseline_summary,
+            artifact_delta_by_path=baseline_delta_by_path,
+            edge_delta_by_key=baseline_edge_deltas,
+        )
+        modes = [current_mode, baseline_mode]
+
+    return RepoArtifactTopologyView(
+        view_basis="current_tracked_state",
+        groups=current_mode.groups,
+        edges=current_mode.edges,
+        artifact_relations=current_mode.artifact_relations,
+        modes=modes,
+        default_mode_key=default_mode_key,
+        selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+    )
 
 
 @dataclass(frozen=True)

@@ -420,6 +420,11 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
     assert payload["audit_brief"]["recommendation_label"] == "Review now"
     assert payload["audit_brief"]["review_now_count"] >= 1
+    assert any(
+        action["label"] == "Open Version Control"
+        and action["href"] == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
+        for action in payload["audit_brief"]["actions"]
+    )
 
 
 def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):
@@ -486,6 +491,10 @@ def test_dashboard_api_returns_audit_brief_without_review_now_findings(tmp_path)
     assert payload["audit_brief"]["review_now_count"] == 0
     assert payload["audit_brief"]["baseline_status"] == "approved"
     assert payload["audit_brief"]["baseline_reference"] != "none-yet"
+    assert any(
+        action["label"] == "Open audit tab"
+        for action in payload["audit_brief"]["actions"]
+    )
 
 
 def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_audit(tmp_path):
@@ -1074,8 +1083,45 @@ def test_repo_dashboard_api_scopes_version_control_tab_payload(tmp_path):
     assert payload["featured_storyline"] is None
     assert payload["history_cues"] == []
     assert payload["design_profiles"] == []
+    assert payload["artifact_topology"] is None
     assert payload["pr_review_routes"] is None
     assert payload["pre_audit_relevance"] is None
+
+
+def test_repo_dashboard_api_accepts_legacy_baseline_tab_query(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-legacy-baseline-tab.db")
+    init_db(db_path)
+    original_db_path = main.AUDIT_DB_PATH
+    original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.AUDIT_DB_PATH = db_path
+    main.settings.local_debug_disable_login = False
+
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard?tab=baseline",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.local_debug_disable_login = original_local_debug_disable_login
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["repo_full"] == "doria90/dummyAI"
+    assert payload["baseline_review"] is not None
+    assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"
 
 
 def test_repo_dashboard_api_scopes_audit_tab_payload(tmp_path):
@@ -1298,6 +1344,10 @@ def test_dashboard_api_can_approve_pending_baseline_and_rebaseline_from_snapshot
     assert rebaseline_payload["dashboard"]["baseline_review"]["is_pending_review"] is True
     assert rebaseline_payload["dashboard"]["baseline_version_count"] == 2
     assert rebaseline_payload["dashboard"]["selected_baseline_source_snapshot_id"] is None
+    assert any(
+        action["label"] == "Open Version Control" and action["href"] == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
+        for action in rebaseline_payload["dashboard"]["audit_brief"]["actions"]
+    )
 
     with TestClient(main.app) as client:
         approve_rebaseline_response = client.post(

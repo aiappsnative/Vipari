@@ -548,7 +548,9 @@ def _render_missing_repo_dashboard_page(
     user = access_context.get("user") if access_context else None
     identity = access_context.get("identity") if access_context else None
     active_tab = requested_tab.strip().lower() if requested_tab else "audit"
-    if active_tab not in {"audit", "drift", "version-control", "baseline", "compliance", "reports"}:
+    if active_tab == "baseline":
+        active_tab = "artifacts"
+    if active_tab not in {"audit", "drift", "version-control", "artifacts", "compliance", "reports"}:
         active_tab = "audit"
     return HTMLResponse(
         render_repo_dashboard_page(
@@ -5197,7 +5199,9 @@ async def _render_dashboard_repo_page(request: Request, repo_full: str, *, reque
         return _attach_server_timing(response, timing_metrics)
     render_started = time.perf_counter()
     active_tab = requested_tab.strip().lower() if requested_tab else "audit"
-    if active_tab not in {"audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"}:
+    if active_tab == "baseline":
+        active_tab = "artifacts"
+    if active_tab not in {"audit", "pr-reviews", "drift", "version-control", "artifacts", "compliance", "reports"}:
         active_tab = "audit"
     blocked_free_tier_tab = _is_active_comments_only_workspace(access_context) and active_tab in {"compliance", "reports"}
     shell_state = "active"

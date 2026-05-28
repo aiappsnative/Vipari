@@ -244,6 +244,12 @@ def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtif
     return _group_low_signal_artifacts(discovered)
 
 
+def _invalidate_dashboard_caches() -> None:
+    from .dashboard_views import invalidate_dashboard_caches
+
+    invalidate_dashboard_caches()
+
+
 def onboard_repository(
     db_path: str,
     *,
@@ -500,6 +506,7 @@ def sync_on_pr_merge_artifact_changes(
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
+    _invalidate_dashboard_caches()
     return RepositoryOnboardingResult(onboarding=onboarding, artifacts=latest_artifacts, baseline_versions=baselines)
 
 
@@ -576,6 +583,7 @@ def add_repo_artifact_to_onboarding(
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
+    _invalidate_dashboard_caches()
     return artifact, baseline
 
 
@@ -594,6 +602,7 @@ def remove_repo_artifact_from_onboarding(db_path: str, *, repo_full: str, artifa
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
+    _invalidate_dashboard_caches()
 
 
 def update_repo_artifact_type(
@@ -621,4 +630,5 @@ def update_repo_artifact_type(
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
+    _invalidate_dashboard_caches()
     return updated

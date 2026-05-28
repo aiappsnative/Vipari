@@ -12,6 +12,12 @@ from services.audit_records import RepoStaticDriftSummary
 from services.dashboard_views import (
     DashboardProfileVector,
     RepoDashboardArtifactEntry,
+    RepoArtifactTopologyMode,
+    RepoArtifactTopologyNode,
+    RepoArtifactTopologyArtifact,
+    RepoArtifactTopologyEdge,
+    RepoArtifactTopologyRelation,
+    RepoArtifactTopologyView,
     RepoArtifactHistoryTimeline,
     RepoArtifactDesignProfile,
     RepoArtifactProvenance,
@@ -191,6 +197,112 @@ def _dashboard(repo_full: str) -> RepoDashboardView:
                 leaderboard_drift_magnitude=0.0,
             )
         ],
+        artifact_topology=RepoArtifactTopologyView(
+            view_basis="current_tracked_state",
+            groups=[
+                RepoArtifactTopologyNode(
+                    key="prompts",
+                    label="Prompts",
+                    short_label="Prompts",
+                    x=60,
+                    y=18,
+                    description="Prompt surfaces",
+                    count=1,
+                    drift_magnitude=0.7,
+                    artifacts=[
+                        RepoArtifactTopologyArtifact(
+                            artifact_path="prompts/system.txt",
+                            artifact_type="prompt",
+                            provenance_label="AI control surface",
+                            drift_magnitude=0.7,
+                        )
+                    ],
+                    top_artifacts=[
+                        RepoArtifactTopologyArtifact(
+                            artifact_path="prompts/system.txt",
+                            artifact_type="prompt",
+                            provenance_label="AI control surface",
+                            drift_magnitude=0.7,
+                        )
+                    ],
+                )
+            ],
+            edges=[],
+            artifact_relations=[],
+            modes=[
+                RepoArtifactTopologyMode(
+                    mode_key="current",
+                    label="Current state",
+                    summary="Latest tracked repository state and inferred current relationships.",
+                    groups=[
+                        RepoArtifactTopologyNode(
+                            key="prompts",
+                            label="Prompts",
+                            short_label="Prompts",
+                            x=60,
+                            y=18,
+                            description="Prompt surfaces",
+                            count=1,
+                            drift_magnitude=0.7,
+                            artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.7,
+                                )
+                            ],
+                            top_artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.7,
+                                )
+                            ],
+                        )
+                    ],
+                    edges=[],
+                    artifact_relations=[],
+                ),
+                RepoArtifactTopologyMode(
+                    mode_key="reference-baseline",
+                    label="Reference baseline",
+                    summary="Reference baseline compared with current: +0 added, -0 removed, 0 changed.",
+                    groups=[
+                        RepoArtifactTopologyNode(
+                            key="prompts",
+                            label="Prompts",
+                            short_label="Prompts",
+                            x=60,
+                            y=18,
+                            description="Prompt surfaces",
+                            count=1,
+                            drift_magnitude=0.0,
+                            artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.0,
+                                )
+                            ],
+                            top_artifacts=[
+                                RepoArtifactTopologyArtifact(
+                                    artifact_path="prompts/system.txt",
+                                    artifact_type="prompt",
+                                    provenance_label="AI control surface",
+                                    drift_magnitude=0.0,
+                                )
+                            ],
+                        )
+                    ],
+                    edges=[],
+                    artifact_relations=[],
+                ),
+            ],
+            default_mode_key="current",
+        ),
     )
 
 
@@ -844,10 +956,13 @@ def test_repo_artifact_mutation_apis_return_refreshed_dashboard(tmp_path):
     assert add_response.json()["artifact"]["artifact_path"] == "policies/usage.md"
     assert add_response.json()["baseline"]["artifact_type"] == "policy"
     assert add_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+    assert add_response.json()["dashboard"]["artifact_topology"]["view_basis"] == "current_tracked_state"
+    assert "artifact_relations" in add_response.json()["dashboard"]["artifact_topology"]
 
     assert patch_response.status_code == 200
     assert patch_response.json()["artifact"]["artifact_type"] == "guardrail"
     assert patch_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+    assert "artifact_topology" in patch_response.json()["dashboard"]
 
     assert delete_response.status_code == 200
     assert delete_response.json()["artifact_path"] == "policies/usage.md"
@@ -901,13 +1016,15 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "supporting history" in repo_text
     assert "baseline-review-panel" in repo_response.text
     assert "Baseline Review" in repo_response.text
+    assert "Artifact topology" in repo_response.text
+    assert "Relationship graph" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
     assert 'data-repo-tab-link="audit"' in repo_response.text
     assert 'data-repo-tab-link="pr-reviews"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI?tab=pr-reviews"' in repo_response.text
-    assert repo_response.text.index('data-repo-tab-link="baseline"') < repo_response.text.index('data-repo-tab-link="pr-reviews"') < repo_response.text.index('data-repo-tab-link="compliance"')
+    assert repo_response.text.index('data-repo-tab-link="artifacts"') < repo_response.text.index('data-repo-tab-link="pr-reviews"') < repo_response.text.index('data-repo-tab-link="compliance"')
     assert 'id="artifact-add-controls"' in repo_response.text
     assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
@@ -934,16 +1051,17 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Search by PR title, PR #, or head SHA" in repo_js_response.text
     assert "Search across GitHub PR titles" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
-    assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
+    assert 'repoTabUrl("version-control", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
     assert "Open baseline review" in repo_js_response.text
+    assert "Compare checkpoints and baseline evidence" in repo_js_response.text
+    assert "ARTIFACT_TOPOLOGY_GROUPS" in repo_js_response.text
     assert "/artifacts/options" in repo_js_response.text
     assert "data-artifact-edit-path" in repo_js_response.text
     assert 'id="repo-pr-review-search"' in repo_response.text
     assert "data-artifact-remove-path" in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text
-    assert "Compare repository context" in repo_js_response.text
     assert "Prepare the handoff" in repo_js_response.text
     assert "Review queue is clear" in repo_js_response.text
     assert "No baseline or disposition proposals are waiting on this repository right now." in repo_js_response.text
@@ -986,12 +1104,26 @@ def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
     assert 'data-active-repo-tab="reports"' in response.text
     assert 'data-repo-tab-link="reports"' in response.text
     assert 'data-repo-tab-link="version-control"' in response.text
+    assert 'data-repo-tab-link="artifacts"' in response.text
     assert '?tab=version-control' in response.text
-    assert '?tab=baseline' in response.text
+    assert '?tab=artifacts' in response.text
     assert '?tab=compliance' in response.text
     assert 'secondary-details-summary-static' in response.text
     assert '<div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">' in response.text
     assert '<details class="secondary-details"><summary class="secondary-details-summary">Version journey and baseline comparison</summary>' not in response.text
+
+
+def test_dashboard_repo_legacy_baseline_tab_maps_to_artifacts(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-legacy-baseline.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI?tab=baseline")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="artifacts"' in response.text
+    assert 'data-repo-tab-link="artifacts"' in response.text
+    assert '?tab=artifacts' in response.text
 
 
 def test_dashboard_index_query_params_render_active_controls(tmp_path):

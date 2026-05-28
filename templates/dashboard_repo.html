@@ -103,7 +103,7 @@
                         <a class="repo-audit-anchor" data-repo-tab-link="audit" href="{{REPO_TAB_AUDIT_URL}}">Audit</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="drift" href="{{REPO_TAB_DRIFT_URL}}">Drift</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="version-control" href="{{REPO_TAB_VERSION_CONTROL_URL}}">Version control</a>
-                        <a class="repo-audit-anchor" data-repo-tab-link="baseline" href="{{REPO_TAB_BASELINE_URL}}">Artifacts</a>
+                        <a class="repo-audit-anchor" data-repo-tab-link="artifacts" href="{{REPO_TAB_BASELINE_URL}}">Artifacts</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="pr-reviews" href="{{REPO_TAB_PR_REVIEWS_URL}}">PR reviews</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="compliance" href="{{REPO_TAB_COMPLIANCE_URL}}">Compliance</a>
                         <a class="repo-audit-anchor" data-repo-tab-link="reports" href="{{REPO_TAB_REPORTS_URL}}">Reports</a>
@@ -305,19 +305,6 @@
                             </div>
                         </div>
                     </div>
-                    <div class="secondary-panel" id="repo-baseline-review-section">
-                        <div class="secondary-panel-title panel-title-with-help">Baseline Review <button type="button" class="inline-help-trigger" aria-label="Explain Baseline Review"><span aria-hidden="true">?</span><span class="inline-help-bubble">Baseline Review works at the artifact level. It asks whether each individual file has been explicitly approved by a human as trusted evidence, with pending, approved, or rejected status and rationale per artifact.</span></button></div>
-                        <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
-                            <span class="visually-hidden">Loading baseline review state...</span>
-                            <div class="skeleton-stack" aria-hidden="true">
-                                <span class="skeleton-line skeleton-line-medium"></span>
-                                <div class="skeleton-chip-row">
-                                    <span class="skeleton-chip"></span>
-                                    <span class="skeleton-chip"></span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </section>
 
                 <section class="secondary-grid repo-tab-panel" id="repo-version-control-section" data-repo-tab-panel="version-control">
@@ -371,6 +358,19 @@
                                         <div class="skeleton-stack" aria-hidden="true">
                                             <span class="skeleton-line skeleton-line-medium"></span>
                                             <div class="skeleton-block"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="secondary-panel secondary-panel-flat" id="repo-baseline-review-section">
+                                    <div class="secondary-panel-title panel-title-with-help">Baseline Review <button type="button" class="inline-help-trigger" aria-label="Explain Baseline Review"><span aria-hidden="true">?</span><span class="inline-help-bubble">Baseline Review now sits beside the version journey so you can create a candidate baseline from a checkpoint and approve or inspect the related artifact evidence from the same governance workspace.</span></button></div>
+                                    <div id="baseline-review-panel" class="loading-shell" aria-busy="true">
+                                        <span class="visually-hidden">Loading baseline review state...</span>
+                                        <div class="skeleton-stack" aria-hidden="true">
+                                            <span class="skeleton-line skeleton-line-medium"></span>
+                                            <div class="skeleton-chip-row">
+                                                <span class="skeleton-chip"></span>
+                                                <span class="skeleton-chip"></span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -507,18 +507,44 @@
                     </div>
                 </section>
 
-                <section class="repos-section repo-tab-panel" id="repo-artifacts-section" data-repo-tab-panel="baseline">
+                <section class="repos-section repo-tab-panel" id="repo-artifacts-section" data-repo-tab-panel="artifacts">
                     <div class="repos-header">
-                        <span class="repos-title">Artifact Registry</span>
+                        <span class="repos-title">Artifact topology</span>
                         <div class="artifacts-header-actions">
                             <span id="artifact-results-summary" class="repos-count"><span class="visually-hidden">Loading artifact registry</span><span class="skeleton-inline" aria-hidden="true"></span></span>
                             <button type="button" id="artifacts-collapse-toggle" class="cue-action-button">Collapse</button>
                         </div>
                     </div>
+                    <div class="detail-note">Explore the inferred relationship map first, then manage the tracked artifact inventory underneath it.</div>
                     <div class="artifacts-toolbar">
                         <label class="artifact-search-label" for="artifact-search-input">Search artifacts</label>
                         <input type="search" id="artifact-search-input" class="artifact-search-input" placeholder="Search by path or type" autocomplete="off">
                         <div id="artifact-filter-chips" class="artifact-filter-chips" role="group" aria-label="Artifact type filters"></div>
+                    </div>
+                    <div class="artifact-topology-shell">
+                        <div class="artifact-topology-head">
+                            <div>
+                                <div class="secondary-panel-title">Relationship graph</div>
+                                <div class="muted">Vipari infers how prompts, guardrails, models, tools, agents, retrieval, and governance surfaces shape one another across this repository.</div>
+                            </div>
+                            <div id="artifact-topology-mode-toggle" class="artifact-topology-mode-toggle"></div>
+                        </div>
+                        <div class="artifact-topology-layout">
+                            <div id="artifact-topology-map" class="artifact-topology-map loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading artifact relationship graph...</span>
+                                <div class="skeleton-stack" aria-hidden="true">
+                                    <div class="skeleton-block"></div>
+                                </div>
+                            </div>
+                            <div id="artifact-topology-focus" class="artifact-topology-focus loading-shell" aria-busy="true">
+                                <span class="visually-hidden">Loading artifact relationship details...</span>
+                                <div class="skeleton-stack" aria-hidden="true">
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                    <span class="skeleton-line skeleton-line-long"></span>
+                                    <span class="skeleton-line skeleton-line-medium"></span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div id="artifact-add-controls" class="artifact-add-controls loading-shell" aria-busy="true">
                         <span class="visually-hidden">Loading artifact add controls...</span>
@@ -532,6 +558,7 @@
                     </div>
                     <div id="artifact-action-status" class="artifact-status" hidden></div>
                     <div id="artifacts-panel-body">
+                        <div class="secondary-panel-title">Tracked artifact inventory</div>
                         <table class="repos-table">
                             <thead>
                                 <tr>

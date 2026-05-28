@@ -15,7 +15,7 @@ from services.baseline_approval_service import RebaselineExternalError, Rebaseli
 
 _ARTIFACT_OPTIONS_CACHE_TTL_SECONDS = 30.0
 _ARTIFACT_OPTIONS_CACHE_MAX_ENTRIES = 128
-_REPO_DASHBOARD_TABS = {"audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"}
+_REPO_DASHBOARD_TABS = {"audit", "pr-reviews", "drift", "version-control", "artifacts", "baseline", "compliance", "reports"}
 
 
 def _cache_get(cache: dict[tuple[object, ...], tuple[float, object]], cache_key: tuple[object, ...], *, lock: threading.RLock):
@@ -58,6 +58,8 @@ def _invalidate_cache_entries(cache: dict[tuple[object, ...], tuple[float, objec
 
 def _resolve_repo_dashboard_tab(request: Request) -> str | None:
 	raw_tab = (request.query_params.get("tab") or "").strip().lower()
+	if raw_tab == "baseline":
+		return "artifacts"
 	return raw_tab if raw_tab in _REPO_DASHBOARD_TABS else None
 
 
@@ -68,6 +70,7 @@ def _repo_dashboard_build_options(active_tab: str | None) -> dict[str, object]:
 		"include_detail_sections": False,
 		"include_repo_summary_metrics": active_tab not in {"version-control", "pr-reviews"},
 		"include_journey": active_tab == "version-control",
+		"include_artifact_topology": active_tab == "artifacts",
 		"include_featured_storyline": active_tab == "audit",
 		"include_history_timelines": False,
 		"include_history_cues": active_tab == "compliance",
