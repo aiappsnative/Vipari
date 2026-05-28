@@ -3116,7 +3116,7 @@ async def profile_page(request: Request):
     return HTMLResponse(
         render_control_plane_profile_page(
             display_name=user.display_name if user else "",
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             github_login=identity.github_login if identity else "Unavailable",
             github_user_id=identity.github_user_id if identity else "Unavailable",
             primary_email=user.primary_email if user else None,
@@ -3185,7 +3185,7 @@ async def settings_page(request: Request):
         render_control_plane_settings_page(
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             status_note=(
                 "Invitation queued." if request.query_params.get("invite_added") else "Settings updated." if request.query_params.get("updated") else None
             ),
@@ -3537,7 +3537,7 @@ async def mcp_integrations_page(request: Request):
             workspace_name=workspace.display_name,
             audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             active_tab=active_tab,
             download_url="/integrations/mcp/download",
@@ -3653,7 +3653,7 @@ async def policies_page(request: Request):
             workspace_name=workspace.display_name,
             audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             summary_cards=summary_cards,
             workspace_policy=workspace_policy_view,
@@ -4048,7 +4048,7 @@ def _render_compliance_tab_page(
             workspace_name=workspace.display_name,
             audit_href="/dashboard",
             plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             status_note=status_note,
             active_tab=active_tab,
             page_title=page_title,
@@ -4136,7 +4136,7 @@ async def help_page(request: Request):
         render_control_plane_help_page(
             workspace_name=workspace.display_name,
             plan_label=get_plan_definition(plan_code).label,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             admin_url="/admin" if _has_owner_admin_access(user, identity, workspace) else None,
             resolution=access_context["resolution"],
             repo_rows=repo_rows,
@@ -4566,7 +4566,7 @@ async def billing_page(request: Request):
             flow_context=flow_context,
             portal_url=portal_url,
             csrf_token=access_context["session"].csrf_secret,
-            theme_preference=access_context["user"].theme_preference if access_context.get("user") else "dark",
+            theme_preference=_current_theme_preference(request),
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=access_context["user"].display_name if access_context.get("user") else None,
                 github_login=access_context["identity"].github_login if access_context.get("identity") else None,
@@ -4955,7 +4955,7 @@ async def repo_setup_page(request: Request):
             onboarding_metrics=render_repo_onboarding_metrics(onboarded_summaries),
             onboarding_summary_cards=render_repo_onboarded_summary_cards(onboarded_summaries),
             audit_href=audit_href,
-            theme_preference=user.theme_preference if user else "dark",
+            theme_preference=_current_theme_preference(request),
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
                 github_login=identity.github_login if identity else None,
