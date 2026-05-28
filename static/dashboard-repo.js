@@ -81,6 +81,21 @@ const ARTIFACT_TOPOLOGY_EDGES = [
 const ARTIFACT_TOPOLOGY_GRAPH_SIZE = { width: 1000, height: 680 };
 const ARTIFACT_TOPOLOGY_DETAIL_ZOOM = 1.18;
 const ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS = 12;
+const ARTIFACT_TOPOLOGY_HOVER_DELAY_MS = 360;
+const ARTIFACT_TOPOLOGY_FLASH_MS = 1800;
+
+const ARTIFACT_TOPOLOGY_RELATIONSHIP_COPY = {
+    "policy constrains": "Governance or policy artifacts restrict what downstream guardrails are expected to allow or enforce.",
+    constrains: "One control surface narrows what the downstream surface is allowed to do.",
+    bounds: "The upstream surface sets the operating envelope or limits for the downstream behavior.",
+    steers: "The upstream surface shapes how the downstream surface behaves without fully determining it.",
+    extends: "The upstream surface expands the downstream surface by giving it more actions or reach.",
+    "acts through": "The upstream surface influences the model indirectly by changing what tools or execution paths it can use.",
+    orchestrates: "The upstream surface coordinates how the downstream surface is invoked as part of a broader workflow.",
+    grounds: "Retrieval or knowledge artifacts provide context that anchors prompts in repository or external source material.",
+    feeds: "The upstream surface supplies inputs or context that the downstream surface consumes.",
+    governs: "Governance artifacts define review, approval, or policy expectations for the downstream surface.",
+};
 
 function resolveRepoTab() {
     const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
@@ -1834,6 +1849,172 @@ function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
     return prioritized.slice(0, ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS);
 }
 
+function artifactTopologyGraphPalette() {
+    const lightMode = document.body?.dataset?.theme === "light";
+    if (lightMode) {
+        return {
+            groupText: "#1f2422",
+            groupBackground: "#d9ebe6",
+            groupBorder: "#3b7d86",
+            artifactText: "#2a2623",
+            artifactBackground: "#f4ede3",
+            artifactBorder: "#6d645d",
+            groupEdgeText: "#3f4749",
+            groupEdgeBackground: "rgba(249, 244, 238, 0.96)",
+            groupEdgeLine: "#617174",
+            artifactEdgeText: "#4f4135",
+            artifactEdgeBackground: "rgba(249, 244, 238, 0.98)",
+            artifactEdgeLine: "#9d6a35",
+            selectedBorder: "#b5761f",
+            selectedShadow: "rgba(181, 118, 31, 0.28)",
+            selectedArtifactBackground: "#ead8bf",
+        };
+    }
+    return {
+        groupText: "#f4f1eb",
+        groupBackground: "#355f69",
+        groupBorder: "#6baab4",
+        artifactText: "#e9e4dd",
+        artifactBackground: "#232729",
+        artifactBorder: "#87979b",
+        groupEdgeText: "#a8b1b3",
+        groupEdgeBackground: "#171816",
+        groupEdgeLine: "#707879",
+        artifactEdgeText: "#d2ccc3",
+        artifactEdgeBackground: "#171816",
+        artifactEdgeLine: "#d39a55",
+        selectedBorder: "#d9a13d",
+        selectedShadow: "rgba(217, 161, 61, 0.32)",
+        selectedArtifactBackground: "#5a4330",
+    };
+}
+
+function renderArtifactTopologyRelationshipHelp() {
+    const rows = Object.entries(ARTIFACT_TOPOLOGY_RELATIONSHIP_COPY).map(([label, description]) => `
+        <div class="artifact-topology-help-row">
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(description)}</span>
+        </div>
+    `).join("");
+    return `
+        <button type="button" class="inline-help-trigger artifact-topology-help-trigger" aria-label="Explain relationship labels">
+            <span aria-hidden="true">?</span>
+            <span class="inline-help-bubble artifact-topology-help-bubble">${rows}</span>
+        </button>
+    `;
+}
+
+function artifactTopologyTooltipElement() {
+    return document.getElementById("artifact-topology-tooltip");
+}
+
+function hideArtifactTopologyTooltip() {
+    const tooltip = artifactTopologyTooltipElement();
+    if (!tooltip) {
+        return;
+    }
+    tooltip.hidden = true;
+    tooltip.textContent = "";
+}
+
+function showArtifactTopologyTooltip(text, renderedPosition = { x: 0, y: 0 }) {
+    const tooltip = artifactTopologyTooltipElement();
+    const graph = document.getElementById("artifact-topology-graph");
+    if (!tooltip || !graph || !text) {
+        return;
+    }
+    const left = Math.max(10, Math.min(graph.clientWidth - 260, Number(renderedPosition.x || 0) + 16));
+    const top = Math.max(10, Math.min(graph.clientHeight - 80, Number(renderedPosition.y || 0) - 12));
+    tooltip.hidden = false;
+    tooltip.textContent = text;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+}
+
+function clearArtifactTopologyHoverTimer() {
+    if (window.__artifactTopologyHoverTimer) {
+        window.clearTimeout(window.__artifactTopologyHoverTimer);
+        window.__artifactTopologyHoverTimer = 0;
+    }
+}
+
+function scheduleArtifactTopologyTooltip(cy, target) {
+    clearArtifactTopologyHoverTimer();
+    const label = String(target.data("fullPath") || target.data("fullLabel") || target.data("label") || "").trim();
+    if (!label) {
+        return;
+    }
+    window.__artifactTopologyHoverTimer = window.setTimeout(() => {
+        const position = typeof target.renderedPosition === "function" ? target.renderedPosition() : artifactTopologyZoomCenter(cy);
+        showArtifactTopologyTooltip(label, position);
+    }, ARTIFACT_TOPOLOGY_HOVER_DELAY_MS);
+}
+
+function flashArtifactTopologyNode(artifactPath) {
+    const cy = window.__artifactTopologyGraph;
+    if (!cy || !artifactPath) {
+        return;
+    }
+    const node = cy.getElementById(artifactTopologyArtifactNodeId(artifactPath));
+    if (!node || node.empty()) {
+        return;
+    }
+    node.addClass("artifact-topology-flash");
+    if (window.__artifactTopologyFlashTimer) {
+        window.clearTimeout(window.__artifactTopologyFlashTimer);
+    }
+    window.__artifactTopologyFlashTimer = window.setTimeout(() => {
+        node.removeClass("artifact-topology-flash");
+    }, ARTIFACT_TOPOLOGY_FLASH_MS);
+}
+
+function applyArtifactTopologyGraphTheme(cy) {
+    const palette = artifactTopologyGraphPalette();
+    cy.style()
+        .selector('node[kind = "group"]')
+        .style({
+            color: palette.groupText,
+            "background-color": palette.groupBackground,
+            "border-color": palette.groupBorder,
+        })
+        .selector('node[kind = "artifact"]')
+        .style({
+            color: palette.artifactText,
+            "background-color": palette.artifactBackground,
+            "border-color": palette.artifactBorder,
+        })
+        .selector('edge[kind = "group-edge"]')
+        .style({
+            color: palette.groupEdgeText,
+            "text-background-color": palette.groupEdgeBackground,
+            "line-color": palette.groupEdgeLine,
+            "target-arrow-color": palette.groupEdgeLine,
+        })
+        .selector('edge[kind = "artifact-edge"]')
+        .style({
+            color: palette.artifactEdgeText,
+            "text-background-color": palette.artifactEdgeBackground,
+            "line-color": palette.artifactEdgeLine,
+            "target-arrow-color": palette.artifactEdgeLine,
+        })
+        .selector(".artifact-topology-selected")
+        .style({
+            "border-color": palette.selectedBorder,
+            "shadow-color": palette.selectedShadow,
+        })
+        .selector(".artifact-topology-selected-child")
+        .style({
+            "border-color": palette.selectedBorder,
+            "background-color": palette.selectedArtifactBackground,
+        })
+        .selector(".artifact-topology-flash")
+        .style({
+            "border-color": palette.selectedBorder,
+            "shadow-color": palette.selectedShadow,
+        })
+        .update();
+}
+
 function buildArtifactTopologyGraphElements(model) {
     const elements = [];
     const visibleArtifactPaths = new Set();
@@ -1961,8 +2142,8 @@ function updateArtifactTopologyZoomHint(cy) {
 function applyArtifactTopologyGraphMode(cy) {
     const detailMode = artifactTopologyGraphDetailMode(cy.zoom());
     cy.batch(() => {
-    cy.elements(".artifact-topology-overview").toggleClass("artifact-topology-hidden", detailMode);
-    cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
+        cy.elements(".artifact-topology-overview").toggleClass("artifact-topology-hidden", detailMode);
+        cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
     });
     updateArtifactTopologyZoomHint(cy);
 }
@@ -1983,6 +2164,8 @@ function updateArtifactTopologyFocusPanel(model, selectedKey) {
 }
 
 function destroyArtifactTopologyGraph() {
+    clearArtifactTopologyHoverTimer();
+    hideArtifactTopologyTooltip();
     if (window.__artifactTopologyGraph && typeof window.__artifactTopologyGraph.destroy === "function") {
         window.__artifactTopologyGraph.destroy();
     }
@@ -1995,6 +2178,7 @@ function initArtifactTopologyGraph(model) {
         return;
     }
 
+    const palette = artifactTopologyGraphPalette();
     const cy = window.cytoscape({
         container,
         elements: buildArtifactTopologyGraphElements(model),
@@ -2015,13 +2199,13 @@ function initArtifactTopologyGraph(model) {
                     "text-max-width": 104,
                     "font-size": 15,
                     "font-weight": 700,
-                    color: "#f4f1eb",
+                    color: palette.groupText,
                     "text-valign": "center",
                     "text-halign": "center",
-                    "background-color": "#355f69",
+                    "background-color": palette.groupBackground,
                     "background-opacity": 0.96,
                     "border-width": 1.5,
-                    "border-color": "#6baab4",
+                    "border-color": palette.groupBorder,
                     "overlay-opacity": 0,
                     "shadow-blur": 24,
                     "shadow-color": "rgba(0, 0, 0, 0.22)",
@@ -2039,14 +2223,14 @@ function initArtifactTopologyGraph(model) {
                     label: "data(label)",
                     "font-size": 10,
                     "font-weight": 600,
-                    color: "#e9e4dd",
+                    color: palette.artifactText,
                     "text-wrap": "wrap",
                     "text-max-width": 86,
                     "text-valign": "bottom",
                     "text-margin-y": 28,
-                    "background-color": "#232729",
+                    "background-color": palette.artifactBackground,
                     "border-width": 1,
-                    "border-color": "#87979b",
+                    "border-color": palette.artifactBorder,
                     "overlay-opacity": 0,
                 },
             },
@@ -2055,14 +2239,14 @@ function initArtifactTopologyGraph(model) {
                 style: {
                     width: 2.1,
                     label: "data(label)",
-                    color: "#a8b1b3",
+                    color: palette.groupEdgeText,
                     "font-size": 11,
                     "text-background-opacity": 1,
-                    "text-background-color": "#171816",
+                    "text-background-color": palette.groupEdgeBackground,
                     "text-background-padding": 4,
                     "curve-style": "bezier",
-                    "line-color": "#707879",
-                    "target-arrow-color": "#707879",
+                    "line-color": palette.groupEdgeLine,
+                    "target-arrow-color": palette.groupEdgeLine,
                     "target-arrow-shape": "triangle",
                     "arrow-scale": 0.9,
                     opacity: 0.9,
@@ -2073,14 +2257,14 @@ function initArtifactTopologyGraph(model) {
                 style: {
                     width: 1.5,
                     label: "data(label)",
-                    color: "#d2ccc3",
+                    color: palette.artifactEdgeText,
                     "font-size": 9,
                     "text-background-opacity": 1,
-                    "text-background-color": "#171816",
+                    "text-background-color": palette.artifactEdgeBackground,
                     "text-background-padding": 3,
                     "curve-style": "unbundled-bezier",
-                    "line-color": "#d39a55",
-                    "target-arrow-color": "#d39a55",
+                    "line-color": palette.artifactEdgeLine,
+                    "target-arrow-color": palette.artifactEdgeLine,
                     "target-arrow-shape": "triangle",
                     "arrow-scale": 0.72,
                     opacity: 0.78,
@@ -2102,23 +2286,34 @@ function initArtifactTopologyGraph(model) {
                 selector: ".artifact-topology-selected",
                 style: {
                     "border-width": 3,
-                    "border-color": "#d9a13d",
+                    "border-color": palette.selectedBorder,
                     "shadow-opacity": 0.42,
-                    "shadow-color": "rgba(217, 161, 61, 0.32)",
+                    "shadow-color": palette.selectedShadow,
                 },
             },
             {
                 selector: ".artifact-topology-selected-child",
                 style: {
                     "border-width": 2,
-                    "border-color": "#d9a13d",
-                    "background-color": "#5a4330",
+                    "border-color": palette.selectedBorder,
+                    "background-color": palette.selectedArtifactBackground,
+                },
+            },
+            {
+                selector: ".artifact-topology-flash",
+                style: {
+                    "border-width": 3,
+                    "border-color": palette.selectedBorder,
+                    "shadow-blur": 34,
+                    "shadow-opacity": 0.55,
+                    "shadow-color": palette.selectedShadow,
                 },
             },
         ],
     });
 
     window.__artifactTopologyGraph = cy;
+    applyArtifactTopologyGraphTheme(cy);
     applyArtifactTopologyGraphMode(cy);
     updateArtifactTopologyGraphSelection(cy, model.selectedKey);
 
@@ -2126,7 +2321,18 @@ function initArtifactTopologyGraph(model) {
         applyArtifactTopologyGraphMode(cy);
     });
 
+    cy.on("mouseover", 'node[kind = "group"], node[kind = "artifact"]', (event) => {
+        scheduleArtifactTopologyTooltip(cy, event.target);
+    });
+
+    cy.on("mouseout", 'node[kind = "group"], node[kind = "artifact"]', () => {
+        clearArtifactTopologyHoverTimer();
+        hideArtifactTopologyTooltip();
+    });
+
     cy.on("tap", 'node[kind = "group"], node[kind = "artifact"]', (event) => {
+        clearArtifactTopologyHoverTimer();
+        hideArtifactTopologyTooltip();
         const groupKey = String(event.target.data("groupKey") || "");
         if (!groupKey) {
             return;
@@ -2162,6 +2368,15 @@ function initArtifactTopologyGraph(model) {
         cy.fit(cy.nodes('[kind = "group"]'), 48);
         applyArtifactTopologyGraphMode(cy);
     }, "boundArtifactZoomReset");
+
+    if (document.body && !window.__artifactTopologyThemeObserver) {
+        window.__artifactTopologyThemeObserver = new MutationObserver(() => {
+            if (window.__artifactTopologyGraph === cy) {
+                applyArtifactTopologyGraphTheme(cy);
+            }
+        });
+        window.__artifactTopologyThemeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-theme"] });
+    }
 }
 
 function renderArtifactTopologyMap(model) {
@@ -2173,12 +2388,14 @@ function renderArtifactTopologyMap(model) {
             <div class="artifact-topology-toolbar">
                 <div id="artifact-topology-zoom-hint" class="artifact-topology-zoom-hint">Overview: grouped control surfaces are visible. Zoom in to reveal artifact-level relationships.</div>
                 <div class="artifact-topology-zoom-controls" role="group" aria-label="Relationship graph zoom controls">
+                    ${renderArtifactTopologyRelationshipHelp()}
                     <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="out">Zoom out</button>
                     <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="reset">Reset</button>
                     <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="in">Zoom in</button>
                 </div>
             </div>
             <div id="artifact-topology-graph" class="artifact-topology-graph" role="img" aria-label="Artifact relationship graph"></div>
+            <div id="artifact-topology-tooltip" class="artifact-topology-tooltip" hidden></div>
         </div>
     `;
 }
@@ -2216,7 +2433,7 @@ function renderArtifactTopologyFocus(model) {
                 : ""}
             <div>
                 <div class="detail-section-label">Artifacts in this surface</div>
-                ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<span class="artifact-topology-artifact-chip"><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>${artifact.delta_label ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-${escapeHtml(String(artifact.delta_status || "changed"))}">${escapeHtml(artifact.delta_label)}</span>` : ""}</span>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
+                ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<span class="artifact-topology-artifact-chip"><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}" data-artifact-topology-highlight="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>${artifact.delta_label ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-${escapeHtml(String(artifact.delta_status || "changed"))}">${escapeHtml(artifact.delta_label)}</span>` : ""}</span>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
             </div>
             <div>
                 <div class="detail-section-label">Linked relationships</div>
@@ -2236,8 +2453,16 @@ function renderArtifactTopologyFocus(model) {
 
 function bindCueCards() {
     document.querySelectorAll("[data-storyline-artifact]").forEach((button) => {
+        if (button.dataset.boundStorylineArtifact === "true") {
+            return;
+        }
+        button.dataset.boundStorylineArtifact = "true";
         button.addEventListener("click", () => {
             const artifactPath = button.getAttribute("data-storyline-artifact");
+            const highlightArtifactPath = button.getAttribute("data-artifact-topology-highlight");
+            if (highlightArtifactPath) {
+                flashArtifactTopologyNode(decodeURIComponent(highlightArtifactPath));
+            }
             if (artifactPath) {
                 if (button.closest("#repo-artifacts-section")) {
                     focusStorylineSection();

@@ -1610,7 +1610,35 @@ strong {
     display: inline-flex;
     flex-wrap: wrap;
     justify-content: flex-end;
+    align-items: center;
     gap: 8px;
+}
+
+.artifact-topology-help-trigger {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+    flex: 0 0 auto;
+}
+
+.artifact-topology-help-bubble {
+    width: min(360px, 72vw);
+    text-align: left;
+}
+
+.artifact-topology-help-row {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+
+.artifact-topology-help-row:last-child {
+    margin-bottom: 0;
 }
 
 .artifact-topology-zoom-button {
@@ -1618,6 +1646,7 @@ strong {
 }
 
 .artifact-topology-graph {
+    position: relative;
     min-height: 420px;
     border-radius: calc(var(--radius-lg) - 2px);
     background:
@@ -1625,6 +1654,22 @@ strong {
         linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 24%),
         color-mix(in srgb, var(--color-surface) 96%, transparent);
     overflow: hidden;
+}
+
+.artifact-topology-tooltip {
+    position: absolute;
+    z-index: 5;
+    max-width: 240px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface-2) 96%, transparent);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    line-height: 1.4;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
+    pointer-events: none;
+    overflow-wrap: anywhere;
 }
 
 .artifact-topology-node-delta-added,
