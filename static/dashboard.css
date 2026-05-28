@@ -1607,10 +1607,38 @@ strong {
     opacity: 0.95;
 }
 
+.artifact-topology-edge-added,
+.artifact-topology-edge-removed {
+    stroke-width: 1.35;
+    stroke-dasharray: 4 3;
+    opacity: 0.62;
+}
+
+.artifact-topology-edge-changed,
+.artifact-topology-edge-reclassified {
+    stroke-width: 1.45;
+    stroke-dasharray: 2 3;
+    opacity: 0.7;
+}
+
 .artifact-topology-edge-label {
     fill: var(--color-text-muted);
     font-size: 2.8px;
     letter-spacing: 0.02em;
+    opacity: 0.84;
+}
+
+.artifact-topology-edge-label-added,
+.artifact-topology-edge-label-removed,
+.artifact-topology-edge-label-changed,
+.artifact-topology-edge-label-reclassified {
+    opacity: 0.68;
+}
+
+.artifact-topology-edge-label-delta {
+    font-size: 2.35px;
+    letter-spacing: 0.03em;
+    opacity: 0.82;
 }
 
 .artifact-topology-node {

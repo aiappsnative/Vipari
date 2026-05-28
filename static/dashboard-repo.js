@@ -1616,6 +1616,8 @@ function normalizeTopologyPayload(topologyPayload) {
             from: String(edge.source_key || edge.from || ""),
             to: String(edge.target_key || edge.to || ""),
             label: String(edge.label || ""),
+            deltaStatus: String(edge.delta_status || edge.deltaStatus || ""),
+            deltaLabel: String(edge.delta_label || edge.deltaLabel || ""),
         })).filter((edge) => edge.from && edge.to),
         artifact_relations: asArray(topologyPayload.artifact_relations).map((relation) => ({
             sourceArtifactPath: String(relation.source_artifact_path || relation.sourceArtifactPath || ""),
@@ -1641,6 +1643,8 @@ function normalizeTopologyPayload(topologyPayload) {
                 from: String(edge.source_key || edge.from || ""),
                 to: String(edge.target_key || edge.to || ""),
                 label: String(edge.label || ""),
+                deltaStatus: String(edge.delta_status || edge.deltaStatus || ""),
+                deltaLabel: String(edge.delta_label || edge.deltaLabel || ""),
             })).filter((edge) => edge.from && edge.to),
             artifactRelations: asArray(mode.artifact_relations).map((relation) => ({
                 sourceArtifactPath: String(relation.source_artifact_path || relation.sourceArtifactPath || ""),
@@ -1775,9 +1779,11 @@ function renderArtifactTopologyMap(model) {
                     }
                     const midX = (from.x + to.x) / 2;
                     const midY = (from.y + to.y) / 2 - 4;
+                    const edgeDeltaClass = edge.deltaStatus ? ` artifact-topology-edge-${escapeHtml(edge.deltaStatus)}` : "";
+                    const edgeLabelDelta = edge.deltaLabel ? ` <tspan class="artifact-topology-edge-label-delta">${escapeHtml(edge.deltaLabel.toLowerCase())}</tspan>` : "";
                     return `
-                        <line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" class="artifact-topology-edge" marker-end="url(#artifact-topology-arrow)"></line>
-                        <text x="${midX}" y="${midY}" class="artifact-topology-edge-label" text-anchor="middle">${escapeHtml(edge.label)}</text>
+                        <line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" class="artifact-topology-edge${edgeDeltaClass}" marker-end="url(#artifact-topology-arrow)"></line>
+                        <text x="${midX}" y="${midY}" class="artifact-topology-edge-label${edgeDeltaClass}" text-anchor="middle">${escapeHtml(edge.label)}${edgeLabelDelta}</text>
                     `;
                 }).join("")}
             </svg>

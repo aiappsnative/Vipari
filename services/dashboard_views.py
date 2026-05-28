@@ -942,6 +942,8 @@ class RepoArtifactTopologyEdge:
     source_key: str
     target_key: str
     label: str
+    delta_status: str | None = None
+    delta_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3499,6 +3501,23 @@ def _artifact_topology_delta_label(status: str | None) -> str | None:
     }.get(str(status or "").lower())
 
 
+def _build_repo_artifact_topology_edge_delta_maps(
+    current_edges: list[RepoArtifactTopologyEdge],
+    baseline_edges: list[RepoArtifactTopologyEdge],
+) -> tuple[dict[tuple[str, str, str], str], dict[tuple[str, str, str], str]]:
+    current_keys = {(edge.source_key, edge.target_key, edge.label) for edge in current_edges}
+    baseline_keys = {(edge.source_key, edge.target_key, edge.label) for edge in baseline_edges}
+    current_deltas = {
+        edge_key: "added"
+        for edge_key in sorted(current_keys - baseline_keys)
+    }
+    baseline_deltas = {
+        edge_key: "removed"
+        for edge_key in sorted(baseline_keys - current_keys)
+    }
+    return current_deltas, baseline_deltas
+
+
 def _build_repo_artifact_topology_delta_maps(
     current_entries: list[RepoDashboardArtifactEntry],
     baseline_entries: list[RepoDashboardArtifactEntry],
@@ -3542,6 +3561,7 @@ def _build_repo_artifact_topology_mode(
     label: str,
     summary: str,
     artifact_delta_by_path: dict[str, str] | None = None,
+    edge_delta_by_key: dict[tuple[str, str, str], str] | None = None,
 ) -> RepoArtifactTopologyMode:
     entries_by_group: dict[str, list[RepoDashboardArtifactEntry]] = {
         str(group["key"]): [] for group in _ARTIFACT_TOPOLOGY_GROUPS
@@ -3608,7 +3628,13 @@ def _build_repo_artifact_topology_mode(
         )
 
     edges = [
-        edge
+        RepoArtifactTopologyEdge(
+            source_key=edge.source_key,
+            target_key=edge.target_key,
+            label=edge.label,
+            delta_status=(edge_delta_by_key or {}).get((edge.source_key, edge.target_key, edge.label)),
+            delta_label=_artifact_topology_delta_label((edge_delta_by_key or {}).get((edge.source_key, edge.target_key, edge.label))),
+        )
         for edge in _ARTIFACT_TOPOLOGY_EDGES
         if edge.source_key in active_group_keys and edge.target_key in active_group_keys
     ]
@@ -3639,6 +3665,8 @@ def _build_repo_artifact_topology(
     }
     current_delta_by_path: dict[str, str] = {}
     baseline_delta_by_path: dict[str, str] = {}
+    current_edge_deltas: dict[tuple[str, str, str], str] = {}
+    baseline_edge_deltas: dict[tuple[str, str, str], str] = {}
     if baseline_entries:
         current_delta_by_path, baseline_delta_by_path = _build_repo_artifact_topology_delta_maps(
             artifact_entries,
@@ -3670,7 +3698,27 @@ def _build_repo_artifact_topology(
             summary=baseline_summary,
             artifact_delta_by_path=baseline_delta_by_path,
         )
-        modes.append(baseline_mode)
+        current_edge_deltas, baseline_edge_deltas = _build_repo_artifact_topology_edge_delta_maps(
+            current_mode.edges,
+            baseline_mode.edges,
+        )
+        current_mode = _build_repo_artifact_topology_mode(
+            artifact_entries,
+            mode_key="current",
+            label="Current state",
+            summary="Latest tracked repository state and inferred current relationships.",
+            artifact_delta_by_path=current_delta_by_path,
+            edge_delta_by_key=current_edge_deltas,
+        )
+        baseline_mode = _build_repo_artifact_topology_mode(
+            baseline_entries,
+            mode_key="reference-baseline",
+            label="Reference baseline",
+            summary=baseline_summary,
+            artifact_delta_by_path=baseline_delta_by_path,
+            edge_delta_by_key=baseline_edge_deltas,
+        )
+        modes = [current_mode, baseline_mode]
 
     return RepoArtifactTopologyView(
         view_basis="current_tracked_state",

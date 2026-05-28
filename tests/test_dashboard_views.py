@@ -1172,6 +1172,27 @@ def test_repo_artifact_topology_builder_marks_added_removed_and_reclassified_del
         provenance_kind="ai_tool_surface",
         provenance_label="AI-assisted tool surface",
     )
+    model_entry = RepoDashboardArtifactEntry(
+        artifact_path="models/runtime_config.json",
+        artifact_type="model_config",
+        discovery_reason="model",
+        discovery_confidence=1.0,
+        baseline_line_count=0,
+        historical_version_count=0,
+        historical_profile_count=0,
+        latest_historical_semantic_distance=0.0,
+        latest_historical_drift_magnitude=0.0,
+        latest_historical_capability_shift=0.0,
+        latest_historical_guardrail_shift=0.0,
+        latest_historical_governance_shift=0.0,
+        latest_historical_autonomy_shift=0.0,
+        pr_profile_count=0,
+        latest_pr_semantic_distance=0.0,
+        latest_pr_capability_shift=0.0,
+        latest_pr_guardrail_shift=0.0,
+        provenance_kind="model_behavior_surface",
+        provenance_label="Model and config surface",
+    )
     guardrail_entry = RepoDashboardArtifactEntry(
         artifact_path="policies/usage.md",
         artifact_type="guardrail",
@@ -1195,7 +1216,7 @@ def test_repo_artifact_topology_builder_marks_added_removed_and_reclassified_del
     )
 
     added_topology = _build_repo_artifact_topology(
-        [prompt_entry, tool_entry],
+        [prompt_entry, tool_entry, model_entry],
         selected_baseline_source_snapshot_id=1,
         baseline_snapshot_artifact_state={
             "prompts/system.txt": {"artifact_type": "prompt"},
@@ -1204,6 +1225,8 @@ def test_repo_artifact_topology_builder_marks_added_removed_and_reclassified_del
     )
     added_tools_group = next(group for group in added_topology.groups if group.key == "tools")
     assert added_tools_group.delta_counts["added"] == 1
+    added_edge = next(edge for edge in added_topology.edges if edge.source_key == "tools" and edge.target_key == "models")
+    assert added_edge.delta_status == "added"
 
     reclassified_topology = _build_repo_artifact_topology(
         [prompt_entry, guardrail_entry],
@@ -1232,6 +1255,8 @@ def test_repo_artifact_topology_builder_marks_added_removed_and_reclassified_del
     removed_baseline_mode = next(mode for mode in removed_topology.modes if mode.mode_key == "reference-baseline")
     removed_governance_group = next(group for group in removed_baseline_mode.groups if group.key == "governance")
     assert removed_governance_group.delta_counts["removed"] == 1
+    removed_edge = next(edge for edge in removed_baseline_mode.edges if edge.source_key == "governance" and edge.target_key == "prompts")
+    assert removed_edge.delta_status == "removed"
 
 
 def test_build_artifact_attribute_profile_degrades_with_partial_profile_data():
