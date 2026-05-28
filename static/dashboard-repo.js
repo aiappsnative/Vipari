@@ -1856,15 +1856,15 @@ function artifactTopologyGraphPalette() {
             groupText: "#1f2422",
             groupBackground: "#d9ebe6",
             groupBorder: "#3b7d86",
-            artifactText: "#2a2623",
+            artifactText: "#201c19",
             artifactBackground: "#f4ede3",
             artifactBorder: "#6d645d",
-            groupEdgeText: "#3f4749",
+            groupEdgeText: "#242b2d",
             groupEdgeBackground: "rgba(249, 244, 238, 0.96)",
-            groupEdgeLine: "#617174",
-            artifactEdgeText: "#4f4135",
+            groupEdgeLine: "#47585c",
+            artifactEdgeText: "#32281f",
             artifactEdgeBackground: "rgba(249, 244, 238, 0.98)",
-            artifactEdgeLine: "#9d6a35",
+            artifactEdgeLine: "#855523",
             selectedBorder: "#b5761f",
             selectedShadow: "rgba(181, 118, 31, 0.28)",
             selectedArtifactBackground: "#ead8bf",
@@ -1923,8 +1923,10 @@ function showArtifactTopologyTooltip(text, renderedPosition = { x: 0, y: 0 }) {
     if (!tooltip || !graph || !text) {
         return;
     }
-    const left = Math.max(10, Math.min(graph.clientWidth - 260, Number(renderedPosition.x || 0) + 16));
-    const top = Math.max(10, Math.min(graph.clientHeight - 80, Number(renderedPosition.y || 0) - 12));
+    const tooltipWidth = 260;
+    const tooltipHeight = 88;
+    const left = Math.max(10, Math.min(graph.clientWidth - tooltipWidth, Number(renderedPosition.x || 0) + 16));
+    const top = Math.max(10, Math.min(graph.clientHeight - tooltipHeight, Number(renderedPosition.y || 0) - 10));
     tooltip.hidden = false;
     tooltip.textContent = text;
     tooltip.style.left = `${left}px`;
@@ -1966,6 +1968,31 @@ function flashArtifactTopologyNode(artifactPath) {
     window.__artifactTopologyFlashTimer = window.setTimeout(() => {
         node.removeClass("artifact-topology-flash");
     }, ARTIFACT_TOPOLOGY_FLASH_MS);
+}
+
+function focusArtifactTopologyNode(artifactPath) {
+    const cy = window.__artifactTopologyGraph;
+    if (!cy || !artifactPath) {
+        return false;
+    }
+    const node = cy.getElementById(artifactTopologyArtifactNodeId(artifactPath));
+    if (!node || node.empty()) {
+        return false;
+    }
+    const groupKey = String(node.data("groupKey") || "");
+    if (groupKey) {
+        updateArtifactTopologyGraphSelection(cy, groupKey);
+        window.__artifactTopologyGroup = groupKey;
+    }
+    cy.stop();
+    cy.animate({
+        center: { eles: node },
+        zoom: Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.12, cy.zoom(), 1.34)),
+        duration: 320,
+        easing: "ease-out-cubic",
+    });
+    flashArtifactTopologyNode(artifactPath);
+    return true;
 }
 
 function applyArtifactTopologyGraphTheme(cy) {
@@ -2394,8 +2421,9 @@ function renderArtifactTopologyMap(model) {
                     <button type="button" class="cue-action-button artifact-topology-zoom-button" data-artifact-topology-zoom="in">Zoom in</button>
                 </div>
             </div>
-            <div id="artifact-topology-graph" class="artifact-topology-graph" role="img" aria-label="Artifact relationship graph"></div>
-            <div id="artifact-topology-tooltip" class="artifact-topology-tooltip" hidden></div>
+            <div id="artifact-topology-graph" class="artifact-topology-graph" role="img" aria-label="Artifact relationship graph">
+                <div id="artifact-topology-tooltip" class="artifact-topology-tooltip" hidden></div>
+            </div>
         </div>
     `;
 }
@@ -2460,11 +2488,12 @@ function bindCueCards() {
         button.addEventListener("click", () => {
             const artifactPath = button.getAttribute("data-storyline-artifact");
             const highlightArtifactPath = button.getAttribute("data-artifact-topology-highlight");
+            let graphFocused = false;
             if (highlightArtifactPath) {
-                flashArtifactTopologyNode(decodeURIComponent(highlightArtifactPath));
+                graphFocused = focusArtifactTopologyNode(decodeURIComponent(highlightArtifactPath));
             }
             if (artifactPath) {
-                if (button.closest("#repo-artifacts-section")) {
+                if (button.closest("#repo-artifacts-section") && !graphFocused) {
                     focusStorylineSection();
                 }
                 loadArtifactStoryline(decodeURIComponent(artifactPath));
