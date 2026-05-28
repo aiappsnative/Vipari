@@ -26,7 +26,7 @@ function resolveRepoFull() {
 }
 
 const repoFull = resolveRepoFull();
-const VALID_REPO_TABS = new Set(["audit", "pr-reviews", "drift", "version-control", "baseline", "compliance", "reports"]);
+const VALID_REPO_TABS = new Set(["audit", "pr-reviews", "drift", "version-control", "artifacts", "baseline", "compliance", "reports"]);
 window.__storylineCache = new Map();
 window.__selectedInsight = null;
 window.__designProfiles = [];
@@ -80,11 +80,14 @@ const ARTIFACT_TOPOLOGY_EDGES = [
 function resolveRepoTab() {
     const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
     if (metaTab && VALID_REPO_TABS.has(metaTab)) {
-        return metaTab;
+        return metaTab === "baseline" ? "artifacts" : metaTab;
     }
 
     const params = new URLSearchParams(window.location.search);
     const requestedTab = (params.get("tab") || "").trim().toLowerCase();
+    if (requestedTab === "baseline") {
+        return "artifacts";
+    }
     return VALID_REPO_TABS.has(requestedTab) ? requestedTab : "audit";
 }
 
@@ -92,7 +95,7 @@ const activeRepoTab = resolveRepoTab();
 window.__activeRepoTab = activeRepoTab;
 
 function shouldPrefetchArtifactOptions() {
-    return activeRepoTab === "baseline";
+    return activeRepoTab === "artifacts";
 }
 
 function storylinePanelCopy() {
@@ -264,11 +267,11 @@ function repoDetailUrl(repo) {
 }
 
 function repoTabUrl(tab, options = {}) {
-    const normalizedTab = String(tab || "").trim().toLowerCase();
+    const normalizedTab = String(tab || "").trim().toLowerCase() === "baseline" ? "artifacts" : String(tab || "").trim().toLowerCase();
     const isAuditTab = normalizedTab === "audit";
     const url = new URL(isAuditTab ? `/dashboard/${encodeURIComponent(repoFull)}/audit` : `/dashboard/${encodeURIComponent(repoFull)}`, window.location.origin);
     if (normalizedTab && !isAuditTab) {
-        url.searchParams.set("tab", tab);
+        url.searchParams.set("tab", normalizedTab);
     }
     const artifactPath = options.artifactPath || requestedArtifactPath();
     if (artifactPath) {
@@ -711,7 +714,7 @@ function bindBaselineReviewActions() {
                         ? `Baseline approved. ${pendingCount} artifact approval${pendingCount === 1 ? " is" : "s are"} still pending in Artifacts.`
                         : "Baseline approved. Review the Artifacts tab to confirm the final stored evidence state.";
                     persistArtifactHandoffNotice(handoffMessage, pendingCount > 0 ? "warning" : "success");
-                    window.location.href = repoTabUrl("baseline", { hash: "artifact-action-status" });
+                    window.location.href = repoTabUrl("artifacts", { hash: "artifact-action-status" });
                     return;
                 }
                 if (payload?.dashboard) {
@@ -3447,7 +3450,7 @@ function applyDashboardPayload(payload) {
     refreshArtifactsSection();
     bindArtifactControls();
     const artifactHandoffNotice = consumeArtifactHandoffNotice();
-    if (artifactHandoffNotice && activeRepoTab === "version-control") {
+    if (artifactHandoffNotice && activeRepoTab === "artifacts") {
         setArtifactActionStatus(artifactHandoffNotice.message, artifactHandoffNotice.tone);
     }
     bindBaselineReviewActions();

@@ -1024,7 +1024,7 @@ def test_dashboard_html_pages_render(tmp_path):
     assert 'data-repo-tab-link="pr-reviews"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI/audit"' in repo_response.text
     assert 'href="/dashboard/doria90%2FdummyAI?tab=pr-reviews"' in repo_response.text
-    assert repo_response.text.index('data-repo-tab-link="baseline"') < repo_response.text.index('data-repo-tab-link="pr-reviews"') < repo_response.text.index('data-repo-tab-link="compliance"')
+    assert repo_response.text.index('data-repo-tab-link="artifacts"') < repo_response.text.index('data-repo-tab-link="pr-reviews"') < repo_response.text.index('data-repo-tab-link="compliance"')
     assert 'id="artifact-add-controls"' in repo_response.text
     assert 'id="artifact-action-status"' in repo_response.text
     assert "available repositories" not in repo_text
@@ -1104,12 +1104,26 @@ def test_dashboard_repo_tab_query_param_renders_active_tab(tmp_path):
     assert 'data-active-repo-tab="reports"' in response.text
     assert 'data-repo-tab-link="reports"' in response.text
     assert 'data-repo-tab-link="version-control"' in response.text
+    assert 'data-repo-tab-link="artifacts"' in response.text
     assert '?tab=version-control' in response.text
-    assert '?tab=baseline' in response.text
+    assert '?tab=artifacts' in response.text
     assert '?tab=compliance' in response.text
     assert 'secondary-details-summary-static' in response.text
     assert '<div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">' in response.text
     assert '<details class="secondary-details"><summary class="secondary-details-summary">Version journey and baseline comparison</summary>' not in response.text
+
+
+def test_dashboard_repo_legacy_baseline_tab_maps_to_artifacts(tmp_path):
+    main.AUDIT_WORKER_ENABLED = False
+    main.AUDIT_DB_PATH = str(tmp_path / "operator-legacy-baseline.db")
+
+    with TestClient(main.app) as client:
+        response = client.get("/dashboard/doria90/dummyAI?tab=baseline")
+
+    assert response.status_code == 200
+    assert 'data-active-repo-tab="artifacts"' in response.text
+    assert 'data-repo-tab-link="artifacts"' in response.text
+    assert '?tab=artifacts' in response.text
 
 
 def test_dashboard_index_query_params_render_active_controls(tmp_path):

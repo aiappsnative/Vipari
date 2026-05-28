@@ -113,6 +113,8 @@ def render_repo_dashboard_page(
     deep_link_pr: str = "",
     deep_link_head_sha: str = "",
 ) -> str:
+    if active_tab == "baseline":
+        active_tab = "artifacts"
     encoded_repo_full = quote(repo_full, safe="")
     base_url = f"/dashboard/{encoded_repo_full}"
     shell_notice = ""
@@ -155,7 +157,7 @@ def render_repo_dashboard_page(
         .replace("{{REPO_TAB_PR_REVIEWS_URL}}", f"{base_url}?tab=pr-reviews{query_suffix}")
         .replace("{{REPO_TAB_DRIFT_URL}}", f"{base_url}?tab=drift{query_suffix}")
         .replace("{{REPO_TAB_VERSION_CONTROL_URL}}", f"{base_url}?tab=version-control{query_suffix}")
-        .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=baseline{query_suffix}")
+        .replace("{{REPO_TAB_BASELINE_URL}}", f"{base_url}?tab=artifacts{query_suffix}")
         .replace("{{REPO_TAB_COMPLIANCE_URL}}", f"{base_url}?tab=compliance{query_suffix}")
         .replace("{{REPO_TAB_REPORTS_URL}}", f"{base_url}?tab=reports{query_suffix}")
     )
