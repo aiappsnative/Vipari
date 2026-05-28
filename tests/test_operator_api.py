@@ -844,10 +844,12 @@ def test_repo_artifact_mutation_apis_return_refreshed_dashboard(tmp_path):
     assert add_response.json()["artifact"]["artifact_path"] == "policies/usage.md"
     assert add_response.json()["baseline"]["artifact_type"] == "policy"
     assert add_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+    assert add_response.json()["dashboard"]["artifact_topology"]["view_basis"] == "current_tracked_state"
 
     assert patch_response.status_code == 200
     assert patch_response.json()["artifact"]["artifact_type"] == "guardrail"
     assert patch_response.json()["dashboard"]["artifacts"][0]["artifact_path"] == "prompts/system.txt"
+    assert "artifact_topology" in patch_response.json()["dashboard"]
 
     assert delete_response.status_code == 200
     assert delete_response.json()["artifact_path"] == "policies/usage.md"
@@ -901,6 +903,8 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "supporting history" in repo_text
     assert "baseline-review-panel" in repo_response.text
     assert "Baseline Review" in repo_response.text
+    assert "Artifact topology" in repo_response.text
+    assert "Relationship graph" in repo_response.text
     assert "driftguard-repo-full" in repo_response.text
     assert "/static/dashboard-repo.js" in repo_response.text
     assert 'data-repo-tab-link="audit"' in repo_response.text
@@ -934,16 +938,17 @@ def test_dashboard_html_pages_render(tmp_path):
     assert "Search by PR title, PR #, or head SHA" in repo_js_response.text
     assert "Search across GitHub PR titles" in repo_js_response.text
     assert 'repoTabUrl("audit", { artifactPath: topInsight?.artifact_path || "", hash: "repo-audit-brief-section" })' in repo_js_response.text
-    assert 'repoTabUrl("baseline", { hash: "baseline-review-panel" })' in repo_js_response.text
+    assert 'repoTabUrl("version-control", { hash: "baseline-review-panel" })' in repo_js_response.text
     assert 'repoTabUrl("reports", { hash: "repo-export-section" })' in repo_js_response.text
     assert "Open baseline review" in repo_js_response.text
+    assert "Compare checkpoints and baseline evidence" in repo_js_response.text
+    assert "ARTIFACT_TOPOLOGY_GROUPS" in repo_js_response.text
     assert "/artifacts/options" in repo_js_response.text
     assert "data-artifact-edit-path" in repo_js_response.text
     assert 'id="repo-pr-review-search"' in repo_response.text
     assert "data-artifact-remove-path" in repo_js_response.text
     assert "audit-workflow-step-head" in repo_js_response.text
     assert "Review the flagged change" in repo_js_response.text
-    assert "Compare repository context" in repo_js_response.text
     assert "Prepare the handoff" in repo_js_response.text
     assert "Review queue is clear" in repo_js_response.text
     assert "No baseline or disposition proposals are waiting on this repository right now." in repo_js_response.text

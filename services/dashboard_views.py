@@ -913,6 +913,42 @@ class RepoDashboardArtifactEntry:
 
 
 @dataclass(frozen=True)
+class RepoArtifactTopologyArtifact:
+    artifact_path: str
+    artifact_type: str
+    provenance_label: str
+    drift_magnitude: float
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyNode:
+    key: str
+    label: str
+    short_label: str
+    x: int
+    y: int
+    description: str
+    count: int
+    drift_magnitude: float
+    top_artifacts: list[RepoArtifactTopologyArtifact]
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyEdge:
+    source_key: str
+    target_key: str
+    label: str
+
+
+@dataclass(frozen=True)
+class RepoArtifactTopologyView:
+    view_basis: str
+    groups: list[RepoArtifactTopologyNode]
+    edges: list[RepoArtifactTopologyEdge]
+    selected_baseline_source_snapshot_id: int | None = None
+
+
+@dataclass(frozen=True)
 class RepoDashboardInsightEntry:
     title: str
     artifact_path: str
@@ -1155,6 +1191,7 @@ class RepoDashboardView:
     governance_decision: RepoGovernanceDecisionSummary | None = None
     audit_brief: RepoAuditBrief | None = None
     artifacts: list[RepoDashboardArtifactEntry] = None
+    artifact_topology: RepoArtifactTopologyView | None = None
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
@@ -2334,6 +2371,10 @@ def _build_repo_dashboard_view_uncached(
         governance_decision=governance_decision,
         audit_brief=audit_brief,
         artifacts=artifact_entries,
+        artifact_topology=_build_repo_artifact_topology(
+            artifact_entries,
+            selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+        ),
         journey_snapshots=journey_snapshots,
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
@@ -2611,6 +2652,10 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                     else None
                 ),
                 artifacts=artifact_entries,
+                artifact_topology=_build_repo_artifact_topology(
+                    artifact_entries,
+                    selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),
+                ),
                 journey_snapshots=[],
                 journey_comparison=None,
                 selected_baseline_source_snapshot_id=baseline_snapshot_ids_by_onboarding.get(onboarding.id),
@@ -3123,6 +3168,7 @@ def _empty_repo_dashboard_view(repo_full: str) -> RepoDashboardView:
         history_cues=[],
         design_profiles=[],
         artifacts=[],
+        artifact_topology=RepoArtifactTopologyView(view_basis="current_tracked_state", groups=[], edges=[]),
         journey_snapshots=[],
         journey_comparison=None,
     )
@@ -3150,6 +3196,173 @@ def _empty_artifact_metrics() -> dict[str, float | int]:
         "latest_pr_autonomy_shift": 0.0,
         "latest_activity_at": 0.0,
     }
+
+
+_ARTIFACT_TOPOLOGY_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "governance",
+        "label": "Governance",
+        "short_label": "Governance",
+        "x": 14,
+        "y": 18,
+        "description": "Policies and governance artifacts constrain how the rest of the AI surface is allowed to behave.",
+    },
+    {
+        "key": "guardrails",
+        "label": "Guardrails",
+        "short_label": "Guardrails",
+        "x": 37,
+        "y": 18,
+        "description": "Guardrails and safety controls shape what prompts, agents, and model calls are allowed to do.",
+    },
+    {
+        "key": "prompts",
+        "label": "Prompts",
+        "short_label": "Prompts",
+        "x": 60,
+        "y": 18,
+        "description": "Prompt and instruction artifacts steer model behavior and often sit downstream of governance and guardrail decisions.",
+    },
+    {
+        "key": "models",
+        "label": "Models",
+        "short_label": "Models",
+        "x": 83,
+        "y": 18,
+        "description": "Model and generation configuration define the behavior envelope the rest of the repository is orchestrating.",
+    },
+    {
+        "key": "tools",
+        "label": "Tools",
+        "short_label": "Tools",
+        "x": 26,
+        "y": 68,
+        "description": "Tooling surfaces can expand model or agent authority by changing what external actions are available.",
+    },
+    {
+        "key": "agents",
+        "label": "Agents",
+        "short_label": "Agents",
+        "x": 50,
+        "y": 68,
+        "description": "Agent orchestration connects prompts, tools, retrieval, and models into end-to-end runtime behavior.",
+    },
+    {
+        "key": "retrieval",
+        "label": "Retrieval",
+        "short_label": "Retrieval",
+        "x": 74,
+        "y": 68,
+        "description": "Retrieval and knowledge surfaces influence the context injected into prompts and agent workflows.",
+    },
+    {
+        "key": "other",
+        "label": "Other",
+        "short_label": "Other",
+        "x": 90,
+        "y": 68,
+        "description": "Supporting artifacts matter to the AI surface but do not yet map cleanly into a narrower control-surface family.",
+    },
+)
+
+
+_ARTIFACT_TOPOLOGY_EDGES: tuple[RepoArtifactTopologyEdge, ...] = (
+    RepoArtifactTopologyEdge(source_key="governance", target_key="guardrails", label="policy constrains"),
+    RepoArtifactTopologyEdge(source_key="guardrails", target_key="prompts", label="constrains"),
+    RepoArtifactTopologyEdge(source_key="guardrails", target_key="models", label="bounds"),
+    RepoArtifactTopologyEdge(source_key="prompts", target_key="models", label="steers"),
+    RepoArtifactTopologyEdge(source_key="tools", target_key="agents", label="extends"),
+    RepoArtifactTopologyEdge(source_key="tools", target_key="models", label="acts through"),
+    RepoArtifactTopologyEdge(source_key="agents", target_key="models", label="orchestrates"),
+    RepoArtifactTopologyEdge(source_key="retrieval", target_key="prompts", label="grounds"),
+    RepoArtifactTopologyEdge(source_key="retrieval", target_key="agents", label="feeds"),
+    RepoArtifactTopologyEdge(source_key="governance", target_key="agents", label="governs"),
+)
+
+
+def _artifact_topology_group_key(entry: RepoDashboardArtifactEntry) -> str:
+    artifact_type = str(entry.artifact_type or "").lower()
+    artifact_path = str(entry.artifact_path or "").lower()
+    provenance_kind = str(entry.provenance_kind or "").lower()
+
+    if "guardrail" in artifact_type or artifact_path.endswith("guardrails.json") or "/guardrail" in artifact_path:
+        return "guardrails"
+    if "policy" in artifact_type or "govern" in artifact_type or provenance_kind == "human_governance_surface":
+        return "governance"
+    if "model" in artifact_type or "config" in artifact_type or provenance_kind == "model_behavior_surface":
+        return "models"
+    if "tool" in artifact_type or provenance_kind == "ai_tool_surface":
+        return "tools"
+    if "agent" in artifact_type or "workflow" in artifact_type or "agent" in artifact_path:
+        return "agents"
+    if any(token in artifact_type for token in ("retrieval", "knowledge", "rag")) or any(token in artifact_path for token in ("retriev", "knowledge")):
+        return "retrieval"
+    if "prompt" in artifact_type or "instruction" in artifact_type or provenance_kind == "ai_control_surface":
+        return "prompts"
+    return "other"
+
+
+def _build_repo_artifact_topology(
+    artifact_entries: list[RepoDashboardArtifactEntry],
+    *,
+    selected_baseline_source_snapshot_id: int | None,
+) -> RepoArtifactTopologyView:
+    entries_by_group: dict[str, list[RepoDashboardArtifactEntry]] = {
+        str(group["key"]): [] for group in _ARTIFACT_TOPOLOGY_GROUPS
+    }
+    for entry in artifact_entries:
+        entries_by_group.setdefault(_artifact_topology_group_key(entry), []).append(entry)
+
+    groups: list[RepoArtifactTopologyNode] = []
+    active_group_keys: set[str] = set()
+    for group in _ARTIFACT_TOPOLOGY_GROUPS:
+        group_key = str(group["key"])
+        entries = entries_by_group.get(group_key, [])
+        if not entries:
+            continue
+        active_group_keys.add(group_key)
+        ranked_entries = sorted(
+            entries,
+            key=lambda entry: (
+                -max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                entry.artifact_path,
+            ),
+        )
+        groups.append(
+            RepoArtifactTopologyNode(
+                key=group_key,
+                label=str(group["label"]),
+                short_label=str(group["short_label"]),
+                x=int(group["x"]),
+                y=int(group["y"]),
+                description=str(group["description"]),
+                count=len(entries),
+                drift_magnitude=max(
+                    max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0))
+                    for entry in entries
+                ),
+                top_artifacts=[
+                    RepoArtifactTopologyArtifact(
+                        artifact_path=entry.artifact_path,
+                        artifact_type=entry.artifact_type,
+                        provenance_label=entry.provenance_label,
+                        drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                    )
+                    for entry in ranked_entries[:3]
+                ],
+            )
+        )
+
+    return RepoArtifactTopologyView(
+        view_basis="current_tracked_state",
+        groups=groups,
+        edges=[
+            edge
+            for edge in _ARTIFACT_TOPOLOGY_EDGES
+            if edge.source_key in active_group_keys and edge.target_key in active_group_keys
+        ],
+        selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
+    )
 
 
 @dataclass(frozen=True)

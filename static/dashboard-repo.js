@@ -45,10 +45,36 @@ window.__artifactEditPath = "";
 window.__artifactMutationBusyPath = "";
 window.__artifactActionStatusMessage = "";
 window.__artifactActionStatusTone = "info";
+window.__artifactTopologyGroup = "";
+window.__artifactTopology = null;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
 window.__pendingProposalsLoadToken = 0;
+
+const ARTIFACT_TOPOLOGY_GROUPS = [
+    { key: "governance", label: "Governance", shortLabel: "Governance", x: 14, y: 18, description: "Policies and governance artifacts constrain how the rest of the AI surface is allowed to behave." },
+    { key: "guardrails", label: "Guardrails", shortLabel: "Guardrails", x: 37, y: 18, description: "Guardrails and safety controls shape what prompts, agents, and model calls are allowed to do." },
+    { key: "prompts", label: "Prompts", shortLabel: "Prompts", x: 60, y: 18, description: "Prompt and instruction artifacts steer model behavior and often sit downstream of governance and guardrail decisions." },
+    { key: "models", label: "Models", shortLabel: "Models", x: 83, y: 18, description: "Model and generation configuration define the behavior envelope the rest of the repository is orchestrating." },
+    { key: "tools", label: "Tools", shortLabel: "Tools", x: 26, y: 68, description: "Tooling surfaces can expand model or agent authority by changing what external actions are available." },
+    { key: "agents", label: "Agents", shortLabel: "Agents", x: 50, y: 68, description: "Agent orchestration connects prompts, tools, retrieval, and models into end-to-end runtime behavior." },
+    { key: "retrieval", label: "Retrieval", shortLabel: "Retrieval", x: 74, y: 68, description: "Retrieval and knowledge surfaces influence the context injected into prompts and agent workflows." },
+    { key: "other", label: "Other", shortLabel: "Other", x: 90, y: 68, description: "Supporting artifacts matter to the AI surface but do not yet map cleanly into a narrower control-surface family." },
+];
+
+const ARTIFACT_TOPOLOGY_EDGES = [
+    { from: "governance", to: "guardrails", label: "policy constrains" },
+    { from: "guardrails", to: "prompts", label: "constrains" },
+    { from: "guardrails", to: "models", label: "bounds" },
+    { from: "prompts", to: "models", label: "steers" },
+    { from: "tools", to: "agents", label: "extends" },
+    { from: "tools", to: "models", label: "acts through" },
+    { from: "agents", to: "models", label: "orchestrates" },
+    { from: "retrieval", to: "prompts", label: "grounds" },
+    { from: "retrieval", to: "agents", label: "feeds" },
+    { from: "governance", to: "agents", label: "governs" },
+];
 
 function resolveRepoTab() {
     const metaTab = document.querySelector('meta[name="driftguard-active-repo-tab"]')?.getAttribute("content")?.trim().toLowerCase();
@@ -1530,6 +1556,197 @@ function renderCueCards(items = []) {
     `).join("")}</div>`;
 }
 
+function artifactTopologyGroupKey(item = {}) {
+    const artifactType = String(item.artifact_type || "").toLowerCase();
+    const provenanceKind = String(item.provenance_kind || "").toLowerCase();
+    const artifactPath = String(item.artifact_path || "").toLowerCase();
+
+    if (artifactType.includes("guardrail") || artifactPath.endsWith("guardrails.json") || artifactPath.includes("/guardrail")) {
+        return "guardrails";
+    }
+    if (artifactType.includes("policy") || artifactType.includes("govern") || provenanceKind === "human_governance_surface") {
+        return "governance";
+    }
+    if (artifactType.includes("model") || artifactType.includes("config") || provenanceKind === "model_behavior_surface") {
+        return "models";
+    }
+    if (artifactType.includes("tool") || provenanceKind === "ai_tool_surface") {
+        return "tools";
+    }
+    if (artifactType.includes("agent") || artifactType.includes("workflow") || artifactPath.includes("agent")) {
+        return "agents";
+    }
+    if (artifactType.includes("retrieval") || artifactType.includes("knowledge") || artifactType.includes("rag") || artifactPath.includes("retriev") || artifactPath.includes("knowledge")) {
+        return "retrieval";
+    }
+    if (artifactType.includes("prompt") || artifactType.includes("instruction") || provenanceKind === "ai_control_surface") {
+        return "prompts";
+    }
+    return "other";
+}
+
+function normalizeTopologyPayload(topologyPayload) {
+    if (!topologyPayload || typeof topologyPayload !== "object") {
+        return null;
+    }
+    const groups = asArray(topologyPayload.groups);
+    const edges = asArray(topologyPayload.edges);
+    if (!groups.length) {
+        return {
+            view_basis: String(topologyPayload.view_basis || "current_tracked_state"),
+            groups: [],
+            edges: [],
+            selected_baseline_source_snapshot_id: topologyPayload.selected_baseline_source_snapshot_id || null,
+        };
+    }
+    return {
+        view_basis: String(topologyPayload.view_basis || "current_tracked_state"),
+        groups: groups.map((group) => ({
+            ...group,
+            count: Number(group.count || 0),
+            driftMagnitude: Number(group.drift_magnitude || group.driftMagnitude || 0),
+            topArtifacts: asArray(group.top_artifacts || group.topArtifacts),
+        })),
+        edges: edges.map((edge) => ({
+            from: String(edge.source_key || edge.from || ""),
+            to: String(edge.target_key || edge.to || ""),
+            label: String(edge.label || ""),
+        })).filter((edge) => edge.from && edge.to),
+        selected_baseline_source_snapshot_id: topologyPayload.selected_baseline_source_snapshot_id || null,
+    };
+}
+
+function buildArtifactTopologyModel(items = [], topologyPayload = null) {
+    const normalizedTopology = normalizeTopologyPayload(topologyPayload);
+    const payloadCount = normalizedTopology
+        ? normalizedTopology.groups.reduce((sum, group) => sum + Number(group.count || 0), 0)
+        : -1;
+    if (normalizedTopology && payloadCount === asArray(items).length) {
+        const groupKeys = new Set(normalizedTopology.groups.map((group) => group.key));
+        const selectedKey = groupKeys.has(window.__artifactTopologyGroup)
+            ? window.__artifactTopologyGroup
+            : (normalizedTopology.groups.slice().sort((left, right) => right.count - left.count)[0]?.key || "");
+        window.__artifactTopologyGroup = selectedKey;
+        return {
+            groups: normalizedTopology.groups,
+            edges: normalizedTopology.edges.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
+            selectedKey,
+            viewBasis: normalizedTopology.view_basis,
+        };
+    }
+
+    const groupedEntries = new Map(ARTIFACT_TOPOLOGY_GROUPS.map((group) => [group.key, []]));
+    asArray(items).forEach((item) => {
+        groupedEntries.get(artifactTopologyGroupKey(item))?.push(item);
+    });
+
+    const groups = ARTIFACT_TOPOLOGY_GROUPS
+        .map((group) => {
+            const entries = groupedEntries.get(group.key) || [];
+            return {
+                ...group,
+                entries,
+                count: entries.length,
+                driftMagnitude: entries.reduce((maxValue, entry) => Math.max(maxValue, Number(entry.leaderboard_drift_magnitude || entry.latest_historical_drift_magnitude || 0)), 0),
+                topArtifacts: [...entries]
+                    .sort((left, right) => Number(right.leaderboard_drift_magnitude || right.latest_historical_drift_magnitude || 0) - Number(left.leaderboard_drift_magnitude || left.latest_historical_drift_magnitude || 0))
+                    .slice(0, 3),
+            };
+        })
+        .filter((group) => group.count > 0);
+
+    const groupKeys = new Set(groups.map((group) => group.key));
+    const selectedKey = groupKeys.has(window.__artifactTopologyGroup)
+        ? window.__artifactTopologyGroup
+        : (groups.slice().sort((left, right) => right.count - left.count)[0]?.key || "");
+    window.__artifactTopologyGroup = selectedKey;
+
+    return {
+        groups,
+        edges: ARTIFACT_TOPOLOGY_EDGES.filter((edge) => groupKeys.has(edge.from) && groupKeys.has(edge.to)),
+        selectedKey,
+        viewBasis: "current_tracked_state",
+    };
+}
+
+function renderArtifactTopologyMap(model) {
+    if (!model.groups.length) {
+        return '<div class="muted">No tracked artifacts are available yet, so Vipari cannot infer a relationship graph for this repository.</div>';
+    }
+    const groupByKey = new Map(model.groups.map((group) => [group.key, group]));
+    return `
+        <div class="artifact-topology-canvas">
+            <svg class="artifact-topology-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                    <marker id="artifact-topology-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                        <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"></path>
+                    </marker>
+                </defs>
+                ${model.edges.map((edge) => {
+                    const from = groupByKey.get(edge.from);
+                    const to = groupByKey.get(edge.to);
+                    if (!from || !to) {
+                        return "";
+                    }
+                    const midX = (from.x + to.x) / 2;
+                    const midY = (from.y + to.y) / 2 - 4;
+                    return `
+                        <line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" class="artifact-topology-edge" marker-end="url(#artifact-topology-arrow)"></line>
+                        <text x="${midX}" y="${midY}" class="artifact-topology-edge-label" text-anchor="middle">${escapeHtml(edge.label)}</text>
+                    `;
+                }).join("")}
+            </svg>
+            ${model.groups.map((group) => `
+                <button
+                    type="button"
+                    class="artifact-topology-node${group.key === model.selectedKey ? " artifact-topology-node-active" : ""}"
+                    data-artifact-topology-node="${escapeHtml(group.key)}"
+                    style="left:${group.x}%;top:${group.y}%;"
+                    aria-pressed="${group.key === model.selectedKey ? "true" : "false"}"
+                >
+                    <span class="artifact-topology-node-count">${escapeHtml(String(group.count))}</span>
+                    <span class="artifact-topology-node-label">${escapeHtml(group.shortLabel)}</span>
+                </button>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderArtifactTopologyFocus(model) {
+    const selectedGroup = model.groups.find((group) => group.key === model.selectedKey) || model.groups[0] || null;
+    if (!selectedGroup) {
+        return '<div class="muted">Select a topology node to inspect its linked artifacts.</div>';
+    }
+    const incoming = model.edges.filter((edge) => edge.to === selectedGroup.key).map((edge) => {
+        const source = ARTIFACT_TOPOLOGY_GROUPS.find((group) => group.key === edge.from);
+        return `${source?.label || edge.from} -> ${selectedGroup.label}`;
+    });
+    const outgoing = model.edges.filter((edge) => edge.from === selectedGroup.key).map((edge) => {
+        const target = ARTIFACT_TOPOLOGY_GROUPS.find((group) => group.key === edge.to);
+        return `${selectedGroup.label} -> ${target?.label || edge.to}`;
+    });
+    return `
+        <div class="stack compact-stack artifact-topology-focus-card">
+            <div class="artifact-card-head">
+                <strong>${escapeHtml(selectedGroup.label)}</strong>
+                <span class="tag tag-muted">${escapeHtml(String(selectedGroup.count))} tracked</span>
+            </div>
+            <div class="artifact-card-reason">${escapeHtml(selectedGroup.description)}</div>
+            <div class="detail-note">Graph basis: ${escapeHtml(model.viewBasis === "current_tracked_state" ? "Latest tracked repository state" : model.viewBasis)}. Highest observed drift in this surface: ${escapeHtml(selectedGroup.driftMagnitude.toFixed(3))}</div>
+            <div>
+                <div class="detail-section-label">Top artifacts</div>
+                ${selectedGroup.topArtifacts.length ? `<div class="tag-row">${selectedGroup.topArtifacts.map((artifact) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
+            </div>
+            <div>
+                <div class="detail-section-label">Linked relationships</div>
+                ${(incoming.length || outgoing.length)
+                    ? `<div class="stack compact-stack">${[...incoming, ...outgoing].map((relationship) => `<div class="artifact-card-reason">${escapeHtml(relationship)}</div>`).join("")}</div>`
+                    : '<div class="muted">No inferred relationships are visible for this surface yet.</div>'}
+            </div>
+        </div>
+    `;
+}
+
 function bindCueCards() {
     document.querySelectorAll("[data-storyline-artifact]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -1787,6 +2004,9 @@ function renderArtifactResultsSummary(totalCount, filteredCount) {
 function refreshArtifactsSection() {
     const items = asArray(window.__artifactEntries);
     const filtered = filteredArtifactEntries(items);
+    const topologyModel = buildArtifactTopologyModel(items, window.__artifactTopology);
+    setSectionHtml("artifact-topology-map", renderArtifactTopologyMap(topologyModel));
+    setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus(topologyModel));
     setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
     setSectionHtml("artifact-add-controls", renderArtifactAddControls());
     const filterHost = document.getElementById("artifact-filter-chips");
@@ -1843,6 +2063,19 @@ function bindArtifactControls() {
         });
     }
 
+    const topologyMap = document.getElementById("artifact-topology-map");
+    if (topologyMap && topologyMap.dataset.boundArtifactTopology !== "true") {
+        topologyMap.dataset.boundArtifactTopology = "true";
+        topologyMap.addEventListener("click", (event) => {
+            const target = event.target instanceof HTMLElement ? event.target.closest("[data-artifact-topology-node]") : null;
+            if (!target) {
+                return;
+            }
+            window.__artifactTopologyGroup = target.getAttribute("data-artifact-topology-node") || "";
+            refreshArtifactsSection();
+        });
+    }
+
     if (shouldPrefetchArtifactOptions() && !window.__artifactOptionsLoaded && !window.__artifactOptionsLoading) {
         void loadArtifactOptions();
     }
@@ -1868,6 +2101,7 @@ async function addTrackedArtifact() {
         }
         const payload = await response.json();
         const inferredType = payload?.artifact?.artifact_type || inferredArtifactTypeForPath(window.__artifactAddPath);
+        window.__artifactTopology = null;
         window.__artifactEntries = [
             ...asArray(window.__artifactEntries),
             {
@@ -1914,6 +2148,7 @@ async function removeTrackedArtifact(artifactPath) {
         }
         const payload = await response.json();
         window.__artifactEditPath = "";
+        window.__artifactTopology = null;
         removeArtifactEntryLocal(artifactPath);
         refreshArtifactsSection();
         if (payload?.dashboard) {
@@ -1947,6 +2182,7 @@ async function saveTrackedArtifactType(artifactPath, artifactType) {
         }
         const payload = await response.json();
         window.__artifactEditPath = "";
+        window.__artifactTopology = null;
         replaceArtifactEntryLocal(artifactPath, { artifact_type: payload?.artifact?.artifact_type || artifactType });
         refreshArtifactsSection();
         if (payload?.dashboard) {
@@ -2239,7 +2475,7 @@ function renderJourneyTimelineCard(snapshot, selectedBaselineSourceSnapshotId = 
 function renderJourneyEmptyState(referenceBaseline = null, currentSnapshot = null) {
     const baselineLabel = referenceBaseline?.source_ref || referenceBaseline?.commit_sha || "the live repository state";
     const currentLabel = currentSnapshot?.source_ref || currentSnapshot?.commit_sha || "the live repository state";
-    const baselineReviewUrl = repoTabUrl("baseline", { hash: "baseline-review-panel" });
+    const baselineReviewUrl = repoTabUrl("version-control", { hash: "baseline-review-panel" });
     const sameCheckpoint = referenceBaseline !== null
         && currentSnapshot !== null
         && Number(referenceBaseline.id) === Number(currentSnapshot.id);
@@ -2249,9 +2485,9 @@ function renderJourneyEmptyState(referenceBaseline = null, currentSnapshot = nul
             <div class="empty-state journey-empty-state">
                 <strong>Version journey will grow once repo history is captured.</strong>
                 <div class="artifact-card-reason">${escapeHtml(currentLabel)} is both the current state and the reference baseline, so there are no earlier checkpoints to plot yet.</div>
-                <div class="detail-note">Approve or review artifact evidence in Artifacts, then let merged changes accumulate. As new repository checkpoints are materialized, they will appear here automatically.</div>
+                <div class="detail-note">Approve or review the candidate baseline from this Version Control workspace, then let merged changes accumulate. As new repository checkpoints are materialized, they will appear here automatically.</div>
                 <div class="export-actions repo-actions-row audit-step-actions">
-                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open Artifacts</a>
+                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open baseline review</a>
                 </div>
             </div>
         `;
@@ -2270,7 +2506,7 @@ function renderJourneyStatusNotice(payload, snapshots = []) {
     const baselineReview = payload?.baseline_review || null;
     const lastOutcome = window.__lastRebaselineOutcome || null;
     const referenceBaseline = snapshots.find((snapshot) => snapshot.is_reference_baseline) || null;
-    const reviewUrl = repoTabUrl("baseline", { hash: "baseline-review-panel" });
+    const reviewUrl = repoTabUrl("version-control", { hash: "baseline-review-panel" });
 
     if (lastOutcome?.status === "approved") {
         const selectedSnapshot = snapshots.find((snapshot) => Number(snapshot.id) === Number(lastOutcome.snapshotId)) || null;
@@ -2289,7 +2525,7 @@ function renderJourneyStatusNotice(payload, snapshots = []) {
         const referenceLabel = referenceBaseline?.source_ref || referenceBaseline?.snapshot_key || "the current reference baseline";
         return `
             <div class="journey-status-note muted">
-                New baseline candidate from ${escapeHtml(selectedLabel)}. ${pendingCount ? `${escapeHtml(String(pendingCount))} item${pendingCount === 1 ? " is" : "s are"} pending approval` : "Pending approval"}; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Review in Artifacts</a>.
+                New baseline candidate from ${escapeHtml(selectedLabel)}. ${pendingCount ? `${escapeHtml(String(pendingCount))} item${pendingCount === 1 ? " is" : "s are"} pending approval` : "Pending approval"}; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Review in Version Control</a>.
             </div>
         `;
     }
@@ -2299,7 +2535,7 @@ function renderJourneyStatusNotice(payload, snapshots = []) {
         const referenceLabel = referenceBaseline?.source_ref || referenceBaseline?.snapshot_key || "the current approved baseline";
         return `
             <div class="journey-status-note muted">
-                ${escapeHtml(String(pendingCount || 0))} baseline candidate${pendingCount === 1 ? " is" : "s are"} pending approval; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Open Artifacts</a>.
+                ${escapeHtml(String(pendingCount || 0))} baseline candidate${pendingCount === 1 ? " is" : "s are"} pending approval; comparisons still use ${escapeHtml(referenceLabel)}. <a class="link" href="${escapeHtml(reviewUrl)}">Open Version Control</a>.
             </div>
         `;
     }
@@ -2823,7 +3059,7 @@ function renderRepoActionsSection(insights) {
     const reviewTitle = topInsight?.title || "Open the highest-priority change first";
     const repoUrl = repoFull ? `https://github.com/${repoFull}` : "";
     const baselineReviewUrl = repoFull
-        ? repoTabUrl("baseline", { hash: "baseline-review-panel" })
+        ? repoTabUrl("version-control", { hash: "baseline-review-panel" })
         : "#baseline-review-panel";
     const driftQueueUrl = repoFull
         ? repoTabUrl("drift", { artifactPath: topInsight?.artifact_path || "", hash: "repo-triage-section" })
@@ -2885,12 +3121,13 @@ function renderRepoActionsSection(insights) {
                 <div class="audit-workflow-step-head">
                     <span class="audit-step-number">2</span>
                     <div class="stack compact-stack">
-                        <span class="audit-step-eyebrow">Context check</span>
-                        <strong>Compare repository context</strong>
+                        <span class="audit-step-eyebrow">Context and baseline</span>
+                        <strong>Compare checkpoints and baseline evidence</strong>
                     </div>
                 </div>
-                <div class="artifact-card-reason">Use the audit brief and repository context before accepting or re-baselining the change.</div>
+                <div class="artifact-card-reason">Use the audit brief, version journey, and baseline review from the same Version Control surface before accepting or re-baselining the change.</div>
                 <div class="export-actions repo-actions-row audit-step-actions">
+                    <a href="${escapeHtml(baselineReviewUrl)}" class="cue-action-button">Open Version Control review</a>
                     <a href="${escapeHtml(driftQueueUrl)}" class="cue-action-button">Open drift queue</a>
                     <a href="${escapeHtml(relatedAuditsUrl)}" class="cue-action-button">Open audit brief</a>
                     ${repoUrl ? `<a href="${escapeHtml(repoUrl)}" class="cue-action-button">Inspect in GitHub</a>` : ""}
@@ -3003,6 +3240,7 @@ function applyDashboardPayload(payload) {
     const baselineReview = payload.baseline_review || null;
     const historyCues = asArray(payload.history_cues);
     const artifacts = asArray(payload.artifacts);
+    const artifactTopology = payload.artifact_topology || null;
     const historyTimelines = asArray(payload.history_timelines);
     const journeySnapshots = asArray(payload.journey_snapshots);
     const selectedBaselineSourceSnapshotId = payload.selected_baseline_source_snapshot_id || null;
@@ -3054,6 +3292,7 @@ function applyDashboardPayload(payload) {
         ? `<div class="stack compact-stack">${lowerConfidenceInsights.slice(0, 4).map((item) => `<div class="artifact-card"><strong>${escapeHtml(item.artifact_path)}</strong><div class="artifact-card-reason">${escapeHtml(item.title || item.rationale || item.flag_summary || "Lower-confidence lead")}</div></div>`).join("")}</div>`
         : '<div class="muted">No lower-confidence findings are competing for attention right now.</div>');
     window.__artifactEntries = artifacts;
+    window.__artifactTopology = artifactTopology;
     if (window.__artifactEditPath && !artifacts.some((item) => item.artifact_path === window.__artifactEditPath)) {
         window.__artifactEditPath = "";
     }
@@ -3061,7 +3300,7 @@ function applyDashboardPayload(payload) {
     refreshArtifactsSection();
     bindArtifactControls();
     const artifactHandoffNotice = consumeArtifactHandoffNotice();
-    if (artifactHandoffNotice && activeRepoTab === "baseline") {
+    if (artifactHandoffNotice && activeRepoTab === "version-control") {
         setArtifactActionStatus(artifactHandoffNotice.message, artifactHandoffNotice.tone);
     }
     bindBaselineReviewActions();

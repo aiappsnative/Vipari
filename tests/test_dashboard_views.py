@@ -12,7 +12,15 @@ from services.audit_records import RepoStaticDriftSummary, record_audit_result
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
 from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
-from services.onboarding import execute_repository_history_backfill, onboard_repository, plan_repository_history_backfill
+from services.onboarding import (
+    add_repo_artifact_to_onboarding,
+    execute_repository_history_backfill,
+    onboard_repository,
+    plan_repository_history_backfill,
+    remove_repo_artifact_from_onboarding,
+    sync_on_pr_merge_artifact_changes,
+    update_repo_artifact_type,
+)
 from services.branch_scan_jobs import create_branch_scan_job
 from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
 from services.repo_journey import build_repo_journey
@@ -139,6 +147,10 @@ def test_build_repo_dashboard_view_aggregates_onboarding_backfill_and_pr_drift(t
     assert dashboard.baseline_review.authoritative_artifact_count == 1
     assert isinstance(dashboard.baseline_review.recent_decisions, list)
     assert dashboard.artifacts[0].provenance_label == "AI control surface"
+    assert dashboard.artifact_topology is not None
+    assert dashboard.artifact_topology.view_basis == "current_tracked_state"
+    assert [group.key for group in dashboard.artifact_topology.groups] == ["prompts"]
+    assert dashboard.artifact_topology.groups[0].top_artifacts[0].artifact_path == "prompts/refund.txt"
     assert dashboard.baseline_version_count == 1
     assert dashboard.backfill.completed_job_count == 1
     assert dashboard.backfill.total_historical_versions == 3
@@ -974,6 +986,87 @@ def test_build_repo_dashboard_view_marks_baseline_only_profile_as_not_promotable
     assert capability.current_value == "unknown"
     assert capability.state == "unknown"
     assert capability.confidence_label == "lower confidence"
+
+
+def test_repo_artifact_topology_updates_for_manual_mutations(tmp_path):
+    db_path = str(tmp_path / "dashboard-topology-mutations.db")
+    init_db(db_path)
+
+    files = {
+        "prompts/system.txt": "You are a safe assistant.",
+        "policies/usage.md": "Human review is required for production-impacting AI changes.",
+    }
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/system.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    initial = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert [group.key for group in initial.artifact_topology.groups] == ["prompts"]
+
+    add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="policies/usage.md",
+        artifact_type="policy",
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+    with_policy = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert {group.key for group in with_policy.artifact_topology.groups} == {"governance", "prompts"}
+
+    update_repo_artifact_type(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+        artifact_type="guardrail",
+    )
+    with_guardrail = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert {group.key for group in with_guardrail.artifact_topology.groups} == {"guardrails", "prompts"}
+
+    remove_repo_artifact_from_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+    )
+    after_remove = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert [group.key for group in after_remove.artifact_topology.groups] == ["prompts"]
+
+
+def test_repo_artifact_topology_updates_for_merge_synced_artifacts(tmp_path):
+    db_path = str(tmp_path / "dashboard-topology-sync.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/system.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "You are a safe assistant.",
+    )
+
+    initial = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert [group.key for group in initial.artifact_topology.groups] == ["prompts"]
+
+    sync_on_pr_merge_artifact_changes(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_snapshots={
+            "tools/llm_tool.py": "def invoke_llm_tool():\n    return 'assistant tool call'\n",
+        },
+        added_paths={"tools/llm_tool.py"},
+    )
+
+    synced = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    assert {group.key for group in synced.artifact_topology.groups} == {"prompts", "tools"}
 
 
 def test_build_artifact_attribute_profile_degrades_with_partial_profile_data():
