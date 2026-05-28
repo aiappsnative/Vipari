@@ -1,9 +1,6 @@
 (() => {
     const storageKey = 'driftguard-theme';
-    const root = document.body;
-    if (!root) {
-        return;
-    }
+    const root = document.documentElement;
 
     const toggleButtons = Array.from(document.querySelectorAll('[data-theme-toggle]'));
     const media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -29,7 +26,11 @@
         if (stored === 'dark' || stored === 'light') {
             return stored;
         }
-        const bodyTheme = root.getAttribute('data-theme');
+        const rootTheme = root.getAttribute('data-theme');
+        if (rootTheme === 'dark' || rootTheme === 'light') {
+            return rootTheme;
+        }
+        const bodyTheme = document.body?.getAttribute('data-theme');
         if (bodyTheme === 'dark' || bodyTheme === 'light') {
             return bodyTheme;
         }
@@ -45,6 +46,9 @@
 
     const applyTheme = (theme, persist = true) => {
         root.setAttribute('data-theme', theme);
+        if (document.body) {
+            document.body.setAttribute('data-theme', theme);
+        }
         if (persist) {
             storeTheme(theme);
         }
@@ -55,6 +59,10 @@
             const label = button.querySelector('[data-theme-toggle-label]');
             if (label) {
                 label.textContent = theme === 'dark' ? 'Dark mode' : 'Light mode';
+            }
+            const glyph = button.querySelector('[data-theme-toggle-glyph]');
+            if (glyph) {
+                glyph.textContent = theme === 'dark' ? '☀' : '☾';
             }
         });
     };

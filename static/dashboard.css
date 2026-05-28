@@ -52,6 +52,7 @@
     --transition: 150ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+html[data-theme="light"],
 body[data-theme="light"] {
     color-scheme: light;
     --color-bg: #f6f0e8;
@@ -2895,7 +2896,9 @@ body.dashboard-index-page[data-theme="light"] {
     margin-top: 0;
     flex: 0 0 auto;
     display: flex;
+    align-items: center;
     justify-content: center;
+    gap: 10px;
     padding: 16px 0 20px;
 }
 
@@ -4724,7 +4727,9 @@ body.repo-audit-page[data-theme="light"] {
     margin-top: 0;
     flex: 0 0 auto;
     display: flex;
+    align-items: center;
     justify-content: center;
+    gap: 10px;
     padding: 16px 0 20px;
 }
 
@@ -5169,6 +5174,21 @@ body.repo-audit-page[data-theme="light"] {
     border-color: var(--color-primary-outline);
 }
 
+.theme-toggle-compact {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    border-radius: 50%;
+    box-shadow: none;
+    backdrop-filter: none;
+}
+
+.theme-toggle-compact .theme-toggle-label {
+    display: none;
+}
+
 .theme-toggle-label {
     font-size: var(--text-md);
     font-weight: 700;
@@ -5336,7 +5356,9 @@ body.control-page[data-theme="light"] {
     margin-top: 0;
     flex: 0 0 auto;
     display: flex;
+    align-items: center;
     justify-content: center;
+    gap: 10px;
     padding: 16px 0 20px;
 }
 

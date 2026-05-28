@@ -7,6 +7,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        (() => {
+            const fallbackTheme = "{{THEME_PREFERENCE}}";
+            let theme = fallbackTheme === "light" || fallbackTheme === "dark" ? fallbackTheme : "dark";
+            try {
+                const storedTheme = window.localStorage.getItem("driftguard-theme");
+                if (storedTheme === "light" || storedTheme === "dark") {
+                    theme = storedTheme;
+                }
+            } catch {}
+            document.documentElement.setAttribute("data-theme", theme);
+        })();
+    </script>
     <link rel="stylesheet" href="/static/dashboard.css" />
     <script defer src="/static/theme-toggle.js"></script>
 </head>
@@ -54,6 +67,10 @@
 
             <div class="sidebar-profile-wrap">
                 <a href="/profile" class="sidebar-profile-link" aria-label="User profile">{{SIDEBAR_PROFILE_INITIAL}}</a>
+                <button type="button" class="theme-toggle theme-toggle-compact" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+                    <span class="theme-toggle-icon" data-theme-toggle-glyph aria-hidden="true">☀</span>
+                    <span class="theme-toggle-label visually-hidden" data-theme-toggle-label>Dark mode</span>
+                </button>
             </div>
         </nav>
 

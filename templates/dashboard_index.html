@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vipari Dashboard</title>
+    <script>
+        (() => {
+            const fallbackTheme = "{{THEME_PREFERENCE}}";
+            let theme = fallbackTheme === "light" || fallbackTheme === "dark" ? fallbackTheme : "dark";
+            try {
+                const storedTheme = window.localStorage.getItem("driftguard-theme");
+                if (storedTheme === "light" || storedTheme === "dark") {
+                    theme = storedTheme;
+                }
+            } catch {}
+            document.documentElement.setAttribute("data-theme", theme);
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -68,6 +81,10 @@
             </div>
             <div class="sidebar-profile-wrap">
                 <a href="/profile" class="sidebar-profile-link" aria-label="Profile">{{SIDEBAR_PROFILE_INITIAL}}</a>
+                <button type="button" class="theme-toggle theme-toggle-compact" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+                    <span class="theme-toggle-icon" data-theme-toggle-glyph aria-hidden="true">☀</span>
+                    <span class="theme-toggle-label visually-hidden" data-theme-toggle-label>Dark mode</span>
+                </button>
             </div>
         </nav>
 
@@ -332,12 +349,5 @@
                                                     </div>
                                                 </section>
                                             </section>
-    <div class="theme-toggle-shell">
-        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
-            <span class="theme-toggle-icon" aria-hidden="true">☀</span>
-            <span class="theme-toggle-label" data-theme-toggle-label>Dark mode</span>
-            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
-        </button>
-    </div>
 </body>
 </html>
