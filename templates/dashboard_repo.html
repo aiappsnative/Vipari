@@ -327,6 +327,16 @@
                         </div>
                         <div class="radar-axis-caption" id="repo-radar-caption">Version-control posture appears once Vipari has both a reference baseline snapshot and a current repository snapshot to compare.</div>
                     </div>
+                    <div class="secondary-panel" id="repo-compare-section">
+                        <div class="secondary-panel-title">Reference baseline vs current</div>
+                        <div id="repo-journey-compare" class="loading-shell" aria-busy="true">
+                            <span class="visually-hidden">Loading baseline comparison...</span>
+                            <div class="skeleton-stack" aria-hidden="true">
+                                <span class="skeleton-line skeleton-line-medium"></span>
+                                <div class="skeleton-block"></div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="secondary-panel secondary-panel-disclosure" id="repo-journey-section">
                         <div class="secondary-details secondary-details-static">
                             <div class="secondary-details-summary secondary-details-summary-static">Version journey and reference baseline</div>
@@ -347,16 +357,6 @@
                                     <div id="repo-journey-timeline" class="loading-shell" aria-busy="true">
                                         <span class="visually-hidden">Loading repository journey timeline...</span>
                                         <div class="skeleton-stack" aria-hidden="true">
-                                            <div class="skeleton-block"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="secondary-panel secondary-panel-flat" id="repo-compare-section">
-                                    <div class="secondary-panel-title">Reference baseline vs current</div>
-                                    <div id="repo-journey-compare" class="loading-shell" aria-busy="true">
-                                        <span class="visually-hidden">Loading baseline comparison...</span>
-                                        <div class="skeleton-stack" aria-hidden="true">
-                                            <span class="skeleton-line skeleton-line-medium"></span>
                                             <div class="skeleton-block"></div>
                                         </div>
                                     </div>
