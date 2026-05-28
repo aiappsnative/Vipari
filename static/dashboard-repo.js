@@ -1608,6 +1608,7 @@ function normalizeTopologyPayload(topologyPayload) {
             ...group,
             count: Number(group.count || 0),
             driftMagnitude: Number(group.drift_magnitude || group.driftMagnitude || 0),
+            deltaCounts: { ...(group.delta_counts || group.deltaCounts || {}) },
             artifacts: asArray(group.artifacts),
             topArtifacts: asArray(group.top_artifacts || group.topArtifacts),
         })),
@@ -1632,6 +1633,7 @@ function normalizeTopologyPayload(topologyPayload) {
                 ...group,
                 count: Number(group.count || 0),
                 driftMagnitude: Number(group.drift_magnitude || group.driftMagnitude || 0),
+                deltaCounts: { ...(group.delta_counts || group.deltaCounts || {}) },
                 artifacts: asArray(group.artifacts),
                 topArtifacts: asArray(group.top_artifacts || group.topArtifacts),
             })),
@@ -1780,6 +1782,22 @@ function renderArtifactTopologyMap(model) {
                 }).join("")}
             </svg>
             ${model.groups.map((group) => `
+                ${(() => {
+                    const badges = [];
+                    const counts = group.deltaCounts || {};
+                    if (Number(counts.added || 0) > 0) {
+                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-added">+${escapeHtml(String(counts.added))}</span>`);
+                    }
+                    if (Number(counts.removed || 0) > 0) {
+                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-removed">-${escapeHtml(String(counts.removed))}</span>`);
+                    }
+                    if (Number(counts.reclassified || 0) > 0) {
+                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-reclassified">~${escapeHtml(String(counts.reclassified))}</span>`);
+                    }
+                    if (Number(counts.changed || 0) > 0) {
+                        badges.push(`<span class="artifact-topology-node-delta artifact-topology-node-delta-changed">${escapeHtml(String(counts.changed))} changed</span>`);
+                    }
+                    return `
                 <button
                     type="button"
                     class="artifact-topology-node${group.key === model.selectedKey ? " artifact-topology-node-active" : ""}"
@@ -1789,7 +1807,10 @@ function renderArtifactTopologyMap(model) {
                 >
                     <span class="artifact-topology-node-count">${escapeHtml(String(group.count))}</span>
                     <span class="artifact-topology-node-label">${escapeHtml(group.shortLabel)}</span>
+                    ${badges.length ? `<span class="artifact-topology-node-deltas">${badges.join("")}</span>` : ""}
                 </button>
+                    `;
+                })()}
             `).join("")}
         </div>
     `;
@@ -1809,6 +1830,7 @@ function renderArtifactTopologyFocus(model) {
         return `${selectedGroup.label} -> ${target?.label || edge.to}`;
     });
     const artifactRelations = asArray(model.artifactRelations).filter((relation) => relation.sourceGroupKey === selectedGroup.key || relation.targetGroupKey === selectedGroup.key);
+    const selectedGroupDeltas = selectedGroup.deltaCounts || {};
     return `
         <div class="stack compact-stack artifact-topology-focus-card">
             <div class="artifact-card-head">
@@ -1817,9 +1839,17 @@ function renderArtifactTopologyFocus(model) {
             </div>
             <div class="artifact-card-reason">${escapeHtml(selectedGroup.description)}</div>
             <div class="detail-note">Graph basis: ${escapeHtml(model.viewBasis === "current_tracked_state" ? "Latest tracked repository state" : model.viewBasis)}. Highest observed drift in this surface: ${escapeHtml(selectedGroup.driftMagnitude.toFixed(3))}</div>
+            ${(Number(selectedGroupDeltas.added || 0) || Number(selectedGroupDeltas.removed || 0) || Number(selectedGroupDeltas.reclassified || 0) || Number(selectedGroupDeltas.changed || 0))
+                ? `<div class="tag-row">
+                    ${Number(selectedGroupDeltas.added || 0) ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-added">${escapeHtml(String(selectedGroupDeltas.added))} added</span>` : ""}
+                    ${Number(selectedGroupDeltas.removed || 0) ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-removed">${escapeHtml(String(selectedGroupDeltas.removed))} removed</span>` : ""}
+                    ${Number(selectedGroupDeltas.reclassified || 0) ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-reclassified">${escapeHtml(String(selectedGroupDeltas.reclassified))} reclassified</span>` : ""}
+                    ${Number(selectedGroupDeltas.changed || 0) ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-changed">${escapeHtml(String(selectedGroupDeltas.changed))} changed</span>` : ""}
+                </div>`
+                : ""}
             <div>
                 <div class="detail-section-label">Artifacts in this surface</div>
-                ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
+                ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<span class="artifact-topology-artifact-chip"><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>${artifact.delta_label ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-${escapeHtml(String(artifact.delta_status || "changed"))}">${escapeHtml(artifact.delta_label)}</span>` : ""}</span>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
             </div>
             <div>
                 <div class="detail-section-label">Linked relationships</div>

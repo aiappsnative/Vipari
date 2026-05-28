@@ -9,7 +9,7 @@ from engine.analysis import analyze_diff
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
-from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
+from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_artifact_topology, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
 from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import (
@@ -1078,6 +1078,160 @@ def test_repo_artifact_topology_updates_for_merge_synced_artifacts(tmp_path):
 
     synced = build_repo_dashboard_view(db_path, "doria90/dummyAI")
     assert {group.key for group in synced.artifact_topology.groups} == {"prompts", "tools"}
+
+
+def test_repo_artifact_topology_marks_reclassified_and_removed_baseline_deltas(tmp_path):
+    db_path = str(tmp_path / "dashboard-topology-deltas.db")
+    init_db(db_path)
+
+    files = {
+        "prompts/system.txt": "You are a safe assistant.",
+        "policies/usage.md": "Human review is required for production-impacting AI changes.",
+    }
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/system.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="policies/usage.md",
+        artifact_type="policy",
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    update_repo_artifact_type(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+        artifact_type="guardrail",
+    )
+    reclassified = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+    guardrail_group = next(group for group in reclassified.artifact_topology.groups if group.key == "guardrails")
+    assert guardrail_group.delta_counts["reclassified"] == 1
+    baseline_mode = next(mode for mode in reclassified.artifact_topology.modes if mode.mode_key == "reference-baseline")
+    baseline_governance_group = next(group for group in baseline_mode.groups if group.key == "governance")
+    assert baseline_governance_group.delta_counts["reclassified"] == 1
+
+    remove_repo_artifact_from_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        artifact_path="policies/usage.md",
+    )
+    removed = build_repo_dashboard_view(db_path, "doria90/dummyAI")
+
+
+def test_repo_artifact_topology_builder_marks_added_removed_and_reclassified_deltas():
+    prompt_entry = RepoDashboardArtifactEntry(
+        artifact_path="prompts/system.txt",
+        artifact_type="prompt",
+        discovery_reason="prompt",
+        discovery_confidence=1.0,
+        baseline_line_count=0,
+        historical_version_count=0,
+        historical_profile_count=0,
+        latest_historical_semantic_distance=0.0,
+        latest_historical_drift_magnitude=0.0,
+        latest_historical_capability_shift=0.0,
+        latest_historical_guardrail_shift=0.0,
+        latest_historical_governance_shift=0.0,
+        latest_historical_autonomy_shift=0.0,
+        pr_profile_count=0,
+        latest_pr_semantic_distance=0.0,
+        latest_pr_capability_shift=0.0,
+        latest_pr_guardrail_shift=0.0,
+        provenance_kind="ai_control_surface",
+        provenance_label="AI control surface",
+    )
+    tool_entry = RepoDashboardArtifactEntry(
+        artifact_path="tools/llm_tool.py",
+        artifact_type="tool",
+        discovery_reason="tool",
+        discovery_confidence=1.0,
+        baseline_line_count=0,
+        historical_version_count=0,
+        historical_profile_count=0,
+        latest_historical_semantic_distance=0.0,
+        latest_historical_drift_magnitude=0.0,
+        latest_historical_capability_shift=0.0,
+        latest_historical_guardrail_shift=0.0,
+        latest_historical_governance_shift=0.0,
+        latest_historical_autonomy_shift=0.0,
+        pr_profile_count=0,
+        latest_pr_semantic_distance=0.0,
+        latest_pr_capability_shift=0.0,
+        latest_pr_guardrail_shift=0.0,
+        provenance_kind="ai_tool_surface",
+        provenance_label="AI-assisted tool surface",
+    )
+    guardrail_entry = RepoDashboardArtifactEntry(
+        artifact_path="policies/usage.md",
+        artifact_type="guardrail",
+        discovery_reason="guardrail",
+        discovery_confidence=1.0,
+        baseline_line_count=0,
+        historical_version_count=0,
+        historical_profile_count=0,
+        latest_historical_semantic_distance=0.0,
+        latest_historical_drift_magnitude=0.0,
+        latest_historical_capability_shift=0.0,
+        latest_historical_guardrail_shift=0.0,
+        latest_historical_governance_shift=0.0,
+        latest_historical_autonomy_shift=0.0,
+        pr_profile_count=0,
+        latest_pr_semantic_distance=0.0,
+        latest_pr_capability_shift=0.0,
+        latest_pr_guardrail_shift=0.0,
+        provenance_kind="human_governance_surface",
+        provenance_label="Governance and policy surface",
+    )
+
+    added_topology = _build_repo_artifact_topology(
+        [prompt_entry, tool_entry],
+        selected_baseline_source_snapshot_id=1,
+        baseline_snapshot_artifact_state={
+            "prompts/system.txt": {"artifact_type": "prompt"},
+        },
+        journey_comparison={"change_breakdown": {"changed_artifact_paths": []}},
+    )
+    added_tools_group = next(group for group in added_topology.groups if group.key == "tools")
+    assert added_tools_group.delta_counts["added"] == 1
+
+    reclassified_topology = _build_repo_artifact_topology(
+        [prompt_entry, guardrail_entry],
+        selected_baseline_source_snapshot_id=1,
+        baseline_snapshot_artifact_state={
+            "prompts/system.txt": {"artifact_type": "prompt"},
+            "policies/usage.md": {"artifact_type": "policy"},
+        },
+        journey_comparison={"change_breakdown": {"changed_artifact_paths": []}},
+    )
+    current_guardrails_group = next(group for group in reclassified_topology.groups if group.key == "guardrails")
+    assert current_guardrails_group.delta_counts["reclassified"] == 1
+    baseline_mode = next(mode for mode in reclassified_topology.modes if mode.mode_key == "reference-baseline")
+    baseline_governance_group = next(group for group in baseline_mode.groups if group.key == "governance")
+    assert baseline_governance_group.delta_counts["reclassified"] == 1
+
+    removed_topology = _build_repo_artifact_topology(
+        [prompt_entry],
+        selected_baseline_source_snapshot_id=1,
+        baseline_snapshot_artifact_state={
+            "prompts/system.txt": {"artifact_type": "prompt"},
+            "policies/usage.md": {"artifact_type": "policy"},
+        },
+        journey_comparison={"change_breakdown": {"changed_artifact_paths": []}},
+    )
+    removed_baseline_mode = next(mode for mode in removed_topology.modes if mode.mode_key == "reference-baseline")
+    removed_governance_group = next(group for group in removed_baseline_mode.groups if group.key == "governance")
+    assert removed_governance_group.delta_counts["removed"] == 1
 
 
 def test_build_artifact_attribute_profile_degrades_with_partial_profile_data():

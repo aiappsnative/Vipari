@@ -918,6 +918,8 @@ class RepoArtifactTopologyArtifact:
     artifact_type: str
     provenance_label: str
     drift_magnitude: float
+    delta_status: str | None = None
+    delta_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -932,6 +934,7 @@ class RepoArtifactTopologyNode:
     drift_magnitude: float
     artifacts: list[RepoArtifactTopologyArtifact]
     top_artifacts: list[RepoArtifactTopologyArtifact]
+    delta_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3487,12 +3490,58 @@ def _snapshot_state_to_artifact_entries(snapshot_artifact_state: dict[str, dict[
     return entries
 
 
+def _artifact_topology_delta_label(status: str | None) -> str | None:
+    return {
+        "added": "Added",
+        "removed": "Removed",
+        "reclassified": "Reclassified",
+        "changed": "Changed",
+    }.get(str(status or "").lower())
+
+
+def _build_repo_artifact_topology_delta_maps(
+    current_entries: list[RepoDashboardArtifactEntry],
+    baseline_entries: list[RepoDashboardArtifactEntry],
+    *,
+    changed_artifact_paths: set[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    current_by_path = {entry.artifact_path: entry for entry in current_entries}
+    baseline_by_path = {entry.artifact_path: entry for entry in baseline_entries}
+    current_deltas: dict[str, str] = {}
+    baseline_deltas: dict[str, str] = {}
+
+    for artifact_path in sorted(set(current_by_path) | set(baseline_by_path)):
+        current_entry = current_by_path.get(artifact_path)
+        baseline_entry = baseline_by_path.get(artifact_path)
+        if current_entry is not None and baseline_entry is None:
+            current_deltas[artifact_path] = "added"
+            continue
+        if baseline_entry is not None and current_entry is None:
+            baseline_deltas[artifact_path] = "removed"
+            continue
+        if current_entry is None or baseline_entry is None:
+            continue
+
+        current_group_key = _artifact_topology_group_key(current_entry)
+        baseline_group_key = _artifact_topology_group_key(baseline_entry)
+        if current_entry.artifact_type != baseline_entry.artifact_type or current_group_key != baseline_group_key:
+            current_deltas[artifact_path] = "reclassified"
+            baseline_deltas[artifact_path] = "reclassified"
+            continue
+        if artifact_path in changed_artifact_paths:
+            current_deltas[artifact_path] = "changed"
+            baseline_deltas[artifact_path] = "changed"
+
+    return current_deltas, baseline_deltas
+
+
 def _build_repo_artifact_topology_mode(
     artifact_entries: list[RepoDashboardArtifactEntry],
     *,
     mode_key: str,
     label: str,
     summary: str,
+    artifact_delta_by_path: dict[str, str] | None = None,
 ) -> RepoArtifactTopologyMode:
     entries_by_group: dict[str, list[RepoDashboardArtifactEntry]] = {
         str(group["key"]): [] for group in _ARTIFACT_TOPOLOGY_GROUPS
@@ -3534,6 +3583,8 @@ def _build_repo_artifact_topology_mode(
                         artifact_type=entry.artifact_type,
                         provenance_label=entry.provenance_label,
                         drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                        delta_status=(artifact_delta_by_path or {}).get(entry.artifact_path),
+                        delta_label=_artifact_topology_delta_label((artifact_delta_by_path or {}).get(entry.artifact_path)),
                     )
                     for entry in ranked_entries
                 ],
@@ -3543,9 +3594,16 @@ def _build_repo_artifact_topology_mode(
                         artifact_type=entry.artifact_type,
                         provenance_label=entry.provenance_label,
                         drift_magnitude=max(float(entry.leaderboard_drift_magnitude or 0.0), float(entry.latest_historical_drift_magnitude or 0.0)),
+                        delta_status=(artifact_delta_by_path or {}).get(entry.artifact_path),
+                        delta_label=_artifact_topology_delta_label((artifact_delta_by_path or {}).get(entry.artifact_path)),
                     )
                     for entry in ranked_entries[:3]
                 ],
+                delta_counts={
+                    status: sum(1 for entry in entries if (artifact_delta_by_path or {}).get(entry.artifact_path) == status)
+                    for status in ("added", "removed", "reclassified", "changed")
+                    if any((artifact_delta_by_path or {}).get(entry.artifact_path) == status for entry in entries)
+                },
             )
         )
 
@@ -3574,11 +3632,25 @@ def _build_repo_artifact_topology(
     baseline_snapshot_artifact_state: dict[str, dict[str, object]] | None = None,
     journey_comparison: dict[str, Any] | None = None,
 ) -> RepoArtifactTopologyView:
+    baseline_entries = _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state)
+    changed_artifact_paths = {
+        str(path)
+        for path in list(((journey_comparison or {}).get("change_breakdown") or {}).get("changed_artifact_paths") or [])
+    }
+    current_delta_by_path: dict[str, str] = {}
+    baseline_delta_by_path: dict[str, str] = {}
+    if baseline_entries:
+        current_delta_by_path, baseline_delta_by_path = _build_repo_artifact_topology_delta_maps(
+            artifact_entries,
+            baseline_entries,
+            changed_artifact_paths=changed_artifact_paths,
+        )
     current_mode = _build_repo_artifact_topology_mode(
         artifact_entries,
         mode_key="current",
         label="Current state",
         summary="Latest tracked repository state and inferred current relationships.",
+        artifact_delta_by_path=current_delta_by_path,
     )
     modes = [current_mode]
     default_mode_key = "current"
@@ -3592,10 +3664,11 @@ def _build_repo_artifact_topology(
                 f"{int(change_breakdown.get('changed_artifact_count', 0))} changed."
             )
         baseline_mode = _build_repo_artifact_topology_mode(
-            _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state),
+            baseline_entries,
             mode_key="reference-baseline",
             label="Reference baseline",
             summary=baseline_summary,
+            artifact_delta_by_path=baseline_delta_by_path,
         )
         modes.append(baseline_mode)
 
