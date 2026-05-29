@@ -50,6 +50,7 @@ window.__artifactTopologyFocusedArtifact = "";
 window.__artifactTopology = null;
 window.__artifactTopologyMode = "current";
 window.__artifactTopologyGraph = null;
+window.__artifactTopologySuppressZoomReset = false;
 window.__pendingRebaselineSnapshot = null;
 window.__rebaselineBusy = false;
 window.__attributeProfileActiveTab = "guardrail_regressions";
@@ -2031,6 +2032,10 @@ function flashArtifactTopologyNode(artifactPath) {
     }, ARTIFACT_TOPOLOGY_FLASH_MS);
 }
 
+function setArtifactTopologySuppressZoomReset(value) {
+    window.__artifactTopologySuppressZoomReset = Boolean(value);
+}
+
 function layoutArtifactTopologyAroundNode(cy, node, onComplete = () => {}) {
     if (!cy || !node || node.empty()) {
         onComplete();
@@ -2132,6 +2137,7 @@ function applyArtifactTopologyFocusedNeighborhood(cy, detailMode) {
         detailEdges.removeClass("artifact-topology-focus-hidden");
         detailNodes.removeClass("artifact-topology-muted");
         detailEdges.removeClass("artifact-topology-muted");
+        detailNodes.removeClass("artifact-topology-focus-root");
     });
     if (!detailMode) {
         return;
@@ -2151,6 +2157,7 @@ function applyArtifactTopologyFocusedNeighborhood(cy, detailMode) {
         detailNodes.filter((element) => !focusNodeIds.has(element.id())).addClass("artifact-topology-focus-hidden");
         detailEdges.filter((element) => !focusEdgeIds.has(element.id())).addClass("artifact-topology-focus-hidden");
         outerNodes.addClass("artifact-topology-muted");
+        node.addClass("artifact-topology-focus-root");
     });
 }
 
@@ -2182,11 +2189,17 @@ function focusArtifactTopologyNode(artifactPath) {
         window.__artifactTopologyGroup = groupKey;
     }
     cy.stop();
+    setArtifactTopologySuppressZoomReset(true);
     const targetZoom = Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.14, cy.zoom(), 1.38));
     cy.zoom(targetZoom);
     applyArtifactTopologyGraphMode(cy);
     layoutArtifactTopologyAroundNode(cy, node, () => {
         fitArtifactTopologyFocusedNeighborhood(cy, node, targetZoom);
+        applyArtifactTopologyGraphMode(cy);
+        updateArtifactTopologyGraphSelection(cy, groupKey);
+        window.setTimeout(() => {
+            setArtifactTopologySuppressZoomReset(false);
+        }, 0);
         flashArtifactTopologyNode(artifactPath);
     });
     return true;
@@ -2228,8 +2241,14 @@ function applyArtifactTopologyGraphTheme(cy) {
         })
         .selector(".artifact-topology-selected-child")
         .style({
+            "border-color": palette.artifactBorder,
+            "background-color": palette.artifactBackground,
+        })
+        .selector(".artifact-topology-focus-root")
+        .style({
             "border-color": palette.selectedBorder,
             "background-color": palette.selectedArtifactBackground,
+            "shadow-color": palette.selectedShadow,
         })
         .selector(".artifact-topology-flash")
         .style({
@@ -2382,7 +2401,6 @@ function updateArtifactTopologyGraphSelection(cy, selectedKey) {
     cy.batch(() => {
         cy.nodes('[kind = "group"]').removeClass("artifact-topology-selected");
         cy.nodes('[kind = "artifact"]').removeClass("artifact-topology-selected-child");
-        cy.nodes(`[groupKey = "${selectedKey}"][kind = "artifact"]`).addClass("artifact-topology-selected-child");
         cy.getElementById(artifactTopologyGroupNodeId(selectedKey)).addClass("artifact-topology-selected");
     });
 }
@@ -2530,9 +2548,20 @@ function initArtifactTopologyGraph(model) {
             {
                 selector: ".artifact-topology-selected-child",
                 style: {
-                    "border-width": 2,
+                    "border-width": 1.5,
+                    "border-color": palette.artifactBorder,
+                    "background-color": palette.artifactBackground,
+                },
+            },
+            {
+                selector: ".artifact-topology-focus-root",
+                style: {
+                    "border-width": 3,
                     "border-color": palette.selectedBorder,
                     "background-color": palette.selectedArtifactBackground,
+                    "shadow-blur": 30,
+                    "shadow-opacity": 0.44,
+                    "shadow-color": palette.selectedShadow,
                 },
             },
             {
@@ -2554,6 +2583,9 @@ function initArtifactTopologyGraph(model) {
     updateArtifactTopologyGraphSelection(cy, model.selectedKey);
 
     cy.on("zoom", () => {
+        if (window.__artifactTopologySuppressZoomReset) {
+            return;
+        }
         if (!artifactTopologyGraphDetailMode(cy.zoom()) && window.__artifactTopologyFocusedArtifact) {
             clearArtifactTopologyFocusedArtifact();
             refreshArtifactsSection();
