@@ -47,6 +47,8 @@ window.__artifactActionStatusMessage = "";
 window.__artifactActionStatusTone = "info";
 window.__artifactTopologyGroup = "";
 window.__artifactTopologyFocusedArtifact = "";
+window.__artifactTopologyConnectionQuery = "";
+window.__artifactTopologyConnectionRelationFilter = "all";
 window.__artifactTopology = null;
 window.__artifactTopologyMode = "current";
 window.__artifactTopologyGraph = null;
@@ -1843,6 +1845,14 @@ function artifactTopologyIsFocused() {
     return Boolean(artifactTopologyFocusedArtifactPath());
 }
 
+function artifactTopologyConnectionQuery() {
+    return String(window.__artifactTopologyConnectionQuery || "").trim().toLowerCase();
+}
+
+function artifactTopologyConnectionRelationFilter() {
+    return String(window.__artifactTopologyConnectionRelationFilter || "all").trim() || "all";
+}
+
 function artifactTopologyFocusedPathDepths(relations, rootArtifactPath, maxDepth = 2) {
     const rootPath = String(rootArtifactPath || "").trim();
     const depths = new Map();
@@ -2602,10 +2612,119 @@ function updateArtifactTopologyGraphSelection(cy, selectedKey) {
     });
 }
 
+function currentArtifactTopologyModel() {
+    return buildArtifactTopologyModel(asArray(window.__artifactEntries), window.__artifactTopology);
+}
+
+function refreshArtifactTopologyFocusPanel(selectedKey = window.__artifactTopologyGroup) {
+    const model = currentArtifactTopologyModel();
+    const groupKeys = new Set(asArray(model.groups).map((group) => group.key));
+    const resolvedSelectedKey = groupKeys.has(selectedKey)
+        ? selectedKey
+        : (model.selectedKey || asArray(model.groups)[0]?.key || "");
+    if (resolvedSelectedKey) {
+        window.__artifactTopologyGroup = resolvedSelectedKey;
+    }
+    setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus({ ...model, selectedKey: resolvedSelectedKey }));
+    bindCueCards();
+    bindArtifactTopologyFocusControls();
+}
+
+function artifactTopologyConnections(model, selectedGroup) {
+    const focusedArtifactPath = artifactTopologyFocusedArtifactPath();
+    const query = artifactTopologyConnectionQuery();
+    const relationFilter = artifactTopologyConnectionRelationFilter();
+    const surfaceRelations = asArray(model.artifactRelations).filter((relation) => relation.sourceGroupKey === selectedGroup.key || relation.targetGroupKey === selectedGroup.key);
+    const filtered = surfaceRelations.filter((relation) => {
+        if (focusedArtifactPath && relation.sourceArtifactPath !== focusedArtifactPath && relation.targetArtifactPath !== focusedArtifactPath) {
+            return false;
+        }
+        if (relationFilter !== "all" && relation.label !== relationFilter) {
+            return false;
+        }
+        if (!query) {
+            return true;
+        }
+        const haystack = [relation.sourceArtifactPath, relation.targetArtifactPath, relation.label, relation.evidence]
+            .map((value) => String(value || "").toLowerCase())
+            .join(" ");
+        return haystack.includes(query);
+    });
+    return {
+        focusedArtifactPath,
+        relationFilter,
+        query: String(window.__artifactTopologyConnectionQuery || ""),
+        allRelations: surfaceRelations,
+        filteredRelations: filtered,
+        relationOptions: [...new Set(surfaceRelations.map((relation) => String(relation.label || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
+    };
+}
+
+function renderArtifactTopologyConnectionRows(relations) {
+    if (!relations.length) {
+        return '<div class="muted">No artifact connections match the current focus and filters.</div>';
+    }
+    return `
+        <div class="artifact-topology-connections-list">
+            ${relations.map((relation) => `
+                <div class="artifact-topology-connection-row">
+                    <button
+                        type="button"
+                        class="cue-action-button artifact-topology-connection-artifact"
+                        data-storyline-artifact="${encodeURIComponent(relation.sourceArtifactPath)}"
+                        data-artifact-topology-highlight="${encodeURIComponent(relation.sourceArtifactPath)}"
+                    >${escapeHtml(relation.sourceArtifactPath)}</button>
+                    <div class="artifact-topology-connection-meta">
+                        <span class="tag tag-muted">${escapeHtml(relation.label)}</span>
+                        ${relation.evidence ? `<span class="detail-note">${escapeHtml(relation.evidence)}</span>` : ""}
+                    </div>
+                    <button
+                        type="button"
+                        class="cue-action-button artifact-topology-connection-artifact"
+                        data-storyline-artifact="${encodeURIComponent(relation.targetArtifactPath)}"
+                        data-artifact-topology-highlight="${encodeURIComponent(relation.targetArtifactPath)}"
+                    >${escapeHtml(relation.targetArtifactPath)}</button>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderArtifactTopologyConnectionsSection(model, selectedGroup) {
+    const connections = artifactTopologyConnections(model, selectedGroup);
+    const focusedCopy = connections.focusedArtifactPath
+        ? `Showing relationships for ${escapeHtml(connections.focusedArtifactPath)} within ${escapeHtml(selectedGroup.label)}.`
+        : `Showing relationships connected to ${escapeHtml(selectedGroup.label)}.`;
+    const summaryCopy = connections.filteredRelations.length === connections.allRelations.length
+        ? `${connections.filteredRelations.length} connection${connections.filteredRelations.length === 1 ? "" : "s"}`
+        : `${connections.filteredRelations.length} of ${connections.allRelations.length} connections`;
+    return `
+        <div>
+            <div class="detail-section-label">Artifact connections</div>
+            <div class="artifact-topology-connections-toolbar">
+                <input
+                    type="search"
+                    class="artifact-topology-connections-search"
+                    placeholder="Search artifact paths or evidence"
+                    value="${escapeHtml(connections.query)}"
+                    data-artifact-connections-query
+                />
+                <select class="artifact-topology-connections-filter" data-artifact-connections-relation>
+                    <option value="all"${connections.relationFilter === "all" ? " selected" : ""}>All relationships</option>
+                    ${connections.relationOptions.map((option) => `<option value="${escapeHtml(option)}"${connections.relationFilter === option ? " selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+                </select>
+            </div>
+            <div class="detail-note artifact-topology-connections-summary">${focusedCopy} ${summaryCopy}.</div>
+            ${renderArtifactTopologyConnectionRows(connections.filteredRelations)}
+        </div>
+    `;
+}
+
 function updateArtifactTopologyFocusPanel(model, selectedKey) {
     window.__artifactTopologyGroup = selectedKey;
     setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus({ ...model, selectedKey }));
     bindCueCards();
+    bindArtifactTopologyFocusControls();
 }
 
 function destroyArtifactTopologyGraph() {
@@ -2795,6 +2914,10 @@ function initArtifactTopologyGraph(model) {
     cy.on("tap", 'node[kind = "group"], node[kind = "artifact"]', (event) => {
         clearArtifactTopologyHoverTimer();
         hideArtifactTopologyTooltip();
+        if (String(event.target.data("kind") || "") === "artifact") {
+            focusArtifactTopologyNode(String(event.target.data("fullPath") || ""));
+            return;
+        }
         const groupKey = String(event.target.data("groupKey") || "");
         if (!groupKey) {
             return;
@@ -2877,15 +3000,6 @@ function renderArtifactTopologyFocus(model) {
     if (!selectedGroup) {
         return '<div class="muted">Select a topology node to inspect its linked artifacts.</div>';
     }
-    const incoming = model.edges.filter((edge) => edge.to === selectedGroup.key).map((edge) => {
-        const source = ARTIFACT_TOPOLOGY_GROUPS.find((group) => group.key === edge.from);
-        return `${source?.label || edge.from} -> ${selectedGroup.label}`;
-    });
-    const outgoing = model.edges.filter((edge) => edge.from === selectedGroup.key).map((edge) => {
-        const target = ARTIFACT_TOPOLOGY_GROUPS.find((group) => group.key === edge.to);
-        return `${selectedGroup.label} -> ${target?.label || edge.to}`;
-    });
-    const artifactRelations = asArray(model.artifactRelations).filter((relation) => relation.sourceGroupKey === selectedGroup.key || relation.targetGroupKey === selectedGroup.key);
     const selectedGroupDeltas = selectedGroup.deltaCounts || {};
     return `
         <div class="stack compact-stack artifact-topology-focus-card">
@@ -2907,20 +3021,33 @@ function renderArtifactTopologyFocus(model) {
                 <div class="detail-section-label">Artifacts in this surface</div>
                 ${asArray(selectedGroup.artifacts).length ? `<div class="tag-row">${asArray(selectedGroup.artifacts).map((artifact) => `<span class="artifact-topology-artifact-chip"><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}" data-artifact-topology-highlight="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>${artifact.delta_label ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-${escapeHtml(String(artifact.delta_status || "changed"))}">${escapeHtml(artifact.delta_label)}</span>` : ""}</span>`).join("")}</div>` : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
             </div>
-            <div>
-                <div class="detail-section-label">Linked relationships</div>
-                ${(incoming.length || outgoing.length)
-                    ? `<div class="stack compact-stack">${[...incoming, ...outgoing].map((relationship) => `<div class="artifact-card-reason">${escapeHtml(relationship)}</div>`).join("")}</div>`
-                    : '<div class="muted">No inferred relationships are visible for this surface yet.</div>'}
-            </div>
-            <div>
-                <div class="detail-section-label">Connected artifacts</div>
-                ${artifactRelations.length
-                    ? `<div class="stack compact-stack">${artifactRelations.map((relation) => `<div class="artifact-card-reason"><strong>${escapeHtml(relation.sourceArtifactPath)}</strong> ${escapeHtml(relation.label)} <strong>${escapeHtml(relation.targetArtifactPath)}</strong>${relation.evidence ? `<div class="detail-note">${escapeHtml(relation.evidence)}</div>` : ""}</div>`).join("")}</div>`
-                    : '<div class="muted">No specific artifact-to-artifact links are inferred for this surface yet.</div>'}
-            </div>
+            ${renderArtifactTopologyConnectionsSection(model, selectedGroup)}
         </div>
     `;
+}
+
+function bindArtifactTopologyFocusControls() {
+    document.querySelectorAll("[data-artifact-connections-query]").forEach((input) => {
+        if (input.dataset.boundArtifactConnectionsQuery === "true") {
+            return;
+        }
+        input.dataset.boundArtifactConnectionsQuery = "true";
+        input.addEventListener("input", () => {
+            window.__artifactTopologyConnectionQuery = input.value || "";
+            refreshArtifactTopologyFocusPanel();
+        });
+    });
+
+    document.querySelectorAll("[data-artifact-connections-relation]").forEach((select) => {
+        if (select.dataset.boundArtifactConnectionsRelation === "true") {
+            return;
+        }
+        select.dataset.boundArtifactConnectionsRelation = "true";
+        select.addEventListener("change", () => {
+            window.__artifactTopologyConnectionRelationFilter = select.value || "all";
+            refreshArtifactTopologyFocusPanel();
+        });
+    });
 }
 
 function bindCueCards() {
@@ -3200,6 +3327,7 @@ function refreshArtifactsSection() {
     setSectionHtml("artifact-topology-map", renderArtifactTopologyMap(topologyModel));
     setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus(topologyModel));
     initArtifactTopologyGraph(topologyModel);
+    bindArtifactTopologyFocusControls();
     setSectionHtml("artifacts-tbody", renderArtifactTable(filtered));
     setSectionHtml("artifact-add-controls", renderArtifactAddControls());
     const filterHost = document.getElementById("artifact-filter-chips");
