@@ -1827,7 +1827,53 @@ function artifactTopologyGroupPosition(group) {
     };
 }
 
-function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
+function clearArtifactTopologyFocusedArtifact() {
+    window.__artifactTopologyFocusedArtifact = "";
+}
+
+function artifactTopologyFocusedPathDepths(relations, rootArtifactPath, maxDepth = 2) {
+    const rootPath = String(rootArtifactPath || "").trim();
+    const depths = new Map();
+    if (!rootPath) {
+        return depths;
+    }
+    const adjacency = new Map();
+    const link = (sourcePath, targetPath) => {
+        if (!sourcePath || !targetPath) {
+            return;
+        }
+        if (!adjacency.has(sourcePath)) {
+            adjacency.set(sourcePath, new Set());
+        }
+        adjacency.get(sourcePath).add(targetPath);
+    };
+    asArray(relations).forEach((relation) => {
+        const sourcePath = String(relation.sourceArtifactPath || "");
+        const targetPath = String(relation.targetArtifactPath || "");
+        link(sourcePath, targetPath);
+        link(targetPath, sourcePath);
+    });
+    const queue = [{ artifactPath: rootPath, depth: 0 }];
+    depths.set(rootPath, 0);
+    while (queue.length) {
+        const current = queue.shift();
+        if (!current || current.depth >= maxDepth) {
+            continue;
+        }
+        const neighbors = adjacency.get(current.artifactPath) || new Set();
+        neighbors.forEach((neighborPath) => {
+            if (depths.has(neighborPath)) {
+                return;
+            }
+            const nextDepth = current.depth + 1;
+            depths.set(neighborPath, nextDepth);
+            queue.push({ artifactPath: neighborPath, depth: nextDepth });
+        });
+    }
+    return depths;
+}
+
+function artifactTopologyVisibleArtifacts(group, relationPaths = new Set(), prioritizedPaths = new Set()) {
     const prioritized = [];
     const seen = new Set();
     const focusedArtifactPath = String(window.__artifactTopologyFocusedArtifact || "").trim();
@@ -1846,6 +1892,12 @@ function artifactTopologyVisibleArtifacts(group, relationPaths = new Set()) {
             pushArtifact(focusedArtifact);
         }
     }
+
+    asArray(group.artifacts).forEach((artifact) => {
+        if (prioritizedPaths.has(String(artifact?.artifact_path || ""))) {
+            pushArtifact(artifact);
+        }
+    });
 
     asArray(group.artifacts).forEach((artifact) => {
         if (relationPaths.has(String(artifact?.artifact_path || ""))) {
@@ -1984,8 +2036,8 @@ function layoutArtifactTopologyAroundNode(cy, node, onComplete = () => {}) {
         onComplete();
         return;
     }
-    const detailNodes = cy.nodes('[kind = "artifact"]').not('.artifact-topology-hidden');
-    const detailEdges = cy.edges('[kind = "artifact-edge"]').not('.artifact-topology-hidden');
+    const detailNodes = cy.nodes('[kind = "artifact"]').not('.artifact-topology-hidden').not('.artifact-topology-focus-hidden');
+    const detailEdges = cy.edges('[kind = "artifact-edge"]').not('.artifact-topology-hidden').not('.artifact-topology-focus-hidden');
     if (!detailNodes.length) {
         onComplete();
         return;
@@ -2036,6 +2088,85 @@ function layoutArtifactTopologyAroundNode(cy, node, onComplete = () => {}) {
     layout.run();
 }
 
+function artifactTopologyFocusCollections(cy, node) {
+    const empty = cy.collection();
+    if (!cy || !node || node.empty()) {
+        return {
+            focusNodes: empty,
+            focusEdges: empty,
+            outerNodes: empty,
+        };
+    }
+    const detailNodes = cy.nodes('[kind = "artifact"]').not('.artifact-topology-hidden');
+    const detailEdges = cy.edges('[kind = "artifact-edge"]').not('.artifact-topology-hidden');
+    if (!detailNodes.length) {
+        return {
+            focusNodes: empty,
+            focusEdges: empty,
+            outerNodes: empty,
+        };
+    }
+    const distanceMap = detailNodes.dijkstra({ root: node, directed: false, weight: () => 1 });
+    const focusNodes = detailNodes.filter((element) => {
+        const distance = distanceMap.distanceTo(element);
+        return Number.isFinite(distance) && distance <= 2;
+    });
+    const outerNodes = focusNodes.filter((element) => {
+        const distance = distanceMap.distanceTo(element);
+        return Number.isFinite(distance) && distance === 2;
+    });
+    const focusNodeIds = new Set(focusNodes.map((element) => element.id()));
+    const focusEdges = detailEdges.filter((edge) => focusNodeIds.has(edge.source().id()) && focusNodeIds.has(edge.target().id()));
+    return {
+        focusNodes,
+        focusEdges,
+        outerNodes,
+    };
+}
+
+function applyArtifactTopologyFocusedNeighborhood(cy, detailMode) {
+    const detailNodes = cy.nodes('[kind = "artifact"]');
+    const detailEdges = cy.edges('[kind = "artifact-edge"]');
+    cy.batch(() => {
+        detailNodes.removeClass("artifact-topology-focus-hidden");
+        detailEdges.removeClass("artifact-topology-focus-hidden");
+        detailNodes.removeClass("artifact-topology-muted");
+        detailEdges.removeClass("artifact-topology-muted");
+    });
+    if (!detailMode) {
+        return;
+    }
+    const focusedArtifactPath = String(window.__artifactTopologyFocusedArtifact || "").trim();
+    if (!focusedArtifactPath) {
+        return;
+    }
+    const node = cy.getElementById(artifactTopologyArtifactNodeId(focusedArtifactPath));
+    if (!node || node.empty()) {
+        return;
+    }
+    const { focusNodes, focusEdges, outerNodes } = artifactTopologyFocusCollections(cy, node);
+    const focusNodeIds = new Set(focusNodes.map((element) => element.id()));
+    const focusEdgeIds = new Set(focusEdges.map((element) => element.id()));
+    cy.batch(() => {
+        detailNodes.filter((element) => !focusNodeIds.has(element.id())).addClass("artifact-topology-focus-hidden");
+        detailEdges.filter((element) => !focusEdgeIds.has(element.id())).addClass("artifact-topology-focus-hidden");
+        outerNodes.addClass("artifact-topology-muted");
+    });
+}
+
+function fitArtifactTopologyFocusedNeighborhood(cy, node, minimumZoom) {
+    if (!cy || !node || node.empty()) {
+        return;
+    }
+    const { focusNodes, focusEdges } = artifactTopologyFocusCollections(cy, node);
+    const focusElements = focusNodes.union(focusEdges);
+    if (focusElements.length) {
+        cy.fit(focusElements, focusNodes.length > 1 ? 156 : 220);
+    }
+    cy.zoom(Math.max(Number(minimumZoom || 0), cy.zoom()));
+    cy.center(node);
+}
+
 function focusArtifactTopologyNode(artifactPath) {
     const cy = window.__artifactTopologyGraph;
     if (!cy || !artifactPath) {
@@ -2055,12 +2186,7 @@ function focusArtifactTopologyNode(artifactPath) {
     cy.zoom(targetZoom);
     applyArtifactTopologyGraphMode(cy);
     layoutArtifactTopologyAroundNode(cy, node, () => {
-        cy.animate({
-            center: { eles: node },
-            zoom: targetZoom,
-            duration: 280,
-            easing: "ease-out-cubic",
-        });
+        fitArtifactTopologyFocusedNeighborhood(cy, node, targetZoom);
         flashArtifactTopologyNode(artifactPath);
     });
     return true;
@@ -2118,6 +2244,8 @@ function buildArtifactTopologyGraphElements(model) {
     const visibleArtifactPaths = new Set();
     const relatedArtifactPathsByGroup = new Map(model.groups.map((group) => [group.key, new Set()]));
     const groupPositions = new Map(model.groups.map((group) => [group.key, artifactTopologyGroupPosition(group)]));
+    const focusedPathDepths = artifactTopologyFocusedPathDepths(model.artifactRelations, window.__artifactTopologyFocusedArtifact, 2);
+    const focusedPaths = new Set(focusedPathDepths.keys());
 
     asArray(model.artifactRelations).forEach((relation) => {
         const sourcePath = String(relation.sourceArtifactPath || "");
@@ -2154,7 +2282,7 @@ function buildArtifactTopologyGraphElements(model) {
         });
 
         const relatedArtifactPaths = relatedArtifactPathsByGroup.get(group.key) || new Set();
-        const artifacts = artifactTopologyVisibleArtifacts(group, relatedArtifactPaths);
+        const artifacts = artifactTopologyVisibleArtifacts(group, relatedArtifactPaths, focusedPaths);
         const radiusBase = 98;
         artifacts.forEach((artifact, index) => {
             const artifactPath = String(artifact.artifact_path || "");
@@ -2232,8 +2360,11 @@ function updateArtifactTopologyZoomHint(cy) {
     if (!hint) {
         return;
     }
+    const focusedArtifactPath = String(window.__artifactTopologyFocusedArtifact || "").trim();
     hint.textContent = artifactTopologyGraphDetailMode(cy.zoom())
-        ? "Detailed view: artifact-level relationships are visible. Zoom out to regroup the graph."
+        ? (focusedArtifactPath
+            ? `Focused view: ${focusedArtifactPath} is centered with nearby relationships. Zoom out or reset to regroup the full graph.`
+            : "Detailed view: artifact-level relationships are visible. Zoom out to regroup the graph.")
         : "Overview: grouped control surfaces are visible. Zoom in to reveal artifact-level relationships.";
 }
 
@@ -2243,6 +2374,7 @@ function applyArtifactTopologyGraphMode(cy) {
         cy.elements(".artifact-topology-overview").toggleClass("artifact-topology-hidden", detailMode);
         cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
     });
+    applyArtifactTopologyFocusedNeighborhood(cy, detailMode);
     updateArtifactTopologyZoomHint(cy);
 }
 
@@ -2375,6 +2507,12 @@ function initArtifactTopologyGraph(model) {
                 },
             },
             {
+                selector: ".artifact-topology-focus-hidden",
+                style: {
+                    display: "none",
+                },
+            },
+            {
                 selector: ".artifact-topology-muted",
                 style: {
                     opacity: 0.28,
@@ -2416,6 +2554,11 @@ function initArtifactTopologyGraph(model) {
     updateArtifactTopologyGraphSelection(cy, model.selectedKey);
 
     cy.on("zoom", () => {
+        if (!artifactTopologyGraphDetailMode(cy.zoom()) && window.__artifactTopologyFocusedArtifact) {
+            clearArtifactTopologyFocusedArtifact();
+            refreshArtifactsSection();
+            return;
+        }
         applyArtifactTopologyGraphMode(cy);
     });
 
@@ -2463,6 +2606,11 @@ function initArtifactTopologyGraph(model) {
         });
     }, "boundArtifactZoomOut");
     bindZoomButton(zoomResetButton, () => {
+        if (window.__artifactTopologyFocusedArtifact) {
+            clearArtifactTopologyFocusedArtifact();
+            refreshArtifactsSection();
+            return;
+        }
         cy.fit(cy.nodes('[kind = "group"]'), 48);
         applyArtifactTopologyGraphMode(cy);
     }, "boundArtifactZoomReset");
