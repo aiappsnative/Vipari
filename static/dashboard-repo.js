@@ -1708,7 +1708,7 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
         const groupKeys = new Set(asArray(selectedMode?.groups).map((group) => group.key));
         const selectedKey = groupKeys.has(window.__artifactTopologyGroup)
             ? window.__artifactTopologyGroup
-            : (asArray(selectedMode?.groups).slice().sort((left, right) => right.count - left.count)[0]?.key || "");
+            : "";
         window.__artifactTopologyGroup = selectedKey;
         return {
             groups: asArray(selectedMode?.groups),
@@ -1747,7 +1747,7 @@ function buildArtifactTopologyModel(items = [], topologyPayload = null) {
     const groupKeys = new Set(groups.map((group) => group.key));
     const selectedKey = groupKeys.has(window.__artifactTopologyGroup)
         ? window.__artifactTopologyGroup
-        : (groups.slice().sort((left, right) => right.count - left.count)[0]?.key || "");
+        : "";
     window.__artifactTopologyGroup = selectedKey;
 
     return {
@@ -2621,10 +2621,8 @@ function refreshArtifactTopologyFocusPanel(selectedKey = window.__artifactTopolo
     const groupKeys = new Set(asArray(model.groups).map((group) => group.key));
     const resolvedSelectedKey = groupKeys.has(selectedKey)
         ? selectedKey
-        : (model.selectedKey || asArray(model.groups)[0]?.key || "");
-    if (resolvedSelectedKey) {
-        window.__artifactTopologyGroup = resolvedSelectedKey;
-    }
+        : (model.selectedKey || "");
+    window.__artifactTopologyGroup = resolvedSelectedKey;
     setSectionHtml("artifact-topology-focus", renderArtifactTopologyFocus({ ...model, selectedKey: resolvedSelectedKey }));
     bindCueCards();
     bindArtifactTopologyFocusControls();
@@ -2716,6 +2714,31 @@ function renderArtifactTopologyConnectionsSection(model, selectedGroup) {
             </div>
             <div class="detail-note artifact-topology-connections-summary">${focusedCopy} ${summaryCopy}.</div>
             ${renderArtifactTopologyConnectionRows(connections.filteredRelations)}
+        </div>
+    `;
+}
+
+function renderArtifactTopologyAllArtifacts(model) {
+    const groups = asArray(model.groups);
+    const totalArtifacts = groups.reduce((count, group) => count + asArray(group.artifacts).length, 0);
+    if (!totalArtifacts) {
+        return '<div class="muted">No tracked artifacts are available yet.</div>';
+    }
+    return `
+        <div class="stack compact-stack artifact-topology-focus-card">
+            <div class="artifact-card-head">
+                <strong>All tracked artifacts</strong>
+                <span class="tag tag-muted">${escapeHtml(String(totalArtifacts))} total</span>
+            </div>
+            <div class="detail-note">Nothing is selected. Pick a surface or artifact in the graph to inspect its connections.</div>
+            ${groups.map((group) => `
+                <div>
+                    <div class="detail-section-label">${escapeHtml(group.label)}</div>
+                    ${asArray(group.artifacts).length
+                        ? `<div class="tag-row">${asArray(group.artifacts).map((artifact) => `<span class="artifact-topology-artifact-chip"><button type="button" class="cue-action-button" data-storyline-artifact="${encodeURIComponent(artifact.artifact_path)}" data-artifact-topology-highlight="${encodeURIComponent(artifact.artifact_path)}">${escapeHtml(artifact.artifact_path)}</button>${artifact.delta_label ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-${escapeHtml(String(artifact.delta_status || "changed"))}">${escapeHtml(artifact.delta_label)}</span>` : ""}</span>`).join("")}</div>`
+                        : '<div class="muted">No artifacts mapped to this surface yet.</div>'}
+                </div>
+            `).join("")}
         </div>
     `;
 }
@@ -2950,13 +2973,11 @@ function initArtifactTopologyGraph(model) {
         });
     }, "boundArtifactZoomOut");
     bindZoomButton(zoomResetButton, () => {
-        if (window.__artifactTopologyFocusedArtifact) {
-            clearArtifactTopologyFocusedArtifact();
-            refreshArtifactsSection();
-            return;
-        }
-        cy.fit(cy.nodes('[kind = "group"]'), 48);
-        applyArtifactTopologyGraphMode(cy);
+        clearArtifactTopologyFocusedArtifact();
+        window.__artifactTopologyGroup = "";
+        window.__artifactTopologyConnectionQuery = "";
+        window.__artifactTopologyConnectionRelationFilter = "all";
+        refreshArtifactsSection();
     }, "boundArtifactZoomReset");
 
     if (document.body && !window.__artifactTopologyThemeObserver) {
@@ -2996,9 +3017,9 @@ function renderArtifactTopologyMap(model) {
 }
 
 function renderArtifactTopologyFocus(model) {
-    const selectedGroup = model.groups.find((group) => group.key === model.selectedKey) || model.groups[0] || null;
+    const selectedGroup = model.groups.find((group) => group.key === model.selectedKey) || null;
     if (!selectedGroup) {
-        return '<div class="muted">Select a topology node to inspect its linked artifacts.</div>';
+        return renderArtifactTopologyAllArtifacts(model);
     }
     const selectedGroupDeltas = selectedGroup.deltaCounts || {};
     return `
@@ -3034,7 +3055,14 @@ function bindArtifactTopologyFocusControls() {
         input.dataset.boundArtifactConnectionsQuery = "true";
         input.addEventListener("input", () => {
             window.__artifactTopologyConnectionQuery = input.value || "";
+            const caretStart = typeof input.selectionStart === "number" ? input.selectionStart : input.value.length;
+            const caretEnd = typeof input.selectionEnd === "number" ? input.selectionEnd : input.value.length;
             refreshArtifactTopologyFocusPanel();
+            const nextInput = document.querySelector("[data-artifact-connections-query]");
+            if (nextInput instanceof HTMLInputElement) {
+                nextInput.focus({ preventScroll: true });
+                nextInput.setSelectionRange(caretStart, caretEnd);
+            }
         });
     });
 

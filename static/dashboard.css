@@ -1759,6 +1759,14 @@ strong {
     text-align: center;
 }
 
+.artifact-topology-connection-meta .detail-note {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: 10px;
+    line-height: 1.3;
+}
+
 .artifact-add-controls {
     display: grid;
     gap: 10px;
