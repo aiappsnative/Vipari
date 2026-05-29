@@ -2730,7 +2730,6 @@ function renderArtifactTopologyAllArtifacts(model) {
                 <strong>All tracked artifacts</strong>
                 <span class="tag tag-muted">${escapeHtml(String(totalArtifacts))} total</span>
             </div>
-            <div class="detail-note">Nothing is selected. Pick a surface or artifact in the graph to inspect its connections.</div>
             ${groups.map((group) => `
                 <div>
                     <div class="detail-section-label">${escapeHtml(group.label)}</div>
@@ -3029,7 +3028,6 @@ function renderArtifactTopologyFocus(model) {
                 <span class="tag tag-muted">${escapeHtml(String(selectedGroup.count))} tracked</span>
             </div>
             <div class="artifact-card-reason">${escapeHtml(selectedGroup.description)}</div>
-            <div class="detail-note">Graph basis: ${escapeHtml(model.viewBasis === "current_tracked_state" ? "Latest tracked repository state" : model.viewBasis)}. Highest observed drift in this surface: ${escapeHtml(selectedGroup.driftMagnitude.toFixed(3))}</div>
             ${(Number(selectedGroupDeltas.added || 0) || Number(selectedGroupDeltas.removed || 0) || Number(selectedGroupDeltas.reclassified || 0) || Number(selectedGroupDeltas.changed || 0))
                 ? `<div class="tag-row">
                     ${Number(selectedGroupDeltas.added || 0) ? `<span class="tag artifact-topology-delta-badge artifact-topology-delta-badge-added">${escapeHtml(String(selectedGroupDeltas.added))} added</span>` : ""}
