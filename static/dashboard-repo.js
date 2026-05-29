@@ -83,6 +83,9 @@ const ARTIFACT_TOPOLOGY_EDGES = [
 const ARTIFACT_TOPOLOGY_GRAPH_SIZE = { width: 1000, height: 680 };
 const ARTIFACT_TOPOLOGY_DETAIL_ZOOM = 1.18;
 const ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS = 12;
+const ARTIFACT_TOPOLOGY_FOCUS_MIN_ARTIFACTS = 6;
+const ARTIFACT_TOPOLOGY_FOCUS_MAX_ARTIFACTS = 10;
+const ARTIFACT_TOPOLOGY_FOCUS_MIN_ZOOM = 0.94;
 const ARTIFACT_TOPOLOGY_HOVER_DELAY_MS = 360;
 const ARTIFACT_TOPOLOGY_FLASH_MS = 1800;
 
@@ -1832,6 +1835,14 @@ function clearArtifactTopologyFocusedArtifact() {
     window.__artifactTopologyFocusedArtifact = "";
 }
 
+function artifactTopologyFocusedArtifactPath() {
+    return String(window.__artifactTopologyFocusedArtifact || "").trim();
+}
+
+function artifactTopologyIsFocused() {
+    return Boolean(artifactTopologyFocusedArtifactPath());
+}
+
 function artifactTopologyFocusedPathDepths(relations, rootArtifactPath, maxDepth = 2) {
     const rootPath = String(rootArtifactPath || "").trim();
     const depths = new Map();
@@ -1909,6 +1920,176 @@ function artifactTopologyVisibleArtifacts(group, relationPaths = new Set(), prio
     asArray(group.artifacts).forEach(pushArtifact);
 
     return prioritized.slice(0, ARTIFACT_TOPOLOGY_MAX_GROUP_ARTIFACTS);
+}
+
+function artifactTopologyArtifactLookup(model) {
+    const lookup = new Map();
+    asArray(model.groups).forEach((group) => {
+        asArray(group.artifacts).forEach((artifact) => {
+            const artifactPath = String(artifact?.artifact_path || "");
+            if (!artifactPath || lookup.has(artifactPath)) {
+                return;
+            }
+            lookup.set(artifactPath, { artifact, group });
+        });
+    });
+    return lookup;
+}
+
+function artifactTopologyConnectedGroupKeys(model, rootGroupKey) {
+    const connected = new Set();
+    if (!rootGroupKey) {
+        return connected;
+    }
+    connected.add(rootGroupKey);
+    asArray(model.edges).forEach((edge) => {
+        if (edge.from === rootGroupKey && edge.to) {
+            connected.add(edge.to);
+        }
+        if (edge.to === rootGroupKey && edge.from) {
+            connected.add(edge.from);
+        }
+    });
+    return connected;
+}
+
+function artifactTopologyBuildFocusedSelection(model, focusedArtifactPath) {
+    const normalizedPath = String(focusedArtifactPath || "").trim();
+    if (!normalizedPath) {
+        return [];
+    }
+    const lookup = artifactTopologyArtifactLookup(model);
+    const rootEntry = lookup.get(normalizedPath);
+    if (!rootEntry) {
+        return [];
+    }
+
+    const depths = artifactTopologyFocusedPathDepths(model.artifactRelations, normalizedPath, 2);
+    const selected = [];
+    const selectedPaths = new Set();
+    const pushSelection = (artifactPath, band, muted = false) => {
+        const entry = lookup.get(artifactPath);
+        if (!entry || selectedPaths.has(artifactPath) || selected.length >= ARTIFACT_TOPOLOGY_FOCUS_MAX_ARTIFACTS) {
+            return;
+        }
+        selectedPaths.add(artifactPath);
+        selected.push({
+            artifactPath,
+            artifact: entry.artifact,
+            group: entry.group,
+            band,
+            muted,
+        });
+    };
+
+    pushSelection(normalizedPath, 0, false);
+
+    [...depths.entries()]
+        .filter(([artifactPath]) => artifactPath !== normalizedPath)
+        .sort((left, right) => {
+            if (left[1] !== right[1]) {
+                return left[1] - right[1];
+            }
+            const leftGroupKey = lookup.get(left[0])?.group?.key || "";
+            const rightGroupKey = lookup.get(right[0])?.group?.key || "";
+            if (leftGroupKey !== rightGroupKey) {
+                return leftGroupKey.localeCompare(rightGroupKey);
+            }
+            return left[0].localeCompare(right[0]);
+        })
+        .forEach(([artifactPath, depth]) => {
+            pushSelection(artifactPath, depth <= 1 ? 1 : 2, false);
+        });
+
+    asArray(rootEntry.group.artifacts)
+        .map((artifact) => String(artifact?.artifact_path || ""))
+        .filter((artifactPath) => artifactPath && artifactPath !== normalizedPath)
+        .forEach((artifactPath) => {
+            if (selected.length < ARTIFACT_TOPOLOGY_FOCUS_MIN_ARTIFACTS) {
+                pushSelection(artifactPath, 3, true);
+            }
+        });
+
+    const connectedGroupKeys = artifactTopologyConnectedGroupKeys(model, rootEntry.group.key);
+    connectedGroupKeys.delete(rootEntry.group.key);
+    asArray(model.groups)
+        .filter((group) => connectedGroupKeys.has(group.key))
+        .forEach((group) => {
+            asArray(group.topArtifacts).forEach((artifact) => {
+                if (selected.length < ARTIFACT_TOPOLOGY_FOCUS_MIN_ARTIFACTS) {
+                    pushSelection(String(artifact?.artifact_path || ""), 4, true);
+                }
+            });
+        });
+
+    return selected;
+}
+
+function artifactTopologyFocusedNodePosition(items, item, index) {
+    const centerX = ARTIFACT_TOPOLOGY_GRAPH_SIZE.width / 2;
+    const centerY = ARTIFACT_TOPOLOGY_GRAPH_SIZE.height / 2;
+    const bandItems = items.filter((candidate) => candidate.band === item.band);
+    const bandIndex = bandItems.findIndex((candidate) => candidate.artifactPath === item.artifactPath);
+    const angleStep = (Math.PI * 2) / Math.max(bandItems.length, 1);
+    const baseAngle = (-Math.PI / 2) + angleStep * Math.max(0, bandIndex);
+    const bandRadii = {
+        0: 0,
+        1: 150,
+        2: 270,
+        3: 360,
+        4: 440,
+    };
+    const radius = bandRadii[item.band] || (320 + (index % 4) * 28);
+    if (item.band === 0) {
+        return { x: centerX, y: centerY };
+    }
+    return {
+        x: clamp(centerX + Math.cos(baseAngle) * radius, 72, ARTIFACT_TOPOLOGY_GRAPH_SIZE.width - 72),
+        y: clamp(centerY + Math.sin(baseAngle) * radius, 72, ARTIFACT_TOPOLOGY_GRAPH_SIZE.height - 72),
+    };
+}
+
+function buildArtifactTopologyFocusedGraphElements(model, focusedArtifactPath) {
+    const focusedItems = artifactTopologyBuildFocusedSelection(model, focusedArtifactPath);
+    if (!focusedItems.length) {
+        return [];
+    }
+
+    const focusedPaths = new Set(focusedItems.map((item) => item.artifactPath));
+    const elements = focusedItems.map((item, index, items) => ({
+        data: {
+            id: artifactTopologyArtifactNodeId(item.artifactPath),
+            label: artifactTopologyShortArtifactLabel(item.artifactPath),
+            fullPath: item.artifactPath,
+            deltaLabel: String(item.artifact?.delta_label || ""),
+            deltaStatus: String(item.artifact?.delta_status || ""),
+            kind: "artifact",
+            groupKey: item.group?.key || "",
+        },
+        position: artifactTopologyFocusedNodePosition(items, item, index),
+        classes: `artifact-detail${item.muted ? " artifact-topology-muted" : ""}${item.band === 0 ? " artifact-topology-focus-root" : ""}`,
+    }));
+
+    asArray(model.artifactRelations).forEach((relation, index) => {
+        const sourcePath = String(relation.sourceArtifactPath || "");
+        const targetPath = String(relation.targetArtifactPath || "");
+        if (!focusedPaths.has(sourcePath) || !focusedPaths.has(targetPath)) {
+            return;
+        }
+        elements.push({
+            data: {
+                id: `artifact-edge:${index}`,
+                source: artifactTopologyArtifactNodeId(sourcePath),
+                target: artifactTopologyArtifactNodeId(targetPath),
+                label: relation.label,
+                evidence: relation.evidence,
+                kind: "artifact-edge",
+            },
+            classes: "artifact-detail",
+        });
+    });
+
+    return elements;
 }
 
 function artifactTopologyGraphPalette() {
@@ -2175,11 +2356,19 @@ function fitArtifactTopologyFocusedNeighborhood(cy, node, minimumZoom) {
 }
 
 function focusArtifactTopologyNode(artifactPath) {
-    const cy = window.__artifactTopologyGraph;
-    if (!cy || !artifactPath) {
+    const normalizedArtifactPath = String(artifactPath || "").trim();
+    if (!normalizedArtifactPath) {
         return false;
     }
-    const node = cy.getElementById(artifactTopologyArtifactNodeId(artifactPath));
+    if (artifactTopologyFocusedArtifactPath() !== normalizedArtifactPath) {
+        window.__artifactTopologyFocusedArtifact = normalizedArtifactPath;
+        refreshArtifactsSection();
+    }
+    const cy = window.__artifactTopologyGraph;
+    if (!cy) {
+        return false;
+    }
+    const node = cy.getElementById(artifactTopologyArtifactNodeId(normalizedArtifactPath));
     if (!node || node.empty()) {
         return false;
     }
@@ -2189,19 +2378,20 @@ function focusArtifactTopologyNode(artifactPath) {
         window.__artifactTopologyGroup = groupKey;
     }
     cy.stop();
-    setArtifactTopologySuppressZoomReset(true);
-    const targetZoom = Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.14, cy.zoom(), 1.38));
-    cy.zoom(targetZoom);
+    if (artifactTopologyIsFocused()) {
+        cy.fit(cy.elements('[kind = "artifact"], [kind = "artifact-edge"]'), 148);
+        cy.zoom(Math.max(ARTIFACT_TOPOLOGY_FOCUS_MIN_ZOOM, cy.zoom()));
+        cy.center(node);
+    } else {
+        cy.animate({
+            center: { eles: node },
+            zoom: Math.min(cy.maxZoom(), Math.max(ARTIFACT_TOPOLOGY_DETAIL_ZOOM + 0.12, cy.zoom(), 1.24)),
+            duration: 260,
+            easing: "ease-out-cubic",
+        });
+    }
     applyArtifactTopologyGraphMode(cy);
-    layoutArtifactTopologyAroundNode(cy, node, () => {
-        fitArtifactTopologyFocusedNeighborhood(cy, node, targetZoom);
-        applyArtifactTopologyGraphMode(cy);
-        updateArtifactTopologyGraphSelection(cy, groupKey);
-        window.setTimeout(() => {
-            setArtifactTopologySuppressZoomReset(false);
-        }, 0);
-        flashArtifactTopologyNode(artifactPath);
-    });
+    flashArtifactTopologyNode(normalizedArtifactPath);
     return true;
 }
 
@@ -2259,6 +2449,14 @@ function applyArtifactTopologyGraphTheme(cy) {
 }
 
 function buildArtifactTopologyGraphElements(model) {
+    const focusedArtifactPath = artifactTopologyFocusedArtifactPath();
+    if (focusedArtifactPath) {
+        const focusedElements = buildArtifactTopologyFocusedGraphElements(model, focusedArtifactPath);
+        if (focusedElements.length) {
+            return focusedElements;
+        }
+    }
+
     const elements = [];
     const visibleArtifactPaths = new Set();
     const relatedArtifactPathsByGroup = new Map(model.groups.map((group) => [group.key, new Set()]));
@@ -2379,21 +2577,20 @@ function updateArtifactTopologyZoomHint(cy) {
     if (!hint) {
         return;
     }
-    const focusedArtifactPath = String(window.__artifactTopologyFocusedArtifact || "").trim();
+    const focusedArtifactPath = artifactTopologyFocusedArtifactPath();
     hint.textContent = artifactTopologyGraphDetailMode(cy.zoom())
         ? (focusedArtifactPath
-            ? `Focused view: ${focusedArtifactPath} is centered with nearby relationships. Zoom out or reset to regroup the full graph.`
+            ? `Focused view: ${focusedArtifactPath} stays isolated with nearby artifacts. Reset returns to the full graph.`
             : "Detailed view: artifact-level relationships are visible. Zoom out to regroup the graph.")
         : "Overview: grouped control surfaces are visible. Zoom in to reveal artifact-level relationships.";
 }
 
 function applyArtifactTopologyGraphMode(cy) {
-    const detailMode = artifactTopologyGraphDetailMode(cy.zoom());
+    const detailMode = artifactTopologyIsFocused() || artifactTopologyGraphDetailMode(cy.zoom());
     cy.batch(() => {
         cy.elements(".artifact-topology-overview").toggleClass("artifact-topology-hidden", detailMode);
         cy.elements(".artifact-detail").toggleClass("artifact-topology-hidden", !detailMode);
     });
-    applyArtifactTopologyFocusedNeighborhood(cy, detailMode);
     updateArtifactTopologyZoomHint(cy);
 }
 
@@ -2583,14 +2780,6 @@ function initArtifactTopologyGraph(model) {
     updateArtifactTopologyGraphSelection(cy, model.selectedKey);
 
     cy.on("zoom", () => {
-        if (window.__artifactTopologySuppressZoomReset) {
-            return;
-        }
-        if (!artifactTopologyGraphDetailMode(cy.zoom()) && window.__artifactTopologyFocusedArtifact) {
-            clearArtifactTopologyFocusedArtifact();
-            refreshArtifactsSection();
-            return;
-        }
         applyArtifactTopologyGraphMode(cy);
     });
 
@@ -2633,7 +2822,7 @@ function initArtifactTopologyGraph(model) {
     }, "boundArtifactZoomIn");
     bindZoomButton(zoomOutButton, () => {
         cy.zoom({
-            level: Math.max(cy.minZoom(), cy.zoom() / 1.2),
+            level: Math.max(artifactTopologyIsFocused() ? ARTIFACT_TOPOLOGY_FOCUS_MIN_ZOOM : cy.minZoom(), cy.zoom() / 1.2),
             renderedPosition: artifactTopologyZoomCenter(cy),
         });
     }, "boundArtifactZoomOut");
@@ -2654,6 +2843,10 @@ function initArtifactTopologyGraph(model) {
             }
         });
         window.__artifactTopologyThemeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+
+    if (artifactTopologyIsFocused()) {
+        focusArtifactTopologyNode(artifactTopologyFocusedArtifactPath());
     }
 }
 
@@ -2742,7 +2935,6 @@ function bindCueCards() {
             let graphFocused = false;
             if (highlightArtifactPath) {
                 const decodedArtifactPath = decodeURIComponent(highlightArtifactPath);
-                window.__artifactTopologyFocusedArtifact = decodedArtifactPath;
                 graphFocused = focusArtifactTopologyNode(decodedArtifactPath);
                 if (!graphFocused && button.closest("#repo-artifacts-section")) {
                     refreshArtifactsSection();
