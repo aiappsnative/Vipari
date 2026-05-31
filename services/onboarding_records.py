@@ -6,6 +6,9 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+
+LOW_SIGNAL_APPROVAL_CONFIDENCE = 0.78
+
 from engine.drift_profile import AgentAttributeProfile, StaticSignals, compare_attribute_profiles
 from .persistence import connect_sqlite
 from .baseline_provenance import (
@@ -402,6 +405,8 @@ def record_repository_onboarding(
         onboarding_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
         for artifact in discovered_artifacts:
+            approval_status = "approved" if artifact.confidence >= LOW_SIGNAL_APPROVAL_CONFIDENCE else "pending"
+            approved_at = now if approval_status == "approved" else None
             cursor = conn.execute(
                 """
                 INSERT INTO onboarded_artifacts (
@@ -441,9 +446,9 @@ def record_repository_onboarding(
                     artifact.baseline_content,
                     json.dumps(_profile_to_json(profile)),
                     now,
-                    "approved",
+                    approval_status,
                     None,
-                    now,
+                    approved_at,
                     None,
                 ),
             )

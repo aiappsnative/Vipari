@@ -777,7 +777,7 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     with patch("main.generate_jwt", return_value="jwt-token"), patch(
         "main.get_installation_token", return_value="installation-token"
     ), patch(
-        "main.list_repository_files", return_value=["prompts/system.txt", "policies/usage.md", "src/app.py"]
+        "main.list_repository_files", return_value=["prompts/system.txt", "policies/usage.md", "tools/ai_agent_tool.py", "src/app.py"]
     ), patch(
         "services.onboarding_records.get_latest_repository_onboarding",
         return_value=SimpleNamespace(id=1, default_branch="main"),
@@ -796,7 +796,9 @@ def test_repo_artifact_options_api_lists_untracked_files(tmp_path):
     inferred_types = {item["path"]: item["inferred_artifact_type"] for item in payload["files"]}
     assert "prompts/system.txt" not in file_paths
     assert "policies/usage.md" in file_paths
+    assert "tools/ai_agent_tool.py" in file_paths
     assert inferred_types["policies/usage.md"] == "policy"
+    assert inferred_types["tools/ai_agent_tool.py"] == "tooling"
     assert "prompt" in payload["artifact_type_options"]
     assert "access;dur=" in response.headers["server-timing"]
     assert "onboarding;dur=" in response.headers["server-timing"]

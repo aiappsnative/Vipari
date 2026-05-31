@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
 from engine.models import ChangedFile
-from engine.relevance import PATH_RULES, classify_changed_file
+from engine.relevance import PATH_RULES, classify_changed_file, infer_artifact_type_from_path as infer_relevance_artifact_type_from_path
 from .github_integration import fetch_file_content, get_repo_default_branch, list_file_commits, list_repository_files
 from .onboarding_records import (
     add_onboarded_artifact,
@@ -124,6 +124,9 @@ def _is_candidate_path(path: str) -> bool:
         return False
 
     score = _candidate_path_score(path)
+    segments = _path_segments(path)
+    if _has_explicit_orchestration_path_hint(path) and not any(segment in NOISY_DISCOVERY_SEGMENTS for segment in segments):
+        return True
     if any(lowered.endswith(ext) for ext in TEXT_HEAVY_DISCOVERY_EXTENSIONS):
         return score >= 1
     return score >= 3
@@ -151,6 +154,11 @@ def _candidate_path_score(path: str) -> int:
         score -= 2
 
     return score
+
+
+def _has_explicit_orchestration_path_hint(path: str) -> bool:
+    lowered = str(path or "").lower()
+    return any(keyword in lowered for keyword in ("agent", "workflow", "orchestr"))
 
 
 def _discovery_confidence(path: str, reason: str) -> float:
@@ -202,7 +210,8 @@ def _group_low_signal_artifacts(discovered: list[DiscoveredArtifactInput]) -> li
 
     for (_, group_label), artifacts in sorted(buffered.items(), key=lambda item: item[0]):
         if len(artifacts) == 1:
-            grouped.append(artifacts[0])
+            if _should_keep_low_signal_singleton(artifacts[0]):
+                grouped.append(artifacts[0])
             continue
 
         representative = min(artifacts, key=_group_representative_sort_key)
@@ -219,10 +228,33 @@ def _group_low_signal_artifacts(discovered: list[DiscoveredArtifactInput]) -> li
     return sorted(grouped, key=lambda artifact: artifact.artifact_path)
 
 
+def _should_keep_low_signal_singleton(artifact: DiscoveredArtifactInput) -> bool:
+    if artifact.confidence >= LOW_SIGNAL_DISCOVERY_CONFIDENCE:
+        return True
+    reason = str(artifact.discovery_reason or "")
+    if "Content indicates" in reason:
+        return True
+    if "Path indicates agent orchestration code or assets." in reason:
+        return True
+    if "Path indicates AI-related code or assets." in reason:
+        return False
+    return True
+
+
 def _group_representative_sort_key(artifact: DiscoveredArtifactInput) -> tuple[int, str]:
     lowered = artifact.artifact_path.lower()
     extension_rank = min((rank for ext, rank in GROUP_REPRESENTATIVE_EXTENSION_RANK.items() if lowered.endswith(ext)), default=9)
     return extension_rank, artifact.artifact_path
+
+
+def _discovered_artifact_requires_review(artifact: DiscoveredArtifactInput) -> bool:
+    return artifact.confidence < LOW_SIGNAL_DISCOVERY_CONFIDENCE
+
+
+def _onboarding_status_for_discovered_artifacts(discovered: list[DiscoveredArtifactInput]) -> str:
+    if any(_discovered_artifact_requires_review(artifact) for artifact in discovered):
+        return "pending_baseline_approval"
+    return "baseline_approved"
 
 
 def discover_ai_artifacts(file_contents: dict[str, str]) -> list[DiscoveredArtifactInput]:
@@ -275,7 +307,7 @@ def onboard_repository(
         repo_full=repo_full,
         installation_id=installation_id,
         default_branch=default_branch,
-        status="baseline_approved",
+        status=_onboarding_status_for_discovered_artifacts(discovered),
         discovered_artifacts=discovered,
         extract_signal_terms_fn=extract_signal_terms_from_text,
         build_profile_fn=build_attribute_profile,
@@ -522,16 +554,28 @@ def tracked_artifact_type_options() -> list[str]:
 
 
 def infer_artifact_type_from_path(artifact_path: str, *, default: str = "generic") -> str:
-    lowered = str(artifact_path or "").lower()
-    for keywords, artifact_type, _reason, _weight in PATH_RULES:
-        variants: set[str] = set()
-        for keyword in keywords:
-            variants.add(keyword)
-            variants.add(f"{keyword}s")
-            if keyword.endswith("y") and len(keyword) > 1:
-                variants.add(f"{keyword[:-1]}ies")
-        if any(variant in lowered for variant in variants):
-            return str(artifact_type)
+    return infer_relevance_artifact_type_from_path(artifact_path, default=default)
+
+
+def infer_artifact_type(
+    artifact_path: str,
+    *,
+    content_text: str | None = None,
+    default: str = "generic",
+) -> str:
+    path_inferred_artifact_type = infer_artifact_type_from_path(artifact_path, default=default)
+    relevance = classify_changed_file(
+        ChangedFile(
+            old_path="",
+            new_path=str(artifact_path or ""),
+            diff_lines=str(content_text or "").splitlines(),
+        )
+    )
+    resolved_artifact_type = str(relevance.artifact_type or default)
+    if resolved_artifact_type in TRACKED_ARTIFACT_TYPE_OPTIONS:
+        return resolved_artifact_type
+    if path_inferred_artifact_type in TRACKED_ARTIFACT_TYPE_OPTIONS:
+        return path_inferred_artifact_type
     return default
 
 
@@ -547,15 +591,20 @@ def add_repo_artifact_to_onboarding(
     onboarding = get_latest_repository_onboarding(db_path, repo_full)
     if onboarding is None:
         raise ValueError("Repository onboarding was not found.")
-    resolved_artifact_type = infer_artifact_type_from_path(artifact_path) if not artifact_type else artifact_type
-    if resolved_artifact_type not in TRACKED_ARTIFACT_TYPE_OPTIONS:
-        raise ValueError("Artifact type is not supported.")
 
     existing = get_onboarded_artifact_by_path(db_path, onboarding.id, artifact_path)
     if existing is not None:
         raise ValueError("Artifact is already tracked for this repository.")
 
     content_text = fetch_file_content_fn(repo_full, artifact_path, token, ref=onboarding.default_branch)
+    resolved_artifact_type = (
+        infer_artifact_type(artifact_path, content_text=content_text)
+        if not artifact_type
+        else artifact_type
+    )
+    if resolved_artifact_type not in TRACKED_ARTIFACT_TYPE_OPTIONS:
+        raise ValueError("Artifact type is not supported.")
+
     artifact = add_onboarded_artifact(
         db_path,
         onboarding_id=onboarding.id,
