@@ -3374,7 +3374,7 @@ def _artifact_topology_group_key(entry: RepoDashboardArtifactEntry) -> str:
         return "models"
     if "tool" in artifact_type or provenance_kind == "ai_tool_surface":
         return "tools"
-    if "agent" in artifact_type or "workflow" in artifact_type or "agent" in artifact_path:
+    if "agent" in artifact_type or "workflow" in artifact_type or provenance_kind == "ai_agent_surface" or "agent" in artifact_path:
         return "agents"
     if any(token in artifact_type for token in ("retrieval", "knowledge", "rag")) or any(token in artifact_path for token in ("retriev", "knowledge")):
         return "retrieval"

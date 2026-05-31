@@ -23,6 +23,7 @@ PATH_RULES = [
     (("model",), "model_config", "Path indicates a model configuration artifact.", 75),
     (("tool",), "tooling", "Path indicates a tool configuration artifact.", 75),
     (("rag", "retriev"), "retrieval", "Path indicates a retrieval-related artifact.", 75),
+    (("agent", "workflow", "orchestr"), "ai_code", "Path indicates agent orchestration code or assets.", 70),
     (("ai", "llm", "assistant"), "ai_code", "Path indicates AI-related code or assets.", 55),
 ]
 
@@ -38,7 +39,33 @@ CONTENT_RULES = [
     (("temperature", "top_p", "model=", 'model:'), "model_config", "Content indicates model configuration.", 75),
     (("tool", "function calling", "function_call"), "tooling", "Content indicates tool usage or configuration.", 70),
     (("retrieval", "knowledge base", "rag"), "retrieval", "Content indicates retrieval configuration.", 70),
+    (("run_agent", "agent_executor", "orchestr", "handoff", "planner"), "ai_code", "Content indicates agent orchestration code or workflow logic.", 82),
 ]
+
+
+def _keyword_variants(keywords: tuple[str, ...] | list[str]) -> set[str]:
+    variants: set[str] = set()
+    for keyword in keywords:
+        normalized = str(keyword or "").strip().lower()
+        if not normalized:
+            continue
+        variants.add(normalized)
+        variants.add(f"{normalized}s")
+        if normalized.endswith("y") and len(normalized) > 1:
+            variants.add(f"{normalized[:-1]}ies")
+    return variants
+
+
+def _path_rule_matches(path: str, keywords: tuple[str, ...] | list[str]) -> bool:
+    lowered_path = str(path or "").lower()
+    return any(variant in lowered_path for variant in _keyword_variants(keywords))
+
+
+def infer_artifact_type_from_path(path: str, *, default: str = "generic") -> str:
+    for keywords, artifact_type, _reason, _weight in PATH_RULES:
+        if _path_rule_matches(path, keywords):
+            return str(artifact_type)
+    return default
 
 
 @dataclass(frozen=True)
@@ -236,13 +263,13 @@ def evaluate_diff_for_audit(
 
 def classify_changed_file(changed_file: ChangedFile) -> RelevanceResult:
     path = changed_file.path.lower()
-    has_positive_path_signal = any(any(keyword in path for keyword in keywords) for keywords, _, _, _ in PATH_RULES)
+    has_positive_path_signal = any(_path_rule_matches(path, keywords) for keywords, _, _, _ in PATH_RULES)
     if any(marker in path for marker in NEGATIVE_PATH_MARKERS) and not has_positive_path_signal:
         return _build_relevance_result(changed_file, [])
 
     signals: List[RelevanceSignal] = []
     for keywords, artifact_type, reason, weight in PATH_RULES:
-        if any(keyword in path for keyword in keywords):
+        if _path_rule_matches(path, keywords):
             signals.append(
                 RelevanceSignal(
                     source="path",

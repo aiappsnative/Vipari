@@ -18,6 +18,8 @@ class ReviewOutputProvenanceLabel:
 
 def artifact_family(artifact_type: str) -> str:
     lowered = str(artifact_type or "other").lower()
+    if lowered == "ai_code" or "agent" in lowered or "workflow" in lowered or "orchestr" in lowered:
+        return "agent"
     if "prompt" in lowered:
         return "prompt"
     if "tool" in lowered:
@@ -33,6 +35,8 @@ def artifact_family(artifact_type: str) -> str:
 
 def artifact_provenance_label(artifact_type: str) -> ArtifactProvenanceLabel:
     family = artifact_family(artifact_type)
+    if family == "agent":
+        return ArtifactProvenanceLabel(family=family, kind="ai_agent_surface", label="Agent orchestration surface")
     if family == "prompt":
         return ArtifactProvenanceLabel(family=family, kind="ai_control_surface", label="AI control surface")
     if family == "tool":

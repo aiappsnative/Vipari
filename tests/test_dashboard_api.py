@@ -731,6 +731,47 @@ def test_repo_dashboard_api_exposes_ai_act_relevance_inputs(tmp_path):
     assert "human_governance_surface" in provenance_kinds
 
 
+def test_repo_dashboard_api_marks_low_confidence_discovery_as_pending_review(tmp_path):
+    db_path = str(tmp_path / "api-dashboard-pending-low-confidence.db")
+    init_db(db_path)
+    main.AUDIT_DB_PATH = db_path
+    main.AUDIT_WORKER_ENABLED = False
+    session = _create_dashboard_owner_session(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: [
+            "notes/assistant-checklist.md",
+            "notes/assistant-faq.md",
+            "notes/assistant-runbook.md",
+            "prompts/system.txt",
+        ],
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "notes/assistant-checklist.md": "Assistant operator checklist.",
+            "notes/assistant-faq.md": "Assistant frequently asked questions.",
+            "notes/assistant-runbook.md": "Assistant runbook for reviewers.",
+            "prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+        }[path],
+    )
+
+    with TestClient(main.app) as client:
+        repo_response = client.get(
+            "/api/repos/doria90/dummyAI/dashboard",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert repo_response.status_code == 200
+    payload = repo_response.json()
+    assert payload["onboarding"]["status"] == "pending_baseline_approval"
+    assert payload["baseline_review"]["is_pending_review"] is True
+    assert payload["baseline_review"]["approved_count"] == 1
+    assert payload["baseline_review"]["pending_count"] == 1
+
+
 def test_repo_dashboard_api_includes_scoped_pre_audit_relevance_for_pr_deep_link(tmp_path):
     db_path = str(tmp_path / "api-dashboard-pre-audit-relevance.db")
     init_db(db_path)

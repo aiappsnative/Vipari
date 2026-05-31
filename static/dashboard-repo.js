@@ -537,6 +537,7 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
 
     const counts = {
         aiControl: 0,
+        agent: 0,
         tool: 0,
         model: 0,
         governance: 0,
@@ -546,6 +547,8 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
         const kind = String(artifact?.provenance_kind || "");
         if (kind === "ai_control_surface") {
             counts.aiControl += 1;
+        } else if (kind === "ai_agent_surface") {
+            counts.agent += 1;
         } else if (kind === "ai_tool_surface") {
             counts.tool += 1;
         } else if (kind === "model_behavior_surface") {
@@ -558,6 +561,9 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
     const statusTags = [];
     if (counts.aiControl > 0) {
         statusTags.push(`<span class="drift-chip chip-capability">${escapeHtml(`${counts.aiControl} AI control surface${counts.aiControl === 1 ? "" : "s"}`)}</span>`);
+    }
+    if (counts.agent > 0) {
+        statusTags.push(`<span class="drift-chip chip-capability">${escapeHtml(`${counts.agent} agent surface${counts.agent === 1 ? "" : "s"}`)}</span>`);
     }
     if (counts.tool > 0) {
         statusTags.push(`<span class="drift-chip chip-model">${escapeHtml(`${counts.tool} tool surface${counts.tool === 1 ? "" : "s"}`)}</span>`);
@@ -580,9 +586,9 @@ function renderAiActAssessment(onboarding, artifacts = [], baselineReview = null
             <p class="detail-note">This repo view surfaces stored evidence that may require AI governance review. It does not classify the repository under the EU AI Act or make legal claims.</p>
             <div class="journey-strip">
                 <div class="journey-node journey-tone-primary">
-                    <span class="journey-node-value">${escapeHtml(String(counts.aiControl + counts.tool + counts.model))}</span>
+                    <span class="journey-node-value">${escapeHtml(String(counts.aiControl + counts.agent + counts.tool + counts.model))}</span>
                     <span class="journey-node-label">AI surfaces</span>
-                    <span class="journey-node-caption">Prompt, tool, and model/config artifacts found in stored onboarding evidence.</span>
+                    <span class="journey-node-caption">Prompt, agent, tool, and model/config artifacts found in stored onboarding evidence.</span>
                 </div>
                 <div class="journey-node journey-tone-medium">
                     <span class="journey-node-value">${escapeHtml(String(counts.governance))}</span>
@@ -650,6 +656,7 @@ function renderPreAuditRelevancePanel(preAuditRelevance) {
 function governanceSurfaceCounts(artifacts = []) {
     const counts = {
         aiControl: 0,
+        agent: 0,
         tool: 0,
         model: 0,
         governance: 0,
@@ -659,6 +666,8 @@ function governanceSurfaceCounts(artifacts = []) {
         const kind = String(artifact?.provenance_kind || "");
         if (kind === "ai_control_surface") {
             counts.aiControl += 1;
+        } else if (kind === "ai_agent_surface") {
+            counts.agent += 1;
         } else if (kind === "ai_tool_surface") {
             counts.tool += 1;
         } else if (kind === "model_behavior_surface") {
@@ -1604,7 +1613,7 @@ function artifactTopologyGroupKey(item = {}) {
     if (artifactType.includes("tool") || provenanceKind === "ai_tool_surface") {
         return "tools";
     }
-    if (artifactType.includes("agent") || artifactType.includes("workflow") || artifactPath.includes("agent")) {
+    if (artifactType.includes("agent") || artifactType.includes("workflow") || provenanceKind === "ai_agent_surface" || artifactPath.includes("agent")) {
         return "agents";
     }
     if (artifactType.includes("retrieval") || artifactType.includes("knowledge") || artifactType.includes("rag") || artifactPath.includes("retriev") || artifactPath.includes("knowledge")) {

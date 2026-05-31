@@ -98,9 +98,13 @@ def test_onboard_repository_groups_low_signal_candidates_by_directory(tmp_path):
     )
 
     assert result.onboarding.discovered_artifact_count == 2
+    assert result.onboarding.status == "pending_baseline_approval"
     assert [artifact.artifact_path for artifact in result.artifacts] == ["notes/assistant-checklist.md", "prompts/system.txt"]
     assert result.artifacts[0].confidence == 0.72
     assert "Grouped 3 low-signal candidates under assistant" in result.artifacts[0].discovery_reason
+    baseline_by_path = {baseline.artifact_path: baseline for baseline in result.baseline_versions}
+    assert baseline_by_path["notes/assistant-checklist.md"].approval_status == "pending"
+    assert baseline_by_path["prompts/system.txt"].approval_status == "approved"
     assert [baseline.artifact_path for baseline in result.baseline_versions] == ["notes/assistant-checklist.md", "prompts/system.txt"]
 
 
@@ -128,6 +132,54 @@ def test_onboard_repository_groups_low_signal_candidates_across_adjacent_text_pa
     assert result.onboarding.discovered_artifact_count == 2
     assert [artifact.artifact_path for artifact in result.artifacts] == ["guides/assistant-faq.md", "prompts/system.txt"]
     assert "Grouped 3 low-signal candidates under assistant" in result.artifacts[0].discovery_reason
+
+
+def test_onboard_repository_drops_singleton_generic_ai_path_candidates(tmp_path):
+    db_path = str(tmp_path / "onboarding.db")
+    init_db(db_path)
+
+    files = {
+        "notes/assistant-checklist.md": "Assistant operator checklist.",
+        "prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert result.onboarding.discovered_artifact_count == 1
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["prompts/system.txt"]
+
+
+def test_onboard_repository_discovers_explicit_agent_code_paths(tmp_path):
+    db_path = str(tmp_path / "onboarding.db")
+    init_db(db_path)
+
+    files = {
+        "agents/refund_worker.py": "def route_refund():\n    return planner.run('refund workflow')\n",
+        "README.md": "docs only",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert result.onboarding.discovered_artifact_count == 1
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["agents/refund_worker.py"]
+    assert result.artifacts[0].artifact_type == "ai_code"
+    assert result.artifacts[0].confidence >= 0.78
 
 
 def test_sync_on_pr_merge_preserves_existing_artifacts_without_baseline_content(tmp_path):
@@ -299,6 +351,60 @@ def test_manual_repo_artifact_add_can_infer_type_from_path(tmp_path):
 
     assert artifact.artifact_type == "policy"
     assert baseline.artifact_type == "policy"
+
+
+def test_manual_repo_artifact_add_can_infer_type_from_content_when_path_is_generic(tmp_path):
+    db_path = str(tmp_path / "onboarding-manual-content-infer.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["notes/release.md"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "Release notes only.",
+    )
+
+    artifact, baseline = add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="notes/runtime.md",
+        artifact_type=None,
+        fetch_file_content_fn=lambda repo, path, token, ref: "model: gpt-4o\ntemperature: 0.2\ntop_p: 0.9",
+    )
+
+    assert artifact.artifact_type == "model_config"
+    assert baseline.artifact_type == "model_config"
+
+
+def test_manual_repo_artifact_add_can_upgrade_tool_path_to_ai_code_from_orchestration_content(tmp_path):
+    db_path = str(tmp_path / "onboarding-manual-agent-tool-infer.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["notes/release.md"],
+        fetch_file_content_fn=lambda repo, path, token, ref: "Release notes only.",
+    )
+
+    artifact, baseline = add_repo_artifact_to_onboarding(
+        db_path,
+        repo_full="doria90/dummyAI",
+        token="token",
+        artifact_path="tools/ai_agent_tool.py",
+        artifact_type=None,
+        fetch_file_content_fn=lambda repo, path, token, ref: "def run_tool():\n    return agent_executor.plan_and_run('refund workflow')",
+    )
+
+    assert artifact.artifact_type == "ai_code"
+    assert baseline.artifact_type == "ai_code"
 
 
 def test_execute_repository_history_backfill_persists_historical_lineage(tmp_path):
