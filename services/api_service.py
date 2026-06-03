@@ -81,7 +81,7 @@ from .persistence import get_persistence_status, persistence_status_payload
 from .repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
 from .secure_store import decrypt_text, encrypt_text
 from .audit_jobs import init_db
-from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
+from .runtime_guardrails import build_runtime_readiness, fastapi_surface_kwargs, readiness_json_response, validate_runtime_configuration
 from .static_assets import FingerprintedStaticFiles
 from routers.dashboard import create_dashboard_page_router, create_dashboard_read_router, create_export_create_router, create_export_job_router, create_repo_baseline_router, create_repo_dashboard_router, create_repo_history_router, create_repo_onboarding_router, create_repo_read_router
 from routers.health import create_health_router
@@ -355,7 +355,7 @@ def create_api_app() -> FastAPI:
         init_db(db_path)
         yield
 
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI(lifespan=lifespan, **fastapi_surface_kwargs(settings))
     app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
     instrument_fastapi(app, enabled=settings.enable_metrics)
     app.include_router(create_health_router(settings))

@@ -14,6 +14,20 @@ from .persistence import connect_sqlite
 from .schema_migrations import MIGRATIONS, list_applied_migrations
 
 
+def public_operational_routes_enabled(settings: Settings) -> bool:
+    return not settings.is_internet_reachable_env
+
+
+def fastapi_surface_kwargs(settings: Settings) -> dict[str, object]:
+    if public_operational_routes_enabled(settings):
+        return {}
+    return {
+        "openapi_url": None,
+        "docs_url": None,
+        "redoc_url": None,
+    }
+
+
 def _is_https_url(value: str) -> bool:
     parsed = urlparse(value.strip())
     return parsed.scheme == "https" and bool(parsed.netloc)

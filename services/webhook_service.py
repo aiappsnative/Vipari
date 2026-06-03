@@ -12,7 +12,8 @@ from .cloud_common import build_webhook_envelope, verify_signature
 from .observability import configure_logging, instrument_fastapi
 from .control_plane_records import apply_github_installation_lifecycle_event, apply_github_installation_repository_event
 from .queue import LocalSQLiteQueue, QueueBackend, RedisQueue, SQSQueue, close_queue_backend
-from .runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
+from .runtime_guardrails import build_runtime_readiness, fastapi_surface_kwargs, readiness_json_response, validate_runtime_configuration
+from routers.health import require_health_routes_enabled
 from .webhook_deliveries import (
     claim_webhook_delivery,
     cleanup_webhook_deliveries,
@@ -49,15 +50,17 @@ def create_webhook_app(queue_backend: QueueBackend | None = None) -> FastAPI:
         finally:
             await close_queue_backend(queue)
 
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI(lifespan=lifespan, **fastapi_surface_kwargs(settings))
     instrument_fastapi(app)
 
     @app.get("/health")
     async def health():
+        require_health_routes_enabled(settings)
         return {"status": "ok", "service_role": settings.service_role}
 
     @app.get("/health/ready")
     async def ready():
+        require_health_routes_enabled(settings)
         return readiness_json_response(await build_runtime_readiness(settings, queue_backend=queue))
 
     @app.post("/webhook")

@@ -206,7 +206,7 @@ from services.operational_policy_records import get_repo_policy_override, get_wo
 from services.persistence import connect_sqlite, get_persistence_status, persistence_status_payload
 from services.provenance_labels import artifact_family
 from services.repo_journey import build_repo_journey, compare_repo_snapshots, get_repo_snapshot_detail, snapshot_to_public_payload
-from services.runtime_guardrails import build_runtime_readiness, readiness_json_response, validate_runtime_configuration
+from services.runtime_guardrails import build_runtime_readiness, fastapi_surface_kwargs, readiness_json_response, validate_runtime_configuration
 from services.secure_store import decrypt_text, encrypt_text
 from services.static_assets import FingerprintedStaticFiles
 from services.api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
@@ -317,7 +317,7 @@ async def lifespan(_: FastAPI):
             worker = None
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, **fastapi_surface_kwargs(settings))
 app.mount("/static", FingerprintedStaticFiles(directory=str(DASHBOARD_STATIC_DIR)), name="static")
 app.include_router(create_health_router(settings))
 

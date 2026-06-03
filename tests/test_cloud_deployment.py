@@ -31,6 +31,7 @@ from services.cloud_worker import _run_resilient_poll_loop
 from services.github_integration import _cache_installation_token, delete_cached_installation_token
 from services.observability import configure_logging
 from services.onboarding import onboard_repository
+from services.runtime_guardrails import MIGRATIONS, build_runtime_readiness
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     apply_github_installation_lifecycle_event,
@@ -594,10 +595,14 @@ def test_api_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     with TestClient(create_api_app()) as client:
         health_response = client.get("/health")
         ready_response = client.get("/health/ready")
+        openapi_response = client.get("/openapi.json")
+        docs_response = client.get("/docs")
 
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok", "service_role": "api"}
     assert ready_response.status_code == 200
+    assert openapi_response.status_code == 200
+    assert docs_response.status_code == 200
     ready_payload = ready_response.json()
     assert ready_payload["status"] == "ok"
     assert ready_payload["service_role"] == "api"
@@ -619,20 +624,7 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
     monkeypatch.setenv("INTERNAL_JWT_SECRET", "test-internal-jwt-secret-32-bytes!")
     _reset_settings_cache()
 
-    _all_versions = [
-        "0001_bootstrap_relational_schema",
-        "0002_add_pull_request_audits_fused_confidence",
-        "0003_add_onboarding_approval_columns",
-        "0004_add_machine_principals",
-        "0005_add_session_flash",
-        "0006_add_audit_feedback_and_triage_tables",
-        "0007_add_high_risk_proposal_tables",
-        "0008_ensure_ai_system_registry_schema",
-        "0009_ensure_export_jobs_snapshot_columns",
-        "0010_ensure_relevance_decision_tables",
-        "0011_ensure_audit_jobs_lifecycle_columns",
-        "0012_ensure_pull_request_audit_lifecycle_columns",
-    ]
+    _all_versions = [version for version, _description, _handler in MIGRATIONS]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.api_service.init_db") as init_db_mock, patch(
         "services.runtime_guardrails.connect_sqlite"
@@ -642,12 +634,14 @@ def test_api_service_health_and_readiness_support_postgres_locator(monkeypatch):
         with TestClient(create_api_app()) as client:
             health_response = client.get("/health")
             ready_response = client.get("/health/ready")
+            openapi_response = client.get("/openapi.json")
+            docs_response = client.get("/docs")
+            ready_payload = asyncio.run(build_runtime_readiness(get_settings()))
 
-    assert health_response.status_code == 200
-    assert health_response.json() == {"status": "ok", "service_role": "api"}
-    assert ready_response.status_code == 200
-    ready_payload = ready_response.json()
-    assert ready_payload["status"] == "ok"
+    assert health_response.status_code == 404
+    assert ready_response.status_code == 404
+    assert openapi_response.status_code == 404
+    assert docs_response.status_code == 404
     assert any(
         check["name"] == "persistence" and check["status"] == "ok" and "PostgreSQL connectivity verified." in check["detail"]
         for check in ready_payload["checks"]
@@ -687,10 +681,14 @@ def test_webhook_service_health_and_readiness_endpoints(tmp_path, monkeypatch):
     with TestClient(create_webhook_app()) as client:
         health_response = client.get("/health")
         ready_response = client.get("/health/ready")
+        openapi_response = client.get("/openapi.json")
+        docs_response = client.get("/docs")
 
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok", "service_role": "webhook"}
     assert ready_response.status_code == 200
+    assert openapi_response.status_code == 200
+    assert docs_response.status_code == 200
     ready_payload = ready_response.json()
     assert ready_payload["status"] == "ok"
     assert ready_payload["service_role"] == "webhook"
@@ -723,20 +721,7 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
     _reset_settings_cache()
 
     queue = _FakeQueue()
-    _all_versions = [
-        "0001_bootstrap_relational_schema",
-        "0002_add_pull_request_audits_fused_confidence",
-        "0003_add_onboarding_approval_columns",
-        "0004_add_machine_principals",
-        "0005_add_session_flash",
-        "0006_add_audit_feedback_and_triage_tables",
-        "0007_add_high_risk_proposal_tables",
-        "0008_ensure_ai_system_registry_schema",
-        "0009_ensure_export_jobs_snapshot_columns",
-        "0010_ensure_relevance_decision_tables",
-        "0011_ensure_audit_jobs_lifecycle_columns",
-        "0012_ensure_pull_request_audit_lifecycle_columns",
-    ]
+    _all_versions = [version for version, _description, _handler in MIGRATIONS]
     applied_migrations = [type("AppliedMigration", (), {"version": v})() for v in _all_versions]
     with patch("services.webhook_service.init_db") as init_db_mock, patch(
         "services.webhook_service.init_webhook_delivery_db"
@@ -750,12 +735,14 @@ def test_webhook_service_health_and_readiness_support_postgres_locator(monkeypat
         with TestClient(create_webhook_app(queue)) as client:
             health_response = client.get("/health")
             ready_response = client.get("/health/ready")
+            openapi_response = client.get("/openapi.json")
+            docs_response = client.get("/docs")
+            ready_payload = asyncio.run(build_runtime_readiness(get_settings(), queue_backend=queue))
 
-    assert health_response.status_code == 200
-    assert health_response.json() == {"status": "ok", "service_role": "webhook"}
-    assert ready_response.status_code == 200
-    ready_payload = ready_response.json()
-    assert ready_payload["status"] == "ok"
+    assert health_response.status_code == 404
+    assert ready_response.status_code == 404
+    assert openapi_response.status_code == 404
+    assert docs_response.status_code == 404
     assert any(
         check["name"] == "persistence" and check["status"] == "ok" and "PostgreSQL connectivity verified." in check["detail"]
         for check in ready_payload["checks"]
