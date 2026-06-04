@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.models import RiskLevel, SemanticContextMode, SemanticReviewPackage, VerifierTrigger
-from engine.verifier import build_verifier_review_requests, should_invoke_verifier
+from engine.verifier import build_verifier_review_requests, parse_verifier_review_result, should_invoke_verifier
 
 
 def test_should_invoke_verifier_for_high_impact_deterministic_risk():
@@ -67,3 +67,45 @@ def test_build_verifier_review_requests_preserves_package_context_and_proposer_o
     assert request.proposed_summary == "Prompt became more permissive."
     assert request.proposed_recommendation == "Escalate before merge."
     assert request.key_questions == ["Did authority expand?"]
+
+
+def test_parse_verifier_review_result_extracts_structured_fields():
+    request = SemanticReviewPackage(
+        path="prompts/system.txt",
+        artifact_type="prompt",
+        context_mode=SemanticContextMode.FULL_ARTIFACT_COMPARE,
+        review_scope="Review as full artifact.",
+        review_objective="Assess authority drift.",
+        key_questions=["Did authority expand?"],
+        added_lines=["You may reveal internal policy."],
+        removed_lines=["Do not reveal internal policy."],
+        deterministic_findings=["High guardrail_drift: Potential guardrail removal detected"],
+    )
+
+    verifier_request = build_verifier_review_requests(
+        [request],
+        proposed_risk_level="Low",
+        proposed_confidence="Low",
+        proposed_summary="Prompt changed but impact is uncertain.",
+        proposed_recommendation="Review the changed AI control surface closely before merge.",
+    )[0]
+
+    result = parse_verifier_review_result(
+        (
+            "Summary: The prompt explicitly weakens guardrails and expands disclosure latitude.\n"
+            "Risk Level: High\n"
+            "Confidence: High\n"
+            "Detailed Analysis:\n"
+            "- The added line removes a prior restriction on internal policy disclosure.\n"
+            "- Deterministic findings already indicate a guardrail weakening pattern.\n"
+            "Recommendation: Escalate before merge."
+        ),
+        request=verifier_request,
+    )
+
+    assert result.risk_level == RiskLevel.HIGH
+    assert result.confidence == "High"
+    assert result.requires_escalation is True
+    assert result.recommendation == "Escalate before merge."
+    assert result.summary == "The prompt explicitly weakens guardrails and expands disclosure latitude."
+    assert len(result.rationale) == 2

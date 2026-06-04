@@ -9,6 +9,9 @@ from .branch_scan_jobs import init_branch_scan_job_db
 from .persistence import connect_sqlite, init_persistence_metadata
 
 
+STALE_PROCESSING_JOB_SECONDS = 15 * 60
+
+
 @dataclass(frozen=True)
 class AuditJob:
     id: int
@@ -138,6 +141,13 @@ def _row_to_job(row: sqlite3.Row) -> AuditJob:
     )
 
 
+def _is_stale_processing_job(row: sqlite3.Row, *, now: float) -> bool:
+    if row["status"] != "processing":
+        return False
+    updated_at = float(row["updated_at"] or row["created_at"] or 0.0)
+    return updated_at <= now - STALE_PROCESSING_JOB_SECONDS
+
+
 def _normalize_pr_lifecycle_fields(
     *,
     pr_state: str | None,
@@ -248,7 +258,39 @@ def create_audit_job(
                     attempt_count = 0,
                     next_attempt_at = ?,
                     last_error = NULL,
-                    comment_body = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    pr_title,
+                    installation_id,
+                    diff_text,
+                    pr_state,
+                    pr_merged_value,
+                    pr_closed_at,
+                    pr_merged_at,
+                    pr_merge_commit_sha,
+                    pr_updated_at,
+                    now,
+                    now,
+                    existing["id"],
+                ),
+            )
+        elif _is_stale_processing_job(existing, now=now):
+            conn.execute(
+                """
+                UPDATE audit_jobs
+                SET pr_title = ?,
+                    installation_id = ?,
+                    diff_text = ?,
+                    pr_state = ?,
+                    pr_merged = ?,
+                    pr_closed_at = ?,
+                    pr_merged_at = ?,
+                    pr_merge_commit_sha = ?,
+                    pr_updated_at = ?,
+                    status = 'queued',
+                    next_attempt_at = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -338,45 +380,74 @@ def update_job_pr_state(
 
 def claim_next_job(db_path: str, now: float | None = None) -> Optional[AuditJob]:
     current_time = now or time.time()
+    stale_before = current_time - STALE_PROCESSING_JOB_SECONDS
     with _connect(db_path) as conn:
         claimed = conn.execute(
             """
             UPDATE audit_jobs
             SET status = 'processing',
-                attempt_count = attempt_count + 1,
+                attempt_count = CASE
+                    WHEN status = 'processing' THEN attempt_count
+                    ELSE attempt_count + 1
+                END,
                 updated_at = ?
             WHERE id = (
                 SELECT id
                 FROM audit_jobs
-                WHERE status IN ('queued', 'retry_wait')
-                  AND next_attempt_at <= ?
+                WHERE (
+                    status IN ('queued', 'retry_wait')
+                    AND next_attempt_at <= ?
+                )
+                   OR (
+                    status = 'processing'
+                    AND updated_at <= ?
+                )
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
             )
             RETURNING *
             """,
-            (current_time, current_time),
+            (current_time, current_time, stale_before),
         ).fetchone()
     return _row_to_job(claimed) if claimed is not None else None
 
 
 def claim_job_by_id(db_path: str, job_id: int, now: float | None = None) -> Optional[AuditJob]:
     current_time = now or time.time()
+    stale_before = current_time - STALE_PROCESSING_JOB_SECONDS
     with _connect(db_path) as conn:
         claimed = conn.execute(
             """
             UPDATE audit_jobs
             SET status = 'processing',
-                attempt_count = attempt_count + 1,
+                attempt_count = CASE
+                    WHEN status = 'processing' THEN attempt_count
+                    ELSE attempt_count + 1
+                END,
                 updated_at = ?
             WHERE id = ?
-              AND status IN ('queued', 'retry_wait')
-              AND next_attempt_at <= ?
+              AND (
+                    (status IN ('queued', 'retry_wait') AND next_attempt_at <= ?)
+                 OR (status = 'processing' AND updated_at <= ?)
+              )
             RETURNING *
             """,
-            (current_time, job_id, current_time),
+            (current_time, job_id, current_time, stale_before),
         ).fetchone()
     return _row_to_job(claimed) if claimed is not None else None
+
+
+def remember_job_comment_body(db_path: str, job_id: int, *, comment_body: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE audit_jobs
+            SET comment_body = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (comment_body, time.time(), job_id),
+        )
 
 
 def mark_job_retry(db_path: str, job_id: int, *, error_message: str, retry_at: float) -> None:
@@ -424,17 +495,18 @@ def mark_job_fallback_posted(db_path: str, job_id: int, *, comment_body: str, er
         )
 
 
-def mark_job_failed(db_path: str, job_id: int, *, error_message: str) -> None:
+def mark_job_failed(db_path: str, job_id: int, *, error_message: str, comment_body: str | None = None) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             """
             UPDATE audit_jobs
             SET status = 'failed',
+                comment_body = COALESCE(?, comment_body),
                 last_error = ?,
                 updated_at = ?
             WHERE id = ?
             """,
-            (error_message, time.time(), job_id),
+            (comment_body, error_message, time.time(), job_id),
         )
 
 

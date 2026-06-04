@@ -2698,6 +2698,7 @@ def render_control_plane_admin_page(
     *,
     actor_github_login: str,
     admin_rows: list[dict[str, object]],
+    budget_rows: list[dict[str, object]],
     unclaimed_installations: list[dict[str, object]],
     billing_claims: list[dict[str, object]],
     audit_logs: list[dict[str, object]],
@@ -2896,6 +2897,68 @@ def render_control_plane_admin_page(
             return f"{installation_login} ({installation_count} installs)"
         return installation_login
 
+    total_used_units = sum(int(row.get("used_units") or 0) for row in budget_rows)
+    constrained_rows = [row for row in budget_rows if row.get("unit_limit") is not None]
+    total_capped_units = sum(int(row.get("unit_limit") or 0) for row in constrained_rows)
+    total_remaining_units = sum(int(row.get("remaining_units") or 0) for row in constrained_rows)
+    top_budget_workspace = str((budget_rows[0].get("workspace_display_name") if budget_rows else "") or "None")
+    budget_breakdown_rows = _render_table(
+        ["Workspace", "Plan", "Status", "Budget", "Remaining", "Utilization", "Breakdown", "Alerts"],
+        [
+            [
+                html_escape(str(row.get("workspace_display_name") or "Workspace")),
+                html_escape(str(row.get("plan_code") or "none")),
+                html_escape(str(row.get("subscription_status") or "none")),
+                html_escape(
+                    (
+                        f"{int(row.get('used_units') or 0)} / {int(row.get('unit_limit') or 0)} units"
+                        if row.get("unit_limit") is not None
+                        else f"{int(row.get('used_units') or 0)} units used"
+                    )
+                ),
+                html_escape(
+                    (
+                        f"{int(row.get('remaining_units') or 0)} units"
+                        if row.get("remaining_units") is not None
+                        else "Unlimited"
+                    )
+                ),
+                html_escape(
+                    (
+                        f"{float(row.get('utilization_percent') or 0.0):.1f}%"
+                        if row.get("utilization_percent") is not None
+                        else "No cap"
+                    )
+                ),
+                html_escape(
+                    ", ".join(
+                        f"{str(item.get('feature_key') or 'unknown')}: {int(item.get('used_units') or 0)}u"
+                        for item in (row.get("feature_breakdown") or [])
+                    )
+                    or "No usage recorded"
+                ),
+                html_escape(
+                    "; ".join(
+                        str(item.get("message") or "")
+                        for item in (row.get("alerts") or [])
+                        if item.get("message")
+                    )
+                    or "Healthy"
+                ),
+            ]
+            for row in budget_rows
+        ],
+    )
+    budget_summary_markup = f'''
+        <div class="admin-log-summary">
+            <span>{len(budget_rows)} workspace budgets tracked</span>
+            <span>{total_used_units} units used in the current window</span>
+            <span>{total_remaining_units if constrained_rows else 'Unlimited'} units remaining across capped workspaces</span>
+            <span>{total_capped_units if constrained_rows else 'Unlimited'} capped units provisioned</span>
+            <span>Top usage workspace: {html_escape(top_budget_workspace)}</span>
+        </div>
+    '''
+
     user_rows = _render_table(
         ["Workspace", "User", "GitHub", "Profile", "Role", "Tier", "Counts", "Setup", "Last login", "Actions"],
         admin_table_rows,
@@ -2946,6 +3009,14 @@ def render_control_plane_admin_page(
                 <h2>Aggregated workspace accounts</h2>
             </div>
             {user_rows}
+        </section>
+        <section class="admin-section">
+            <div class="section-heading">
+                <p class="eyebrow">Advanced analysis</p>
+                <h2>Workspace budget status</h2>
+            </div>
+            {budget_summary_markup}
+            {budget_breakdown_rows}
         </section>
         <section class="admin-section">
             <div class="section-heading">

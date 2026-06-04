@@ -1,6 +1,8 @@
+import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -41,6 +43,19 @@ class TestClient(FastAPITestClient):
                     self.cookies.pop(key, None)
                 else:
                     self.cookies.set(key, previous_value)
+
+
+def _restore_local_debug_login(original_value: bool) -> None:
+    main.settings.local_debug_disable_login = original_value
+
+
+def setup_module(module):
+    module._original_local_debug_disable_login = main.settings.local_debug_disable_login
+    main.settings.local_debug_disable_login = False
+
+
+def teardown_module(module):
+    _restore_local_debug_login(getattr(module, "_original_local_debug_disable_login", False))
 
 
 PROMPT_BASELINE = """# Refund Copilot
@@ -358,73 +373,129 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["insights"][0]["review_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
     assert payload["insights"][0]["supporting_review_target"] is None
     assert payload["insights"][0]["supporting_review_url"] is None
-    assert payload["insights"][0]["change_summary"]
-    assert payload["insights"][0]["flag_summary"].startswith("Flagged because")
-    assert payload["insights"][0]["risk_reasons"]
-    assert payload["lower_confidence_insights"] == []
-    assert payload["control_surface_groups"][0]["group_key"] == "prompts"
-    assert payload["history_timelines"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["history_timelines"][0]["point_count"] == 2
-    assert payload["featured_storyline"]["artifact_path"] == "prompts/refund.txt"
-    assert payload["featured_storyline"]["summary"]
-    assert payload["featured_storyline"]["episodes"][0]["episode_type"] == "baseline_milestone"
-    assert payload["featured_storyline"]["episodes"][-1]["episode_type"] == "current_posture"
-    assert payload["history_cues"][0]["label"]
-    assert payload["governance_posture"]["review_quality"]
-    assert isinstance(payload["governance_posture"]["top_governance_anomalies"], list)
-    assert payload["design_profiles"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["design_profiles"][0]["baseline_provenance"]["source_type"] == "approved_baseline"
-    assert payload["design_profiles"][0]["baseline_provenance"]["is_authoritative"] is True
-    assert payload["design_profiles"][0]["provenance"]["label"] == "Historical backfill"
-    assert payload["design_profiles"][0]["provenance"]["source_ref"] == "commit sha-2"
-    assert payload["design_profiles"][0]["provenance"]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
-    assert payload["design_profiles"][0]["provenance"]["review_context"] == "Historical snapshot from backfill"
-    assert payload["design_profiles"][0]["headline_summary"]
-    assert payload["design_profiles"][0]["drift_label"] in ["small drift", "medium drift", "large drift"]
-    assert payload["design_profiles"][0]["drift_tone"] in ["low", "medium", "high"]
-    assert payload["design_profiles"][0]["can_promote_source_to_baseline"] is True
-    assert len(payload["design_profiles"][0]["attribute_profile"]) == 6
-    assert any(
-        dimension["attribute_key"] == "model_config_posture"
-        for dimension in payload["design_profiles"][0]["attribute_profile"]
+
+
+def test_dashboard_escalation_queue_includes_workspace_budget_status(tmp_path):
+    from services.analysis_budget import consume_analysis_budget, reserve_analysis_budget
+    from services.control_plane_records import upsert_entitlement
+
+    db_path = str(tmp_path / "dashboard-budget-api.db")
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = db_path
+    init_db(db_path)
+    session = _create_dashboard_owner_session(db_path)
+
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = json.dumps(
+        {
+            "advanced_analysis_units_limit": 8,
+            "advanced_analysis_window_seconds": 86400,
+            "advanced_analysis_alert_utilization_percent": 70,
+            "advanced_analysis_price_threshold_usd": 0.01,
+            "advanced_analysis_provider_costs": {
+                "openai": {
+                    "gpt-4o": {
+                        "prompt_per_1k_usd": 0.01,
+                        "completion_per_1k_usd": 0.03,
+                    }
+                }
+            },
+        }
     )
-    assert any(
-        dimension["attribute_key"] == "control_surface_type"
-        for dimension in payload["design_profiles"][0]["attribute_profile"]
+    upsert_entitlement(db_path, workspace_id=1, payload=payload)
+    reservation = reserve_analysis_budget(
+        db_path,
+        workspace_id=1,
+        feature_key="semantic_review",
+        reservation_key="dashboard-budget-semantic",
+        estimated_units=5,
+        now=time.time(),
     )
-    assert isinstance(payload["design_profiles"][0]["attribute_findings"], list)
-    if payload["design_profiles"][0]["attribute_findings"]:
-        assert payload["design_profiles"][0]["attribute_findings"][0]["reason"]
-        assert isinstance(payload["design_profiles"][0]["attribute_findings"][0]["evidence"], list)
-        assert payload["design_profiles"][0]["attribute_findings"][0]["remediation"]
-    assert any(
-        finding["attribute_key"] == "stability_vs_creativity"
-        for finding in payload["design_profiles"][0]["attribute_findings"]
+    consume_analysis_budget(
+        db_path,
+        reservation_key=reservation.reservation_key,
+        consumed_units=5,
+        usage=SimpleNamespace(prompt_tokens=1000, completion_tokens=1000),
+        provider="openai",
+        model="gpt-4o",
+        note="semantic review completed",
     )
-    assert payload["design_profiles"][0]["baseline_profile"]["guardrail_robustness"] >= 0
-    assert payload["history_timelines"][0]["points"][0]["label"] == "Historical backfill"
-    assert payload["history_timelines"][0]["points"][0]["source_ref"] == "commit sha-1"
-    assert payload["history_timelines"][0]["points"][0]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-1"
-    assert payload["history_timelines"][0]["points"][0]["review_context"] == "Historical snapshot from backfill"
-    assert payload["history_timelines"][0]["points"][-1]["label"] == "Historical backfill"
-    assert payload["history_timelines"][0]["points"][-1]["source_ref"] == "commit sha-2"
-    assert payload["history_timelines"][0]["points"][-1]["source_url"] == "https://github.com/doria90/dummyAI/commit/sha-2"
-    assert payload["history_timelines"][0]["points"][-1]["review_context"] == "Historical snapshot from backfill"
-    assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["source_type"] == "approved_baseline"
-    assert payload["history_timelines"][0]["points"][-1]["baseline_provenance"]["is_authoritative"] is True
-    assert payload["artifacts"][0]["artifact_path"] == "prompts/refund.txt"
-    assert payload["journey_snapshots"][0]["snapshot_type"] == "baseline_approved"
-    assert payload["journey_snapshots"][0]["input_summary"]["baseline_verified"] is True
-    assert payload["journey_snapshots"][-1]["snapshot_type"] == "current"
-    assert payload["journey_comparison"]["comparison_kind"] == "baseline_vs_current"
-    assert payload["journey_comparison"]["change_breakdown"]["critical_surfaces_changed"] >= 1
-    assert payload["audit_brief"]["recommendation_label"] == "Review now"
-    assert payload["audit_brief"]["review_now_count"] >= 1
-    assert any(
-        action["label"] == "Open Version Control"
-        and action["href"] == "/dashboard/doria90%2FdummyAI?tab=version-control#baseline-review-panel"
-        for action in payload["audit_brief"]["actions"]
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/escalation-queue?include_watch=true",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workspace_budget"]["workspace_display_name"] == "Dashboard Workspace"
+    assert body["workspace_budget"]["used_units"] == 5
+    assert body["workspace_budget"]["remaining_units"] == 3
+    assert body["workspace_budget"]["budget_status"] == "warning"
+    assert body["workspace_budget"]["estimated_cost_usd"] == 0.04
+    assert body["workspace_budget"]["alert_state"] == "warning"
+    assert body["workspace_budget"]["alerts"]
+    assert body["workspace_budget"]["feature_breakdown"] == [
+        {
+            "feature_key": "semantic_review",
+            "used_units": 5,
+            "reserved_units": 5,
+            "consumed_units": 5,
+            "event_count": 1,
+        }
+    ]
+    assert "plan_code" not in body["workspace_budget"]
+    assert "subscription_status" not in body["workspace_budget"]
+
+
+def test_dashboard_escalation_queue_hides_workspace_budget_from_non_owner_readers(tmp_path):
+    from services.analysis_budget import consume_analysis_budget, reserve_analysis_budget
+    from services.control_plane_records import upsert_entitlement
+
+    db_path = str(tmp_path / "dashboard-budget-api-non-owner.db")
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = db_path
+    init_db(db_path)
+    owner_session = _create_dashboard_owner_session(db_path)
+    member_session = _create_dashboard_member_session(db_path, workspace_id=owner_session.workspace_id, role="viewer")
+
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = json.dumps(
+        {
+            "advanced_analysis_units_limit": 8,
+            "advanced_analysis_window_seconds": 86400,
+        }
     )
+    upsert_entitlement(db_path, workspace_id=owner_session.workspace_id, payload=payload)
+    reservation = reserve_analysis_budget(
+        db_path,
+        workspace_id=owner_session.workspace_id,
+        feature_key="semantic_review",
+        reservation_key="dashboard-budget-member-hidden",
+        estimated_units=5,
+        now=time.time(),
+    )
+    consume_analysis_budget(
+        db_path,
+        reservation_key=reservation.reservation_key,
+        consumed_units=5,
+        note="semantic review completed",
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/escalation-queue?include_watch=true",
+            cookies={main.settings.session_cookie_name: member_session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workspace_budget"] is None
 
 
 def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):

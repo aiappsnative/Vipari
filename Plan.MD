@@ -4,6 +4,8 @@ This document outlines the phased roadmap for building the Vipari backend. It is
 
 This is the canonical roadmap document. Product/usage guidance belongs in [README.md](README.md), while deeper architecture belongs in [docs/detection-engine-plan.md](docs/detection-engine-plan.md).
 
+Detailed design for the planned advanced-analysis budgeting mechanism now lives in [docs/advanced-analysis-budgeting-design.md](docs/advanced-analysis-budgeting-design.md).
+
 For the enduring product thesis, guardrails, and design principles that should outlast roadmap changes, see `SOUL.md`.
 
 ---
@@ -35,6 +37,11 @@ This framing should shape roadmap decisions:
 - **Primary decision improved:** whether an AI-related PR must be escalated before merge
 - **Default baseline concept:** latest explicitly approved version of a control surface
 - **Near-term commercial proof:** find concrete, non-obvious high-risk AI changes in real repos with tolerable noise
+
+### Detection-engine follow-on clarification
+
+- The verifier is now implemented end-to-end behind rollout control: shadow mode still plans and records metadata, while active mode executes a second verifier model pass and can upgrade the final reviewer-facing output
+- The live budgeting slice now covers shared-ingress micro-classifier calls plus worker-side semantic review and active verifier execution via workspace-scoped `advanced_analysis_units`; the next budgeting follow-on is extending the same model to scenario evaluation and hybrid analysis
 
 ---
 

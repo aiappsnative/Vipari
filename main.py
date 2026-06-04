@@ -127,6 +127,7 @@ from services.control_plane_records import (
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
     get_active_repo_allocation_for_repo,
+    get_all_workspace_budget_summary,
     get_github_installation_by_installation_id,
     get_ai_system_by_id,
     get_ai_system_for_workspace_repo,
@@ -4234,10 +4235,19 @@ async def admin_page(request: Request):
     if active_tab not in {"overview", "logs", "feedback"}:
         active_tab = "overview"
     admin_rows = [asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)]
+    budget_rows = [
+        asdict(row)
+        for row in get_all_workspace_budget_summary(
+            AUDIT_DB_PATH,
+            limit=max(1, count_workspaces(AUDIT_DB_PATH)),
+            sort_by="used_units",
+        )
+    ]
     return HTMLResponse(
         render_control_plane_admin_page(
             actor_github_login=admin_context["identity"].github_login,
             admin_rows=admin_rows,
+            budget_rows=budget_rows,
             unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
             billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
             audit_logs=[asdict(row) for row in list_recent_control_plane_audit_logs(AUDIT_DB_PATH)],
@@ -5315,10 +5325,19 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     visibility = _dashboard_repo_visibility(access_context)
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     build_started = time.perf_counter()
+    workspace = access_context.get("workspace") if access_context is not None else None
+    current_user = access_context.get("user") if access_context is not None else None
     result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
+        workspace_id=(
+            workspace.id
+            if workspace is not None
+            and current_user is not None
+            and workspace.billing_owner_user_id == current_user.id
+            else None
+        ),
         build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     _record_server_timing_metric(timing_metrics, "build", build_started)
@@ -6290,6 +6309,9 @@ async def webhook(request: Request):
         model=(AI_MODEL if client is not None else None),
         timeout_seconds=RELEVANCE_MICRO_CLASSIFIER_TIMEOUT_SECONDS,
         provider=AI_PROVIDER,
+        workspace_id=(
+            allocation.workspace_id if (allocation := get_repo_allocation_for_installation(AUDIT_DB_PATH, installation_id, repo_full)) is not None else None
+        ),
     )
 
     if not audit_decision.should_audit:

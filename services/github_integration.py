@@ -332,11 +332,19 @@ def list_file_commits(repo_full: str, file_path: str, token: str, *, branch: str
     return commit_shas
 
 
-def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, existing_comment_id: int | None = None) -> int:
+def upsert_pr_comment(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    body: str,
+    *,
+    existing_comment_id: int | None = None,
+    head_sha: str | None = None,
+) -> int:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
-    managed_body = _build_managed_comment_body(body)
+    managed_body = _build_managed_comment_body(body, head_sha=head_sha)
     existing_comment = None
 
     if existing_comment_id is not None:
@@ -354,13 +362,64 @@ def upsert_pr_comment(repo_full: str, pr_number: int, token: str, body: str, *, 
     return created_comment.id
 
 
-def create_pr_review(repo_full: str, pr_number: int, token: str, body: str, *, event: str) -> int:
+def find_matching_pr_comment_id(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    body: str,
+    *,
+    head_sha: str | None = None,
+) -> int | None:
     github_client = Github(auth=Auth.Token(token))
     repo = github_client.get_repo(repo_full)
     pr = repo.get_pull(pr_number)
-    managed_body = _build_managed_comment_body(body)
+    managed_body = _build_managed_comment_body(body, head_sha=head_sha)
+    for comment in pr.get_issue_comments():
+        if not _is_trusted_managed_feedback_source(comment):
+            continue
+        if comment.body == managed_body:
+            return comment.id
+    return None
+
+
+def create_pr_review(repo_full: str, pr_number: int, token: str, body: str, *, event: str, head_sha: str | None = None) -> int:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    pr = repo.get_pull(pr_number)
+    managed_body = _build_managed_comment_body(body, head_sha=head_sha)
     created_review = pr.create_review(body=managed_body, event=event)
     return created_review.id
+
+
+def find_matching_pr_review_id(
+    repo_full: str,
+    pr_number: int,
+    token: str,
+    body: str,
+    *,
+    event: str | None = None,
+    head_sha: str | None = None,
+) -> int | None:
+    github_client = Github(auth=Auth.Token(token))
+    repo = github_client.get_repo(repo_full)
+    pr = repo.get_pull(pr_number)
+    managed_body = _build_managed_comment_body(body, head_sha=head_sha)
+    normalized_event = event.strip().lower() if event else None
+    for review in pr.get_reviews():
+        if not _is_trusted_managed_feedback_source(review):
+            continue
+        review_body = getattr(review, "body", None)
+        if review_body != managed_body:
+            continue
+        review_state = str(getattr(review, "state", "") or "").strip().lower()
+        if normalized_event == "approve" and review_state != "approved":
+            continue
+        if normalized_event == "request_changes" and review_state != "changes_requested":
+            continue
+        if normalized_event == "comment" and review_state not in {"commented", ""}:
+            continue
+        return review.id
+    return None
 
 
 def list_pr_comment_reactions(repo_full: str, pr_number: int, token: str, *, comment_id: int) -> list[GithubReactionRecord]:
@@ -583,11 +642,33 @@ def _find_reusable_check_run_id(
     return None
 
 
-def _build_managed_comment_body(body: str) -> str:
+def _build_managed_comment_body(body: str, *, head_sha: str | None = None) -> str:
+    normalized_head_sha = (head_sha or "").strip()
+    metadata_line = f"<!-- driftguard:head-sha:{normalized_head_sha} -->\n" if normalized_head_sha else ""
     for marker in (DRIFTGUARD_MANAGED_MARKER, PROMPTDRIFT_MANAGED_MARKER):
         if body.startswith(marker):
-            return body.replace(marker, DRIFTGUARD_MANAGED_MARKER, 1)
-    return f"{DRIFTGUARD_MANAGED_MARKER}\n{body}"
+            normalized_body = body.replace(marker, DRIFTGUARD_MANAGED_MARKER, 1)
+            if metadata_line and metadata_line not in normalized_body:
+                return normalized_body.replace(f"{DRIFTGUARD_MANAGED_MARKER}\n", f"{DRIFTGUARD_MANAGED_MARKER}\n{metadata_line}", 1)
+            return normalized_body
+    return f"{DRIFTGUARD_MANAGED_MARKER}\n{metadata_line}{body}"
+
+
+def _is_trusted_managed_feedback_source(feedback: object) -> bool:
+    app = getattr(feedback, "performed_via_github_app", None)
+    app_slug = str(getattr(app, "slug", "") or "").strip().lower()
+    trusted_identities = {"vipari", "driftguard", "promptdrift"}
+    if app_slug in trusted_identities:
+        return True
+
+    user = getattr(feedback, "user", None)
+    if user is None:
+        return False
+    user_login = str(getattr(user, "login", "") or "").strip().lower()
+    if not user_login.endswith("[bot]"):
+        return False
+    bot_login = user_login[:-5]
+    return bot_login in trusted_identities
 
 
 def _reaction_record_from_github(reaction: object, *, target_kind: str, target_id: int) -> GithubReactionRecord:

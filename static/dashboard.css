@@ -125,6 +125,10 @@ strong {
     color: var(--color-text-muted);
 }
 
+.posture-bar-budget-alert {
+    color: var(--color-medium);
+}
+
 .link,
 .repo-link {
     color: var(--color-primary);
@@ -7836,6 +7840,45 @@ body.control-page.compliance-page .compliance-shell-section {
 }
 
 .posture-bar-counts {
+
+    .posture-bar-budget {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+        white-space: nowrap;
+    }
+
+    .posture-bar-budget strong {
+        color: var(--color-primary);
+        font-size: 0.74rem;
+    }
+
+    .posture-bar-budget-exhausted {
+        border-color: rgba(235, 87, 87, 0.4);
+        background: rgba(235, 87, 87, 0.12);
+    }
+
+    .posture-bar-budget-low {
+        border-color: rgba(242, 153, 74, 0.4);
+        background: rgba(242, 153, 74, 0.12);
+    }
+
+    .posture-bar-budget-warning {
+        border-color: rgba(242, 153, 74, 0.4);
+        background: rgba(242, 153, 74, 0.12);
+    }
+
+    .posture-bar-budget-available,
+    .posture-bar-budget-unlimited {
+        border-color: rgba(39, 174, 96, 0.28);
+        background: rgba(39, 174, 96, 0.08);
+    }
     margin-left: auto;
     color: var(--text-secondary);
     font-size: 0.78rem;

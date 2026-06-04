@@ -31,6 +31,12 @@
       "required_scope": "drift.read"
     },
     {
+      "name": "vipari.get_workspace_budget_status",
+      "title": "Get workspace budget status",
+      "description": "Return the current advanced analysis budget status and feature breakdown for the authenticated workspace.",
+      "required_scope": "drift.read"
+    },
+    {
       "name": "vipari.get_export_status",
       "title": "Get export status",
       "description": "Return the current status for one workspace-owned compliance export job.",

@@ -174,6 +174,12 @@ def _ensure_pull_request_audit_policy_provenance(db_path: str) -> None:
     ensure_pull_request_audit_policy_provenance(db_path)
 
 
+def _ensure_analysis_budget_tables(db_path: str) -> None:
+    from .analysis_budget import init_analysis_budget_db
+
+    init_analysis_budget_db(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -250,6 +256,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0015_add_pull_request_audit_policy_provenance",
         "Repair legacy pull_request_audits tables so operational policy provenance columns exist for effective policy reconstruction.",
         _ensure_pull_request_audit_policy_provenance,
+    ),
+    (
+        "0016_add_analysis_budget_tables",
+        "Create workspace analysis budget windows and event ledger tables for advanced-analysis unit reservation and reconciliation.",
+        _ensure_analysis_budget_tables,
     ),
 )
 

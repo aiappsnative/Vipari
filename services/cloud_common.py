@@ -10,6 +10,14 @@ from github.GithubException import GithubException
 
 from engine.models import RelevanceConfidenceTier
 from engine.relevance import evaluate_diff_for_audit, needs_audit as engine_needs_audit
+from .analysis_budget import (
+    AdvancedAnalysisBudgetExceededError,
+    compute_feature_units,
+    consume_analysis_budget,
+    extract_llm_usage,
+    release_analysis_budget,
+    reserve_analysis_budget,
+)
 from .audit_records import record_pre_audit_relevance_decision
 from .github_integration import fetch_commit_pair_diff, fetch_pr_diff
 
@@ -37,10 +45,21 @@ def evaluate_and_persist_audit_decision(
     model: str | None = None,
     timeout_seconds: float = 5.0,
     provider: str | None = None,
+    workspace_id: int | None = None,
 ):
+    effective_llm_client = _budget_wrapped_micro_classifier_client(
+        llm_client,
+        db_path=db_path,
+        workspace_id=workspace_id,
+        repo_full=repo_full,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        provider=provider,
+        model=model,
+    )
     decision = evaluate_diff_for_audit(
         diff_text,
-        llm_client=llm_client,
+        llm_client=effective_llm_client,
         model=model,
         timeout_seconds=timeout_seconds,
         provider=provider,
@@ -55,6 +74,70 @@ def evaluate_and_persist_audit_decision(
                 relevance=relevance,
             )
     return decision
+
+
+def _budget_wrapped_micro_classifier_client(
+    llm_client: object | None,
+    *,
+    db_path: str,
+    workspace_id: int | None,
+    repo_full: str,
+    pr_number: int,
+    head_sha: str,
+    provider: str | None,
+    model: str | None,
+) -> object | None:
+    if llm_client is None or workspace_id is None:
+        return llm_client
+
+    create_fn = getattr(getattr(getattr(llm_client, "chat", None), "completions", None), "create", None)
+    if create_fn is None:
+        return llm_client
+
+    counter = {"value": 0}
+
+    def _create_with_budget(**kwargs):
+        counter["value"] += 1
+        # Keep duplicate deliveries of the same PR head idempotent at the micro-classifier layer.
+        reservation_key = f"relevance:{repo_full}:{pr_number}:{head_sha}:{counter['value']}"
+        reservation = reserve_analysis_budget(
+            db_path,
+            workspace_id=workspace_id,
+            feature_key="micro_classifier",
+            reservation_key=reservation_key,
+            estimated_units=1,
+        )
+        if not reservation.allowed:
+            raise AdvancedAnalysisBudgetExceededError(reservation.reason or "micro-classifier budget unavailable")
+        try:
+            response = create_fn(**kwargs)
+        except Exception:
+            release_analysis_budget(db_path, reservation_key=reservation.reservation_key, note="micro-classifier call failed before completion")
+            raise
+        usage = extract_llm_usage(response)
+        consume_analysis_budget(
+            db_path,
+            reservation_key=reservation.reservation_key,
+            consumed_units=compute_feature_units("micro_classifier", usage),
+            usage=usage,
+            provider=provider,
+            model=model,
+            note="micro-classifier completed",
+        )
+        return response
+
+    class _WrappedCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return _create_with_budget(**kwargs)
+
+    class _WrappedChat:
+        completions = _WrappedCompletions()
+
+    class _WrappedClient:
+        chat = _WrappedChat()
+
+    return _WrappedClient()
 
 
 def get_diff_fetch_error_status_code(exc: Exception) -> int | None:

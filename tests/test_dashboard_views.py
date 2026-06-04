@@ -3,13 +3,18 @@ import sys
 from urllib.error import HTTPError
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from services.analysis_budget import list_analysis_budget_events
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
+from services.control_plane_records import allocate_repo_to_workspace, create_user, create_workspace, replace_repo_connections, update_repo_allocation_status, upsert_entitlement, upsert_github_installation, upsert_subscription
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_artifact_topology, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
+from services.entitlements import derive_entitlement_payload
 from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import (
@@ -21,8 +26,8 @@ from services.onboarding import (
     sync_on_pr_merge_artifact_changes,
     update_repo_artifact_type,
 )
-from services.branch_scan_jobs import create_branch_scan_job
-from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
+from services.branch_scan_jobs import STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS, claim_next_branch_scan_job, create_branch_scan_job, get_branch_scan_job
+from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job, process_next_branch_scan_job_once
 from services.repo_journey import build_repo_journey
 
 
@@ -404,6 +409,387 @@ def test_live_branch_head_scan_removes_deleted_artifacts(tmp_path):
     assert [artifact.artifact_path for artifact in dashboard.artifacts] == ["prompts/refund.txt"]
     assert dashboard.onboarding is not None
     assert dashboard.onboarding.discovered_artifact_count == 1
+
+
+def _bind_branch_scan_repo_to_workspace(db_path: str, *, repo_full: str, installation_id: int, limit: int) -> int:
+    owner = create_user(db_path, display_name="Budget Owner", primary_email="budget-owner@example.com")
+    workspace = create_workspace(db_path, slug="branch-scan-budget", display_name="Branch Scan Budget", billing_owner_user_id=owner.id)
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_branch_scan_budget",
+        stripe_price_id="price_branch_scan_budget",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=86401.0,
+        next_payment_at=86401.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = '{"advanced_analysis_units_limit": %d, "advanced_analysis_window_seconds": 86400}' % limit
+    upsert_entitlement(db_path, workspace_id=workspace.id, payload=payload)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=str(installation_id),
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repositories=[
+            {
+                "repo_github_id": repo_full.split("/", 1)[1],
+                "repo_full": repo_full,
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id=repo_full.split("/", 1)[1],
+        repo_full=repo_full,
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "onboarded")
+    return workspace.id
+
+
+def test_live_branch_head_scan_skips_when_budget_is_exhausted(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-exhausted.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=0)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-exhausted",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content") as fetch_file_content_mock:
+        settings = BranchScanWorkerSettings(
+            db_path=db_path,
+            github_app_id="app-id",
+            github_private_key_path="/tmp/test-key.pem",
+        )
+        result = process_next_branch_scan_job_once(settings)
+
+    assert result is True
+    fetch_file_content_mock.assert_not_called()
+    saved_job = get_branch_scan_job(db_path, job.id)
+    assert saved_job is not None
+    assert saved_job.status == "retry_wait"
+    assert saved_job.attempt_count == 0
+    assert "advanced analysis budget exhausted" in str(saved_job.last_error or "").lower()
+    assert list_analysis_budget_events(db_path, workspace_id=workspace_id) == []
+
+
+def test_live_branch_head_scan_records_budget_event_on_success(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-success.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=10)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-success",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", return_value=PROMPT_CURRENT):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    budget_events = list_analysis_budget_events(db_path, workspace_id=workspace_id)
+    assert len(budget_events) == 1
+    assert budget_events[0]["feature_key"] == "branch_scan"
+    assert budget_events[0]["status"] == "consumed"
+
+
+def test_live_branch_head_scan_charges_only_analyzed_artifacts(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-partial.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt", "config/policy.yml"],
+        fetch_file_content_fn=lambda repo, path, token, ref: {
+            "prompts/refund.txt": PROMPT_BASELINE,
+            "config/policy.yml": "policy: strict\n",
+        }[path],
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=10)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-partial",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    def _fetch_content(repo, path, token, ref):
+        if path == "config/policy.yml":
+            raise HTTPError(f"https://example.test/{path}", 404, "Not Found", hdrs=None, fp=None)
+        return PROMPT_CURRENT
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", side_effect=_fetch_content):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    budget_events = list_analysis_budget_events(db_path, workspace_id=workspace_id)
+    assert len(budget_events) == 1
+    assert budget_events[0]["feature_key"] == "branch_scan"
+    assert budget_events[0]["units_consumed"] == 1
+
+
+def test_live_branch_head_scan_uses_new_budget_window_after_retry(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-window-retry.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=10)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-window-retry",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", side_effect=RuntimeError("transient fetch failure")), patch(
+        "services.branch_scan_worker.time.time", return_value=10.0
+    ):
+        with pytest.raises(RuntimeError):
+            process_branch_scan_job(
+                job,
+                BranchScanWorkerSettings(
+                    db_path=db_path,
+                    github_app_id="app-id",
+                    github_private_key_path="/tmp/test-key.pem",
+                ),
+            )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", return_value=PROMPT_CURRENT), patch(
+        "services.branch_scan_worker.time.time", return_value=90010.0
+    ):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    budget_events = list_analysis_budget_events(db_path, workspace_id=workspace_id)
+    assert len(budget_events) == 2
+    assert budget_events[0]["status"] == "released"
+    assert budget_events[1]["status"] == "consumed"
+    assert budget_events[0]["window_start"] != budget_events[1]["window_start"]
+
+
+def test_live_branch_head_scan_uses_same_timestamp_for_budget_key_and_reservation(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-key-alignment.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=10)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-key-alignment",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    captured = {}
+
+    class Reservation:
+        allowed = True
+        reservation_key = "branch-scan-test"
+
+    def fake_reserve_analysis_budget(*args, **kwargs):
+        captured["reservation_key"] = kwargs["reservation_key"]
+        captured["now"] = kwargs.get("now")
+        raise RuntimeError("stop after reservation")
+
+    with patch("services.branch_scan_worker.resolve_analysis_budget_policy", return_value=type("Policy", (), {"window_seconds": 10})()), patch(
+        "services.branch_scan_worker.reserve_analysis_budget",
+        side_effect=fake_reserve_analysis_budget,
+    ), patch("services.branch_scan_worker.time.time", side_effect=[10.0]):
+        with pytest.raises(RuntimeError, match="stop after reservation"):
+            process_branch_scan_job(
+                job,
+                BranchScanWorkerSettings(
+                    db_path=db_path,
+                    github_app_id="app-id",
+                    github_private_key_path="/tmp/test-key.pem",
+                ),
+            )
+
+    assert captured["reservation_key"].endswith("window:1")
+    assert captured["now"] == 10.0
+
+
+def test_branch_scan_claim_recovers_stale_processing_job(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-claim-stale.db")
+    init_db(db_path)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="stale-branch-scan-sha",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    claimed = claim_next_branch_scan_job(db_path)
+    assert claimed is not None
+    assert claimed.id == job.id
+
+    recovered = claim_next_branch_scan_job(
+        db_path,
+        now=claimed.updated_at + STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS + 1,
+    )
+    assert recovered is not None
+    assert recovered.id == job.id
+    assert recovered.status == "processing"
+    assert recovered.attempt_count == claimed.attempt_count + 1
+
+
+def test_branch_scan_stale_recovery_then_budget_defer_preserves_attempt_spend(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-stale-budget-defer.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=0)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="stale-budget-defer-sha",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    claimed = claim_next_branch_scan_job(db_path)
+    assert claimed is not None
+    assert claimed.attempt_count == 1
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content") as fetch_file_content_mock, patch(
+        "services.branch_scan_jobs.time.time",
+        return_value=claimed.updated_at + STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS + 1,
+    ), patch(
+        "services.branch_scan_worker.time.time",
+        return_value=claimed.updated_at + STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS + 1,
+    ):
+        settings = BranchScanWorkerSettings(
+            db_path=db_path,
+            github_app_id="app-id",
+            github_private_key_path="/tmp/test-key.pem",
+        )
+        result = process_next_branch_scan_job_once(settings)
+
+    assert result is True
+    fetch_file_content_mock.assert_not_called()
+    saved_job = get_branch_scan_job(db_path, job.id)
+    assert saved_job is not None
+    assert saved_job.status == "retry_wait"
+    assert saved_job.attempt_count == 1
 
 def test_priority_from_fused_signals_raises_dashboard_priority_for_high_risk_audits():
     assert priority_from_fused_signals(0.41, risk_level="High") == "review_now"

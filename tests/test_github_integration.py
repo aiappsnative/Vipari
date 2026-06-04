@@ -11,7 +11,7 @@ from urllib.request import Request
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services import github_integration
-from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, generate_jwt, list_pr_comment_reactions, list_pr_review_reactions, remove_pr_label, sync_pr_label
+from services.github_integration import _resolve_private_key_path, create_pr_review, ensure_pr_label, find_matching_pr_comment_id, find_matching_pr_review_id, generate_jwt, list_pr_comment_reactions, list_pr_review_reactions, remove_pr_label, sync_pr_label
 
 
 def test_list_repository_files_reuses_cached_tree_for_same_repo_and_ref(monkeypatch):
@@ -491,6 +491,153 @@ def test_create_pr_review_wraps_body_with_managed_marker(monkeypatch):
 
     assert review_id == 404
     assert created_reviews == [("<!-- driftguard:managed-comment -->\nReview body", "REQUEST_CHANGES")]
+
+
+def test_find_matching_pr_comment_id_requires_matching_head_and_bot_author(monkeypatch):
+    class FakeComment:
+        def __init__(self, comment_id, body, *, login, user_type, app=None):
+            self.id = comment_id
+            self.body = body
+            self.user = SimpleNamespace(login=login, type=user_type)
+            self.performed_via_github_app = app
+
+    class FakePullRequest:
+        def get_issue_comments(self):
+            return [
+                FakeComment(
+                    100,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:old-head -->\nReview body",
+                    login="vipari[bot]",
+                    user_type="Bot",
+                ),
+                FakeComment(
+                    150,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    login="github-actions[bot]",
+                    user_type="Bot",
+                ),
+                FakeComment(
+                    175,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    login="spoofed-bot[bot]",
+                    user_type="Bot",
+                    app=SimpleNamespace(slug="evil-app", name="Vipari"),
+                ),
+                FakeComment(
+                    200,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    login="octocat",
+                    user_type="User",
+                ),
+                FakeComment(
+                    300,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    login="vipari[bot]",
+                    user_type="Bot",
+                ),
+            ]
+
+    class FakeRepo:
+        def get_pull(self, pr_number):
+            assert pr_number == 31
+            return FakePullRequest()
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    comment_id = find_matching_pr_comment_id(
+        "doria90/dummyAI",
+        31,
+        "installation-token",
+        "Review body",
+        head_sha="new-head",
+    )
+
+    assert comment_id == 300
+
+
+def test_find_matching_pr_review_id_requires_matching_head_and_bot_author(monkeypatch):
+    class FakeReview:
+        def __init__(self, review_id, body, *, state, login, user_type, app=None):
+            self.id = review_id
+            self.body = body
+            self.state = state
+            self.user = SimpleNamespace(login=login, type=user_type)
+            self.performed_via_github_app = app
+
+    class FakePullRequest:
+        def get_reviews(self):
+            return [
+                FakeReview(
+                    401,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:old-head -->\nReview body",
+                    state="CHANGES_REQUESTED",
+                    login="vipari[bot]",
+                    user_type="Bot",
+                ),
+                FakeReview(
+                    4012,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    state="CHANGES_REQUESTED",
+                    login="github-actions[bot]",
+                    user_type="Bot",
+                ),
+                FakeReview(
+                    4013,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    state="CHANGES_REQUESTED",
+                    login="spoofed-bot[bot]",
+                    user_type="Bot",
+                    app=SimpleNamespace(slug="evil-app", name="Vipari"),
+                ),
+                FakeReview(
+                    402,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    state="CHANGES_REQUESTED",
+                    login="octocat",
+                    user_type="User",
+                ),
+                FakeReview(
+                    403,
+                    "<!-- driftguard:managed-comment -->\n<!-- driftguard:head-sha:new-head -->\nReview body",
+                    state="CHANGES_REQUESTED",
+                    login="vipari[bot]",
+                    user_type="Bot",
+                ),
+            ]
+
+    class FakeRepo:
+        def get_pull(self, pr_number):
+            assert pr_number == 32
+            return FakePullRequest()
+
+    class FakeGithub:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def get_repo(self, repo_full):
+            assert repo_full == "doria90/dummyAI"
+            return FakeRepo()
+
+    monkeypatch.setattr(github_integration, "Github", FakeGithub)
+
+    review_id = find_matching_pr_review_id(
+        "doria90/dummyAI",
+        32,
+        "installation-token",
+        "Review body",
+        event="request_changes",
+        head_sha="new-head",
+    )
+
+    assert review_id == 403
 
 
 def test_list_pr_comment_reactions_returns_serialized_reactions(monkeypatch):

@@ -612,6 +612,107 @@ def test_webhook_runs_micro_classifier_for_uncertain_diff_and_persists_decision(
         main.client = original_client
 
 
+def test_webhook_queues_uncertain_diff_when_micro_classifier_budget_is_exhausted(tmp_path):
+    from services.analysis_budget import list_analysis_budget_events
+    from services.audit_records import list_pre_audit_relevance_decisions
+    from services.control_plane_records import allocate_repo_to_workspace, create_workspace, create_user, upsert_entitlement, upsert_github_installation
+
+    original_db_path = main.AUDIT_DB_PATH
+    original_client = main.client
+    main.AUDIT_DB_PATH = str(tmp_path / "webhook-uncertain-budget.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    class FailingCompletions:
+        @staticmethod
+        def create(**kwargs):
+            raise AssertionError("micro-classifier model call should be skipped when budget is exhausted")
+
+    main.client = type("Client", (), {"chat": type("Chat", (), {"completions": FailingCompletions()})()})()
+    main.GITHUB_WEBHOOK_SECRET = "secret"
+
+    user = create_user(main.AUDIT_DB_PATH, display_name="Budget Owner", primary_email="budget-owner@example.com")
+    workspace = create_workspace(main.AUDIT_DB_PATH, slug="budget-webhook", display_name="Budget Webhook", billing_owner_user_id=user.id)
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 3,
+            "seat_limit": 25,
+            "retention_policy": "extended",
+            "support_tier": "priority",
+            "feature_flags_json": json.dumps({"advanced_analysis_units_limit": 0, "advanced_analysis_window_seconds": 86400}),
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        account_id="123",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=123,
+        repo_github_id="dummyAI",
+        repo_full="doria90/dummyAI",
+        baseline_mode="default_branch",
+        activated_by_user_id=user.id,
+    )
+
+    payload = {
+        "action": "opened",
+        "installation": {"id": 123},
+        "repository": {"full_name": "doria90/dummyAI"},
+        "pull_request": {
+            "number": 18,
+            "base": {"sha": "base-opened"},
+            "head": {"sha": "uncertain-budget-head"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": sign_payload(body, "secret"),
+        "X-GitHub-Event": "pull_request",
+    }
+
+    try:
+        with patch("main.generate_jwt", return_value="jwt-token"), patch(
+            "main.get_installation_token", return_value="installation-token"
+        ), patch(
+            "main.fetch_pr_diff",
+            return_value="diff --git a/src/assistant_router.py b/src/assistant_router.py\nindex 1..2\n+route update\n",
+        ), patch("main.fetch_commit_pair_diff") as fetch_commit_pair_diff, patch("main.create_audit_job") as create_job:
+            fetch_commit_pair_diff.return_value = ""
+            create_job.return_value = type("Job", (), {"id": 78})()
+            response = client.post("/webhook", content=body, headers={**headers, "Content-Type": "application/json"})
+
+        assert response.status_code == 200
+        assert response.json() == {"message": "audit queued", "job_id": 78}
+        create_job.assert_called_once()
+        decisions = list_pre_audit_relevance_decisions(
+            main.AUDIT_DB_PATH,
+            repo_full="doria90/dummyAI",
+            pr_number=18,
+            head_sha="uncertain-budget-head",
+        )
+        assert len(decisions) == 1
+        assert decisions[0].classifier_status == "budget_exhausted"
+        assert decisions[0].classifier_is_relevant is True
+        assert "budget exhausted" in (decisions[0].classifier_reason or "").lower()
+        assert list_analysis_budget_events(main.AUDIT_DB_PATH, workspace_id=workspace.id) == []
+    finally:
+        main.AUDIT_DB_PATH = original_db_path
+        main.client = original_client
+
+
 def test_webhook_ignores_pr_when_workspace_settings_disable_comments(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "webhook-comments-disabled.db")

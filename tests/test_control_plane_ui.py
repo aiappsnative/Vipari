@@ -3183,6 +3183,96 @@ def test_admin_page_renders_github_profile_details(tmp_path):
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_admin_page_renders_workspace_budget_status(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    original_login = main.settings.owner_github_login
+    original_id = main.settings.owner_github_user_id
+    original_email = main.settings.owner_email
+    main.AUDIT_DB_PATH = str(tmp_path / "admin-budget-status.db")
+    main.init_db(main.AUDIT_DB_PATH)
+    main.settings.owner_github_login = "admin-user"
+    main.settings.owner_github_user_id = ""
+    main.settings.owner_email = ""
+
+    from services.analysis_budget import consume_analysis_budget, reserve_analysis_budget
+    from services.control_plane_records import create_user_session, create_workspace, upsert_entitlement, upsert_github_identity
+    from services.entitlements import derive_entitlement_payload
+
+    admin_user, _admin_identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="980",
+        github_login="admin-user",
+        display_name="Admin User",
+        primary_email="admin@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "user:email"],
+        access_token_encrypted="encrypted-token",
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="admin-budget-session",
+        user_id=admin_user.id,
+        workspace_id=None,
+        csrf_secret="csrf-budget",
+        expires_at=time.time() + 3600,
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="budget-workspace",
+        display_name="Budget Workspace",
+        billing_owner_user_id=admin_user.id,
+    )
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = json.dumps(
+        {
+            "advanced_analysis_units_limit": 8,
+            "advanced_analysis_window_seconds": 86400,
+            "advanced_analysis_price_threshold_usd": 0.01,
+            "advanced_analysis_provider_costs": {
+                "openai": {
+                    "gpt-4o": {
+                        "prompt_per_1k_usd": 0.01,
+                        "completion_per_1k_usd": 0.03,
+                    }
+                }
+            },
+        }
+    )
+    upsert_entitlement(main.AUDIT_DB_PATH, workspace_id=workspace.id, payload=payload)
+
+    reservation = reserve_analysis_budget(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        feature_key="semantic_review",
+        reservation_key="admin-budget-semantic",
+        estimated_units=5,
+        now=time.time(),
+    )
+    consume_analysis_budget(
+        main.AUDIT_DB_PATH,
+        reservation_key=reservation.reservation_key,
+        consumed_units=5,
+        usage=SimpleNamespace(prompt_tokens=1000, completion_tokens=1000),
+        provider="openai",
+        model="gpt-4o",
+        note="semantic review completed",
+    )
+
+    response = client.get("/admin", cookies={main.settings.session_cookie_name: session.session_id})
+
+    assert response.status_code == 200
+    assert "Workspace budget status" in response.text
+    assert "Budget Workspace" in response.text
+    assert "5 / 8 units" in response.text
+    assert "semantic_review: 5u" in response.text
+    assert "estimated $0.0400, above the configured per-event threshold of $0.0100" in response.text
+
+    main.settings.owner_github_login = original_login
+    main.settings.owner_github_user_id = original_id
+    main.settings.owner_email = original_email
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_admin_logs_tab_renders_unified_activity_feed(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     original_login = main.settings.owner_github_login

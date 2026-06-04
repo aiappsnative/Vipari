@@ -4,8 +4,9 @@ from collections.abc import Callable
 from dataclasses import asdict
 import json
 
-from services.control_plane_records import list_repo_allocations_for_workspace
+from services.control_plane_records import get_workspace_budget_status, get_workspace_entitlement, list_repo_allocations_for_workspace
 from services.dashboard_views import build_dashboard_overview_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.entitlements import get_analysis_budget_alert_utilization_percent
 from services.governance_policy import GOVERNANCE_ROLLOUT_DRY_RUN, build_governance_ci_outcome, normalize_governance_rollout_mode
 
 
@@ -120,13 +121,68 @@ def build_dashboard_escalation_queue_payload(
     *,
     allowed_repo_fulls: set[str] | None = None,
     include_watch: bool = False,
+    workspace_id: int | None = None,
     build_workspace_escalation_queue_fn: Callable[..., dict[str, object]] = build_workspace_escalation_queue,
 ) -> dict[str, object]:
-    return build_workspace_escalation_queue_fn(
+    payload = build_workspace_escalation_queue_fn(
         db_path,
         allowed_repo_fulls=allowed_repo_fulls,
         include_watch=include_watch,
     )
+    payload["workspace_budget"] = _build_workspace_budget_payload(db_path, workspace_id=workspace_id)
+    return payload
+
+
+def _build_workspace_budget_payload(db_path: str, *, workspace_id: int | None) -> dict[str, object] | None:
+    if workspace_id is None:
+        return None
+    summary = get_workspace_budget_status(db_path, workspace_id)
+    if summary is None:
+        return None
+    payload = {
+        "workspace_id": summary.workspace_id,
+        "workspace_display_name": summary.workspace_display_name,
+        "unit_limit": summary.unit_limit,
+        "used_units": summary.used_units,
+        "remaining_units": summary.remaining_units,
+        "utilization_percent": summary.utilization_percent,
+        "estimated_cost_usd": summary.estimated_cost_usd,
+        "alert_state": summary.alert_state,
+        "alerts": [
+            {
+                "code": alert["code"] if isinstance(alert, dict) else alert.code,
+                "severity": alert["severity"] if isinstance(alert, dict) else alert.severity,
+                "message": alert["message"] if isinstance(alert, dict) else alert.message,
+            }
+            for alert in summary.alerts
+        ],
+        "feature_breakdown": [
+            {
+                "feature_key": feature["feature_key"] if isinstance(feature, dict) else feature.feature_key,
+                "used_units": feature["used_units"] if isinstance(feature, dict) else feature.used_units,
+                "reserved_units": feature["reserved_units"] if isinstance(feature, dict) else feature.reserved_units,
+                "consumed_units": feature["consumed_units"] if isinstance(feature, dict) else feature.consumed_units,
+                "event_count": feature["event_count"] if isinstance(feature, dict) else feature.event_count,
+            }
+            for feature in summary.feature_breakdown
+        ],
+    }
+    entitlement = get_workspace_entitlement(db_path, workspace_id)
+    low_budget_threshold = get_analysis_budget_alert_utilization_percent(
+        entitlement.feature_flags_json if entitlement is not None else None
+    )
+    utilization = float(summary.utilization_percent or 0.0)
+    if summary.unit_limit is None:
+        payload["budget_status"] = "unlimited"
+    elif (summary.remaining_units or 0) <= 0:
+        payload["budget_status"] = "exhausted"
+    elif utilization >= low_budget_threshold:
+        payload["budget_status"] = "low"
+    elif summary.alert_state == "warning":
+        payload["budget_status"] = "warning"
+    else:
+        payload["budget_status"] = "available"
+    return payload
 
 
 def build_pending_proposals_payload(
