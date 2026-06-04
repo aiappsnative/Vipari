@@ -69,7 +69,7 @@ def test_migrate_database_records_bootstrap_migration(tmp_path):
     result = migrate_database(db_path)
     applied = list_applied_migrations(db_path)
 
-        _all_versions = [version for version, _description, _handler in MIGRATIONS]
+    _all_versions = [version for version, _description, _handler in MIGRATIONS]
     assert result.backend == "sqlite"
     assert result.applied_versions == _all_versions
     assert result.pending_versions == []

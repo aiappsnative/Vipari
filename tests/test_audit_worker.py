@@ -4604,6 +4604,19 @@ def test_worker_active_verifier_skips_second_pass_when_budget_is_exhausted(tmp_p
     db_path = str(tmp_path / "jobs-budget-verifier.db")
     init_db(db_path)
     owner, workspace, _allocation = _bind_repo_to_workspace(db_path, workspace_mode="comments")
+    upsert_workspace_policy(
+        db_path,
+        workspace_id=workspace.id,
+        policy=normalize_operational_policy(
+            {
+                "llm_strategy": {
+                    "when_to_run_semantic": "on_all_ai_relevant",
+                    "when_to_run_verifier": "on_medium_plus",
+                }
+            }
+        ),
+        created_by_user_id=owner.id,
+    )
     upsert_entitlement(
         db_path,
         workspace_id=workspace.id,
@@ -4648,7 +4661,7 @@ def test_worker_active_verifier_skips_second_pass_when_budget_is_exhausted(tmp_p
                         message=SimpleNamespace(
                             content=(
                                 "Summary: The prompt changed, but reviewer certainty is limited.\n"
-                                "Risk Level: Low\n"
+                                "Risk Level: Medium\n"
                                 "Confidence: Low\n"
                                 "Detailed Analysis:\n"
                                 "- The prompt changed.\n"

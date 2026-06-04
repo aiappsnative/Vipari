@@ -127,6 +127,7 @@ from services.control_plane_records import (
     get_billing_customer_for_workspace,
     get_billing_handoff_claim_by_token,
     get_active_repo_allocation_for_repo,
+    get_all_workspace_budget_summary,
     get_github_installation_by_installation_id,
     get_ai_system_by_id,
     get_ai_system_for_workspace_repo,
@@ -4234,10 +4235,19 @@ async def admin_page(request: Request):
     if active_tab not in {"overview", "logs", "feedback"}:
         active_tab = "overview"
     admin_rows = [asdict(row) for row in list_admin_workspace_users(AUDIT_DB_PATH)]
+    budget_rows = [
+        asdict(row)
+        for row in get_all_workspace_budget_summary(
+            AUDIT_DB_PATH,
+            limit=max(1, count_workspaces(AUDIT_DB_PATH)),
+            sort_by="used_units",
+        )
+    ]
     return HTMLResponse(
         render_control_plane_admin_page(
             actor_github_login=admin_context["identity"].github_login,
             admin_rows=admin_rows,
+            budget_rows=budget_rows,
             unclaimed_installations=[asdict(row) for row in list_unclaimed_installations(AUDIT_DB_PATH)],
             billing_claims=[asdict(row) for row in list_billing_handoff_claims(AUDIT_DB_PATH)],
             audit_logs=[asdict(row) for row in list_recent_control_plane_audit_logs(AUDIT_DB_PATH)],
@@ -5319,6 +5329,7 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
+            workspace_id=(access_context["workspace"].id if access_context and access_context.get("workspace") is not None else None),
         build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     _record_server_timing_metric(timing_metrics, "build", build_started)

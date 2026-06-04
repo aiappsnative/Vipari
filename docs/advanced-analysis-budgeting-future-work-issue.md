@@ -4,6 +4,21 @@
 
 This issue captures the budgeting design and implementation work completed so far for the detection engine so it can be resumed later without rediscovery.
 
+## Status update (June 2026)
+
+This note is now historical rather than current planning state.
+
+The parked budgeting slice has since been resumed on a dedicated feature branch and extended to cover:
+
+- scenario evaluation budget gating
+- hybrid analysis budget gating
+- branch-scan budget gating for workspace-bound repositories
+- current-window budget reporting in control-plane, dashboard, and MCP read surfaces
+- estimated provider cost reporting from entitlement-configured provider/model rate tables
+- operator alerts for budget exhaustion, high utilization, single-event cost spikes, and current-window estimated spend spikes
+
+One deliberate policy choice remains: provider price thresholds are currently alert-only, not hard execution gates. The current implementation surfaces anomalies to operators while preserving conservative analysis behavior.
+
 Budgeting is not required for current detection-engine merge readiness. The immediate priority is keeping the roadmap branch focused on the detection engine itself. The budget slice should therefore be parked on a dedicated branch and treated as follow-on work.
 
 ## Why this was explored

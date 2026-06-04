@@ -66,18 +66,71 @@ The current implementation enforces advanced-analysis budget checks for:
 - relevance micro-classifier calls at shared ingress in `services/cloud_common.py`
 - semantic review in `services/audit_worker.py`
 - active verifier execution in `services/audit_worker.py`
+- scenario evaluation in `services/scenario_execution.py`
+- hybrid analysis in `services/hybrid_execution.py`
+- branch-scan snapshot/profile processing in `services/branch_scan_worker.py`
 
 The current live mechanics are:
 
 - workspace budget configuration is read from `entitlements.feature_flags_json`
 - `advanced_analysis_units_limit` sets the active-window unit cap
 - `advanced_analysis_window_seconds` optionally overrides the default rolling window size
+- `advanced_analysis_provider_costs` optionally maps provider/model pairs to estimated prompt/completion USD rates per 1k tokens for read-side cost estimation
+- `advanced_analysis_price_threshold_usd` optionally flags unusually expensive single events in the current window
+- `advanced_analysis_window_price_threshold_usd` optionally flags unusually expensive aggregate provider spend in the current window
+- `advanced_analysis_alert_utilization_percent` optionally overrides the default operator warning threshold of `80%` window utilization
 - micro-classifier reservations occur before each uncertain-file classifier call and conservatively keep the artifact relevant when the reservation is denied
 - semantic review reserves units before the LLM call and falls back to deterministic review if the reservation is denied
 - active verifier execution reserves units before the second-pass call and skips verifier execution, while preserving proposer output, if the reservation is denied
+- scenario evaluation and hybrid analysis reserve deterministic-cost units before execution and skip optional execution when the reservation is denied
+- branch-scan processing reserves deterministic-cost units for workspace-bound repos and skips snapshot/profile work when the reservation is denied
+- usage is surfaced through control-plane, dashboard, and MCP read paths with current-window feature breakdown, estimated provider cost, and operator alerts
 - usage is reconciled after completion into `workspace_analysis_budget_windows` and `workspace_analysis_budget_events`
 
-This live slice intentionally still leaves scenario and hybrid charging for the next iteration.
+Provider price thresholds are currently alert-only. They do not hard-block semantic review or verifier execution; they exist to surface anomalous spend to operators while real usage is calibrated.
+
+## Operator configuration
+
+The current operator-facing budget flags all live in `entitlements.feature_flags_json`.
+
+Supported flags:
+
+- `advanced_analysis_units_limit`: current-window unit cap for the workspace
+- `advanced_analysis_window_seconds`: optional window length override; defaults to the standard rolling window when omitted
+- `advanced_analysis_provider_costs`: optional nested provider/model table for read-side estimated provider cost
+- `advanced_analysis_price_threshold_usd`: optional per-event warning threshold for estimated provider cost
+- `advanced_analysis_window_price_threshold_usd`: optional aggregate current-window warning threshold for estimated provider cost
+- `advanced_analysis_alert_utilization_percent`: optional utilization warning threshold; defaults to `80`
+
+Example:
+
+```json
+{
+   "advanced_analysis_units_limit": 20000,
+   "advanced_analysis_window_seconds": 2592000,
+   "advanced_analysis_price_threshold_usd": 0.02,
+   "advanced_analysis_window_price_threshold_usd": 5.0,
+   "advanced_analysis_alert_utilization_percent": 80,
+   "advanced_analysis_provider_costs": {
+      "openai": {
+         "gpt-4o": {
+            "prompt_per_1k_usd": 0.01,
+            "completion_per_1k_usd": 0.03
+         },
+         "*": {
+            "prompt_per_1k_usd": 0.005,
+            "completion_per_1k_usd": 0.015
+         }
+      }
+   }
+}
+```
+
+Read-side outputs now include:
+
+- feature-level current-window usage breakdown
+- estimated current-window provider cost when a provider/model rate table is configured
+- alert records for budget exhaustion, high utilization, single-event provider price spikes, and current-window estimated cost spikes
 
 ## Unit calculation
 
@@ -178,6 +231,6 @@ The budgeting mechanism must preserve the existing detection-engine guardrails:
 
 The first slice does not need to solve everything. The likely follow-ons are:
 
-- operator-facing budget dashboards and alerts
 - monthly or plan-bound budget windows tied to workspace entitlements
 - richer per-feature trend reporting for calibration and pricing
+- a later decision on whether provider-price anomalies should remain alert-only or become hard execution gates

@@ -59,6 +59,16 @@ def _reset_settings_cache():
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _disable_local_debug_login(monkeypatch):
+    monkeypatch.setenv("LOCAL_DEBUG_DISABLE_LOGIN", "false")
+    _reset_settings_cache()
+    try:
+        yield
+    finally:
+        _reset_settings_cache()
+
+
 def _seed_worker_control_plane_state(db_path: str, *, installation_id: int, repo_full: str) -> None:
     init_control_plane_db(db_path)
     user, _identity = upsert_github_identity(

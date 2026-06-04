@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .analysis_budget import consume_analysis_budget, estimate_feature_units, release_analysis_budget, reserve_analysis_budget
 from .oss_eval_harness import list_eval_scenarios, run_evaluation
 from .scenario_evaluation import ScenarioEvalPlan
 
@@ -47,6 +48,7 @@ def execute_scenario_eval_plan(
     *,
     db_path: str,
     workspace_id: int | None,
+    audit_job_id: int | None = None,
     repo_full: str,
     installation_id: int,
     token: str,
@@ -80,27 +82,55 @@ def execute_scenario_eval_plan(
             executions=(),
         )
 
-    result = run_evaluation_fn(
-        db_path,
-        workspace_id=workspace_id,
-        repo_full=repo_full,
-        installation_id=installation_id,
-        token=token,
-        mode="baseline_plus_backfill",
-        commit_limit_per_artifact=5,
-        output_root=output_root,
-        branch_name=branch_name,
-        candidate_key=scenario_key,
-        expected_control_surfaces=[],
-        manual_notes=(
-            f"Shadow-mode scenario eval triggered from audit job context for selected artifacts: "
-            f"{', '.join(plan.artifact_paths)}"
-        ),
-        run_label=run_label,
-        scenario_key=scenario_key,
-        verifier_rollout_mode=verifier_rollout_mode,
-        verifier_max_requests_per_review=verifier_max_requests_per_review,
-    )
+    reservation_key = None
+    if workspace_id is not None and audit_job_id is not None:
+        budget = reserve_analysis_budget(
+            db_path,
+            workspace_id=workspace_id,
+            feature_key="scenario",
+            reservation_key=f"audit-job:{audit_job_id}:scenario-eval",
+            estimated_units=estimate_feature_units("scenario", request_count=max(1, len(plan.artifact_paths))),
+            audit_job_id=audit_job_id,
+        )
+        if not budget.allowed:
+            return ScenarioEvalExecutionSummary(
+                rollout_mode=plan.rollout_mode,
+                attempted=False,
+                executed=False,
+                reason=f"Scenario eval execution skipped because {budget.reason}.",
+                executions=(),
+            )
+        reservation_key = budget.reservation_key
+
+    try:
+        result = run_evaluation_fn(
+            db_path,
+            workspace_id=workspace_id,
+            repo_full=repo_full,
+            installation_id=installation_id,
+            token=token,
+            mode="baseline_plus_backfill",
+            commit_limit_per_artifact=5,
+            output_root=output_root,
+            branch_name=branch_name,
+            candidate_key=scenario_key,
+            expected_control_surfaces=[],
+            manual_notes=(
+                f"Shadow-mode scenario eval triggered from audit job context for selected artifacts: "
+                f"{', '.join(plan.artifact_paths)}"
+            ),
+            run_label=run_label,
+            scenario_key=scenario_key,
+            verifier_rollout_mode=verifier_rollout_mode,
+            verifier_max_requests_per_review=verifier_max_requests_per_review,
+        )
+    except Exception:
+        release_analysis_budget(
+            db_path,
+            reservation_key=reservation_key,
+            note="scenario eval failed before completion",
+        )
+        raise
 
     execution = ScenarioEvalExecution(
         scenario_key=scenario_key,
@@ -109,6 +139,12 @@ def execute_scenario_eval_plan(
         comparison_path=result.comparison_path,
         assertion_summary=dict(result.package.get("assertion_summary") or {}),
         candidate_source=result.package.get("candidate_source"),
+    )
+    consume_analysis_budget(
+        db_path,
+        reservation_key=reservation_key,
+        consumed_units=estimate_feature_units("scenario", request_count=max(1, len(plan.artifact_paths))),
+        note="scenario eval completed",
     )
     return ScenarioEvalExecutionSummary(
         rollout_mode=plan.rollout_mode,

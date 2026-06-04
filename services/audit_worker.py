@@ -1182,6 +1182,7 @@ def _execute_scenario_eval_for_job(
             scenario_eval_plan,
             db_path=settings.db_path,
             workspace_id=allocation.workspace_id if allocation is not None else None,
+            audit_job_id=job.id,
             repo_full=job.repo_full,
             installation_id=job.installation_id,
             token=installation_token,
@@ -1202,13 +1203,19 @@ def _execute_scenario_eval_for_job(
 
 
 def _execute_hybrid_analysis_for_job(
+    job: AuditJob,
+    settings: WorkerSettings,
     hybrid_analysis_plan: HybridAnalysisPlan,
     artifact_snapshots: dict[str, str],
 ) -> HybridExecutionSummary:
     try:
+        allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
         return execute_hybrid_analysis_plan(
             hybrid_analysis_plan,
             artifact_snapshots=artifact_snapshots,
+            db_path=settings.db_path,
+            workspace_id=allocation.workspace_id if allocation is not None else None,
+            audit_job_id=job.id,
         )
     except Exception as exc:
         return HybridExecutionSummary(
@@ -2325,6 +2332,8 @@ def _handle_fallback(
     )
     effective_hybrid_analysis_plan = hybrid_analysis_plan or _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
     effective_hybrid_execution_summary = hybrid_execution_summary or _execute_hybrid_analysis_for_job(
+        job,
+        settings,
         effective_hybrid_analysis_plan,
         artifact_snapshots or {},
     )
@@ -2647,7 +2656,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             snapshot_count=len(artifact_snapshots),
         )
         phase_started = time.perf_counter()
-        hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
+        hybrid_execution_summary = _execute_hybrid_analysis_for_job(job, settings, hybrid_analysis_plan, artifact_snapshots)
         log_phase(
             "Audit job phase completed",
             step="hybrid_analysis_execute",
@@ -2722,7 +2731,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
     scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
     hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
-    hybrid_execution_summary = _execute_hybrid_analysis_for_job(hybrid_analysis_plan, artifact_snapshots)
+    hybrid_execution_summary = _execute_hybrid_analysis_for_job(job, settings, hybrid_analysis_plan, artifact_snapshots)
     try:
         phase_started = time.perf_counter()
         if should_run_semantic:
@@ -2796,7 +2805,6 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 max_requests_per_review=settings.verifier_max_requests_per_review,
                 policy_verifier_strategy=verifier_strategy,
             )
-        log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
         log_phase("Audit job phase completed", step="build_llm_comment", started_at=phase_started)
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}"

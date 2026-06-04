@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -15,6 +16,7 @@ import pytest
 import main
 import services.mcp_broker as mcp_broker
 from config import Settings
+from services.analysis_budget import consume_analysis_budget, reserve_analysis_budget
 from services.audit_jobs import init_db
 from services.control_plane_records import (
     allocate_repo_to_workspace,
@@ -50,6 +52,16 @@ def _reset_mcp_broker_rate_limiters():
     mcp_broker._mcp_invoke_limiter = mcp_broker._SlidingWindowRateLimiter(limit=120, window_seconds=60.0)
     mcp_broker._mcp_mutation_limiter = mcp_broker._SlidingWindowRateLimiter(limit=12, window_seconds=60.0)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_local_debug_login_for_mcp_tests():
+    original = main.settings.local_debug_disable_login
+    main.settings.local_debug_disable_login = False
+    try:
+        yield
+    finally:
+        main.settings.local_debug_disable_login = original
 
 
 def _issue_broker_token(client: TestClient, client_id: str, client_secret: str) -> str:
@@ -321,6 +333,11 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
             json={"tool_name": "vipari.list_escalations", "arguments": {}},
             headers=_bearer_header(broker_token),
         )
+        budget_response = client.post(
+            "/api/agent-integrations/mcp/invoke",
+            json={"tool_name": "vipari.get_workspace_budget_status", "arguments": {}},
+            headers=_bearer_header(broker_token),
+        )
 
     main.AUDIT_DB_PATH = original_db_path
     main.settings.app_encryption_key = original_enc
@@ -333,6 +350,7 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     assert "drift.read" in available_tools_response.json()["result"]["granted_scopes"]
     assert "vipari.list_repos" in tool_names
     assert "vipari.get_repo_posture" in tool_names
+    assert "vipari.get_workspace_budget_status" in tool_names
     assert repos_response.status_code == 200
     assert repos_response.json()["result"]["repos"][0]["repo_full"] == "doria90/dummyAI"
     assert posture_response.status_code == 200
@@ -344,9 +362,80 @@ def test_mcp_broker_tools_and_read_calls(tmp_path):
     assert casefile_response.json()["result"]["audit_brief"]["latest_execution"]["hybrid_analysis_execution"]["executions"][0]["analyzer_key"] == "prompt_policy_static_scan"
     assert escalations_response.status_code == 200
     assert escalations_response.json()["result"]["workspace_id"] >= 1
+    assert budget_response.status_code == 200
+    assert budget_response.json()["result"]["workspace_display_name"] == "MCP Workspace"
     entries = list_control_plane_audit_logs_for_workspace(db_path, 1)
     assert any(entry.event_type == "mcp_broker.token_issued" for entry in entries)
     assert any(entry.event_type == "mcp_broker.tool_invoked" for entry in entries)
+
+
+def test_mcp_broker_read_tool_returns_workspace_budget_usage(tmp_path):
+    db_path = str(tmp_path / "mcp-broker-budget-read.db")
+    original_db_path = main.AUDIT_DB_PATH
+    original_enc = main.settings.app_encryption_key
+    original_jwt_secret = main.settings.internal_jwt_secret
+    main.AUDIT_DB_PATH = db_path
+    main.settings.app_encryption_key = "very-secret-key-exactly-32chars!"
+    main.settings.internal_jwt_secret = "broker-token-secret-with-32-bytes!!"
+
+    client_id, client_secret = _seed_mcp_workspace(db_path)
+    upsert_entitlement(
+        db_path,
+        workspace_id=1,
+        payload={
+            **derive_entitlement_payload("team", "active"),
+            "feature_flags_json": json.dumps(
+                {
+                    "advanced_analysis_units_limit": 20,
+                    "advanced_analysis_window_seconds": 86400,
+                    "advanced_analysis_price_threshold_usd": 0.01,
+                    "advanced_analysis_provider_costs": {
+                        "openai": {
+                            "gpt-4o": {
+                                "prompt_per_1k_usd": 0.01,
+                                "completion_per_1k_usd": 0.03,
+                            }
+                        }
+                    },
+                }
+            ),
+        },
+    )
+    reservation = reserve_analysis_budget(
+        db_path,
+        workspace_id=1,
+        feature_key="semantic_review",
+        reservation_key="mcp-budget-read-semantic",
+        estimated_units=5,
+        now=time.time(),
+    )
+    consume_analysis_budget(
+        db_path,
+        reservation_key=reservation.reservation_key,
+        consumed_units=5,
+        usage=SimpleNamespace(prompt_tokens=1000, completion_tokens=1000),
+        provider="openai",
+        model="gpt-4o",
+        note="semantic review completed",
+    )
+
+    with TestClient(main.app) as client:
+        broker_token = _issue_broker_token(client, client_id, client_secret)
+        response = client.post(
+            "/api/agent-integrations/mcp/invoke",
+            json={"tool_name": "vipari.get_workspace_budget_status", "arguments": {}},
+            headers=_bearer_header(broker_token),
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+    main.settings.app_encryption_key = original_enc
+    main.settings.internal_jwt_secret = original_jwt_secret
+
+    assert response.status_code == 200
+    assert response.json()["result"]["workspace_display_name"] == "MCP Workspace"
+    assert response.json()["result"]["used_units"] == 5
+    assert response.json()["result"]["estimated_cost_usd"] == 0.04
+    assert response.json()["result"]["feature_breakdown"][0]["feature_key"] == "semantic_review"
 
 
 def test_mcp_broker_read_only_token_hides_write_tools_and_rejects_invocation(tmp_path):

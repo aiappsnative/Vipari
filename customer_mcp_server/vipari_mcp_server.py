@@ -151,6 +151,12 @@ def list_escalations(include_watch: bool = False, limit: int = 20) -> dict[str, 
     )
 
 
+@server.tool(name="vipari.get_workspace_budget_status")
+def get_workspace_budget_status() -> dict[str, object]:
+    """Get the current advanced analysis budget status for the bound Vipari workspace."""
+    return _invoke("vipari.get_workspace_budget_status", {})
+
+
 @server.tool(name="vipari.get_export_status")
 def get_export_status(export_id: int) -> dict[str, object]:
     """Get the current status for one workspace-owned Vipari export job."""

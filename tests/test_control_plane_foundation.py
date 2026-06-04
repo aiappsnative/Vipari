@@ -8,7 +8,14 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 import config
 from config import Settings
 from services.audit_jobs import init_db
-from services.entitlements import derive_entitlement_payload, get_plan_definition, resolve_price_id
+from services.entitlements import (
+    DEFAULT_ANALYSIS_BUDGET_WINDOW_SECONDS,
+    derive_entitlement_payload,
+    get_analysis_budget_limit,
+    get_analysis_budget_window_seconds,
+    get_plan_definition,
+    resolve_price_id,
+)
 
 
 def test_entitlement_catalog_supports_enterprise_and_business_alias():
@@ -26,6 +33,22 @@ def test_entitlement_payload_disables_dashboard_for_failed_billing():
     assert payload["plan_code"] == "team"
     assert payload["dashboard_enabled"] is False
     assert payload["repo_limit"] == 20
+
+
+def test_analysis_budget_limit_defaults_follow_plan_tiers():
+    assert get_analysis_budget_limit("free") == 100
+    assert get_analysis_budget_limit("starter") == 2000
+    assert get_analysis_budget_limit("team") == 20000
+    assert get_analysis_budget_limit("enterprise") is None
+
+
+def test_analysis_budget_feature_flags_override_plan_defaults():
+    assert get_analysis_budget_limit(
+        "team",
+        '{"advanced_analysis_units_limit": 5, "advanced_analysis_window_seconds": 86400}',
+    ) == 5
+    assert get_analysis_budget_window_seconds('{"advanced_analysis_window_seconds": 86400}') == 86400
+    assert get_analysis_budget_window_seconds('{"advanced_analysis_window_seconds": "bad"}') == DEFAULT_ANALYSIS_BUDGET_WINDOW_SECONDS
 
 
 def test_price_resolution_prefers_enterprise_key_but_supports_legacy_business_key():

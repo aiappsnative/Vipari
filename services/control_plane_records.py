@@ -377,6 +377,23 @@ class AdminWorkspaceUserRecord:
 
 
 @dataclass(frozen=True)
+class WorkspaceBudgetSummaryRecord:
+    workspace_id: int
+    workspace_slug: str
+    workspace_display_name: str
+    plan_code: str | None
+    subscription_status: str | None
+    unit_limit: int | None
+    used_units: int
+    remaining_units: int | None
+    utilization_percent: float | None
+    estimated_cost_usd: float | None
+    alert_state: str
+    feature_breakdown: tuple[dict[str, object], ...]
+    alerts: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True)
 class AdminInstallationRecord:
     installation_id: int
     workspace_id: int | None
@@ -1750,6 +1767,82 @@ def count_workspaces(db_path: str) -> int:
     with _connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0]
     return int(count)
+
+
+def get_workspace_budget_status(db_path: str, workspace_id: int, *, now: float | None = None) -> WorkspaceBudgetSummaryRecord | None:
+    workspace = get_workspace_by_id(db_path, workspace_id)
+    if workspace is None:
+        return None
+    entitlement = get_workspace_entitlement(db_path, workspace_id)
+    from .analysis_budget_reporting import get_workspace_budget_status as _get_workspace_budget_status
+
+    status = _get_workspace_budget_status(db_path, workspace_id=workspace_id, entitlement=entitlement, now=now)
+    return WorkspaceBudgetSummaryRecord(
+        workspace_id=workspace.id,
+        workspace_slug=workspace.slug,
+        workspace_display_name=workspace.display_name,
+        plan_code=entitlement.plan_code if entitlement is not None else None,
+        subscription_status=entitlement.subscription_status if entitlement is not None else None,
+        unit_limit=status.unit_limit,
+        used_units=status.used_units,
+        remaining_units=status.remaining_units,
+        utilization_percent=status.utilization_percent,
+        estimated_cost_usd=status.estimated_cost_usd,
+        alert_state=status.alert_state,
+        feature_breakdown=tuple(
+            {
+                "feature_key": item.feature_key,
+                "used_units": item.used_units,
+                "reserved_units": item.reserved_units,
+                "consumed_units": item.consumed_units,
+                "event_count": item.event_count,
+            }
+            for item in status.feature_breakdown
+        ),
+        alerts=tuple(
+            {
+                "code": item.code,
+                "severity": item.severity,
+                "message": item.message,
+            }
+            for item in status.alerts
+        ),
+    )
+
+
+def get_all_workspace_budget_summary(
+    db_path: str,
+    *,
+    limit: int = 20,
+    sort_by: str = "used_units",
+    now: float | None = None,
+) -> list[WorkspaceBudgetSummaryRecord]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT w.id, w.slug, w.display_name
+            FROM workspaces w
+            ORDER BY lower(w.display_name), w.id
+            """
+        ).fetchall()
+
+    summaries = [
+        summary
+        for summary in (get_workspace_budget_status(db_path, int(row["id"]), now=now) for row in rows)
+        if summary is not None
+    ]
+
+    normalized_sort = (sort_by or "used_units").strip().lower()
+    if normalized_sort == "name":
+        summaries.sort(key=lambda item: (item.workspace_display_name.lower(), item.workspace_id))
+    elif normalized_sort == "utilization":
+        summaries.sort(
+            key=lambda item: (item.utilization_percent if item.utilization_percent is not None else -1.0, item.used_units, item.workspace_id),
+            reverse=True,
+        )
+    else:
+        summaries.sort(key=lambda item: (item.used_units, item.workspace_id), reverse=True)
+    return summaries[: max(1, int(limit))]
 
 
 def get_billing_customer_for_workspace(db_path: str, workspace_id: int) -> BillingCustomerRecord | None:

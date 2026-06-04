@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import math
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from .control_plane_records import EntitlementRecord, get_workspace_entitlement
+from .entitlements import get_analysis_budget_limit, get_analysis_budget_window_seconds
 from .persistence import connect_sqlite
 
 
@@ -99,26 +99,14 @@ def resolve_analysis_budget_policy(
     entitlement: EntitlementRecord | None = None,
 ) -> AnalysisBudgetPolicy:
     resolved_entitlement = entitlement or get_workspace_entitlement(db_path, workspace_id)
-    if resolved_entitlement is None or not resolved_entitlement.feature_flags_json:
-        return AnalysisBudgetPolicy(unit_limit=None)
-    try:
-        flags = json.loads(resolved_entitlement.feature_flags_json)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    if resolved_entitlement is None:
         return AnalysisBudgetPolicy(unit_limit=None)
 
-    raw_limit = flags.get("advanced_analysis_units_limit")
-    if raw_limit is None:
-        return AnalysisBudgetPolicy(unit_limit=None)
-
-    try:
-        unit_limit = max(0, int(raw_limit))
-    except (TypeError, ValueError):
-        return AnalysisBudgetPolicy(unit_limit=None)
-
-    try:
-        window_seconds = max(3600, int(flags.get("advanced_analysis_window_seconds") or DEFAULT_ADVANCED_ANALYSIS_WINDOW_SECONDS))
-    except (TypeError, ValueError):
-        window_seconds = DEFAULT_ADVANCED_ANALYSIS_WINDOW_SECONDS
+    unit_limit = get_analysis_budget_limit(
+        resolved_entitlement.plan_code,
+        resolved_entitlement.feature_flags_json,
+    )
+    window_seconds = get_analysis_budget_window_seconds(resolved_entitlement.feature_flags_json)
 
     return AnalysisBudgetPolicy(unit_limit=unit_limit, window_seconds=window_seconds)
 

@@ -16,6 +16,8 @@ from .branch_scan_jobs import (
     mark_branch_scan_job_failed,
     mark_branch_scan_job_retry,
 )
+from .analysis_budget import consume_analysis_budget, estimate_feature_units, release_analysis_budget, reserve_analysis_budget
+from .control_plane_records import get_repo_allocation_for_installation
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .onboarding import sync_on_pr_merge_artifact_changes
 from .onboarding_records import (
@@ -53,6 +55,21 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
         materialize_repo_journey(settings.db_path, job.repo_full)
         return "completed"
 
+    budget_reservation_key: str | None = None
+    repo_allocation = get_repo_allocation_for_installation(settings.db_path, job.installation_id, job.repo_full)
+    if repo_allocation is not None:
+        budget_reservation = reserve_analysis_budget(
+            settings.db_path,
+            workspace_id=repo_allocation.workspace_id,
+            feature_key="branch_scan",
+            reservation_key=f"branch-scan:{job.id}:{job.commit_sha}",
+            estimated_units=estimate_feature_units("branch_scan", request_count=len(artifacts)),
+        )
+        if not budget_reservation.allowed:
+            mark_branch_scan_job_completed(settings.db_path, job.id)
+            return "completed"
+        budget_reservation_key = budget_reservation.reservation_key
+
     jwt_token = generate_jwt(
         settings.github_app_id,
         settings.github_private_key_path,
@@ -62,60 +79,68 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
 
     created_any_profile = False
     removed_paths: set[str] = set()
-    for artifact in artifacts:
-        history_job = create_historical_backfill_jobs(
-            settings.db_path,
-            onboarding_id=onboarding.id,
-            repo_full=job.repo_full,
-            jobs=[
-                HistoricalBackfillJobInput(
-                    onboarded_artifact_id=artifact.id,
-                    artifact_path=artifact.artifact_path,
-                    artifact_type=artifact.artifact_type,
-                    commit_shas=[job.commit_sha],
-                )
-            ],
-            status="processing",
-            job_kind="branch_scan",
-        )[0]
+    try:
+        for artifact in artifacts:
+            history_job = create_historical_backfill_jobs(
+                settings.db_path,
+                onboarding_id=onboarding.id,
+                repo_full=job.repo_full,
+                jobs=[
+                    HistoricalBackfillJobInput(
+                        onboarded_artifact_id=artifact.id,
+                        artifact_path=artifact.artifact_path,
+                        artifact_type=artifact.artifact_type,
+                        commit_shas=[job.commit_sha],
+                    )
+                ],
+                status="processing",
+                job_kind="branch_scan",
+            )[0]
 
-        try:
-            content = fetch_file_content(job.repo_full, artifact.artifact_path, token, ref=job.commit_sha)
-        except HTTPError as exc:
-            if exc.code == 404:
-                removed_paths.add(artifact.artifact_path)
-                update_historical_backfill_job_status(
-                    settings.db_path,
-                    job_id=history_job.id,
-                    status="completed",
-                    completed_commit_count=0,
-                    last_error=None,
-                )
-                continue
-            raise
+            try:
+                content = fetch_file_content(job.repo_full, artifact.artifact_path, token, ref=job.commit_sha)
+            except HTTPError as exc:
+                if exc.code == 404:
+                    removed_paths.add(artifact.artifact_path)
+                    update_historical_backfill_job_status(
+                        settings.db_path,
+                        job_id=history_job.id,
+                        status="completed",
+                        completed_commit_count=0,
+                        last_error=None,
+                    )
+                    continue
+                raise
 
-        _versions, profiles = record_historical_backfill_versions(
+            _versions, profiles = record_historical_backfill_versions(
+                settings.db_path,
+                backfill_job_id=history_job.id,
+                onboarding_id=onboarding.id,
+                onboarded_artifact_id=artifact.id,
+                repo_full=job.repo_full,
+                artifact_path=artifact.artifact_path,
+                artifact_type=artifact.artifact_type,
+                snapshots=[HistoricalArtifactSnapshotInput(commit_sha=job.commit_sha, content=content)],
+                extract_signal_terms_fn=extract_signal_terms_from_text,
+                build_profile_fn=build_attribute_profile,
+                branch_ref=job.branch_ref,
+                triggered_by=job.triggered_by,
+            )
+            created_any_profile = created_any_profile or bool(profiles)
+            update_historical_backfill_job_status(
+                settings.db_path,
+                job_id=history_job.id,
+                status="completed",
+                completed_commit_count=len(profiles),
+                last_error=None,
+            )
+    except Exception:
+        release_analysis_budget(
             settings.db_path,
-            backfill_job_id=history_job.id,
-            onboarding_id=onboarding.id,
-            onboarded_artifact_id=artifact.id,
-            repo_full=job.repo_full,
-            artifact_path=artifact.artifact_path,
-            artifact_type=artifact.artifact_type,
-            snapshots=[HistoricalArtifactSnapshotInput(commit_sha=job.commit_sha, content=content)],
-            extract_signal_terms_fn=extract_signal_terms_from_text,
-            build_profile_fn=build_attribute_profile,
-            branch_ref=job.branch_ref,
-            triggered_by=job.triggered_by,
+            reservation_key=budget_reservation_key,
+            note=f"branch scan failed for {job.repo_full}@{job.commit_sha}",
         )
-        created_any_profile = created_any_profile or bool(profiles)
-        update_historical_backfill_job_status(
-            settings.db_path,
-            job_id=history_job.id,
-            status="completed",
-            completed_commit_count=len(profiles),
-            last_error=None,
-        )
+        raise
 
     if removed_paths:
         sync_on_pr_merge_artifact_changes(
@@ -125,6 +150,12 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
         )
     else:
         materialize_repo_journey(settings.db_path, job.repo_full)
+    consume_analysis_budget(
+        settings.db_path,
+        reservation_key=budget_reservation_key,
+        consumed_units=estimate_feature_units("branch_scan", request_count=len(artifacts)),
+        note=f"branch scan completed for {job.repo_full}@{job.commit_sha}",
+    )
     mark_branch_scan_job_completed(settings.db_path, job.id)
     return "completed_with_updates" if created_any_profile else "completed"
 

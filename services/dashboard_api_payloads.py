@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 import json
 
-from services.control_plane_records import list_repo_allocations_for_workspace
+from services.control_plane_records import get_workspace_budget_status, list_repo_allocations_for_workspace
 from services.dashboard_views import build_dashboard_overview_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.governance_policy import GOVERNANCE_ROLLOUT_DRY_RUN, build_governance_ci_outcome, normalize_governance_rollout_mode
 
@@ -120,13 +120,37 @@ def build_dashboard_escalation_queue_payload(
     *,
     allowed_repo_fulls: set[str] | None = None,
     include_watch: bool = False,
+    workspace_id: int | None = None,
     build_workspace_escalation_queue_fn: Callable[..., dict[str, object]] = build_workspace_escalation_queue,
 ) -> dict[str, object]:
-    return build_workspace_escalation_queue_fn(
+    payload = build_workspace_escalation_queue_fn(
         db_path,
         allowed_repo_fulls=allowed_repo_fulls,
         include_watch=include_watch,
     )
+    payload["workspace_budget"] = _build_workspace_budget_payload(db_path, workspace_id=workspace_id)
+    return payload
+
+
+def _build_workspace_budget_payload(db_path: str, *, workspace_id: int | None) -> dict[str, object] | None:
+    if workspace_id is None:
+        return None
+    summary = get_workspace_budget_status(db_path, workspace_id)
+    if summary is None:
+        return None
+    payload = asdict(summary)
+    payload["alerts"] = list(summary.alerts)
+    payload["feature_breakdown"] = list(summary.feature_breakdown)
+    utilization = float(summary.utilization_percent or 0.0)
+    if summary.unit_limit is None:
+        payload["budget_status"] = "unlimited"
+    elif (summary.remaining_units or 0) <= 0:
+        payload["budget_status"] = "exhausted"
+    elif utilization >= 80.0:
+        payload["budget_status"] = "low"
+    else:
+        payload["budget_status"] = "available"
+    return payload
 
 
 def build_pending_proposals_payload(

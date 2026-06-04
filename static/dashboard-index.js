@@ -1328,18 +1328,55 @@ function renderWorkspacePostureBar(queuePayload) {
     const reasons = asArray(queuePayload?.workspace_posture_reasons);
     const escalationCount = Number(queuePayload?.escalation_count || 0);
     const watchCount = Number(queuePayload?.watch_count || 0);
+    const workspaceBudget = queuePayload?.workspace_budget && typeof queuePayload.workspace_budget === "object"
+        ? queuePayload.workspace_budget
+        : null;
 
     const postureClass = posture === "risk" ? "posture-bar-risk" : posture === "watch" ? "posture-bar-watch" : "posture-bar-healthy";
     const postureLabel = posture === "risk" ? "Risk" : posture === "watch" ? "Watch" : "Healthy";
     const reasonHtml = reasons.length
         ? `<span class="posture-bar-reasons">${reasons.map((r) => `<span class="posture-bar-reason">${escapeHtml(r)}</span>`).join("")}</span>`
         : "";
+        let budgetHtml = "";
+        if (workspaceBudget) {
+            const budgetStatus = String(workspaceBudget.budget_status || "available");
+            const budgetLimit = workspaceBudget.unit_limit;
+            const budgetUsed = Number(workspaceBudget.used_units || 0);
+            const budgetRemaining = workspaceBudget.remaining_units;
+            const budgetUtilization = Number(workspaceBudget.utilization_percent || 0);
+            const budgetSummary = budgetLimit == null
+                ? `${budgetUsed} units used · unlimited plan`
+                : `${budgetUsed}/${Number(budgetLimit || 0)} units · ${Number(budgetRemaining || 0)} left`;
+            const featureSummary = asArray(workspaceBudget.feature_breakdown)
+                .slice(0, 2)
+                .map((entry) => `${entry.feature_key || "feature"}: ${Number(entry.used_units || 0)}u`)
+                .join(" · ");
+            const budgetAlerts = asArray(workspaceBudget.alerts)
+                .map((entry) => String(entry?.message || "").trim())
+                .filter((entry) => entry);
+            const budgetLabel = budgetStatus === "exhausted"
+                ? "Budget exhausted"
+                : budgetStatus === "low"
+                    ? `Budget ${budgetUtilization.toFixed(0)}% used`
+                    : budgetStatus === "unlimited"
+                        ? "Budget available"
+                        : "Budget healthy";
+            budgetHtml = `
+                <span class="posture-bar-budget posture-bar-budget-${escapeHtml(budgetStatus)}" title="Advanced analysis budget">
+                    <strong>${escapeHtml(budgetLabel)}</strong>
+                    <span>${escapeHtml(budgetSummary)}</span>
+                    ${featureSummary ? `<span>${escapeHtml(featureSummary)}</span>` : ""}
+                    ${budgetAlerts[0] ? `<span class="posture-bar-budget-alert">${escapeHtml(budgetAlerts[0])}</span>` : ""}
+                </span>
+            `;
+        }
     const countsHtml = `<span class="posture-bar-counts"><strong>${escalationCount}</strong> escalation${escalationCount !== 1 ? "s" : ""} &middot; <strong>${watchCount}</strong> watch</span>`;
 
     return `
         <div class="posture-bar-inner ${postureClass}">
             <span class="posture-bar-indicator" aria-label="Workspace posture: ${escapeHtml(postureLabel)}">${escapeHtml(postureLabel)}</span>
             ${reasonHtml}
+                        ${budgetHtml}
             ${countsHtml}
         </div>
     `;

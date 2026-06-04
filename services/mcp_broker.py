@@ -24,6 +24,7 @@ from .control_plane_records import (
     create_control_plane_audit_log,
     get_machine_principal_by_client_id,
     get_repo_allocation_for_workspace,
+    get_workspace_budget_status,
     get_workspace_entitlement,
     list_repo_allocations_for_workspace,
 )
@@ -221,6 +222,16 @@ MCP_BROKER_TOOLS: tuple[dict[str, Any], ...] = (
                 "include_watch": {"type": "boolean"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },
+        },
+    },
+    {
+        "name": "vipari.get_workspace_budget_status",
+        "title": "Get workspace budget status",
+        "description": "Return the current advanced analysis budget status and feature breakdown for the authenticated workspace.",
+        "required_scope": MCP_READ_SCOPE,
+        "input_schema": {
+            "type": "object",
+            "properties": {},
         },
     },
     {
@@ -701,6 +712,7 @@ def _resolve_mcp_tool_handler(tool_name: str):
         "vipari.get_repo_posture": _tool_get_repo_posture,
         "vipari.get_repo_casefile": _tool_get_repo_casefile,
         "vipari.list_escalations": _tool_list_escalations,
+        "vipari.get_workspace_budget_status": _tool_get_workspace_budget_status,
         "vipari.get_export_status": _tool_get_export_status,
         "vipari.create_compliance_export": _tool_create_compliance_export,
         "vipari.list_baseline_proposals": _tool_list_baseline_proposals,
@@ -904,6 +916,17 @@ def _tool_list_repos(arguments: dict[str, Any], *, context: McpBrokerPrincipalCo
         "repo_count": len(payload),
         "repos": payload,
     }
+
+
+def _tool_get_workspace_budget_status(arguments: dict[str, Any], *, context: McpBrokerPrincipalContext, db_path: str) -> dict[str, Any]:
+    del arguments
+    summary = get_workspace_budget_status(db_path, context.workspace_id)
+    if summary is None:
+        _raise_mcp_client_error(status_code=404, error="workspace_not_found", message="Workspace not found.")
+    result = asdict(summary)
+    result["alerts"] = list(summary.alerts)
+    result["feature_breakdown"] = list(summary.feature_breakdown)
+    return result
 
 
 def _tool_get_repo_posture(arguments: dict[str, Any], *, context: McpBrokerPrincipalContext, db_path: str) -> dict[str, Any]:

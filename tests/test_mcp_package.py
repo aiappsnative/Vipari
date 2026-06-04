@@ -58,6 +58,7 @@ def test_build_customer_mcp_bundle_uses_self_contained_package_directory():
         "vipari.get_repo_posture",
         "vipari.get_repo_casefile",
         "vipari.list_escalations",
+        "vipari.get_workspace_budget_status",
         "vipari.get_export_status",
         "vipari.create_compliance_export",
         "vipari.list_baseline_proposals",

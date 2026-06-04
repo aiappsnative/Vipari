@@ -7,9 +7,12 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from engine.analysis import analyze_diff
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from services.analysis_budget import list_analysis_budget_events
 from services.audit_jobs import init_db
 from services.audit_records import RepoStaticDriftSummary, record_audit_result
+from services.control_plane_records import allocate_repo_to_workspace, create_user, create_workspace, replace_repo_connections, update_repo_allocation_status, upsert_entitlement, upsert_github_installation, upsert_subscription
 from services.dashboard_views import DashboardOverviewRiskState, DashboardOverviewView, DriftEpisode, RepoDashboardArtifactEntry, RepoDashboardBackfillSummary, RepoDashboardView, _RepoArtifactEvidenceBundle, _RepoArtifactProfileContext, _build_repo_artifact_topology, _build_repo_history_cues, _collapse_storyline_episodes, _insight_title, build_artifact_attribute_profile, build_dashboard_overview_view, build_repo_dashboard_view, invalidate_dashboard_caches, list_repo_dashboard_index
+from services.entitlements import derive_entitlement_payload
 from services.governance_signals import build_repo_governance_posture
 from services.signal_fusion import priority_from_fused_signals, priority_sort_rank, priority_weighted_risk
 from services.onboarding import (
@@ -404,6 +407,145 @@ def test_live_branch_head_scan_removes_deleted_artifacts(tmp_path):
     assert [artifact.artifact_path for artifact in dashboard.artifacts] == ["prompts/refund.txt"]
     assert dashboard.onboarding is not None
     assert dashboard.onboarding.discovered_artifact_count == 1
+
+
+def _bind_branch_scan_repo_to_workspace(db_path: str, *, repo_full: str, installation_id: int, limit: int) -> int:
+    owner = create_user(db_path, display_name="Budget Owner", primary_email="budget-owner@example.com")
+    workspace = create_workspace(db_path, slug="branch-scan-budget", display_name="Branch Scan Budget", billing_owner_user_id=owner.id)
+    upsert_subscription(
+        db_path,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_branch_scan_budget",
+        stripe_price_id="price_branch_scan_budget",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=1.0,
+        current_period_end_at=86401.0,
+        next_payment_at=86401.0,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = '{"advanced_analysis_units_limit": %d, "advanced_analysis_window_seconds": 86400}' % limit
+    upsert_entitlement(db_path, workspace_id=workspace.id, payload=payload)
+    upsert_github_installation(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        account_id=str(installation_id),
+        account_login="doria90",
+        account_type="User",
+        target_type="User",
+        status="active",
+    )
+    replace_repo_connections(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repositories=[
+            {
+                "repo_github_id": repo_full.split("/", 1)[1],
+                "repo_full": repo_full,
+                "default_branch": "main",
+                "is_private": True,
+                "status": "available",
+            }
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        db_path,
+        workspace_id=workspace.id,
+        installation_id=installation_id,
+        repo_github_id=repo_full.split("/", 1)[1],
+        repo_full=repo_full,
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(db_path, allocation.id, "onboarded")
+    return workspace.id
+
+
+def test_live_branch_head_scan_skips_when_budget_is_exhausted(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-exhausted.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=0)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-exhausted",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content") as fetch_file_content_mock:
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result == "completed"
+    fetch_file_content_mock.assert_not_called()
+    assert list_analysis_budget_events(db_path, workspace_id=workspace_id) == []
+
+
+def test_live_branch_head_scan_records_budget_event_on_success(tmp_path):
+    db_path = str(tmp_path / "dashboard-live-head-budget-success.db")
+    init_db(db_path)
+
+    onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: PROMPT_BASELINE,
+    )
+    workspace_id = _bind_branch_scan_repo_to_workspace(db_path, repo_full="doria90/dummyAI", installation_id=123, limit=10)
+    job = create_branch_scan_job(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        commit_sha="livehead-budget-success",
+        branch_ref="refs/heads/main",
+        triggered_by="push_webhook",
+    )
+
+    with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
+        "services.branch_scan_worker.get_installation_token", return_value="installation-token"
+    ), patch("services.branch_scan_worker.fetch_file_content", return_value=PROMPT_CURRENT):
+        result = process_branch_scan_job(
+            job,
+            BranchScanWorkerSettings(
+                db_path=db_path,
+                github_app_id="app-id",
+                github_private_key_path="/tmp/test-key.pem",
+            ),
+        )
+
+    assert result in {"completed", "completed_with_updates"}
+    budget_events = list_analysis_budget_events(db_path, workspace_id=workspace_id)
+    assert len(budget_events) == 1
+    assert budget_events[0]["feature_key"] == "branch_scan"
+    assert budget_events[0]["status"] == "consumed"
 
 def test_priority_from_fused_signals_raises_dashboard_priority_for_high_risk_audits():
     assert priority_from_fused_signals(0.41, risk_level="High") == "review_now"
