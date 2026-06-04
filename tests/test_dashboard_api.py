@@ -390,6 +390,7 @@ def test_dashboard_escalation_queue_includes_workspace_budget_status(tmp_path):
         {
             "advanced_analysis_units_limit": 8,
             "advanced_analysis_window_seconds": 86400,
+            "advanced_analysis_alert_utilization_percent": 50,
             "advanced_analysis_price_threshold_usd": 0.01,
             "advanced_analysis_provider_costs": {
                 "openai": {
@@ -433,11 +434,13 @@ def test_dashboard_escalation_queue_includes_workspace_budget_status(tmp_path):
     assert body["workspace_budget"]["workspace_display_name"] == "Dashboard Workspace"
     assert body["workspace_budget"]["used_units"] == 5
     assert body["workspace_budget"]["remaining_units"] == 3
-    assert body["workspace_budget"]["budget_status"] == "available"
+    assert body["workspace_budget"]["budget_status"] == "low"
     assert body["workspace_budget"]["estimated_cost_usd"] == 0.04
     assert body["workspace_budget"]["alert_state"] == "warning"
     assert body["workspace_budget"]["alerts"][0]["code"] == "provider_price_threshold_exceeded"
     assert body["workspace_budget"]["feature_breakdown"][0]["feature_key"] == "semantic_review"
+    assert "plan_code" not in body["workspace_budget"]
+    assert "subscription_status" not in body["workspace_budget"]
 
 
 def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):

@@ -21,6 +21,9 @@ class AdvancedAnalysisBudgetExceededError(RuntimeError):
     pass
 
 
+PUBLIC_BUDGET_EXHAUSTED_REASON = "advanced analysis budget exhausted for the active window"
+
+
 @dataclass(frozen=True)
 class LlmUsage:
     prompt_tokens: int
@@ -216,10 +219,7 @@ def reserve_analysis_budget(
                 used_units=used_units,
                 unit_limit=policy.unit_limit,
                 window_start=window_start,
-                reason=(
-                    f"advanced analysis budget exhausted for workspace {workspace_id}: "
-                    f"{used_units}/{policy.unit_limit} units already reserved or consumed in the active window"
-                ),
+                reason=PUBLIC_BUDGET_EXHAUSTED_REASON,
             )
 
         conn.execute(

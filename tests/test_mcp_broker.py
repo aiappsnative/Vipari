@@ -436,6 +436,8 @@ def test_mcp_broker_read_tool_returns_workspace_budget_usage(tmp_path):
     assert response.json()["result"]["used_units"] == 5
     assert response.json()["result"]["estimated_cost_usd"] == 0.04
     assert response.json()["result"]["feature_breakdown"][0]["feature_key"] == "semantic_review"
+    assert "plan_code" not in response.json()["result"]
+    assert "subscription_status" not in response.json()["result"]
 
 
 def test_mcp_broker_read_only_token_hides_write_tools_and_rejects_invocation(tmp_path):

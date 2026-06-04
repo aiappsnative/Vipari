@@ -1102,7 +1102,7 @@ def _build_verifier_note(verifier_plan: VerifierPlan | None) -> str | None:
                 f"{effective_result.risk_level.value} risk with {effective_result.confidence.lower()} confidence."
             )
         if "budget exhausted" in verifier_plan.reason.lower():
-            return f"Verifier stayed in planning-only mode because {verifier_plan.reason.rstrip('.').lower()}."
+            return "Verifier stayed in planning-only mode because active verifier execution was skipped after advanced-analysis budget was exhausted."
         return (
             f"Verifier was eligible to review {verifier_plan.request_count} {request_label} via `{verifier_plan.trigger or 'unknown'}` "
             f"because {verifier_plan.reason.rstrip('.').lower()}, but no usable verifier result was returned."
@@ -2728,10 +2728,6 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     should_run_semantic = _should_run_semantic_review(deterministic_analysis, semantic_strategy)
     semantic_review_completed = should_run_semantic
     workspace_id = _resolve_job_workspace_id(job, settings)
-    scenario_eval_plan = _build_scenario_eval_plan_for_job(job, deterministic_analysis, settings)
-    scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
-    hybrid_analysis_plan = _build_hybrid_analysis_plan_for_job(job, deterministic_analysis, settings)
-    hybrid_execution_summary = _execute_hybrid_analysis_for_job(job, settings, hybrid_analysis_plan, artifact_snapshots)
     try:
         phase_started = time.perf_counter()
         if should_run_semantic:

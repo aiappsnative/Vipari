@@ -25,7 +25,8 @@ from services.onboarding import (
     update_repo_artifact_type,
 )
 from services.branch_scan_jobs import create_branch_scan_job
-from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job
+from services.branch_scan_jobs import get_branch_scan_job
+from services.branch_scan_worker import BranchScanWorkerSettings, process_branch_scan_job, process_next_branch_scan_job_once
 from services.repo_journey import build_repo_journey
 
 
@@ -492,17 +493,19 @@ def test_live_branch_head_scan_skips_when_budget_is_exhausted(tmp_path):
     with patch("services.branch_scan_worker.generate_jwt", return_value="jwt-token"), patch(
         "services.branch_scan_worker.get_installation_token", return_value="installation-token"
     ), patch("services.branch_scan_worker.fetch_file_content") as fetch_file_content_mock:
-        result = process_branch_scan_job(
-            job,
-            BranchScanWorkerSettings(
-                db_path=db_path,
-                github_app_id="app-id",
-                github_private_key_path="/tmp/test-key.pem",
-            ),
+        settings = BranchScanWorkerSettings(
+            db_path=db_path,
+            github_app_id="app-id",
+            github_private_key_path="/tmp/test-key.pem",
         )
+        result = process_next_branch_scan_job_once(settings)
 
-    assert result == "completed"
+    assert result is True
     fetch_file_content_mock.assert_not_called()
+    saved_job = get_branch_scan_job(db_path, job.id)
+    assert saved_job is not None
+    assert saved_job.status == "retry_wait"
+    assert "advanced analysis budget exhausted" in str(saved_job.last_error or "").lower()
     assert list_analysis_budget_events(db_path, workspace_id=workspace_id) == []
 
 

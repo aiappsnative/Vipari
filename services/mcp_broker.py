@@ -923,10 +923,18 @@ def _tool_get_workspace_budget_status(arguments: dict[str, Any], *, context: Mcp
     summary = get_workspace_budget_status(db_path, context.workspace_id)
     if summary is None:
         _raise_mcp_client_error(status_code=404, error="workspace_not_found", message="Workspace not found.")
-    result = asdict(summary)
-    result["alerts"] = list(summary.alerts)
-    result["feature_breakdown"] = list(summary.feature_breakdown)
-    return result
+    return {
+        "workspace_id": summary.workspace_id,
+        "workspace_display_name": summary.workspace_display_name,
+        "unit_limit": summary.unit_limit,
+        "used_units": summary.used_units,
+        "remaining_units": summary.remaining_units,
+        "utilization_percent": summary.utilization_percent,
+        "estimated_cost_usd": summary.estimated_cost_usd,
+        "alert_state": summary.alert_state,
+        "alerts": list(summary.alerts),
+        "feature_breakdown": list(summary.feature_breakdown),
+    }
 
 
 def _tool_get_repo_posture(arguments: dict[str, Any], *, context: McpBrokerPrincipalContext, db_path: str) -> dict[str, Any]:

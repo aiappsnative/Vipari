@@ -16,7 +16,7 @@ from .branch_scan_jobs import (
     mark_branch_scan_job_failed,
     mark_branch_scan_job_retry,
 )
-from .analysis_budget import consume_analysis_budget, estimate_feature_units, release_analysis_budget, reserve_analysis_budget
+from .analysis_budget import AdvancedAnalysisBudgetExceededError, consume_analysis_budget, estimate_feature_units, release_analysis_budget, reserve_analysis_budget
 from .control_plane_records import get_repo_allocation_for_installation
 from .github_integration import fetch_file_content, generate_jwt, get_installation_token
 from .onboarding import sync_on_pr_merge_artifact_changes
@@ -66,8 +66,7 @@ def process_branch_scan_job(job: BranchScanJob, settings: BranchScanWorkerSettin
             estimated_units=estimate_feature_units("branch_scan", request_count=len(artifacts)),
         )
         if not budget_reservation.allowed:
-            mark_branch_scan_job_completed(settings.db_path, job.id)
-            return "completed"
+            raise AdvancedAnalysisBudgetExceededError(budget_reservation.reason or "branch scan budget unavailable")
         budget_reservation_key = budget_reservation.reservation_key
 
     jwt_token = generate_jwt(

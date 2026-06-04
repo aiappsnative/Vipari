@@ -2903,7 +2903,7 @@ def render_control_plane_admin_page(
     total_remaining_units = sum(int(row.get("remaining_units") or 0) for row in constrained_rows)
     top_budget_workspace = str((budget_rows[0].get("workspace_display_name") if budget_rows else "") or "None")
     budget_breakdown_rows = _render_table(
-        ["Workspace", "Plan", "Status", "Budget", "Remaining", "Utilization", "Breakdown"],
+        ["Workspace", "Plan", "Status", "Budget", "Remaining", "Utilization", "Breakdown", "Alerts"],
         [
             [
                 html_escape(str(row.get("workspace_display_name") or "Workspace")),

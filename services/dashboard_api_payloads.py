@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
 import json
 
-from services.control_plane_records import get_workspace_budget_status, list_repo_allocations_for_workspace
+from services.control_plane_records import get_workspace_budget_status, get_workspace_entitlement, list_repo_allocations_for_workspace
 from services.dashboard_views import build_dashboard_overview_view, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.entitlements import get_analysis_budget_alert_utilization_percent
 from services.governance_policy import GOVERNANCE_ROLLOUT_DRY_RUN, build_governance_ci_outcome, normalize_governance_rollout_mode
 
 
@@ -138,15 +138,28 @@ def _build_workspace_budget_payload(db_path: str, *, workspace_id: int | None) -
     summary = get_workspace_budget_status(db_path, workspace_id)
     if summary is None:
         return None
-    payload = asdict(summary)
-    payload["alerts"] = list(summary.alerts)
-    payload["feature_breakdown"] = list(summary.feature_breakdown)
+    payload = {
+        "workspace_id": summary.workspace_id,
+        "workspace_display_name": summary.workspace_display_name,
+        "unit_limit": summary.unit_limit,
+        "used_units": summary.used_units,
+        "remaining_units": summary.remaining_units,
+        "utilization_percent": summary.utilization_percent,
+        "estimated_cost_usd": summary.estimated_cost_usd,
+        "alert_state": summary.alert_state,
+        "alerts": list(summary.alerts),
+        "feature_breakdown": list(summary.feature_breakdown),
+    }
+    entitlement = get_workspace_entitlement(db_path, workspace_id)
+    low_budget_threshold = get_analysis_budget_alert_utilization_percent(
+        entitlement.feature_flags_json if entitlement is not None else None
+    )
     utilization = float(summary.utilization_percent or 0.0)
     if summary.unit_limit is None:
         payload["budget_status"] = "unlimited"
     elif (summary.remaining_units or 0) <= 0:
         payload["budget_status"] = "exhausted"
-    elif utilization >= 80.0:
+    elif utilization >= low_budget_threshold:
         payload["budget_status"] = "low"
     else:
         payload["budget_status"] = "available"
