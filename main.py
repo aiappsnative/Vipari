@@ -5325,11 +5325,19 @@ def dashboard_escalation_queue(request: Request, include_watch: bool = False):
     visibility = _dashboard_repo_visibility(access_context)
     _record_server_timing_metric(timing_metrics, "visibility", visibility_started)
     build_started = time.perf_counter()
+    workspace = access_context.get("workspace") if access_context is not None else None
+    current_user = access_context.get("user") if access_context is not None else None
     result = build_dashboard_escalation_queue_payload(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visibility["allowed_repo_fulls"],
         include_watch=include_watch,
-            workspace_id=(access_context["workspace"].id if access_context and access_context.get("workspace") is not None else None),
+        workspace_id=(
+            workspace.id
+            if workspace is not None
+            and current_user is not None
+            and workspace.billing_owner_user_id == current_user.id
+            else None
+        ),
         build_workspace_escalation_queue_fn=build_workspace_escalation_queue,
     )
     _record_server_timing_metric(timing_metrics, "build", build_started)

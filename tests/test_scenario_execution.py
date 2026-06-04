@@ -193,3 +193,4 @@ def test_execute_scenario_eval_plan_records_budget_event_on_success(tmp_path):
     assert len(budget_events) == 1
     assert budget_events[0]["feature_key"] == "scenario"
     assert budget_events[0]["status"] == "consumed"
+    assert budget_events[0]["units_consumed"] == 5

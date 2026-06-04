@@ -98,6 +98,7 @@ def _budget_wrapped_micro_classifier_client(
 
     def _create_with_budget(**kwargs):
         counter["value"] += 1
+        # Keep duplicate deliveries of the same PR head idempotent at the micro-classifier layer.
         reservation_key = f"relevance:{repo_full}:{pr_number}:{head_sha}:{counter['value']}"
         reservation = reserve_analysis_budget(
             db_path,

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from .persistence import connect_sqlite
 
 
+STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS = 15 * 60
+
+
 @dataclass(frozen=True)
 class BranchScanJob:
     id: int
@@ -67,6 +70,13 @@ def _row_to_job(row: sqlite3.Row) -> BranchScanJob:
     )
 
 
+def _is_stale_processing_job(row: sqlite3.Row, *, now: float) -> bool:
+    if row["status"] != "processing":
+        return False
+    updated_at = float(row["updated_at"] or row["created_at"] or 0.0)
+    return updated_at <= now - STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS
+
+
 def create_branch_scan_job(
     db_path: str,
     *,
@@ -79,20 +89,46 @@ def create_branch_scan_job(
     init_branch_scan_job_db(db_path)
     now = time.time()
     with _connect(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO branch_scan_jobs (
-                repo_full, installation_id, commit_sha, branch_ref, triggered_by,
-                status, attempt_count, next_attempt_at, last_error, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, NULL, ?, ?)
-            ON CONFLICT(repo_full, commit_sha) DO UPDATE SET
-                installation_id = excluded.installation_id,
-                branch_ref = excluded.branch_ref,
-                triggered_by = excluded.triggered_by,
-                updated_at = excluded.updated_at
-            """,
-            (repo_full, installation_id, commit_sha, branch_ref, triggered_by, now, now, now),
-        )
+        existing = conn.execute(
+            "SELECT * FROM branch_scan_jobs WHERE repo_full = ? AND commit_sha = ?",
+            (repo_full, commit_sha),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO branch_scan_jobs (
+                    repo_full, installation_id, commit_sha, branch_ref, triggered_by,
+                    status, attempt_count, next_attempt_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, NULL, ?, ?)
+                """,
+                (repo_full, installation_id, commit_sha, branch_ref, triggered_by, now, now, now),
+            )
+        elif _is_stale_processing_job(existing, now=now):
+            conn.execute(
+                """
+                UPDATE branch_scan_jobs
+                SET installation_id = ?,
+                    branch_ref = ?,
+                    triggered_by = ?,
+                    status = 'queued',
+                    next_attempt_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (installation_id, branch_ref, triggered_by, now, now, existing["id"]),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE branch_scan_jobs
+                SET installation_id = ?,
+                    branch_ref = ?,
+                    triggered_by = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (installation_id, branch_ref, triggered_by, now, existing["id"]),
+            )
         row = conn.execute(
             "SELECT * FROM branch_scan_jobs WHERE repo_full = ? AND commit_sha = ?",
             (repo_full, commit_sha),
@@ -104,6 +140,7 @@ def create_branch_scan_job(
 
 def claim_next_branch_scan_job(db_path: str, now: float | None = None) -> BranchScanJob | None:
     current_time = now or time.time()
+    stale_before = current_time - STALE_BRANCH_SCAN_PROCESSING_JOB_SECONDS
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -114,14 +151,20 @@ def claim_next_branch_scan_job(db_path: str, now: float | None = None) -> Branch
             WHERE id = (
                 SELECT id
                 FROM branch_scan_jobs
-                WHERE status IN ('queued', 'retry_wait')
-                  AND next_attempt_at <= ?
+                WHERE (
+                    status IN ('queued', 'retry_wait')
+                    AND next_attempt_at <= ?
+                )
+                   OR (
+                    status = 'processing'
+                    AND updated_at <= ?
+                )
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
             )
             RETURNING *
             """,
-            (current_time, current_time),
+            (current_time, current_time, stale_before),
         ).fetchone()
     return _row_to_job(row) if row is not None else None
 
@@ -148,6 +191,22 @@ def mark_branch_scan_job_retry(db_path: str, job_id: int, *, error_message: str,
             SET status = 'retry_wait',
                 next_attempt_at = ?,
                 last_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (retry_at, error_message, time.time(), job_id),
+        )
+
+
+def defer_branch_scan_job(db_path: str, job_id: int, *, error_message: str, retry_at: float) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE branch_scan_jobs
+            SET status = 'retry_wait',
+                next_attempt_at = ?,
+                last_error = ?,
+                attempt_count = CASE WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
                 updated_at = ?
             WHERE id = ?
             """,

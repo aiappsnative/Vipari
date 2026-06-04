@@ -42,10 +42,12 @@ from .signal_fusion import fuse_risk_levels, normalize_confidence_level, normali
 from .audit_jobs import (
     AuditJob,
     claim_next_job,
+    get_job,
     mark_job_completed,
     mark_job_failed,
     mark_job_fallback_posted,
     mark_job_retry,
+    remember_job_comment_body,
 )
 from .audit_records import (
     PrCommentEpisodeRecord,
@@ -55,7 +57,18 @@ from .audit_records import (
     record_audit_result,
 )
 from .control_plane_records import get_repo_allocation_for_installation, get_workspace_by_id, get_workspace_entitlement
-from .github_integration import create_pr_review, fetch_file_content, generate_jwt, get_installation_token, post_check_run, post_commit_status, sync_pr_label, upsert_pr_comment
+from .github_integration import (
+    create_pr_review,
+    fetch_file_content,
+    find_matching_pr_comment_id,
+    find_matching_pr_review_id,
+    generate_jwt,
+    get_installation_token,
+    post_check_run,
+    post_commit_status,
+    sync_pr_label,
+    upsert_pr_comment,
+)
 from .governance_policy import (
     GOVERNANCE_ROLLOUT_OFF,
     build_governance_ci_outcome,
@@ -208,6 +221,7 @@ def build_llm_comment(
     analysis_budget_db_path: str | None = None,
     analysis_budget_workspace_id: int | None = None,
     analysis_budget_audit_job_id: int | None = None,
+    analysis_budget_audit_attempt_count: int | None = None,
     return_metadata: bool = False,
 ) -> str | LlmCommentBuildResult:
     recommendation = escalation_recommendation or _build_escalation_recommendation(deterministic_analysis)
@@ -226,11 +240,12 @@ def build_llm_comment(
     )
     semantic_budget_reservation_key = None
     if analysis_budget_db_path and analysis_budget_workspace_id is not None and analysis_budget_audit_job_id is not None:
+        attempt_count = max(1, int(analysis_budget_audit_attempt_count or 1))
         semantic_budget = reserve_analysis_budget(
             analysis_budget_db_path,
             workspace_id=analysis_budget_workspace_id,
             feature_key="semantic_review",
-            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:semantic-review",
+            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:attempt:{attempt_count}:semantic-review",
             estimated_units=estimate_feature_units("semantic_review"),
             audit_job_id=analysis_budget_audit_job_id,
         )
@@ -304,6 +319,7 @@ def build_llm_comment(
         analysis_budget_db_path=analysis_budget_db_path,
         analysis_budget_workspace_id=analysis_budget_workspace_id,
         analysis_budget_audit_job_id=analysis_budget_audit_job_id,
+        analysis_budget_audit_attempt_count=analysis_budget_audit_attempt_count,
     )
     fusion_assessment = _apply_verifier_to_fusion_assessment(fusion_assessment, verifier_plan)
     summary = _apply_verifier_to_summary(summary, verifier_plan)
@@ -934,17 +950,19 @@ def _execute_verifier_plan(
     analysis_budget_db_path: str | None = None,
     analysis_budget_workspace_id: int | None = None,
     analysis_budget_audit_job_id: int | None = None,
+    analysis_budget_audit_attempt_count: int | None = None,
 ) -> VerifierPlan:
     if verifier_plan.rollout_mode != "active" or not verifier_plan.should_invoke or not verifier_plan.requests:
         return verifier_plan
 
     verifier_budget_reservation_key = None
     if analysis_budget_db_path and analysis_budget_workspace_id is not None and analysis_budget_audit_job_id is not None:
+        attempt_count = max(1, int(analysis_budget_audit_attempt_count or 1))
         verifier_budget = reserve_analysis_budget(
             analysis_budget_db_path,
             workspace_id=analysis_budget_workspace_id,
             feature_key="verifier",
-            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:verifier",
+            reservation_key=f"audit-job:{analysis_budget_audit_job_id}:attempt:{attempt_count}:verifier",
             estimated_units=estimate_feature_units("verifier", request_count=len(verifier_plan.requests)),
             audit_job_id=analysis_budget_audit_job_id,
         )
@@ -976,11 +994,29 @@ def _execute_verifier_plan(
                 timeout=timeout_seconds,
             )
         except Exception:
-            release_analysis_budget(
-                analysis_budget_db_path or "",
-                reservation_key=verifier_budget_reservation_key,
-                note="verifier call failed before completion",
-            )
+            if consumed_units > 0 or total_prompt_tokens > 0 or total_completion_tokens > 0:
+                consume_analysis_budget(
+                    analysis_budget_db_path or "",
+                    reservation_key=verifier_budget_reservation_key,
+                    consumed_units=consumed_units,
+                    usage=(
+                        None
+                        if total_prompt_tokens == 0 and total_completion_tokens == 0
+                        else SimpleNamespace(
+                            prompt_tokens=total_prompt_tokens,
+                            completion_tokens=total_completion_tokens,
+                        )
+                    ),
+                    model=model,
+                    provider="openai",
+                    note="verifier execution partially completed before failure",
+                )
+            else:
+                release_analysis_budget(
+                    analysis_budget_db_path or "",
+                    reservation_key=verifier_budget_reservation_key,
+                    note="verifier call failed before completion",
+                )
             raise
         usage = extract_llm_usage(response)
         if usage is not None:
@@ -1102,7 +1138,7 @@ def _build_verifier_note(verifier_plan: VerifierPlan | None) -> str | None:
                 f"{effective_result.risk_level.value} risk with {effective_result.confidence.lower()} confidence."
             )
         if "budget exhausted" in verifier_plan.reason.lower():
-            return "Verifier stayed in planning-only mode because active verifier execution was skipped after advanced-analysis budget was exhausted."
+            return "Verifier stayed in planning-only mode because active verifier execution was skipped on this pass."
         return (
             f"Verifier was eligible to review {verifier_plan.request_count} {request_label} via `{verifier_plan.trigger or 'unknown'}` "
             f"because {verifier_plan.reason.rstrip('.').lower()}, but no usable verifier result was returned."
@@ -1183,6 +1219,7 @@ def _execute_scenario_eval_for_job(
             db_path=settings.db_path,
             workspace_id=allocation.workspace_id if allocation is not None else None,
             audit_job_id=job.id,
+            audit_job_attempt_count=job.attempt_count,
             repo_full=job.repo_full,
             installation_id=job.installation_id,
             token=installation_token,
@@ -1216,6 +1253,7 @@ def _execute_hybrid_analysis_for_job(
             db_path=settings.db_path,
             workspace_id=allocation.workspace_id if allocation is not None else None,
             audit_job_id=job.id,
+            audit_job_attempt_count=job.attempt_count,
         )
     except Exception as exc:
         return HybridExecutionSummary(
@@ -1783,15 +1821,39 @@ def _build_episode_context(job: AuditJob, settings: WorkerSettings) -> PrComment
     )
 
 
-def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> int:
+def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *, installation_token: str | None = None) -> int | None:
     token = installation_token or _get_installation_token_for_job(job, settings)
+    had_recoverable_body = bool(job.comment_body)
+    if not job.comment_body:
+        remember_job_comment_body(settings.db_path, job.id, comment_body=body)
+        job = get_job(settings.db_path, job.id) or job
     existing_comment = get_audit_comment_episode_for_pr_head_sha(
         settings.db_path,
         job.repo_full,
         job.pr_number,
         job.head_sha,
     )
-    return upsert_pr_comment(
+    if existing_comment is None and had_recoverable_body and job.comment_body:
+        recovered_comment_id = find_matching_pr_comment_id(
+            job.repo_full,
+            job.pr_number,
+            token,
+            job.comment_body,
+            head_sha=job.head_sha,
+        )
+        if recovered_comment_id is not None:
+            comment_id = upsert_pr_comment(
+                job.repo_full,
+                job.pr_number,
+                token,
+                body,
+                existing_comment_id=recovered_comment_id,
+                head_sha=job.head_sha,
+            )
+            if body != job.comment_body:
+                remember_job_comment_body(settings.db_path, job.id, comment_body=body)
+            return comment_id
+    comment_id = upsert_pr_comment(
         job.repo_full,
         job.pr_number,
         token,
@@ -1801,7 +1863,11 @@ def _post_comment_for_job(job: AuditJob, body: str, settings: WorkerSettings, *,
             if existing_comment is not None
             else None
         ),
+        head_sha=job.head_sha,
     )
+    if body != job.comment_body:
+        remember_job_comment_body(settings.db_path, job.id, comment_body=body)
+    return comment_id
 
 
 def _post_review_for_job(
@@ -1811,8 +1877,12 @@ def _post_review_for_job(
     settings: WorkerSettings,
     *,
     installation_token: str | None = None,
-) -> int:
+) -> tuple[int | None, str]:
     token = installation_token or _get_installation_token_for_job(job, settings)
+    had_recoverable_body = bool(job.comment_body)
+    if not job.comment_body:
+        remember_job_comment_body(settings.db_path, job.id, comment_body=body)
+        job = get_job(settings.db_path, job.id) or job
     existing_comment = get_audit_comment_episode_for_pr_head_sha(
         settings.db_path,
         job.repo_full,
@@ -1820,13 +1890,28 @@ def _post_review_for_job(
         job.head_sha,
     )
     if existing_comment is not None and existing_comment.audit_comment.github_review_id is not None:
-        return existing_comment.audit_comment.github_review_id
-    return create_pr_review(
-        job.repo_full,
-        job.pr_number,
-        token,
+        return existing_comment.audit_comment.github_review_id, existing_comment.audit_comment.comment_body
+    if existing_comment is None and had_recoverable_body and job.comment_body:
+        recovered_review_id = find_matching_pr_review_id(
+            job.repo_full,
+            job.pr_number,
+            token,
+            job.comment_body,
+            event=event,
+            head_sha=job.head_sha,
+        )
+        if recovered_review_id is not None:
+            return recovered_review_id, job.comment_body
+    return (
+        create_pr_review(
+            job.repo_full,
+            job.pr_number,
+            token,
+            body,
+            event=event,
+            head_sha=job.head_sha,
+        ),
         body,
-        event=event,
     )
 
 
@@ -1901,6 +1986,13 @@ def _governance_check_run_text(decision: object) -> str:
     return "\n".join(lines)
 
 
+def _public_audit_error_message(error_message: str) -> str:
+    lowered = error_message.lower()
+    if "advanced analysis budget exhausted" in lowered:
+        return "Advanced analysis execution was deferred by current execution limits."
+    return error_message
+
+
 def _fallback_governance_check_run_text(
     deterministic_analysis: DiffAnalysis,
     *,
@@ -1908,7 +2000,7 @@ def _fallback_governance_check_run_text(
     recommendation: EscalationRecommendation,
 ) -> str:
     lines = [
-        f"Fallback reason: {error_message}",
+        f"Fallback reason: {_public_audit_error_message(error_message)}",
         f"Deterministic risk: {_normalize_risk_level(deterministic_analysis.suggested_risk_level.value)}",
         f"Escalation decision: {recommendation.decision}",
     ]
@@ -2084,7 +2176,7 @@ def _post_fallback_governance_check_run_for_job(
 
 
 def _pending_governance_check_run_text(error_message: str, *, retry_at: float | None) -> str:
-    lines = [f"Retry reason: {error_message}"]
+    lines = [f"Retry reason: {_public_audit_error_message(error_message)}"]
     if retry_at is not None:
         lines.append(f"Retry scheduled at: {int(retry_at)}")
     return "\n".join(lines)
@@ -2384,11 +2476,12 @@ def _handle_fallback(
     if effective_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
         review_event = _review_event_for_risk_level(deterministic_analysis.suggested_risk_level.value)
         github_review_id = None
+        persisted_review_body = fallback_comment if review_event is not None else None
         combined_error_message = error_message
         if review_event is not None:
             try:
                 installation_token = _get_installation_token_for_job(job, settings)
-                github_review_id = _post_review_for_job(
+                github_review_id, persisted_review_body = _post_review_for_job(
                     job,
                     fallback_comment,
                     review_event,
@@ -2457,7 +2550,7 @@ def _handle_fallback(
                 status="fallback_posted" if review_event is not None else "completed",
                 completion_mode="fallback_posted" if review_event is not None else "completed",
                 output_mode="preliminary_review_fallback" if review_event is not None else "suppressed",
-                comment_body=fallback_comment if review_event is not None else None,
+                comment_body=persisted_review_body if review_event is not None else None,
                 comment_mode=_review_comment_mode(review_event) if review_event is not None else None,
                 semantic_review_completed=False,
                 error_message=combined_error_message,
@@ -2484,7 +2577,7 @@ def _handle_fallback(
             mark_job_fallback_posted(
                 settings.db_path,
                 job.id,
-                comment_body=fallback_comment,
+                comment_body=persisted_review_body,
                 error_message=combined_error_message,
             )
             return "fallback_posted"
@@ -2573,7 +2666,12 @@ def _handle_fallback(
         combined_error = (
             f"{combined_error_message}; persistence failed after fallback comment post: {type(persist_exc).__name__}: {persist_exc}"
         )
-        mark_job_failed(settings.db_path, job.id, error_message=combined_error)
+        mark_job_failed(
+            settings.db_path,
+            job.id,
+            error_message=combined_error,
+            comment_body=fallback_comment,
+        )
         return "failed"
 
     try:
@@ -2625,7 +2723,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         artifact_count=scenario_eval_plan.artifact_count,
     )
     scenario_eval_execution_summary = None
-    if scenario_eval_plan.should_run:
+    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF and scenario_eval_plan.should_run:
         phase_started = time.perf_counter()
         scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
         log_phase(
@@ -2646,7 +2744,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
     )
     artifact_snapshots = {}
     hybrid_execution_summary = None
-    if hybrid_analysis_plan.should_run:
+    if pr_feedback_mode == PR_FEEDBACK_MODE_OFF and hybrid_analysis_plan.should_run:
         phase_started = time.perf_counter()
         artifact_snapshots = _fetch_artifact_snapshots(job, deterministic_analysis, settings)
         log_phase(
@@ -2748,6 +2846,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
                 analysis_budget_db_path=settings.db_path,
                 analysis_budget_workspace_id=workspace_id,
                 analysis_budget_audit_job_id=job.id,
+                analysis_budget_audit_attempt_count=job.attempt_count,
                 return_metadata=True,
             )
             if isinstance(comment_result, LlmCommentBuildResult):
@@ -2839,15 +2938,36 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             hybrid_execution_summary=hybrid_execution_summary,
         )
 
+    if scenario_eval_plan.should_run and scenario_eval_execution_summary is None:
+        phase_started = time.perf_counter()
+        scenario_eval_execution_summary = _execute_scenario_eval_for_job(job, settings, scenario_eval_plan)
+        log_phase(
+            "Audit job phase completed",
+            step="scenario_eval_execute",
+            started_at=phase_started,
+            execution_count=scenario_eval_execution_summary.execution_count,
+        )
+
+    if hybrid_analysis_plan.should_run and hybrid_execution_summary is None:
+        phase_started = time.perf_counter()
+        hybrid_execution_summary = _execute_hybrid_analysis_for_job(job, settings, hybrid_analysis_plan, artifact_snapshots)
+        log_phase(
+            "Audit job phase completed",
+            step="hybrid_analysis_execute",
+            started_at=phase_started,
+            execution_count=hybrid_execution_summary.execution_count,
+        )
+
     if pr_feedback_mode == PR_FEEDBACK_MODE_REVIEWS:
         review_event = _review_event_for_risk_level(fusion_assessment.risk_level)
         github_review_id = None
+        persisted_review_body = comment_body if review_event is not None else None
         installation_token = _get_installation_token_for_job(job, settings)
 
         if review_event is not None:
             try:
                 phase_started = time.perf_counter()
-                github_review_id = _post_review_for_job(
+                github_review_id, persisted_review_body = _post_review_for_job(
                     job,
                     comment_body,
                     review_event,
@@ -2922,14 +3042,14 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
 
         try:
             phase_started = time.perf_counter()
-            _persist_audit_result(
+            audit = _persist_audit_result(
                 job,
                 deterministic_analysis,
                 settings,
                 status="completed",
                 completion_mode="completed",
                 output_mode="formal_review" if review_event is not None else "suppressed",
-                comment_body=comment_body if review_event is not None else None,
+                comment_body=persisted_review_body if review_event is not None else None,
                 comment_mode=_review_comment_mode(review_event) if review_event is not None else None,
                 semantic_review_completed=semantic_review_completed,
                 suggested_risk_level=fusion_assessment.risk_level,
@@ -2949,7 +3069,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             log_phase("Audit job phase completed", step="persist_audit_result", started_at=phase_started)
         except Exception as persist_exc:
             error_message = f"Persistence failure after review post: {type(persist_exc).__name__}: {persist_exc}"
-            mark_job_failed(settings.db_path, job.id, error_message=error_message)
+            mark_job_failed(
+                settings.db_path,
+                job.id,
+                error_message=error_message,
+                comment_body=persisted_review_body if review_event is not None else None,
+            )
             return "failed"
 
         if review_event is not None:
@@ -2958,7 +3083,7 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
             except Exception:
                 pass
 
-        mark_job_completed(settings.db_path, job.id, comment_body=comment_body if review_event is not None else None)
+        mark_job_completed(settings.db_path, job.id, comment_body=persisted_review_body if review_event is not None else None)
         log_phase("Audit job execution finished", step="process_job", started_at=job_started, result="completed")
         return "completed"
 
@@ -3061,7 +3186,12 @@ def process_job(job: AuditJob, settings: WorkerSettings) -> str:
         log_phase("Audit job phase completed", step="persist_audit_result", started_at=phase_started)
     except Exception as persist_exc:
         error_message = f"Persistence failure after comment post: {type(persist_exc).__name__}: {persist_exc}"
-        mark_job_failed(settings.db_path, job.id, error_message=error_message)
+        mark_job_failed(
+            settings.db_path,
+            job.id,
+            error_message=error_message,
+            comment_body=comment_body,
+        )
         return "failed"
 
     try:

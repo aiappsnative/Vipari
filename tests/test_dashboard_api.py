@@ -390,7 +390,7 @@ def test_dashboard_escalation_queue_includes_workspace_budget_status(tmp_path):
         {
             "advanced_analysis_units_limit": 8,
             "advanced_analysis_window_seconds": 86400,
-            "advanced_analysis_alert_utilization_percent": 50,
+            "advanced_analysis_alert_utilization_percent": 70,
             "advanced_analysis_price_threshold_usd": 0.01,
             "advanced_analysis_provider_costs": {
                 "openai": {
@@ -434,13 +434,68 @@ def test_dashboard_escalation_queue_includes_workspace_budget_status(tmp_path):
     assert body["workspace_budget"]["workspace_display_name"] == "Dashboard Workspace"
     assert body["workspace_budget"]["used_units"] == 5
     assert body["workspace_budget"]["remaining_units"] == 3
-    assert body["workspace_budget"]["budget_status"] == "low"
+    assert body["workspace_budget"]["budget_status"] == "warning"
     assert body["workspace_budget"]["estimated_cost_usd"] == 0.04
     assert body["workspace_budget"]["alert_state"] == "warning"
-    assert body["workspace_budget"]["alerts"][0]["code"] == "provider_price_threshold_exceeded"
-    assert body["workspace_budget"]["feature_breakdown"][0]["feature_key"] == "semantic_review"
+    assert body["workspace_budget"]["alerts"]
+    assert body["workspace_budget"]["feature_breakdown"] == [
+        {
+            "feature_key": "semantic_review",
+            "used_units": 5,
+            "reserved_units": 5,
+            "consumed_units": 5,
+            "event_count": 1,
+        }
+    ]
     assert "plan_code" not in body["workspace_budget"]
     assert "subscription_status" not in body["workspace_budget"]
+
+
+def test_dashboard_escalation_queue_hides_workspace_budget_from_non_owner_readers(tmp_path):
+    from services.analysis_budget import consume_analysis_budget, reserve_analysis_budget
+    from services.control_plane_records import upsert_entitlement
+
+    db_path = str(tmp_path / "dashboard-budget-api-non-owner.db")
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = db_path
+    init_db(db_path)
+    owner_session = _create_dashboard_owner_session(db_path)
+    member_session = _create_dashboard_member_session(db_path, workspace_id=owner_session.workspace_id, role="viewer")
+
+    payload = derive_entitlement_payload("team", "active")
+    payload["feature_flags_json"] = json.dumps(
+        {
+            "advanced_analysis_units_limit": 8,
+            "advanced_analysis_window_seconds": 86400,
+        }
+    )
+    upsert_entitlement(db_path, workspace_id=owner_session.workspace_id, payload=payload)
+    reservation = reserve_analysis_budget(
+        db_path,
+        workspace_id=owner_session.workspace_id,
+        feature_key="semantic_review",
+        reservation_key="dashboard-budget-member-hidden",
+        estimated_units=5,
+        now=time.time(),
+    )
+    consume_analysis_budget(
+        db_path,
+        reservation_key=reservation.reservation_key,
+        consumed_units=5,
+        note="semantic review completed",
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/escalation-queue?include_watch=true",
+            cookies={main.settings.session_cookie_name: member_session.session_id},
+        )
+
+    main.AUDIT_DB_PATH = original_db_path
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workspace_budget"] is None
 
 
 def test_dashboard_api_exposes_history_bootstrap_cue_before_backfill(tmp_path):

@@ -105,6 +105,7 @@ def execute_hybrid_analysis_plan(
     db_path: str | None = None,
     workspace_id: int | None = None,
     audit_job_id: int | None = None,
+    audit_job_attempt_count: int | None = None,
 ) -> HybridExecutionSummary:
     if not plan.should_run:
         return HybridExecutionSummary(
@@ -117,11 +118,12 @@ def execute_hybrid_analysis_plan(
 
     reservation_key = None
     if db_path and workspace_id is not None and audit_job_id is not None:
+        attempt_count = max(1, int(audit_job_attempt_count or 1))
         budget = reserve_analysis_budget(
             db_path,
             workspace_id=workspace_id,
             feature_key="hybrid",
-            reservation_key=f"audit-job:{audit_job_id}:hybrid-analysis",
+            reservation_key=f"audit-job:{audit_job_id}:attempt:{attempt_count}:hybrid-analysis",
             estimated_units=estimate_feature_units("hybrid", request_count=max(1, len(plan.requests))),
             audit_job_id=audit_job_id,
         )

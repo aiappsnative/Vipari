@@ -49,6 +49,7 @@ def execute_scenario_eval_plan(
     db_path: str,
     workspace_id: int | None,
     audit_job_id: int | None = None,
+    audit_job_attempt_count: int | None = None,
     repo_full: str,
     installation_id: int,
     token: str,
@@ -84,11 +85,12 @@ def execute_scenario_eval_plan(
 
     reservation_key = None
     if workspace_id is not None and audit_job_id is not None:
+        attempt_count = max(1, int(audit_job_attempt_count or 1))
         budget = reserve_analysis_budget(
             db_path,
             workspace_id=workspace_id,
             feature_key="scenario",
-            reservation_key=f"audit-job:{audit_job_id}:scenario-eval",
+            reservation_key=f"audit-job:{audit_job_id}:attempt:{attempt_count}:scenario-eval",
             estimated_units=estimate_feature_units("scenario", request_count=max(1, len(plan.artifact_paths))),
             audit_job_id=audit_job_id,
         )

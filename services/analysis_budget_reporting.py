@@ -69,7 +69,7 @@ def get_workspace_budget_status(
                 COALESCE(SUM(
                     CASE
                         WHEN status = 'released' THEN 0
-                        WHEN status = 'consumed' THEN CASE WHEN units_consumed > units_reserved THEN units_consumed ELSE units_reserved END
+                        WHEN status = 'consumed' THEN CASE WHEN units_consumed > 0 THEN units_consumed ELSE units_reserved END
                         ELSE units_reserved
                     END
                 ), 0) AS used_units

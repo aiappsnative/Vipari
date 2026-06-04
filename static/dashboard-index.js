@@ -1358,6 +1358,8 @@ function renderWorkspacePostureBar(queuePayload) {
                 ? "Budget exhausted"
                 : budgetStatus === "low"
                     ? `Budget ${budgetUtilization.toFixed(0)}% used`
+                    : budgetStatus === "warning"
+                        ? "Budget attention needed"
                     : budgetStatus === "unlimited"
                         ? "Budget available"
                         : "Budget healthy";

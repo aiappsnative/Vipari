@@ -12,6 +12,8 @@ from .persistence import connect_sqlite
 
 DEFAULT_ADVANCED_ANALYSIS_WINDOW_SECONDS = 30 * 24 * 60 * 60
 FEATURE_UNIT_FLOORS = {
+    "scenario": 5,
+    "hybrid": 2,
     "semantic_review": 5,
     "verifier": 5,
 }
@@ -185,12 +187,38 @@ def reserve_analysis_budget(
     current_time = now or time.time()
     window_start = _window_start_for_time(current_time, policy.window_seconds)
     window_end = window_start + policy.window_seconds
+    scoped_reservation_key = _window_scoped_reservation_key(reservation_key, window_start=window_start)
 
     with connect_sqlite(db_path) as conn:
         existing = conn.execute(
             "SELECT * FROM workspace_analysis_budget_events WHERE reservation_key = ?",
-            (reservation_key,),
+            (scoped_reservation_key,),
         ).fetchone()
+        legacy_existing = None
+        if existing is None:
+            legacy_existing = conn.execute(
+                "SELECT * FROM workspace_analysis_budget_events WHERE reservation_key = ?",
+                (reservation_key,),
+            ).fetchone()
+        if legacy_existing is not None:
+            if float(legacy_existing["window_start"] or 0.0) != window_start:
+                archived_reservation_key = (
+                    f"{reservation_key}:window:{int(float(legacy_existing['window_start'] or 0.0))}:archived:{legacy_existing['id']}"
+                )
+                conn.execute(
+                    "UPDATE workspace_analysis_budget_events SET reservation_key = ? WHERE id = ?",
+                    (archived_reservation_key, legacy_existing["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE workspace_analysis_budget_events SET reservation_key = ? WHERE id = ?",
+                    (scoped_reservation_key, legacy_existing["id"]),
+                )
+                existing = conn.execute(
+                    "SELECT * FROM workspace_analysis_budget_events WHERE reservation_key = ?",
+                    (scoped_reservation_key,),
+                ).fetchone()
+
         if existing is not None:
             if existing["status"] == "released":
                 conn.execute(
@@ -199,11 +227,31 @@ def reserve_analysis_budget(
                     SET status = 'reserved', units_reserved = ?, note = NULL, updated_at = ?
                     WHERE reservation_key = ?
                     """,
-                    (estimated_units, current_time, reservation_key),
+                    (estimated_units, current_time, scoped_reservation_key),
+                )
+            else:
+                return AnalysisBudgetReservation(
+                    allowed=True,
+                    reservation_key=scoped_reservation_key,
+                    estimated_units=int(existing["units_reserved"] or estimated_units),
+                    used_units=_sum_reserved_or_consumed_units(conn, workspace_id=workspace_id, window_start=window_start),
+                    unit_limit=policy.unit_limit,
+                    window_start=window_start,
+                )
+
+        if existing is not None:
+            if existing["status"] == "released":
+                conn.execute(
+                    """
+                    UPDATE workspace_analysis_budget_events
+                    SET status = 'reserved', units_reserved = ?, note = NULL, updated_at = ?
+                    WHERE reservation_key = ?
+                    """,
+                    (estimated_units, current_time, scoped_reservation_key),
                 )
             return AnalysisBudgetReservation(
                 allowed=True,
-                reservation_key=reservation_key,
+                reservation_key=scoped_reservation_key,
                 estimated_units=int(existing["units_reserved"] or estimated_units),
                 used_units=_sum_reserved_or_consumed_units(conn, workspace_id=workspace_id, window_start=window_start),
                 unit_limit=policy.unit_limit,
@@ -240,12 +288,12 @@ def reserve_analysis_budget(
                 units_reserved, units_consumed, status, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'reserved', ?, ?)
             """,
-            (workspace_id, window_start, reservation_key, feature_key, audit_job_id, audit_id, estimated_units, current_time, current_time),
+            (workspace_id, window_start, scoped_reservation_key, feature_key, audit_job_id, audit_id, estimated_units, current_time, current_time),
         )
 
     return AnalysisBudgetReservation(
         allowed=True,
-        reservation_key=reservation_key,
+        reservation_key=scoped_reservation_key,
         estimated_units=estimated_units,
         used_units=used_units,
         unit_limit=policy.unit_limit,
@@ -322,13 +370,17 @@ def _window_start_for_time(now: float, window_seconds: int) -> float:
     return float(int(now // window_seconds) * window_seconds)
 
 
+def _window_scoped_reservation_key(reservation_key: str, *, window_start: float) -> str:
+    return f"{reservation_key}:budget-window:{int(window_start)}"
+
+
 def _sum_reserved_or_consumed_units(conn, *, workspace_id: int, window_start: float) -> int:
     row = conn.execute(
         """
         SELECT COALESCE(SUM(
             CASE
                 WHEN status = 'released' THEN 0
-                WHEN status = 'consumed' THEN CASE WHEN units_consumed > units_reserved THEN units_consumed ELSE units_reserved END
+                WHEN status = 'consumed' THEN CASE WHEN units_consumed > 0 THEN units_consumed ELSE units_reserved END
                 ELSE units_reserved
             END
         ), 0) AS total_units

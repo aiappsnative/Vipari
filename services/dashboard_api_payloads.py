@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 import json
 
 from services.control_plane_records import get_workspace_budget_status, get_workspace_entitlement, list_repo_allocations_for_workspace
@@ -147,8 +148,24 @@ def _build_workspace_budget_payload(db_path: str, *, workspace_id: int | None) -
         "utilization_percent": summary.utilization_percent,
         "estimated_cost_usd": summary.estimated_cost_usd,
         "alert_state": summary.alert_state,
-        "alerts": list(summary.alerts),
-        "feature_breakdown": list(summary.feature_breakdown),
+        "alerts": [
+            {
+                "code": alert["code"] if isinstance(alert, dict) else alert.code,
+                "severity": alert["severity"] if isinstance(alert, dict) else alert.severity,
+                "message": alert["message"] if isinstance(alert, dict) else alert.message,
+            }
+            for alert in summary.alerts
+        ],
+        "feature_breakdown": [
+            {
+                "feature_key": feature["feature_key"] if isinstance(feature, dict) else feature.feature_key,
+                "used_units": feature["used_units"] if isinstance(feature, dict) else feature.used_units,
+                "reserved_units": feature["reserved_units"] if isinstance(feature, dict) else feature.reserved_units,
+                "consumed_units": feature["consumed_units"] if isinstance(feature, dict) else feature.consumed_units,
+                "event_count": feature["event_count"] if isinstance(feature, dict) else feature.event_count,
+            }
+            for feature in summary.feature_breakdown
+        ],
     }
     entitlement = get_workspace_entitlement(db_path, workspace_id)
     low_budget_threshold = get_analysis_budget_alert_utilization_percent(
@@ -161,6 +178,8 @@ def _build_workspace_budget_payload(db_path: str, *, workspace_id: int | None) -
         payload["budget_status"] = "exhausted"
     elif utilization >= low_budget_threshold:
         payload["budget_status"] = "low"
+    elif summary.alert_state == "warning":
+        payload["budget_status"] = "warning"
     else:
         payload["budget_status"] = "available"
     return payload
