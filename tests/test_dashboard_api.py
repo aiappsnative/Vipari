@@ -344,7 +344,7 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert overview_payload["attention_repos"][0]["highest_change_summary"]
     assert overview_payload["attention_repos"][0]["highest_flag_summary"].startswith("Flagged because")
     assert overview_payload["repos"][0]["historical_version_count"] >= 1
-    assert overview_payload["nav_repos"] == []
+    assert [repo["repo_full"] for repo in overview_payload["nav_repos"]] == ["doria90/dummyAI"]
     assert overview_payload["overview_sections"]["urgent_queue"]["repo_count"] >= 1
     assert overview_payload["overview_sections"]["urgent_queue"]["repos"][0]["repo_full"] == "doria90/dummyAI"
     assert overview_payload["overview_sections"]["recent_changes"]["repo_count"] >= 1
@@ -689,7 +689,7 @@ def test_dashboard_overview_api_filter_critical_limits_repo_lists(tmp_path):
     assert response.status_code == 200
     payload = response.json()
     assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
-    assert payload["nav_repos"] == []
+    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["attention_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
     assert payload["overview_sections"]["urgent_queue"]["watch_count"] == 0
@@ -752,7 +752,7 @@ def test_dashboard_overview_api_range_24h_limits_recent_activity(tmp_path):
     assert response.status_code == 200
     payload = response.json()
     assert [repo["repo_full"] for repo in payload["repos"]] == ["doria90/dummyAI"]
-    assert payload["nav_repos"] == []
+    assert [repo["repo_full"] for repo in payload["nav_repos"]] == ["doria90/dummyAI"]
     assert [repo["repo_full"] for repo in payload["overview_sections"]["recent_changes"]["repos"]] == ["doria90/dummyAI"]
     assert payload["risk_state"]["review_now_repo_count"] >= 1
 

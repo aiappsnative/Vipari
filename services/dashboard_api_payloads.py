@@ -95,7 +95,7 @@ def build_dashboard_overview_payload(
     )
     payload = asdict(filtered_overview_view)
     _strip_dashboard_overview_payload_duplicates(payload)
-    nav_repos = filtered_overview_view.repos if normalized_filter == "mine" else []
+    nav_repos = overview_view.repos if normalized_filter != "mine" else filtered_overview_view.repos
     payload["nav_repos"] = [asdict(repo) for repo in nav_repos]
     return payload
 
