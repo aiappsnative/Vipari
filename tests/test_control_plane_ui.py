@@ -73,8 +73,8 @@ def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path)
         with pytest.raises(HTTPException) as exc_info:
             main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
 
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "Repository is not allocated to this workspace."
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Repository is not allocated to this workspace."
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -1755,6 +1755,9 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
     assert 'aria-label="Settings"' in get_response.text
+    assert "Compliance context" in get_response.text
+    assert "Workspace defaults" in get_response.text
+    assert "Repository overrides" in get_response.text
     assert "Vipari MCP connector" not in get_response.text
     assert "Open Agent Integrations" not in get_response.text
     assert "Open system admin" not in get_response.text
@@ -1848,6 +1851,51 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/settings-repo")
     assert allocation is not None
     assert allocation.pr_feedback_mode is None
+
+    workspace_compliance_response = client.post(
+        "/settings/compliance-context",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "risk_tier": "limited",
+            "customer_impact": "customer_facing",
+            "human_oversight": "required",
+            "handles_personal_data": "1",
+            "deployment_regions": "eu-west-1, us-east-1",
+            "notes": "workspace default posture",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert workspace_compliance_response.status_code == 303
+    assert workspace_compliance_response.headers["location"] == "/settings?updated=1"
+
+    repo_compliance_response = client.post(
+        "/settings/repositories/compliance-context",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "allocation_id": str(allocation.id),
+            "risk_tier": "high",
+            "customer_impact": "critical",
+            "human_oversight": "optional",
+            "handles_personal_data": "1",
+            "handles_biometric_data": "1",
+            "deployment_regions": "us-east-1",
+            "notes": "repo override posture",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert repo_compliance_response.status_code == 303
+    assert repo_compliance_response.headers["location"] == "/settings?updated=1"
+
+    refreshed_settings_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert refreshed_settings_response.status_code == 200
+    assert "workspace default posture" in refreshed_settings_response.text
+    assert "repo override posture" in refreshed_settings_response.text
+    assert "limited" in refreshed_settings_response.text
+    assert "high" in refreshed_settings_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 

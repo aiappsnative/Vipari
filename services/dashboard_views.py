@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from services.capability_inference import CapabilityDelta, CapabilityProfile, compare_capability_profiles, empty_capability_delta, empty_capability_profile, infer_capability_profile_from_artifacts
+from services.compliance_context_records import resolve_effective_compliance_context
 from .baseline_provenance import (
     BaselineProvenance,
     approved_onboarding_provenance,
@@ -1224,6 +1226,10 @@ class RepoDashboardView:
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
+    capability_profile: CapabilityProfile = field(default_factory=empty_capability_profile)
+    capability_delta: CapabilityDelta = field(default_factory=empty_capability_delta)
+    compliance_context: dict[str, Any] = field(default_factory=dict)
+    compliance_context_source: str = "none"
     export_jobs: list[dict[str, Any]] = None
 
 
@@ -1382,6 +1388,26 @@ def build_workspace_escalation_queue(
             for item in items
         ],
     }
+
+
+def _resolve_repo_compliance_context(db_path: str, repo_full: str) -> tuple[dict[str, Any], str]:
+    with connect_sqlite(db_path) as conn:
+        allocation_row = conn.execute(
+            "SELECT id, workspace_id FROM repo_allocations WHERE repo_full = ? AND allocation_status IN ('active', 'onboarded') ORDER BY updated_at DESC LIMIT 1",
+            (repo_full,),
+        ).fetchone()
+    if allocation_row is None:
+        return ({}, "none")
+
+    try:
+        resolved = resolve_effective_compliance_context(
+            db_path,
+            workspace_id=int(allocation_row["workspace_id"]),
+            repo_allocation_id=int(allocation_row["id"]),
+        )
+    except Exception:
+        return ({}, "none")
+    return (dict(resolved.context), resolved.source)
 
 
 # ---------------------------------------------------------------------------
@@ -2202,6 +2228,7 @@ def _build_repo_dashboard_view_uncached(
             lower_confidence_insights=[],
             repo_audits=repo_audits,
         )
+        compliance_context, compliance_context_source = _resolve_repo_compliance_context(db_path, repo_full)
         return RepoDashboardView(
             repo_full=repo_full,
             onboarding=None,
@@ -2234,6 +2261,10 @@ def _build_repo_dashboard_view_uncached(
             journey_comparison=journey_comparison,
             selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
             export_jobs=[],
+            capability_profile=empty_capability_profile(),
+            capability_delta=empty_capability_delta(),
+            compliance_context=compliance_context,
+            compliance_context_source=compliance_context_source,
         )
 
     artifacts = timed_stage("repo-onboarded-artifacts", lambda: list_onboarded_artifacts_for_onboarding(db_path, onboarding.id))
@@ -2387,6 +2418,13 @@ def _build_repo_dashboard_view_uncached(
         ),
     )
 
+    current_capability_profile = infer_capability_profile_from_artifacts(artifact_entries)
+    baseline_capability_profile = empty_capability_profile()
+    if baseline_snapshot_artifact_state:
+        baseline_entries = _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state)
+        baseline_capability_profile = infer_capability_profile_from_artifacts(baseline_entries)
+    compliance_context, compliance_context_source = _resolve_repo_compliance_context(db_path, repo_full)
+
     return RepoDashboardView(
         repo_full=repo_full,
         onboarding=onboarding,
@@ -2429,6 +2467,10 @@ def _build_repo_dashboard_view_uncached(
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         export_jobs=[],
+        capability_profile=current_capability_profile,
+        capability_delta=compare_capability_profiles(current_capability_profile, baseline_capability_profile),
+        compliance_context=compliance_context,
+        compliance_context_source=compliance_context_source,
     )
 
 

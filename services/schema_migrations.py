@@ -180,6 +180,12 @@ def _ensure_analysis_budget_tables(db_path: str) -> None:
     init_analysis_budget_db(db_path)
 
 
+def _ensure_compliance_context_tables(db_path: str) -> None:
+    from .compliance_context_records import bootstrap_compliance_context_tables
+
+    bootstrap_compliance_context_tables(db_path)
+
+
 MigrationHandler = Callable[[str], None]
 MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
     (
@@ -261,6 +267,11 @@ MIGRATIONS: tuple[tuple[str, str, MigrationHandler], ...] = (
         "0016_add_analysis_budget_tables",
         "Create workspace analysis budget windows and event ledger tables for advanced-analysis unit reservation and reconciliation.",
         _ensure_analysis_budget_tables,
+    ),
+    (
+        "0017_add_compliance_context_tables",
+        "Create workspace and repo compliance context tables for persisted AI Act capability context defaults and repository overrides.",
+        _ensure_compliance_context_tables,
     ),
 )
 

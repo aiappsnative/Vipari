@@ -288,6 +288,9 @@ def _create_dashboard_member_session(
 
 
 def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
+    from services.compliance_context_records import upsert_repo_compliance_context_override, upsert_workspace_compliance_context
+    from services.control_plane_records import get_active_repo_allocation_for_repo
+
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
@@ -318,6 +321,31 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
             "sha-1": PROMPT_BASELINE,
             "sha-2": PROMPT_CURRENT,
         }[ref],
+    )
+
+    allocation = get_active_repo_allocation_for_repo(db_path, "doria90/dummyAI")
+    assert allocation is not None
+    upsert_workspace_compliance_context(
+        db_path,
+        workspace_id=allocation.workspace_id,
+        context={
+            "risk_tier": "limited",
+            "customer_impact": "customer_facing",
+            "human_oversight": "required",
+            "handles_personal_data": False,
+            "handles_biometric_data": False,
+            "deployment_regions": ["eu-west-1"],
+            "notes": "workspace default",
+        },
+    )
+    upsert_repo_compliance_context_override(
+        db_path,
+        workspace_id=allocation.workspace_id,
+        repo_allocation_id=allocation.id,
+        context_override={
+            "risk_tier": "high",
+            "handles_personal_data": True,
+        },
     )
 
     with TestClient(main.app) as client:
@@ -363,6 +391,14 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["baseline_review"]["is_pending_review"] is False
     assert isinstance(payload["baseline_review"]["recent_decisions"], list)
     assert payload["artifacts"][0]["provenance_label"] == "AI control surface"
+    assert payload["capability_profile"]["primary_capability"] == "generative_ai"
+    assert "generative_ai" in payload["capability_profile"]["capability_tags"]
+    assert payload["capability_delta"]["introduced"] == []
+    assert payload["capability_delta"]["removed"] == []
+    assert payload["compliance_context_source"] == "repo_override"
+    assert payload["compliance_context"]["risk_tier"] == "high"
+    assert payload["compliance_context"]["customer_impact"] == "customer_facing"
+    assert payload["compliance_context"]["handles_personal_data"] is True
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
