@@ -1584,6 +1584,7 @@ strong {
 }
 
 .artifact-topology-map {
+    display: flex;
     padding: 14px;
 }
 
@@ -1593,7 +1594,11 @@ strong {
 
 .artifact-topology-viewport-shell {
     display: grid;
+    grid-template-rows: auto minmax(420px, 1fr);
+    flex: 1 1 auto;
     gap: 12px;
+    min-height: 0;
+    width: 100%;
 }
 
 .artifact-topology-toolbar {
@@ -1651,6 +1656,7 @@ strong {
 
 .artifact-topology-graph {
     position: relative;
+    height: 100%;
     min-height: 420px;
     border-radius: calc(var(--radius-lg) - 2px);
     background:
