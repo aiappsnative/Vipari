@@ -636,6 +636,8 @@ def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_
     assert payload["governance_decision"]["decision_lane"] == "escalate"
     assert payload["governance_decision"]["requires_escalation"] is True
     assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["governance_decision"]["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["governance_decision"]["capability_delta_signal"]["delta"], float)
     assert payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
     assert isinstance(payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["delta"], float)
     assert isinstance(payload["governance_decision"]["rationale"], list)
@@ -673,8 +675,11 @@ def test_dashboard_overview_api_surfaces_governance_escalation_state(tmp_path):
     assert payload["attention_repos"][0]["governance_should_block_merge"] is False
     assert payload["attention_repos"][0]["governance_pr_number"] == 84
     assert payload["attention_repos"][0]["governance_head_sha"] == "sha-governance-84"
+    assert payload["attention_repos"][0]["governance_capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["attention_repos"][0]["governance_capability_delta_signal"]["delta"], float)
     assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_decision_lane"] == "escalate"
     assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_requires_escalation"] is True
+    assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
     assert "matched_risk_item" not in payload["overview_sections"]["recent_changes"]["repos"][0]
 
 

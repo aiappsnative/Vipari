@@ -759,6 +759,7 @@ class DashboardOverviewAttentionRepo:
     governance_should_block_merge: bool = False
     governance_pr_number: int | None = None
     governance_head_sha: str | None = None
+    governance_capability_delta_signal: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -857,6 +858,7 @@ class DashboardOverviewRepoCard:
     governance_should_block_merge: bool = False
     governance_pr_number: int | None = None
     governance_head_sha: str | None = None
+    governance_capability_delta_signal: dict[str, Any] | None = None
     matched_risk_item: DashboardOverviewRegressionEntry | None = None
 
 
@@ -1226,6 +1228,7 @@ class RepoGovernanceDecisionSummary:
     requires_escalation: bool
     should_block_merge: bool
     rationale: list[dict[str, Any]]
+    capability_delta_signal: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1826,6 +1829,11 @@ def _build_overview_repo_cards(
                 governance_should_block_merge=(attention.governance_should_block_merge if attention is not None else False),
                 governance_pr_number=(attention.governance_pr_number if attention is not None else None),
                 governance_head_sha=(attention.governance_head_sha if attention is not None else None),
+                governance_capability_delta_signal=(
+                    dict(attention.governance_capability_delta_signal)
+                    if attention is not None and attention.governance_capability_delta_signal is not None
+                    else None
+                ),
                 matched_risk_item=matched_risk_item,
             )
         )
@@ -2281,7 +2289,7 @@ def _build_repo_dashboard_view_uncached(
             history_cues=[],
             design_profiles=[],
             governance_posture=RepoGovernancePosture("low confidence", "mixed", 0, "current", ()),
-            governance_decision=_build_repo_governance_decision_summary(db_path, repo_audits),
+            governance_decision=_build_repo_governance_decision_summary(db_path, repo_full, repo_audits),
             audit_brief=audit_brief,
             artifacts=[],
             journey_snapshots=journey_snapshots,
@@ -2430,7 +2438,7 @@ def _build_repo_dashboard_view_uncached(
     )
     governance_decision = timed_stage(
         "repo-governance-decision",
-        lambda: _build_repo_governance_decision_summary(db_path, repo_audits),
+        lambda: _build_repo_governance_decision_summary(db_path, repo_full, repo_audits),
     )
     audit_brief = timed_stage(
         "repo-audit-brief",
@@ -2503,6 +2511,7 @@ def _build_repo_dashboard_view_uncached(
 
 def _build_repo_governance_decision_summary(
     db_path: str,
+    repo_full: str,
     repo_audits: list[object],
 ) -> RepoGovernanceDecisionSummary | None:
     completed_audits = [audit for audit in repo_audits if getattr(audit, "status", None) == "completed"]
@@ -2524,6 +2533,17 @@ def _build_repo_governance_decision_summary(
         findings=findings,
         rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
     )
+    baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, latest_audit.id)
+    capability_delta_signal = dict(
+        baseline_comparison.get("capability_delta_signal")
+        or asdict(
+            build_capability_delta_signal(
+                None,
+                has_measurement=False,
+                unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
+            )
+        )
+    )
     return RepoGovernanceDecisionSummary(
         audit_id=latest_audit.id,
         pr_number=latest_audit.pr_number,
@@ -2532,6 +2552,7 @@ def _build_repo_governance_decision_summary(
         decision_lane=decision.decision_lane,
         requires_escalation=decision.requires_escalation,
         should_block_merge=decision.should_block_merge,
+        capability_delta_signal=capability_delta_signal,
         rationale=[
             {
                 "code": reason.code,
@@ -2766,6 +2787,8 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 design_profiles=[],
                 governance_decision=(
                     _build_repo_governance_decision_summary_from_rows(
+                        db_path,
+                        repo.repo_full,
                         latest_audit_row,
                         finding_rows_by_audit_id.get(int(latest_audit_row["id"]), []),
                     )
@@ -3193,6 +3216,8 @@ def _load_overview_batch_state(
 
 
 def _build_repo_governance_decision_summary_from_rows(
+    db_path: str,
+    repo_full: str,
     audit_row: sqlite3.Row,
     finding_rows: list[sqlite3.Row],
 ) -> RepoGovernanceDecisionSummary:
@@ -3221,6 +3246,17 @@ def _build_repo_governance_decision_summary_from_rows(
         findings=findings,
         rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
     )
+    baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, audit.id)
+    capability_delta_signal = dict(
+        baseline_comparison.get("capability_delta_signal")
+        or asdict(
+            build_capability_delta_signal(
+                None,
+                has_measurement=False,
+                unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
+            )
+        )
+    )
     return RepoGovernanceDecisionSummary(
         audit_id=audit.id,
         pr_number=audit.pr_number,
@@ -3229,6 +3265,7 @@ def _build_repo_governance_decision_summary_from_rows(
         decision_lane=decision.decision_lane,
         requires_escalation=decision.requires_escalation,
         should_block_merge=decision.should_block_merge,
+        capability_delta_signal=capability_delta_signal,
         rationale=[
             {
                 "code": reason.code,
@@ -6113,6 +6150,11 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 governance_should_block_merge=(view.governance_decision.should_block_merge if view.governance_decision is not None else False),
                 governance_pr_number=(view.governance_decision.pr_number if view.governance_decision is not None else None),
                 governance_head_sha=(view.governance_decision.head_sha if view.governance_decision is not None else None),
+                governance_capability_delta_signal=(
+                    dict(view.governance_decision.capability_delta_signal)
+                    if view.governance_decision is not None and view.governance_decision.capability_delta_signal is not None
+                    else None
+                ),
             )
         )
 
