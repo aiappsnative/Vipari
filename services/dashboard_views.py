@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
+from services.capability_inference import CapabilityDelta, CapabilityProfile, build_capability_delta_signal, compare_capability_profiles, empty_capability_delta, empty_capability_profile, infer_capability_profile_from_artifacts
+from services.compliance_context_records import resolve_effective_compliance_context
 from .baseline_provenance import (
     BaselineProvenance,
     approved_onboarding_provenance,
@@ -276,6 +278,14 @@ def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id:
         {key: _average(values) for key, values in aggregate_dimension_deltas.items() if values},
         limit=4,
     )
+    capability_values = aggregate_dimension_deltas.get("capability_risk") or []
+    capability_delta_signal = asdict(
+        build_capability_delta_signal(
+            _average(capability_values),
+            has_measurement=bool(capability_values),
+            unavailable_summary="Capability delta is unavailable for this PR route until comparable profile data is captured.",
+        )
+    )
 
     comparison_ready = bool(artifact_rows)
     comparison_notice = ""
@@ -307,6 +317,7 @@ def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id:
             "approved_baseline_artifact_count": len(approved_baselines_by_path),
         },
         "top_dimension_shifts": top_dimension_shifts,
+        "capability_delta_signal": capability_delta_signal,
         "artifact_rows": artifact_rows,
     }
 
@@ -635,6 +646,35 @@ def build_repo_pr_review_routes_payload(
         entry["selected"] = bool(selected_route is not None and entry["audit_id"] == selected_route["audit_id"])
         if selected_route is not None and entry["audit_id"] == selected_route["audit_id"]:
             entry["baseline_comparison"] = _build_pr_review_baseline_comparison(db_path, repo_full, entry["audit_id"])
+            entry["capability_delta_signal"] = dict(
+                entry["baseline_comparison"].get("capability_delta_signal")
+                or asdict(
+                    build_capability_delta_signal(
+                        None,
+                        has_measurement=False,
+                        unavailable_summary="Capability delta is unavailable for this PR route until comparable profile data is captured.",
+                    )
+                )
+            )
+            selected_audit_record = next((audit for audit in candidate_audits if audit.id == entry["audit_id"]), None)
+            if selected_audit_record is not None:
+                selected_findings = list_findings_for_audit(db_path, entry["audit_id"])
+                entry["governance_decision"] = _governance_decision_payload(
+                    evaluate_governance_decision(
+                        selected_audit_record,
+                        findings=selected_findings,
+                        rollout_mode=normalized_rollout_mode,
+                        capability_delta_signal=entry["capability_delta_signal"],
+                    )
+                )
+        else:
+            entry["capability_delta_signal"] = asdict(
+                build_capability_delta_signal(
+                    None,
+                    has_measurement=False,
+                    unavailable_summary="No capability delta signal available for this route preview.",
+                )
+            )
 
     return {
         "repo_full": repo_full,
@@ -730,6 +770,7 @@ class DashboardOverviewAttentionRepo:
     governance_should_block_merge: bool = False
     governance_pr_number: int | None = None
     governance_head_sha: str | None = None
+    governance_capability_delta_signal: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -828,6 +869,7 @@ class DashboardOverviewRepoCard:
     governance_should_block_merge: bool = False
     governance_pr_number: int | None = None
     governance_head_sha: str | None = None
+    governance_capability_delta_signal: dict[str, Any] | None = None
     matched_risk_item: DashboardOverviewRegressionEntry | None = None
 
 
@@ -1197,6 +1239,7 @@ class RepoGovernanceDecisionSummary:
     requires_escalation: bool
     should_block_merge: bool
     rationale: list[dict[str, Any]]
+    capability_delta_signal: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1224,6 +1267,10 @@ class RepoDashboardView:
     journey_snapshots: list[dict[str, Any]] = None
     journey_comparison: dict[str, Any] | None = None
     selected_baseline_source_snapshot_id: int | None = None
+    capability_profile: CapabilityProfile = field(default_factory=empty_capability_profile)
+    capability_delta: CapabilityDelta = field(default_factory=empty_capability_delta)
+    compliance_context: dict[str, Any] = field(default_factory=dict)
+    compliance_context_source: str = "none"
     export_jobs: list[dict[str, Any]] = None
 
 
@@ -1249,6 +1296,9 @@ class EscalationQueueItem:
     review_url: str | None
     review_pr_number: int | None
     review_head_sha: str | None
+    governance_decision_lane: str | None
+    governance_rationale_codes: list[str]
+    governance_capability_delta_signal: dict[str, Any] | None
     attribute_deltas: list[dict[str, Any]]  # top-2 changed dimensions
     updated_at: float | None
 
@@ -1308,6 +1358,17 @@ def build_workspace_escalation_queue(
                     review_url=insight.review_url,
                     review_pr_number=insight.review_pr_number,
                     review_head_sha=insight.review_head_sha,
+                    governance_decision_lane=(view.governance_decision.decision_lane if view.governance_decision is not None else None),
+                    governance_rationale_codes=(
+                        [str(reason.get("code") or "") for reason in view.governance_decision.rationale if str(reason.get("code") or "")]
+                        if view.governance_decision is not None
+                        else []
+                    ),
+                    governance_capability_delta_signal=(
+                        dict(view.governance_decision.capability_delta_signal)
+                        if view.governance_decision is not None and view.governance_decision.capability_delta_signal is not None
+                        else None
+                    ),
                     attribute_deltas=deltas,
                     updated_at=insight.updated_at,
                 ))
@@ -1376,12 +1437,56 @@ def build_workspace_escalation_queue(
                 "review_url": item.review_url,
                 "review_pr_number": item.review_pr_number,
                 "review_head_sha": item.review_head_sha,
+                "governance_decision_lane": item.governance_decision_lane,
+                "governance_rationale_codes": item.governance_rationale_codes,
+                "governance_capability_delta_signal": item.governance_capability_delta_signal,
                 "attribute_deltas": item.attribute_deltas,
                 "updated_at": item.updated_at,
             }
             for item in items
         ],
     }
+
+
+def build_repo_governance_capability_signal_index(
+    db_path: str,
+    *,
+    allowed_repo_fulls: set[str] | None = None,
+    repo_scope_by_full: dict[str, str] | None = None,
+    allocation_status_by_full: dict[str, str | None] | None = None,
+) -> dict[str, dict[str, Any]]:
+    repos = list_repo_dashboard_index(
+        db_path,
+        allowed_repo_fulls=allowed_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    signal_by_repo: dict[str, dict[str, Any]] = {}
+    for view in _build_overview_repo_views(db_path, repos):
+        if view.governance_decision is None or view.governance_decision.capability_delta_signal is None:
+            continue
+        signal_by_repo[view.repo_full] = dict(view.governance_decision.capability_delta_signal)
+    return signal_by_repo
+
+
+def _resolve_repo_compliance_context(db_path: str, repo_full: str) -> tuple[dict[str, Any], str]:
+    with connect_sqlite(db_path) as conn:
+        allocation_row = conn.execute(
+            "SELECT id, workspace_id FROM repo_allocations WHERE repo_full = ? AND allocation_status IN ('active', 'onboarded') ORDER BY updated_at DESC LIMIT 1",
+            (repo_full,),
+        ).fetchone()
+    if allocation_row is None:
+        return ({}, "none")
+
+    try:
+        resolved = resolve_effective_compliance_context(
+            db_path,
+            workspace_id=int(allocation_row["workspace_id"]),
+            repo_allocation_id=int(allocation_row["id"]),
+        )
+    except Exception:
+        return ({}, "none")
+    return (dict(resolved.context), resolved.source)
 
 
 # ---------------------------------------------------------------------------
@@ -1773,6 +1878,11 @@ def _build_overview_repo_cards(
                 governance_should_block_merge=(attention.governance_should_block_merge if attention is not None else False),
                 governance_pr_number=(attention.governance_pr_number if attention is not None else None),
                 governance_head_sha=(attention.governance_head_sha if attention is not None else None),
+                governance_capability_delta_signal=(
+                    dict(attention.governance_capability_delta_signal)
+                    if attention is not None and attention.governance_capability_delta_signal is not None
+                    else None
+                ),
                 matched_risk_item=matched_risk_item,
             )
         )
@@ -2202,6 +2312,7 @@ def _build_repo_dashboard_view_uncached(
             lower_confidence_insights=[],
             repo_audits=repo_audits,
         )
+        compliance_context, compliance_context_source = _resolve_repo_compliance_context(db_path, repo_full)
         return RepoDashboardView(
             repo_full=repo_full,
             onboarding=None,
@@ -2227,13 +2338,17 @@ def _build_repo_dashboard_view_uncached(
             history_cues=[],
             design_profiles=[],
             governance_posture=RepoGovernancePosture("low confidence", "mixed", 0, "current", ()),
-            governance_decision=_build_repo_governance_decision_summary(db_path, repo_audits),
+            governance_decision=_build_repo_governance_decision_summary(db_path, repo_full, repo_audits),
             audit_brief=audit_brief,
             artifacts=[],
             journey_snapshots=journey_snapshots,
             journey_comparison=journey_comparison,
             selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
             export_jobs=[],
+            capability_profile=empty_capability_profile(),
+            capability_delta=empty_capability_delta(),
+            compliance_context=compliance_context,
+            compliance_context_source=compliance_context_source,
         )
 
     artifacts = timed_stage("repo-onboarded-artifacts", lambda: list_onboarded_artifacts_for_onboarding(db_path, onboarding.id))
@@ -2372,7 +2487,7 @@ def _build_repo_dashboard_view_uncached(
     )
     governance_decision = timed_stage(
         "repo-governance-decision",
-        lambda: _build_repo_governance_decision_summary(db_path, repo_audits),
+        lambda: _build_repo_governance_decision_summary(db_path, repo_full, repo_audits),
     )
     audit_brief = timed_stage(
         "repo-audit-brief",
@@ -2386,6 +2501,13 @@ def _build_repo_dashboard_view_uncached(
             fallback_baseline_reference=_baseline_reference_from_versions(latest_approved_baseline_versions or latest_baseline_versions),
         ),
     )
+
+    current_capability_profile = infer_capability_profile_from_artifacts(artifact_entries)
+    baseline_capability_profile = empty_capability_profile()
+    if baseline_snapshot_artifact_state:
+        baseline_entries = _snapshot_state_to_artifact_entries(baseline_snapshot_artifact_state)
+        baseline_capability_profile = infer_capability_profile_from_artifacts(baseline_entries)
+    compliance_context, compliance_context_source = _resolve_repo_compliance_context(db_path, repo_full)
 
     return RepoDashboardView(
         repo_full=repo_full,
@@ -2429,11 +2551,16 @@ def _build_repo_dashboard_view_uncached(
         journey_comparison=journey_comparison,
         selected_baseline_source_snapshot_id=selected_baseline_source_snapshot_id,
         export_jobs=[],
+        capability_profile=current_capability_profile,
+        capability_delta=compare_capability_profiles(current_capability_profile, baseline_capability_profile),
+        compliance_context=compliance_context,
+        compliance_context_source=compliance_context_source,
     )
 
 
 def _build_repo_governance_decision_summary(
     db_path: str,
+    repo_full: str,
     repo_audits: list[object],
 ) -> RepoGovernanceDecisionSummary | None:
     completed_audits = [audit for audit in repo_audits if getattr(audit, "status", None) == "completed"]
@@ -2450,10 +2577,22 @@ def _build_repo_governance_decision_summary(
         reverse=True,
     )[0]
     findings = list_findings_for_audit(db_path, latest_audit.id)
+    baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, latest_audit.id)
+    capability_delta_signal = dict(
+        baseline_comparison.get("capability_delta_signal")
+        or asdict(
+            build_capability_delta_signal(
+                None,
+                has_measurement=False,
+                unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
+            )
+        )
+    )
     decision = evaluate_governance_decision(
         latest_audit,
         findings=findings,
         rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal=capability_delta_signal,
     )
     return RepoGovernanceDecisionSummary(
         audit_id=latest_audit.id,
@@ -2463,6 +2602,7 @@ def _build_repo_governance_decision_summary(
         decision_lane=decision.decision_lane,
         requires_escalation=decision.requires_escalation,
         should_block_merge=decision.should_block_merge,
+        capability_delta_signal=capability_delta_signal,
         rationale=[
             {
                 "code": reason.code,
@@ -2697,6 +2837,8 @@ def _build_overview_repo_views(db_path: str, repos: list[RepoDashboardIndexEntry
                 design_profiles=[],
                 governance_decision=(
                     _build_repo_governance_decision_summary_from_rows(
+                        db_path,
+                        repo.repo_full,
                         latest_audit_row,
                         finding_rows_by_audit_id.get(int(latest_audit_row["id"]), []),
                     )
@@ -3124,6 +3266,8 @@ def _load_overview_batch_state(
 
 
 def _build_repo_governance_decision_summary_from_rows(
+    db_path: str,
+    repo_full: str,
     audit_row: sqlite3.Row,
     finding_rows: list[sqlite3.Row],
 ) -> RepoGovernanceDecisionSummary:
@@ -3147,10 +3291,22 @@ def _build_repo_governance_decision_summary_from_rows(
         )
         for row in finding_rows
     ]
+    baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, audit.id)
+    capability_delta_signal = dict(
+        baseline_comparison.get("capability_delta_signal")
+        or asdict(
+            build_capability_delta_signal(
+                None,
+                has_measurement=False,
+                unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
+            )
+        )
+    )
     decision = evaluate_governance_decision(
         audit,
         findings=findings,
         rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal=capability_delta_signal,
     )
     return RepoGovernanceDecisionSummary(
         audit_id=audit.id,
@@ -3160,6 +3316,7 @@ def _build_repo_governance_decision_summary_from_rows(
         decision_lane=decision.decision_lane,
         requires_escalation=decision.requires_escalation,
         should_block_merge=decision.should_block_merge,
+        capability_delta_signal=capability_delta_signal,
         rationale=[
             {
                 "code": reason.code,
@@ -6044,6 +6201,11 @@ def _build_overview_attention_repos(repo_views: list[RepoDashboardView]) -> list
                 governance_should_block_merge=(view.governance_decision.should_block_merge if view.governance_decision is not None else False),
                 governance_pr_number=(view.governance_decision.pr_number if view.governance_decision is not None else None),
                 governance_head_sha=(view.governance_decision.head_sha if view.governance_decision is not None else None),
+                governance_capability_delta_signal=(
+                    dict(view.governance_decision.capability_delta_signal)
+                    if view.governance_decision is not None and view.governance_decision.capability_delta_signal is not None
+                    else None
+                ),
             )
         )
 

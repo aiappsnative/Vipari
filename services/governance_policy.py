@@ -66,6 +66,7 @@ def evaluate_governance_decision(
     *,
     findings: list[object] | None = None,
     rollout_mode: str = GOVERNANCE_ROLLOUT_DRY_RUN,
+    capability_delta_signal: dict[str, object] | None = None,
 ) -> GovernanceDecision:
     normalized_rollout_mode = normalize_governance_rollout_mode(rollout_mode)
     reasons: list[GovernanceDecisionReason] = []
@@ -128,7 +129,33 @@ def evaluate_governance_decision(
             )
         )
 
-    requires_escalation = any(reason.code in {"high_risk_audit", "high_severity_findings"} for reason in reasons)
+    signal = capability_delta_signal if isinstance(capability_delta_signal, dict) else {}
+    direction = str(signal.get("direction") or "stable").strip().lower() or "stable"
+    material = bool(signal.get("material"))
+    delta_value = float(signal.get("delta") or 0.0)
+    if material and direction == "expanded":
+        reasons.append(
+            GovernanceDecisionReason(
+                code="material_capability_expansion",
+                summary="A material capability expansion was detected relative to the baseline and should be treated as a governance escalation signal.",
+                severity="high",
+                evidence=(f"capability_delta={delta_value:.4f}", f"capability_direction={direction}"),
+            )
+        )
+    elif material and direction == "reduced":
+        reasons.append(
+            GovernanceDecisionReason(
+                code="material_capability_reduction",
+                summary="A material capability reduction was detected relative to the baseline and recorded as governance context.",
+                severity="info",
+                evidence=(f"capability_delta={delta_value:.4f}", f"capability_direction={direction}"),
+            )
+        )
+
+    requires_escalation = any(
+        reason.code in {"high_risk_audit", "high_severity_findings", "material_capability_expansion"}
+        for reason in reasons
+    )
     should_block_merge = normalized_rollout_mode == GOVERNANCE_ROLLOUT_ENFORCE and requires_escalation
     if should_block_merge:
         decision_lane = "block_merge"

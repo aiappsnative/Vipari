@@ -4,12 +4,14 @@ import hashlib
 
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from engine.diff_parser import extract_signal_terms_from_text
 from engine.drift_profile import build_attribute_profile
 from engine.models import ChangedFile
 from engine.relevance import PATH_RULES, classify_changed_file, infer_artifact_type_from_path as infer_relevance_artifact_type_from_path
+from .ai_library_registry import AiLibraryMatch, is_supported_dependency_manifest, match_ai_libraries
+from .capability_inference import CapabilityProfile, empty_capability_profile, infer_capability_profile
 from .github_integration import fetch_file_content, get_repo_default_branch, list_file_commits, list_repository_files
 from .onboarding_records import (
     add_onboarded_artifact,
@@ -109,6 +111,8 @@ class RepositoryOnboardingResult:
     onboarding: RepositoryOnboardingRecord
     artifacts: list[OnboardedArtifactRecord]
     baseline_versions: list[OnboardingBaselineVersionRecord]
+    ai_library_matches: list[AiLibraryMatch] = field(default_factory=list)
+    capability_profile: CapabilityProfile = field(default_factory=empty_capability_profile)
 
 
 @dataclass(frozen=True)
@@ -293,7 +297,11 @@ def onboard_repository(
     fetch_file_content_fn=fetch_file_content,
 ) -> RepositoryOnboardingResult:
     default_branch = get_default_branch_fn(repo_full, token)
-    candidate_paths = [path for path in list_repository_files_fn(repo_full, token, ref=default_branch) if _is_candidate_path(path)]
+    candidate_paths = [
+        path
+        for path in list_repository_files_fn(repo_full, token, ref=default_branch)
+        if _is_candidate_path(path) or is_supported_dependency_manifest(path)
+    ]
     file_contents: dict[str, str] = {}
     for path in candidate_paths:
         try:
@@ -301,7 +309,9 @@ def onboard_repository(
         except Exception:
             continue
 
+    ai_library_matches = match_ai_libraries(file_contents)
     discovered = discover_ai_artifacts(file_contents)
+    capability_profile = infer_capability_profile(ai_library_matches, discovered)
     onboarding = record_repository_onboarding(
         db_path,
         repo_full=repo_full,
@@ -317,7 +327,13 @@ def onboard_repository(
     from .repo_journey import materialize_repo_journey
 
     materialize_repo_journey(db_path, repo_full)
-    return RepositoryOnboardingResult(onboarding=onboarding, artifacts=artifacts, baseline_versions=baselines)
+    return RepositoryOnboardingResult(
+        onboarding=onboarding,
+        artifacts=artifacts,
+        baseline_versions=baselines,
+        ai_library_matches=ai_library_matches,
+        capability_profile=capability_profile,
+    )
 
 
 def plan_repository_history_backfill(

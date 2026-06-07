@@ -561,6 +561,137 @@ def _render_repo_feedback_mode_control(repo: dict[str, object], *, csrf_token: s
     '''
 
 
+def _render_workspace_compliance_context_summary(context: dict[str, object] | None) -> str:
+    if not context:
+        context = {
+            "risk_tier": "unclassified",
+            "customer_impact": "internal",
+            "human_oversight": "required",
+            "handles_personal_data": False,
+            "handles_biometric_data": False,
+            "deployment_regions": [],
+            "notes": "",
+        }
+    regions = ", ".join(str(item) for item in context.get("deployment_regions") or []) or "None"
+    notes = str(context.get("notes") or "").strip() or "No additional notes."
+    return f'''
+        <div class="control-page-meta-grid compliance-context-summary-grid">
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Risk tier</span><strong>{html_escape(str(context.get("risk_tier") or "unclassified"))}</strong></div>
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Customer impact</span><strong>{html_escape(str(context.get("customer_impact") or "internal"))}</strong></div>
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Human oversight</span><strong>{html_escape(str(context.get("human_oversight") or "required"))}</strong></div>
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Personal data</span><strong>{"Yes" if context.get("handles_personal_data") else "No"}</strong></div>
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Biometric data</span><strong>{"Yes" if context.get("handles_biometric_data") else "No"}</strong></div>
+            <div class="control-page-meta-card"><span class="control-page-meta-label">Deployment regions</span><strong>{html_escape(regions)}</strong></div>
+        </div>
+        <p class="control-page-copy">{html_escape(notes)}</p>
+    '''
+
+
+def _render_workspace_compliance_context_form(*, csrf_token: str, can_manage: bool, context: dict[str, object] | None) -> str:
+    current = context or {}
+    disabled = "disabled" if not can_manage else ""
+    selected_risk = str(current.get("risk_tier") or "unclassified")
+    selected_customer_impact = str(current.get("customer_impact") or "internal")
+    selected_human_oversight = str(current.get("human_oversight") or "required")
+    personal_checked = "checked" if current.get("handles_personal_data") else ""
+    biometric_checked = "checked" if current.get("handles_biometric_data") else ""
+    regions = ", ".join(str(item) for item in (current.get("deployment_regions") or []))
+    notes = html_escape(str(current.get("notes") or ""))
+    return f'''
+        <form method="post" action="/settings/compliance-context" class="control-page-form control-page-form-wide">
+            {_csrf_input(csrf_token)}
+            <div class="control-page-form-grid compliance-context-form-grid">
+                <label class="control-page-label" for="workspace-risk-tier">Risk tier</label>
+                <select class="control-page-select" id="workspace-risk-tier" name="risk_tier" {disabled}>
+                    <option value="unclassified" {"selected" if selected_risk == "unclassified" else ""}>Unclassified</option>
+                    <option value="minimal" {"selected" if selected_risk == "minimal" else ""}>Minimal</option>
+                    <option value="limited" {"selected" if selected_risk == "limited" else ""}>Limited</option>
+                    <option value="high" {"selected" if selected_risk == "high" else ""}>High</option>
+                </select>
+                <label class="control-page-label" for="workspace-customer-impact">Customer impact</label>
+                <select class="control-page-select" id="workspace-customer-impact" name="customer_impact" {disabled}>
+                    <option value="internal" {"selected" if selected_customer_impact == "internal" else ""}>Internal</option>
+                    <option value="customer_facing" {"selected" if selected_customer_impact == "customer_facing" else ""}>Customer facing</option>
+                    <option value="critical" {"selected" if selected_customer_impact == "critical" else ""}>Critical</option>
+                </select>
+                <label class="control-page-label" for="workspace-human-oversight">Human oversight</label>
+                <select class="control-page-select" id="workspace-human-oversight" name="human_oversight" {disabled}>
+                    <option value="required" {"selected" if selected_human_oversight == "required" else ""}>Required</option>
+                    <option value="optional" {"selected" if selected_human_oversight == "optional" else ""}>Optional</option>
+                    <option value="none" {"selected" if selected_human_oversight == "none" else ""}>None</option>
+                </select>
+                <label class="control-page-checkbox"><input type="checkbox" name="handles_personal_data" value="1" {personal_checked} {disabled} /> Handles personal data</label>
+                <label class="control-page-checkbox"><input type="checkbox" name="handles_biometric_data" value="1" {biometric_checked} {disabled} /> Handles biometric data</label>
+                <label class="control-page-label" for="workspace-regions">Deployment regions</label>
+                <input class="control-page-input" id="workspace-regions" name="deployment_regions" value="{html_escape(regions)}" placeholder="eu-west-1, us-east-1" {disabled} />
+            </div>
+            <label class="control-page-label" for="workspace-compliance-notes">Notes</label>
+            <textarea class="control-page-input field-input-area" id="workspace-compliance-notes" name="notes" rows="3" {disabled}>{notes}</textarea>
+            <button type="submit" class="control-page-button" {disabled}>Save compliance context</button>
+        </form>
+    '''
+
+
+def _render_repo_compliance_context_forms(repo_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
+    if not repo_rows:
+        return '<p class="control-page-copy">No repositories are allocated yet.</p>'
+    rendered: list[str] = []
+    for repo in repo_rows:
+        allocation_id = repo.get("allocation_id")
+        if allocation_id in {None, ""}:
+            continue
+        context = repo.get("compliance_context") if isinstance(repo.get("compliance_context"), dict) else {}
+        source = str(repo.get("compliance_context_source") or "workspace_default")
+        regions = ", ".join(str(item) for item in (context.get("deployment_regions") or [])) if isinstance(context, dict) else ""
+        notes = str(context.get("notes") or "").strip() if isinstance(context, dict) else ""
+        rendered.append(
+            f'''
+            <article class="repo-setup-card repo-setup-summary-card">
+                <div class="repo-setup-card-top">
+                    <div class="repo-setup-card-label">{html_escape(str(repo.get("repo_full") or "Repository"))}</div>
+                    <span class="repo-setup-chip repo-setup-chip-cool">{html_escape(source.replace("_", " "))}</span>
+                </div>
+                <div class="control-page-meta-grid compliance-context-summary-grid">
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Risk tier</span><strong>{html_escape(str(context.get("risk_tier") or "unclassified"))}</strong></div>
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Customer impact</span><strong>{html_escape(str(context.get("customer_impact") or "internal"))}</strong></div>
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Human oversight</span><strong>{html_escape(str(context.get("human_oversight") or "required"))}</strong></div>
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Personal data</span><strong>{"Yes" if context.get("handles_personal_data") else "No"}</strong></div>
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Biometric data</span><strong>{"Yes" if context.get("handles_biometric_data") else "No"}</strong></div>
+                    <div class="control-page-meta-card"><span class="control-page-meta-label">Deployment regions</span><strong>{html_escape(regions or 'None')}</strong></div>
+                </div>
+                <p class="control-page-copy">{html_escape(notes or 'No repo-specific override notes yet.')}</p>
+                <form method="post" action="/settings/repositories/compliance-context" class="control-page-form control-page-form-wide">
+                    {_csrf_input(csrf_token)}
+                    <input type="hidden" name="allocation_id" value="{html_escape(str(allocation_id))}" />
+                    <div class="control-page-form-grid compliance-context-form-grid">
+                        <label class="control-page-label" for="repo-risk-tier-{html_escape(str(allocation_id))}">Risk tier</label>
+                        <select class="control-page-select" id="repo-risk-tier-{html_escape(str(allocation_id))}" name="risk_tier" {'disabled' if not can_manage else ''}>
+                            <option value="">Inherit</option>
+                            <option value="unclassified">Unclassified</option>
+                            <option value="minimal">Minimal</option>
+                            <option value="limited">Limited</option>
+                            <option value="high">High</option>
+                        </select>
+                        <label class="control-page-label" for="repo-customer-impact-{html_escape(str(allocation_id))}">Customer impact</label>
+                        <select class="control-page-select" id="repo-customer-impact-{html_escape(str(allocation_id))}" name="customer_impact" {'disabled' if not can_manage else ''}>
+                            <option value="">Inherit</option>
+                            <option value="internal">Internal</option>
+                            <option value="customer_facing">Customer facing</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <label class="control-page-label" for="repo-notes-{html_escape(str(allocation_id))}">Override notes</label>
+                    <textarea class="control-page-input field-input-area" id="repo-notes-{html_escape(str(allocation_id))}" name="notes" rows="2" {'disabled' if not can_manage else ''}></textarea>
+                    <button type="submit" class="control-page-button" {'disabled' if not can_manage else ''}>Save override</button>
+                </form>
+            </article>
+            '''
+        )
+    if not rendered:
+        return '<p class="control-page-copy">No compliance overrides are editable for the current repository set.</p>'
+    return "".join(rendered)
+
+
 def _admin_sidebar_item(admin_url: str | None) -> str:
     if not admin_url:
         return ""
@@ -1014,12 +1145,26 @@ def render_repo_onboarding_metrics(onboarded_summaries: list[dict[str, object]])
     approved_count = sum(1 for summary in onboarded_summaries if str(summary.get("onboarding_status") or "").lower() == "baseline_approved")
     tracked_artifacts = sum(int(summary.get("discovered_artifact_count") or 0) for summary in onboarded_summaries)
     historical_checkpoints = sum(int(summary.get("historical_version_count") or 0) for summary in onboarded_summaries)
+    material_capability_shift_count = sum(
+        1
+        for summary in onboarded_summaries
+        if isinstance(summary.get("governance_capability_delta_signal"), dict)
+        and bool(summary.get("governance_capability_delta_signal", {}).get("material"))
+    )
     cards = [
         ("Onboarded repos", onboarded_count, "Repositories with a stored onboarding record in this workspace."),
         ("Baseline approved", approved_count, "Repos whose current onboarding baseline is already locked."),
         ("Tracked artifacts", tracked_artifacts, "Control surfaces currently captured across onboarded repositories."),
         ("History checkpoints", historical_checkpoints, "Historical snapshots materialized across onboarded repositories."),
     ]
+    if material_capability_shift_count > 0:
+        cards.append(
+            (
+                "Material capability shifts",
+                material_capability_shift_count,
+                "Onboarded repos whose latest governance review reported a material capability delta.",
+            )
+        )
     return "".join(
         f'''
         <article class="repo-setup-metric-card">
@@ -1041,6 +1186,7 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
         state_label, state_class = _repo_setup_state_label(None, {"allocation_status": summary.get("allocation_status")}, summary)
         state_key = _repo_setup_state_key(None, {"allocation_status": summary.get("allocation_status")}, summary)
         last_onboarded_value = summary.get("last_onboarded_at") if isinstance(summary.get("last_onboarded_at"), (int, float)) else 0
+        capability_signal_copy = _repo_setup_capability_delta_copy(summary)
         rendered.append(
             f'''
             <article class="repo-setup-card repo-setup-card-strong repo-setup-summary-card" data-repo-summary-card="true" data-status="{html_escape(state_key)}" data-repo-full="{html_escape(str(summary['repo_full']).lower())}" data-artifacts="{int(summary.get('discovered_artifact_count') or 0)}" data-history="{int(summary.get('historical_version_count') or 0)}" data-last-onboarded="{last_onboarded_value}">
@@ -1056,11 +1202,22 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
                     <div class="repo-setup-stat"><span class="repo-setup-meta-label">Last onboarded</span><span class="repo-setup-meta-value">{html_escape(_format_timestamp(summary.get('last_onboarded_at') if isinstance(summary.get('last_onboarded_at'), (int, float)) else None))}</span></div>
                 </div>
                 <p>{html_escape(_repo_setup_summary_copy(summary))}</p>
+                {f'<p class="repo-setup-metric-foot">{html_escape(capability_signal_copy)}</p>' if capability_signal_copy else ''}
                 <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(str(summary['repo_full'])))}">Open audit page</a>
             </article>
             '''
         )
     return "".join(rendered)
+
+
+def _repo_setup_capability_delta_copy(summary: dict[str, object]) -> str | None:
+    signal = summary.get("governance_capability_delta_signal")
+    if not isinstance(signal, dict):
+        return None
+    summary_text = str(signal.get("summary") or "").strip()
+    if not summary_text:
+        return None
+    return f"Capability delta: {summary_text}"
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:
@@ -1157,6 +1314,7 @@ def render_control_plane_settings_page(
     workspace_role: str,
     workspace_members: list[dict[str, object]],
     repo_rows: list[dict[str, object]],
+    workspace_compliance_context: dict[str, object] | None = None,
     next_payment_at: float | None,
     subscription_status: str | None,
     setup_state: str,
@@ -1214,6 +1372,9 @@ def render_control_plane_settings_page(
         .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
         .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_list(workspace_members))
         .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows, csrf_token=csrf_token, can_manage=can_manage))
+        .replace("{{COMPLIANCE_CONTEXT_SUMMARY}}", _render_workspace_compliance_context_summary(workspace_compliance_context))
+        .replace("{{COMPLIANCE_CONTEXT_FORM}}", _render_workspace_compliance_context_form(csrf_token=csrf_token, can_manage=can_manage, context=workspace_compliance_context))
+        .replace("{{REPO_COMPLIANCE_CONTEXTS}}", _render_repo_compliance_context_forms(repo_rows, csrf_token=csrf_token, can_manage=can_manage))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))
         .replace("{{SETUP_STATE}}", html_escape(_setup_state_label(setup_state)))

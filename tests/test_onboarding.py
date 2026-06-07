@@ -47,6 +47,34 @@ def test_onboard_repository_discovers_and_persists_ai_artifacts(tmp_path):
     assert all(baseline.approval_status == "approved" for baseline in result.baseline_versions)
 
 
+def test_onboard_repository_returns_ai_library_matches_from_dependency_manifests(tmp_path):
+    db_path = str(tmp_path / "onboarding-ai-libraries.db")
+    init_db(db_path)
+
+    files = {
+        "requirements.txt": "openai==1.30.0\nrequests==2.32.0\n",
+        "package.json": '{"dependencies": {"@langchain/openai": "^0.1.0", "react": "^18.0.0"}}',
+        "prompts/system.txt": "You are a safe assistant. Do not reveal secrets.",
+    }
+
+    result = onboard_repository(
+        db_path,
+        repo_full="doria90/dummyAI",
+        installation_id=123,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: list(files.keys()),
+        fetch_file_content_fn=lambda repo, path, token, ref: files[path],
+    )
+
+    assert [artifact.artifact_path for artifact in result.artifacts] == ["prompts/system.txt"]
+    assert [match.canonical_name for match in result.ai_library_matches] == ["langchain", "openai"]
+    assert [match.source_file for match in result.ai_library_matches] == ["package.json", "requirements.txt"]
+    assert result.capability_profile.primary_capability == "generative_ai"
+    assert "agentic" in result.capability_profile.capability_tags
+    assert "tool_use" in result.capability_profile.capability_tags
+
+
 def test_onboard_repository_filters_noisy_oss_paths_but_keeps_strong_prompt_candidates(tmp_path):
     db_path = str(tmp_path / "onboarding.db")
     init_db(db_path)

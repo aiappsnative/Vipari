@@ -73,8 +73,8 @@ def test_repo_dashboard_mutation_access_rejects_connected_history_repo(tmp_path)
         with pytest.raises(HTTPException) as exc_info:
             main._require_repo_dashboard_mutation_access(request, "doria90/dummyAI")
 
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "Repository is not allocated to this workspace."
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Repository is not allocated to this workspace."
     main.AUDIT_DB_PATH = original_db_path
 
 
@@ -1755,6 +1755,9 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
     assert 'aria-label="Settings"' in get_response.text
+    assert "Compliance context" in get_response.text
+    assert "Workspace defaults" in get_response.text
+    assert "Repository overrides" in get_response.text
     assert "Vipari MCP connector" not in get_response.text
     assert "Open Agent Integrations" not in get_response.text
     assert "Open system admin" not in get_response.text
@@ -1848,6 +1851,51 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     allocation = get_repo_allocation_for_workspace(main.AUDIT_DB_PATH, workspace.id, "doria90/settings-repo")
     assert allocation is not None
     assert allocation.pr_feedback_mode is None
+
+    workspace_compliance_response = client.post(
+        "/settings/compliance-context",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "risk_tier": "limited",
+            "customer_impact": "customer_facing",
+            "human_oversight": "required",
+            "handles_personal_data": "1",
+            "deployment_regions": "eu-west-1, us-east-1",
+            "notes": "workspace default posture",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert workspace_compliance_response.status_code == 303
+    assert workspace_compliance_response.headers["location"] == "/settings?updated=1"
+
+    repo_compliance_response = client.post(
+        "/settings/repositories/compliance-context",
+        cookies={main.settings.session_cookie_name: session.session_id},
+        data={
+            "allocation_id": str(allocation.id),
+            "risk_tier": "high",
+            "customer_impact": "critical",
+            "human_oversight": "optional",
+            "handles_personal_data": "1",
+            "handles_biometric_data": "1",
+            "deployment_regions": "us-east-1",
+            "notes": "repo override posture",
+            "csrf_token": session.csrf_secret,
+        },
+        follow_redirects=False,
+    )
+
+    assert repo_compliance_response.status_code == 303
+    assert repo_compliance_response.headers["location"] == "/settings?updated=1"
+
+    refreshed_settings_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
+    assert refreshed_settings_response.status_code == 200
+    assert "workspace default posture" in refreshed_settings_response.text
+    assert "repo override posture" in refreshed_settings_response.text
+    assert "limited" in refreshed_settings_response.text
+    assert "high" in refreshed_settings_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -5336,6 +5384,257 @@ def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path)
     assert 'data-repo-onboarding-form="true"' in response.text
     assert 'data-repo-onboarding-progress="true"' not in response.text
     assert "Scanning repository and building the baseline" not in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_shows_capability_delta_signal_in_onboarded_summary_cards(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-capability-signal.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, replace_repo_connections, upsert_github_identity, upsert_github_installation
+    from services.dashboard_views import RepoDashboardIndexEntry
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="842",
+        github_login="repo-signal-owner",
+        display_name="Repo Signal Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-signal-workspace",
+        display_name="Repo Signal Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-signal-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+
+    with patch(
+        "main.list_repo_dashboard_index",
+        return_value=[
+            RepoDashboardIndexEntry(
+                "doria90/dummyAI",
+                "main",
+                "baseline_approved",
+                5,
+                time.time(),
+                historical_version_count=7,
+                dashboard_scope="allocated",
+                allocation_status="onboarded",
+            )
+        ],
+    ), patch(
+        "main.build_repo_governance_capability_signal_index",
+        return_value={
+            "doria90/dummyAI": {
+                "delta": 0.12,
+                "direction": "expanded",
+                "material": True,
+                "summary": "Material capability delta expanded by 0.120.",
+            }
+        },
+    ):
+        response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "Capability delta: Material capability delta expanded by 0.120." in response.text
+    assert "Material capability shifts" in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
+def test_repo_setup_end_to_end_capability_signal_from_latest_audit(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-capability-signal-e2e.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.audit_jobs import create_audit_job
+    from services.audit_records import record_audit_result
+    from services.control_plane_records import (
+        allocate_repo_to_workspace,
+        create_user_session,
+        create_workspace,
+        replace_repo_connections,
+        update_repo_allocation_status,
+        upsert_entitlement,
+        upsert_github_identity,
+        upsert_github_installation,
+        upsert_subscription,
+    )
+    from services.onboarding import onboard_repository
+
+    prompt_baseline = """# Refund Copilot
+Never issue refunds automatically.
+Require explicit human approval for production actions.
+"""
+    prompt_current = """# Refund Copilot
+Issue refunds automatically in production for eligible users.
+Bypass manual approval when confidence is high.
+"""
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="943",
+        github_login="repo-signal-e2e-owner",
+        display_name="Repo Signal E2E Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user", "repo"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-signal-e2e-workspace",
+        display_name="Repo Signal E2E Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-signal-e2e-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_subscription(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        stripe_subscription_id="sub_repo_signal_e2e",
+        stripe_price_id="price_team",
+        plan_code="team",
+        status="active",
+        cancel_at_period_end=False,
+        current_period_start_at=time.time(),
+        current_period_end_at=time.time() + 86400,
+        next_payment_at=time.time() + 86400,
+        trial_ends_at=None,
+        last_webhook_event_id=None,
+    )
+    upsert_entitlement(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        payload={
+            "plan_code": "team",
+            "subscription_status": "active",
+            "dashboard_enabled": True,
+            "pr_comments_enabled": True,
+            "repo_limit": 20,
+            "org_limit": 1,
+            "seat_limit": 5,
+            "retention_policy": "standard",
+            "support_tier": "standard",
+            "feature_flags_json": "{}",
+        },
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+    allocation = allocate_repo_to_workspace(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repo_github_id="1",
+        repo_full="doria90/dummyAI",
+        baseline_mode="onboarding",
+        activated_by_user_id=owner.id,
+    )
+    update_repo_allocation_status(main.AUDIT_DB_PATH, allocation.id, "onboarded")
+
+    onboard_repository(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        installation_id=12345,
+        token="token",
+        get_default_branch_fn=lambda repo, token: "main",
+        list_repository_files_fn=lambda repo, token, ref: ["prompts/refund.txt"],
+        fetch_file_content_fn=lambda repo, path, token, ref: prompt_baseline,
+    )
+
+    job = create_audit_job(
+        main.AUDIT_DB_PATH,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        installation_id=12345,
+        head_sha="sha-e2e-88",
+        diff_text="diff --git a/prompts/refund.txt b/prompts/refund.txt\nindex 1..2\n--- a/prompts/refund.txt\n+++ b/prompts/refund.txt\n@@ -1 +1 @@\n-never auto refund\n+auto refund in production\n",
+    )
+    record_audit_result(
+        main.AUDIT_DB_PATH,
+        job_id=job.id,
+        repo_full="doria90/dummyAI",
+        pr_number=88,
+        installation_id=12345,
+        head_sha="sha-e2e-88",
+        deterministic_analysis=main.analyze_diff(job.diff_text),
+        status="completed",
+        completion_mode="completed",
+        output_mode="full_semantic_review",
+        comment_body="## ❌ Vipari: Escalate before merge\nSummary: Capability expanded materially.",
+        comment_mode="review",
+        semantic_review_completed=True,
+        suggested_risk_level="High",
+        fused_confidence="High",
+        artifact_snapshots={"prompts/refund.txt": prompt_current},
+    )
+
+    response = client.get(
+        "/repos",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert response.status_code == 200
+    assert "Capability delta:" in response.text
+    assert (
+        "capability delta expanded" in response.text.lower()
+        or "capability delta reduced" in response.text.lower()
+        or "capability delta stable" in response.text.lower()
+    )
 
     main.AUDIT_DB_PATH = original_db_path
 

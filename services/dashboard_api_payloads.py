@@ -335,6 +335,7 @@ def build_repo_governance_decision_payload(
         "conclusion": ci_outcome["conclusion"],
         "recommended_exit_code": ci_outcome["recommended_exit_code"],
         "recommended_gate": ci_outcome["recommended_gate"],
+        "capability_delta_signal": selected_route.get("capability_delta_signal"),
         "governance_decision": enriched_governance_decision,
     }
 

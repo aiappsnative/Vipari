@@ -16,7 +16,7 @@ import json
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Any, Literal
 
 from config import get_settings
 from .api_models import BaselineDecisionRequest, RepoRebaselineRequest, RepositoryBackfillRequest, RepositoryOnboardingRequest
@@ -75,6 +75,13 @@ from .baseline_approval_service import (
     reject_repo_baseline_artifact,
 )
 from .compliance_export_service import ComplianceExportRequest as ComplianceExportServiceRequest, build_compliance_export
+from .compliance_context_records import (
+    get_repo_compliance_context_override,
+    get_workspace_compliance_context,
+    resolve_effective_compliance_context,
+    upsert_repo_compliance_context_override,
+    upsert_workspace_compliance_context,
+)
 from .export_jobs import create_export_job, get_export_job, list_export_jobs_for_repo, list_export_jobs_for_requester
 from .onboarding_records import get_onboarded_artifact_by_id, promote_latest_source_to_onboarding_baseline
 from .persistence import get_persistence_status, persistence_status_payload
@@ -263,6 +270,14 @@ class OnboardingProposalRequest(BaseModel):
     proposed_category: str | None = Field(default=None, max_length=80)
     rationale: str = Field(default="", max_length=2000)
     metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class WorkspaceComplianceContextRequest(BaseModel):
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class RepoComplianceContextOverrideRequest(BaseModel):
+    context_override: dict[str, Any] = Field(default_factory=dict)
 
 
 class IssuePrincipalTokenRequest(BaseModel):
@@ -1078,6 +1093,159 @@ def create_api_app() -> FastAPI:
                     }
                     for alloc in allocations
                 ],
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/compliance-context")
+    def cp_get_workspace_compliance_context(workspace_id: int, request: Request):
+        """Return workspace-level compliance context defaults.
+
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        resolved = resolve_effective_compliance_context(
+            db_path,
+            workspace_id=workspace_id,
+            persist_missing_workspace_context=False,
+        )
+        workspace_record = get_workspace_compliance_context(db_path, workspace_id)
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "source": resolved.source,
+                "context": resolved.context,
+                "context_hash": (workspace_record.context_hash if workspace_record is not None else None),
+                "updated_at": (workspace_record.updated_at if workspace_record is not None else None),
+            }
+        )
+
+    @app.put("/cp/workspaces/{workspace_id}/compliance-context")
+    def cp_upsert_workspace_compliance_context(
+        workspace_id: int,
+        payload: WorkspaceComplianceContextRequest,
+        request: Request,
+    ):
+        """Upsert workspace-level compliance context defaults.
+
+        Requires scope: ``drift.write.low``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        require_cp_workspace_match(claims, workspace_id)
+        record = upsert_workspace_compliance_context(
+            db_path,
+            workspace_id=workspace_id,
+            context=payload.context,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="compliance_context.workspace_upserted",
+            subject_type="workspace_compliance_context",
+            subject_id=str(workspace_id),
+        )
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "context": json.loads(record.context_json),
+                "context_hash": record.context_hash,
+                "updated_at": record.updated_at,
+            }
+        )
+
+    @app.get("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/compliance-context")
+    def cp_get_repo_compliance_context(workspace_id: int, repo_full: str, request: Request):
+        """Return effective compliance context for a workspace-allocated repo.
+
+        Requires scope: ``drift.read``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_READ)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        resolved = resolve_effective_compliance_context(
+            db_path,
+            workspace_id=workspace_id,
+            repo_allocation_id=allocation.id,
+            persist_missing_workspace_context=False,
+        )
+        override_record = get_repo_compliance_context_override(
+            db_path,
+            allocation.id,
+            workspace_id=workspace_id,
+        )
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "repo_full": repo_full,
+                "repo_allocation_id": allocation.id,
+                "source": resolved.source,
+                "effective_context": resolved.context,
+                "override": (
+                    json.loads(override_record.override_json)
+                    if override_record is not None
+                    else None
+                ),
+                "override_hash": (
+                    override_record.override_hash
+                    if override_record is not None
+                    else None
+                ),
+            }
+        )
+
+    @app.put("/cp/workspaces/{workspace_id}/repos/{repo_full:path}/compliance-context")
+    def cp_upsert_repo_compliance_context(
+        workspace_id: int,
+        repo_full: str,
+        payload: RepoComplianceContextOverrideRequest,
+        request: Request,
+    ):
+        """Upsert repo-level compliance context override.
+
+        Requires scope: ``drift.write.low``.
+        """
+        claims, _principal = require_cp_principal(request, settings, db_path)
+        require_cp_scope(claims, SCOPE_DRIFT_WRITE_LOW)
+        require_cp_workspace_match(claims, workspace_id)
+        allocation = get_repo_allocation_for_workspace(db_path, workspace_id, repo_full)
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Repository is not allocated to this workspace.")
+        override = upsert_repo_compliance_context_override(
+            db_path,
+            workspace_id=workspace_id,
+            repo_allocation_id=allocation.id,
+            context_override=payload.context_override,
+        )
+        effective = resolve_effective_compliance_context(
+            db_path,
+            workspace_id=workspace_id,
+            repo_allocation_id=allocation.id,
+            persist_missing_workspace_context=True,
+        )
+        create_control_plane_audit_log(
+            db_path,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            event_type="compliance_context.repo_override_upserted",
+            subject_type="repo_compliance_context_override",
+            subject_id=str(override.id),
+            payload={"repo_full": repo_full, "repo_allocation_id": allocation.id},
+        )
+        return JSONResponse(
+            {
+                "workspace_id": workspace_id,
+                "repo_full": repo_full,
+                "repo_allocation_id": allocation.id,
+                "override": json.loads(override.override_json),
+                "override_hash": override.override_hash,
+                "effective_context": effective.context,
+                "source": effective.source,
             }
         )
 

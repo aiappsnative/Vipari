@@ -43,6 +43,7 @@ from services.audit_records import (
 )
 from services.audit_feedback_records import list_recent_feedback_events, list_recent_triage_events
 from services.activity_records import list_recent_activity_events
+from services.compliance_context_records import default_workspace_compliance_context, resolve_effective_compliance_context, upsert_repo_compliance_context_override, upsert_workspace_compliance_context
 from services.audit_worker import AuditWorker, WorkerSettings
 from services.audit_records import list_pre_audit_relevance_decisions
 from services.mcp_broker import (
@@ -190,7 +191,7 @@ from services.control_plane_records import (
 from services.pr_feedback_mode import resolve_pr_feedback_mode
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_governance_decision_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_repo_pr_review_routes_payload, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_repo_governance_capability_signal_index, build_repo_pr_review_routes_payload, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -1657,8 +1658,25 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
     for connection in connections:
         allocation = allocations.get(connection.repo_full)
         status = "Available"
+        compliance_context = default_workspace_compliance_context()
+        compliance_context_source = "workspace_default"
         if allocation is not None:
             status = "Onboarded" if allocation.allocation_status == "onboarded" else "Allocated"
+            try:
+                resolved_context = resolve_effective_compliance_context(
+                    AUDIT_DB_PATH,
+                    workspace_id=workspace_id,
+                    repo_allocation_id=allocation.id,
+                )
+                compliance_context = resolved_context.context
+                compliance_context_source = resolved_context.source
+            except ValueError as exc:
+                logger.warning(
+                    "Falling back to workspace default compliance context due to invalid repo compliance mapping",
+                    extra={"workspace_id": workspace_id, "repo_allocation_id": allocation.id, "error": str(exc)},
+                )
+                compliance_context = default_workspace_compliance_context()
+                compliance_context_source = "workspace_default"
         effective_mode_label = {
             "comments": "Comments",
             "reviews": "Reviews",
@@ -1681,6 +1699,8 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
                     else "Not allocated"
                 ),
                 "effective_feedback_mode_label": effective_mode_label,
+                "compliance_context_source": compliance_context_source,
+                "compliance_context": compliance_context,
             }
         )
         seen_repo_fulls.add(connection.repo_full)
@@ -1688,6 +1708,23 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
     for repo_full, allocation in allocations.items():
         if repo_full in seen_repo_fulls:
             continue
+        compliance_context = default_workspace_compliance_context()
+        compliance_context_source = "workspace_default"
+        try:
+            resolved_context = resolve_effective_compliance_context(
+                AUDIT_DB_PATH,
+                workspace_id=workspace_id,
+                repo_allocation_id=allocation.id,
+            )
+            compliance_context = resolved_context.context
+            compliance_context_source = resolved_context.source
+        except ValueError as exc:
+            logger.warning(
+                "Falling back to workspace default compliance context due to invalid repo compliance mapping",
+                extra={"workspace_id": workspace_id, "repo_allocation_id": allocation.id, "error": str(exc)},
+            )
+            compliance_context = default_workspace_compliance_context()
+            compliance_context_source = "workspace_default"
         effective_mode_label = {
             "comments": "Comments",
             "reviews": "Reviews",
@@ -1706,6 +1743,8 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
                 "repo_feedback_mode_override": allocation.pr_feedback_mode,
                 "repo_feedback_mode_override_label": {"comments": "Comments only", "reviews": "Formal reviews", "off": "Off"}.get(allocation.pr_feedback_mode, "Inherit workspace default"),
                 "effective_feedback_mode_label": effective_mode_label,
+                "compliance_context_source": compliance_context_source,
+                "compliance_context": compliance_context,
             }
         )
 
@@ -3201,6 +3240,11 @@ async def settings_page(request: Request):
             workspace_role=membership.role if membership else "viewer",
             workspace_members=_workspace_member_rows(workspace.id),
             repo_rows=_workspace_repo_rows(workspace.id, pr_feedback_allowed=pr_feedback_allowed),
+            workspace_compliance_context=resolve_effective_compliance_context(
+                AUDIT_DB_PATH,
+                workspace_id=workspace.id,
+                persist_missing_workspace_context=True,
+            ).context,
             next_payment_at=subscription.next_payment_at if subscription else None,
             subscription_status=subscription.status if subscription else None,
             setup_state=workspace.setup_state,
@@ -3301,6 +3345,89 @@ async def settings_update_repo_feedback_mode(
         AUDIT_DB_PATH,
         allocation.id,
         pr_feedback_mode=override_mode,
+    )
+    return RedirectResponse("/settings?updated=1", status_code=303)
+
+
+@app.post("/settings/compliance-context")
+@app.post("/app/settings/compliance-context")
+async def settings_update_workspace_compliance_context(
+    request: Request,
+    risk_tier: str = Form(default="unclassified"),
+    customer_impact: str = Form(default="internal"),
+    human_oversight: str = Form(default="required"),
+    handles_personal_data: str | None = Form(default=None),
+    handles_biometric_data: str | None = Form(default=None),
+    deployment_regions: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    context = {
+        "risk_tier": risk_tier,
+        "customer_impact": customer_impact,
+        "human_oversight": human_oversight,
+        "handles_personal_data": handles_personal_data is not None,
+        "handles_biometric_data": handles_biometric_data is not None,
+        "deployment_regions": [item.strip() for item in (deployment_regions or "").split(",") if item.strip()],
+        "notes": notes or "",
+    }
+    upsert_workspace_compliance_context(
+        AUDIT_DB_PATH,
+        workspace_id=access_context["workspace"].id,
+        context=context,
+    )
+    return RedirectResponse("/settings?updated=1", status_code=303)
+
+
+@app.post("/settings/repositories/compliance-context")
+@app.post("/app/settings/repositories/compliance-context")
+async def settings_update_repo_compliance_context(
+    request: Request,
+    allocation_id: int = Form(...),
+    risk_tier: str = Form(default=""),
+    customer_impact: str = Form(default=""),
+    human_oversight: str = Form(default=""),
+    handles_personal_data: str | None = Form(default=None),
+    handles_biometric_data: str | None = Form(default=None),
+    deployment_regions: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    csrf_token: str | None = Form(None),
+):
+    access_context = _current_workspace_context(request)
+    if not _has_settings_access(access_context):
+        raise HTTPException(status_code=403, detail="Settings are available only for accepted workspace members.")
+    _validate_csrf_secret(access_context["session"].csrf_secret, csrf_token)
+    _require_workspace_role(access_context, "owner", "admin")
+    allocation = next((candidate for candidate in list_repo_allocations_for_workspace(AUDIT_DB_PATH, access_context["workspace"].id) if candidate.id == allocation_id), None)
+    if allocation is None:
+        raise HTTPException(status_code=404, detail="Repository allocation was not found for this workspace.")
+    override: dict[str, object] = {}
+    for key, value in (
+        ("risk_tier", risk_tier),
+        ("customer_impact", customer_impact),
+        ("human_oversight", human_oversight),
+        ("notes", notes or ""),
+    ):
+        cleaned = str(value or "").strip()
+        if cleaned:
+            override[key] = cleaned
+    if handles_personal_data is not None:
+        override["handles_personal_data"] = True
+    if handles_biometric_data is not None:
+        override["handles_biometric_data"] = True
+    region_values = [item.strip() for item in (deployment_regions or "").split(",") if item.strip()]
+    if region_values:
+        override["deployment_regions"] = region_values
+    upsert_repo_compliance_context_override(
+        AUDIT_DB_PATH,
+        workspace_id=access_context["workspace"].id,
+        repo_allocation_id=allocation.id,
+        context_override=override,
     )
     return RedirectResponse("/settings?updated=1", status_code=303)
 
@@ -4933,6 +5060,16 @@ async def repo_setup_page(request: Request):
         )
         if str(item.dashboard_scope or "allocated") == "allocated"
     ]
+    governance_signal_by_repo = build_repo_governance_capability_signal_index(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visible_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    for summary in onboarded_summaries:
+        repo_full = str(summary.get("repo_full") or "")
+        if repo_full in governance_signal_by_repo:
+            summary["governance_capability_delta_signal"] = governance_signal_by_repo[repo_full]
     consumed_repo_slots = len(
         {str(item["repo_full"]) for item in active_allocations}
         | {str(item["repo_full"]) for item in onboarded_summaries}

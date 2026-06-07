@@ -288,6 +288,9 @@ def _create_dashboard_member_session(
 
 
 def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
+    from services.compliance_context_records import upsert_repo_compliance_context_override, upsert_workspace_compliance_context
+    from services.control_plane_records import get_active_repo_allocation_for_repo
+
     db_path = str(tmp_path / "api-dashboard.db")
     init_db(db_path)
     main.AUDIT_DB_PATH = db_path
@@ -318,6 +321,31 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
             "sha-1": PROMPT_BASELINE,
             "sha-2": PROMPT_CURRENT,
         }[ref],
+    )
+
+    allocation = get_active_repo_allocation_for_repo(db_path, "doria90/dummyAI")
+    assert allocation is not None
+    upsert_workspace_compliance_context(
+        db_path,
+        workspace_id=allocation.workspace_id,
+        context={
+            "risk_tier": "limited",
+            "customer_impact": "customer_facing",
+            "human_oversight": "required",
+            "handles_personal_data": False,
+            "handles_biometric_data": False,
+            "deployment_regions": ["eu-west-1"],
+            "notes": "workspace default",
+        },
+    )
+    upsert_repo_compliance_context_override(
+        db_path,
+        workspace_id=allocation.workspace_id,
+        repo_allocation_id=allocation.id,
+        context_override={
+            "risk_tier": "high",
+            "handles_personal_data": True,
+        },
     )
 
     with TestClient(main.app) as client:
@@ -363,6 +391,14 @@ def test_dashboard_api_returns_repo_view_for_seeded_repo(tmp_path):
     assert payload["baseline_review"]["is_pending_review"] is False
     assert isinstance(payload["baseline_review"]["recent_decisions"], list)
     assert payload["artifacts"][0]["provenance_label"] == "AI control surface"
+    assert payload["capability_profile"]["primary_capability"] == "generative_ai"
+    assert "generative_ai" in payload["capability_profile"]["capability_tags"]
+    assert payload["capability_delta"]["introduced"] == []
+    assert payload["capability_delta"]["removed"] == []
+    assert payload["compliance_context_source"] == "repo_override"
+    assert payload["compliance_context"]["risk_tier"] == "high"
+    assert payload["compliance_context"]["customer_impact"] == "customer_facing"
+    assert payload["compliance_context"]["handles_personal_data"] is True
     assert payload["backfill"]["completed_job_count"] == 1
     assert payload["insights"][0]["artifact_path"] == "prompts/refund.txt"
     assert payload["insights"][0]["queue_lane"] == "primary"
@@ -600,6 +636,10 @@ def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_
     assert payload["governance_decision"]["decision_lane"] == "escalate"
     assert payload["governance_decision"]["requires_escalation"] is True
     assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["governance_decision"]["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["governance_decision"]["capability_delta_signal"]["delta"], float)
+    assert payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["delta"], float)
     assert isinstance(payload["governance_decision"]["rationale"], list)
     assert any(reason["code"] == "high_risk_audit" for reason in payload["governance_decision"]["rationale"])
 
@@ -635,8 +675,11 @@ def test_dashboard_overview_api_surfaces_governance_escalation_state(tmp_path):
     assert payload["attention_repos"][0]["governance_should_block_merge"] is False
     assert payload["attention_repos"][0]["governance_pr_number"] == 84
     assert payload["attention_repos"][0]["governance_head_sha"] == "sha-governance-84"
+    assert payload["attention_repos"][0]["governance_capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["attention_repos"][0]["governance_capability_delta_signal"]["delta"], float)
     assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_decision_lane"] == "escalate"
     assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_requires_escalation"] is True
+    assert payload["overview_sections"]["recent_changes"]["repos"][0]["governance_capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
     assert "matched_risk_item" not in payload["overview_sections"]["recent_changes"]["repos"][0]
 
 
@@ -926,6 +969,8 @@ def test_repo_governance_decision_api_returns_dry_run_decision_for_persisted_aud
     assert payload["governance_decision"]["decision_lane"] == "escalate"
     assert payload["governance_decision"]["requires_escalation"] is True
     assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["capability_delta_signal"]["delta"], float)
     assert payload["governance_decision"]["conclusion"] == "neutral"
     assert payload["governance_decision"]["recommended_exit_code"] == 0
 
@@ -1108,6 +1153,10 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["decision_lane"] == "escalate"
     assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["requires_escalation"] is True
     assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["should_block_merge"] is False
+    assert any(
+        reason["code"] == "material_capability_expansion"
+        for reason in payload["pr_review_routes"]["selected_route"]["governance_decision"]["rationale"]
+    )
     assert any(
         reason["code"] == "high_risk_audit"
         for reason in payload["pr_review_routes"]["selected_route"]["governance_decision"]["rationale"]

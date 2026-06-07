@@ -220,6 +220,20 @@
                         <p class="control-page-copy">This is the live repository surface currently attached to the workspace.</p>
                         {{WORKSPACE_REPOS}}
                     </article>
+
+                    <article class="control-page-section control-page-section-wide control-page-anchor-section" id="settings-compliance-context">
+                        <div class="secondary-panel-title">Compliance context</div>
+                        <h2 class="control-page-section-title">Workspace defaults and repository overrides</h2>
+                        <p class="control-page-copy">Use these controls to record the workspace-level compliance posture and any repo-specific exceptions.</p>
+                        <div class="control-page-section-spacer control-page-section-spacer-sm"></div>
+                        <div class="secondary-panel-title">Workspace defaults</div>
+                        {{COMPLIANCE_CONTEXT_SUMMARY}}
+                        {{COMPLIANCE_CONTEXT_FORM}}
+                        <div class="control-page-section-spacer control-page-section-spacer-lg"></div>
+                        <div class="secondary-panel-title">Repository overrides</div>
+                        <p class="control-page-copy">Each allocated repository can inherit the workspace defaults or override the effective context.</p>
+                        {{REPO_COMPLIANCE_CONTEXTS}}
+                    </article>
                 </section>
             </main>
         </div>
