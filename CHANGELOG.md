@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-07 — Unified capability-delta signaling across onboarding, PR comments, governance, and control plane
+
+### Added
+- canonical `capability_delta_signal` modeling for PR baseline comparison routes, governance-decision payloads, and control-plane repo setup cards
+- governance rationale codes for material capability shifts, including `material_capability_expansion` (escalation signal) and `material_capability_reduction` (context signal)
+- escalation-queue payload governance context fields so control-tower consumers can see decision lane, rationale codes, and capability signal directly on queue items
+- technical note documenting the unified signal pipeline: [docs/capability-delta-unification-v1.md](docs/capability-delta-unification-v1.md)
+
+### Changed
+- governance decision evaluation now accepts capability-delta signal input and factors material expansion into escalation decisions
+- audit-worker governance status/check-run generation now passes capability signal context derived from attribute-profile deltas
+- repo setup (`/repos`) onboarding summaries now use a targeted governance capability-signal index instead of full overview payload assembly
+- CI governance gate check-run rendering now explicitly surfaces capability-expansion rationale/evidence when present
+
+### Verified
+- focused governance, dashboard API, control-plane UI, control-tower, and governance-gate regression slices passed locally after integration
+
 ## 2026-05-28 — Repo baseline governance and artifact topology merged to main
 
 ### Added

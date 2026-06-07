@@ -190,6 +190,12 @@ def test_governance_gate_posts_neutral_check_run_when_token_provided():
             "decision_lane": "escalate",
             "rationale": [
                 {
+                    "code": "material_capability_expansion",
+                    "summary": "A material capability expansion was detected relative to the baseline and should be treated as a governance escalation signal.",
+                    "evidence": ["capability_delta=0.1200", "capability_direction=expanded"],
+                },
+                {
+                    "code": "high_risk_audit",
                     "summary": "The completed PR audit reached a high-risk outcome and should enter the escalation lane.",
                     "evidence": ["fused_risk=High", "fused_confidence=High"],
                 }
@@ -226,7 +232,7 @@ def test_governance_gate_posts_neutral_check_run_when_token_provided():
                 "conclusion": "neutral",
                 "title": "Governance recommends escalation",
                 "summary": "doria90/dummyAI PR #84 sha-governance-84: lane=escalate conclusion=neutral gate=warn",
-                "text": "Decision lane: escalate\nRollout mode: dry_run\n\nRationale:\n- The completed PR audit reached a high-risk outcome and should enter the escalation lane.\n  Evidence: fused_risk=High\n  Evidence: fused_confidence=High",
+                "text": "Decision lane: escalate\nRollout mode: dry_run\n\nRationale:\n- A material capability expansion was detected relative to the baseline and should be treated as a governance escalation signal.\n  Evidence: capability_delta=0.1200\n  Evidence: capability_direction=expanded\n- The completed PR audit reached a high-risk outcome and should enter the escalation lane.\n  Evidence: fused_risk=High\n  Evidence: fused_confidence=High",
                 "details_url": "https://app.example.test/dashboard/doria90%2FdummyAI?tab=pr-reviews",
             },
         )

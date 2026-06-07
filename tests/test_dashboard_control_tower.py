@@ -221,6 +221,7 @@ def test_build_workspace_escalation_queue_item_structure(tmp_path):
         "repo_full", "artifact_path", "artifact_type", "priority", "score",
         "title", "rationale", "recommended_action", "evidence_label",
         "provenance_summary", "baseline_label", "review_target", "review_url",
+        "governance_decision_lane", "governance_rationale_codes", "governance_capability_delta_signal",
         "attribute_deltas", "updated_at",
     }
     assert expected_keys.issubset(item.keys())
@@ -228,6 +229,7 @@ def test_build_workspace_escalation_queue_item_structure(tmp_path):
     assert item["priority"] in ("review_now", "watch")
     assert isinstance(item["score"], (int, float))
     assert isinstance(item["attribute_deltas"], list)
+    assert isinstance(item["governance_rationale_codes"], list)
 
 
 def test_build_workspace_escalation_queue_excludes_watch_by_default(tmp_path):
@@ -367,6 +369,11 @@ def test_escalation_queue_api_with_seeded_repo(tmp_path):
     assert "items" in payload
     assert "escalation_count" in payload
     assert "watch_count" in payload
+    if payload["items"]:
+        item = payload["items"][0]
+        assert "governance_decision_lane" in item
+        assert "governance_rationale_codes" in item
+        assert "governance_capability_delta_signal" in item
 
 
 def test_escalation_queue_api_include_watch_param(tmp_path):

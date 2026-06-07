@@ -191,7 +191,7 @@ from services.control_plane_records import (
 from services.pr_feedback_mode import resolve_pr_feedback_mode
 from services.dashboard_frontend import DASHBOARD_STATIC_DIR, render_dashboard_index_page, render_repo_dashboard_page
 from services.dashboard_api_payloads import build_artifact_storyline_payload, build_dashboard_escalation_queue_payload, build_dashboard_overview_payload, build_pending_proposals_payload, build_pre_audit_relevance_payload, build_repo_governance_decision_payload, build_repo_index_payload, build_repo_journey_payload, build_repo_snapshot_compare_payload, build_repo_snapshot_detail_payload
-from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_repo_pr_review_routes_payload, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
+from services.dashboard_views import build_dashboard_overview_view, build_repo_artifact_storyline, build_repo_dashboard_view, build_repo_dashboard_view_with_timings, build_repo_governance_capability_signal_index, build_repo_pr_review_routes_payload, build_workspace_escalation_queue, filter_dashboard_overview_view, list_repo_dashboard_index
 from services.entitlements import derive_entitlement_payload, get_plan_definition
 from services.export_jobs import create_export_job, get_export_job, list_export_jobs_for_requester, update_export_job_status
 from services.export_jobs import list_export_jobs_for_workspace_requester
@@ -5052,18 +5052,12 @@ async def repo_setup_page(request: Request):
         )
         if str(item.dashboard_scope or "allocated") == "allocated"
     ]
-    overview_view = build_dashboard_overview_view(
+    governance_signal_by_repo = build_repo_governance_capability_signal_index(
         AUDIT_DB_PATH,
         allowed_repo_fulls=visible_repo_fulls,
         repo_scope_by_full=repo_scope_by_full,
         allocation_status_by_full=allocation_status_by_full,
     )
-    governance_signal_by_repo: dict[str, dict[str, object]] = {}
-    for attention in list(getattr(overview_view, "attention_repos", []) or []):
-        repo_full = str(getattr(attention, "repo_full", "") or "")
-        signal = getattr(attention, "governance_capability_delta_signal", None)
-        if repo_full and isinstance(signal, dict):
-            governance_signal_by_repo[repo_full] = dict(signal)
     for summary in onboarded_summaries:
         repo_full = str(summary.get("repo_full") or "")
         if repo_full in governance_signal_by_repo:

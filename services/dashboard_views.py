@@ -1296,6 +1296,9 @@ class EscalationQueueItem:
     review_url: str | None
     review_pr_number: int | None
     review_head_sha: str | None
+    governance_decision_lane: str | None
+    governance_rationale_codes: list[str]
+    governance_capability_delta_signal: dict[str, Any] | None
     attribute_deltas: list[dict[str, Any]]  # top-2 changed dimensions
     updated_at: float | None
 
@@ -1355,6 +1358,17 @@ def build_workspace_escalation_queue(
                     review_url=insight.review_url,
                     review_pr_number=insight.review_pr_number,
                     review_head_sha=insight.review_head_sha,
+                    governance_decision_lane=(view.governance_decision.decision_lane if view.governance_decision is not None else None),
+                    governance_rationale_codes=(
+                        [str(reason.get("code") or "") for reason in view.governance_decision.rationale if str(reason.get("code") or "")]
+                        if view.governance_decision is not None
+                        else []
+                    ),
+                    governance_capability_delta_signal=(
+                        dict(view.governance_decision.capability_delta_signal)
+                        if view.governance_decision is not None and view.governance_decision.capability_delta_signal is not None
+                        else None
+                    ),
                     attribute_deltas=deltas,
                     updated_at=insight.updated_at,
                 ))
@@ -1423,12 +1437,36 @@ def build_workspace_escalation_queue(
                 "review_url": item.review_url,
                 "review_pr_number": item.review_pr_number,
                 "review_head_sha": item.review_head_sha,
+                "governance_decision_lane": item.governance_decision_lane,
+                "governance_rationale_codes": item.governance_rationale_codes,
+                "governance_capability_delta_signal": item.governance_capability_delta_signal,
                 "attribute_deltas": item.attribute_deltas,
                 "updated_at": item.updated_at,
             }
             for item in items
         ],
     }
+
+
+def build_repo_governance_capability_signal_index(
+    db_path: str,
+    *,
+    allowed_repo_fulls: set[str] | None = None,
+    repo_scope_by_full: dict[str, str] | None = None,
+    allocation_status_by_full: dict[str, str | None] | None = None,
+) -> dict[str, dict[str, Any]]:
+    repos = list_repo_dashboard_index(
+        db_path,
+        allowed_repo_fulls=allowed_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    signal_by_repo: dict[str, dict[str, Any]] = {}
+    for view in _build_overview_repo_views(db_path, repos):
+        if view.governance_decision is None or view.governance_decision.capability_delta_signal is None:
+            continue
+        signal_by_repo[view.repo_full] = dict(view.governance_decision.capability_delta_signal)
+    return signal_by_repo
 
 
 def _resolve_repo_compliance_context(db_path: str, repo_full: str) -> tuple[dict[str, Any], str]:
