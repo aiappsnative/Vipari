@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from config import get_settings
 from services.api_service import create_api_app
 from services.audit_jobs import init_db
+from services.compliance_context_records import get_workspace_compliance_context
 from services.control_plane_records import (
     allocate_repo_to_workspace,
     create_machine_principal,
@@ -132,6 +133,7 @@ def test_cp_workspace_compliance_context_get_and_put(tmp_path, monkeypatch):
 
     assert get_before.status_code == 200
     assert get_before.json()["context"]["risk_tier"] == "unclassified"
+    assert get_before.json()["context_hash"] is None
 
     assert put_response.status_code == 200
     put_payload = put_response.json()
@@ -143,6 +145,26 @@ def test_cp_workspace_compliance_context_get_and_put(tmp_path, monkeypatch):
     get_payload = get_after.json()
     assert get_payload["context"]["customer_impact"] == "customer_facing"
     assert get_payload["context"]["deployment_regions"] == ["eu-west-1", "us-east-1"]
+
+
+def test_cp_workspace_compliance_context_get_does_not_persist_defaults(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cp-compliance-context-readonly.db")
+    _configure_env(monkeypatch, db_path)
+    workspace_id, _repo_full, _allocation_id = _seed_workspace_with_repo(db_path)
+    _seed_principal(db_path, workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-read-only")
+    token = _make_token(workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-read-only")
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/compliance-context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["context"]["risk_tier"] == "unclassified"
+    assert payload["context_hash"] is None
+    assert get_workspace_compliance_context(db_path, workspace_id) is None
 
 
 def test_cp_repo_compliance_context_override_get_and_put(tmp_path, monkeypatch):
@@ -180,6 +202,60 @@ def test_cp_repo_compliance_context_override_get_and_put(tmp_path, monkeypatch):
     assert get_payload["source"] == "repo_override"
     assert get_payload["effective_context"]["risk_tier"] == "high"
     assert get_payload["effective_context"]["handles_personal_data"] is True
+
+
+def test_cp_repo_compliance_context_get_does_not_persist_workspace_defaults(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cp-repo-compliance-context-readonly.db")
+    _configure_env(monkeypatch, db_path)
+    workspace_id, repo_full, _allocation_id = _seed_workspace_with_repo(db_path)
+    _seed_principal(db_path, workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-repo-read-only")
+    token = _make_token(workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-repo-read-only")
+
+    with TestClient(create_api_app()) as client:
+        response = client.get(
+            f"/cp/workspaces/{workspace_id}/repos/{repo_full}/compliance-context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "workspace_default"
+    assert payload["override"] is None
+    assert get_workspace_compliance_context(db_path, workspace_id) is None
+
+
+def test_cp_workspace_compliance_context_put_requires_write_scope(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cp-compliance-context-put-scope.db")
+    _configure_env(monkeypatch, db_path)
+    workspace_id, _repo_full, _allocation_id = _seed_workspace_with_repo(db_path)
+    _seed_principal(db_path, workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-no-write")
+    token = _make_token(workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-no-write")
+
+    with TestClient(create_api_app()) as client:
+        response = client.put(
+            f"/cp/workspaces/{workspace_id}/compliance-context",
+            json={"context": {"risk_tier": "limited"}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+
+
+def test_cp_repo_compliance_context_put_requires_write_scope(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "cp-repo-compliance-context-put-scope.db")
+    _configure_env(monkeypatch, db_path)
+    workspace_id, repo_full, _allocation_id = _seed_workspace_with_repo(db_path)
+    _seed_principal(db_path, workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-repo-no-write")
+    token = _make_token(workspace_id, scopes=[SCOPE_DRIFT_READ], client_id="cp-cc-repo-no-write")
+
+    with TestClient(create_api_app()) as client:
+        response = client.put(
+            f"/cp/workspaces/{workspace_id}/repos/{repo_full}/compliance-context",
+            json={"context_override": {"risk_tier": "high"}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
 
 
 def test_cp_repo_compliance_context_requires_workspace_repo_allocation(tmp_path, monkeypatch):
