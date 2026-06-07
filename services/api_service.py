@@ -1108,7 +1108,7 @@ def create_api_app() -> FastAPI:
         resolved = resolve_effective_compliance_context(
             db_path,
             workspace_id=workspace_id,
-            persist_missing_workspace_context=True,
+            persist_missing_workspace_context=False,
         )
         workspace_record = get_workspace_compliance_context(db_path, workspace_id)
         return JSONResponse(
@@ -1172,7 +1172,7 @@ def create_api_app() -> FastAPI:
             db_path,
             workspace_id=workspace_id,
             repo_allocation_id=allocation.id,
-            persist_missing_workspace_context=True,
+            persist_missing_workspace_context=False,
         )
         override_record = get_repo_compliance_context_override(
             db_path,
