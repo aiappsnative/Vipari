@@ -1755,9 +1755,9 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert 'href="/billing"' in get_response.text
     assert "Open billing" in get_response.text
     assert 'aria-label="Settings"' in get_response.text
-    assert "Compliance context" in get_response.text
-    assert "Workspace defaults" in get_response.text
-    assert "Repository overrides" in get_response.text
+    assert "Compliance context" not in get_response.text
+    assert "Workspace defaults" not in get_response.text
+    assert "Repository overrides" not in get_response.text
     assert "Vipari MCP connector" not in get_response.text
     assert "Open Agent Integrations" not in get_response.text
     assert "Open system admin" not in get_response.text
@@ -1852,8 +1852,18 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     assert allocation is not None
     assert allocation.pr_feedback_mode is None
 
+    compliance_context_page_response = client.get(
+        "/compliance/context",
+        cookies={main.settings.session_cookie_name: session.session_id},
+    )
+
+    assert compliance_context_page_response.status_code == 200
+    assert "Compliance context" in compliance_context_page_response.text
+    assert "Workspace defaults" in compliance_context_page_response.text
+    assert "Repository overrides" in compliance_context_page_response.text
+
     workspace_compliance_response = client.post(
-        "/settings/compliance-context",
+        "/compliance/context",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
             "risk_tier": "limited",
@@ -1868,10 +1878,10 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     )
 
     assert workspace_compliance_response.status_code == 303
-    assert workspace_compliance_response.headers["location"] == "/settings?updated=1"
+    assert workspace_compliance_response.headers["location"].startswith("/compliance/context?status=")
 
     repo_compliance_response = client.post(
-        "/settings/repositories/compliance-context",
+        "/compliance/repositories/context",
         cookies={main.settings.session_cookie_name: session.session_id},
         data={
             "allocation_id": str(allocation.id),
@@ -1888,14 +1898,14 @@ def test_settings_page_updates_workspace_pr_comments_toggle(tmp_path):
     )
 
     assert repo_compliance_response.status_code == 303
-    assert repo_compliance_response.headers["location"] == "/settings?updated=1"
+    assert repo_compliance_response.headers["location"].startswith("/compliance/context?status=")
 
-    refreshed_settings_response = client.get("/settings", cookies={main.settings.session_cookie_name: session.session_id})
-    assert refreshed_settings_response.status_code == 200
-    assert "workspace default posture" in refreshed_settings_response.text
-    assert "repo override posture" in refreshed_settings_response.text
-    assert "limited" in refreshed_settings_response.text
-    assert "high" in refreshed_settings_response.text
+    refreshed_context_response = client.get("/compliance/context", cookies={main.settings.session_cookie_name: session.session_id})
+    assert refreshed_context_response.status_code == 200
+    assert "workspace default posture" in refreshed_context_response.text
+    assert "repo override posture" in refreshed_context_response.text
+    assert "limited" in refreshed_context_response.text
+    assert "high" in refreshed_context_response.text
 
     main.AUDIT_DB_PATH = original_db_path
 
@@ -7279,11 +7289,13 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
 
     response = client.get("/compliance", cookies={main.settings.session_cookie_name: session.session_id})
     frameworks_response = client.get("/compliance/frameworks", cookies={main.settings.session_cookie_name: session.session_id})
+    context_response = client.get("/compliance/context", cookies={main.settings.session_cookie_name: session.session_id})
     exports_response = client.get("/compliance/exports", cookies={main.settings.session_cookie_name: session.session_id})
     evidence_response = client.get("/compliance/evidence", cookies={main.settings.session_cookie_name: session.session_id})
 
     assert response.status_code == 200
     assert frameworks_response.status_code == 200
+    assert context_response.status_code == 200
     assert exports_response.status_code == 200
     assert evidence_response.status_code == 200
     assert 'aria-label="Compliance"' in response.text
@@ -7320,6 +7332,8 @@ def test_compliance_page_lists_workspace_exports_and_repos(tmp_path):
     assert "Limited risk" in frameworks_response.text
     assert "High risk" in frameworks_response.text
     assert "Prohibited" in frameworks_response.text
+    assert "Compliance context" in context_response.text
+    assert "Repository overrides" in context_response.text
     assert "Run compliance exports" in exports_response.text
     assert "Export history" in exports_response.text
     assert "Review-ready preset" in exports_response.text

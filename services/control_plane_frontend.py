@@ -587,7 +587,13 @@ def _render_workspace_compliance_context_summary(context: dict[str, object] | No
     '''
 
 
-def _render_workspace_compliance_context_form(*, csrf_token: str, can_manage: bool, context: dict[str, object] | None) -> str:
+def _render_workspace_compliance_context_form(
+    *,
+    csrf_token: str,
+    can_manage: bool,
+    context: dict[str, object] | None,
+    action_url: str,
+) -> str:
     current = context or {}
     disabled = "disabled" if not can_manage else ""
     selected_risk = str(current.get("risk_tier") or "unclassified")
@@ -598,7 +604,7 @@ def _render_workspace_compliance_context_form(*, csrf_token: str, can_manage: bo
     regions = ", ".join(str(item) for item in (current.get("deployment_regions") or []))
     notes = html_escape(str(current.get("notes") or ""))
     return f'''
-        <form method="post" action="/settings/compliance-context" class="control-page-form control-page-form-wide">
+        <form method="post" action="{html_escape(action_url)}" class="control-page-form control-page-form-wide compliance-context-form">
             {_csrf_input(csrf_token)}
             <div class="control-page-form-grid compliance-context-form-grid">
                 <label class="control-page-label" for="workspace-risk-tier">Risk tier</label>
@@ -632,7 +638,13 @@ def _render_workspace_compliance_context_form(*, csrf_token: str, can_manage: bo
     '''
 
 
-def _render_repo_compliance_context_forms(repo_rows: list[dict[str, object]], *, csrf_token: str, can_manage: bool) -> str:
+def _render_repo_compliance_context_forms(
+    repo_rows: list[dict[str, object]],
+    *,
+    csrf_token: str,
+    can_manage: bool,
+    action_url: str,
+) -> str:
     if not repo_rows:
         return '<p class="control-page-copy">No repositories are allocated yet.</p>'
     rendered: list[str] = []
@@ -646,10 +658,13 @@ def _render_repo_compliance_context_forms(repo_rows: list[dict[str, object]], *,
         notes = str(context.get("notes") or "").strip() if isinstance(context, dict) else ""
         rendered.append(
             f'''
-            <article class="repo-setup-card repo-setup-summary-card">
-                <div class="repo-setup-card-top">
-                    <div class="repo-setup-card-label">{html_escape(str(repo.get("repo_full") or "Repository"))}</div>
-                    <span class="repo-setup-chip repo-setup-chip-cool">{html_escape(source.replace("_", " "))}</span>
+            <article class="control-page-section compliance-context-repo-card">
+                <div class="compliance-gap-head">
+                    <div>
+                        <p class="secondary-panel-title">Repository override</p>
+                        <h3 class="control-page-section-title">{html_escape(str(repo.get("repo_full") or "Repository"))}</h3>
+                    </div>
+                    <span class="compliance-status-pill tone-muted">{html_escape(source.replace("_", " "))}</span>
                 </div>
                 <div class="control-page-meta-grid compliance-context-summary-grid">
                     <div class="control-page-meta-card"><span class="control-page-meta-label">Risk tier</span><strong>{html_escape(str(context.get("risk_tier") or "unclassified"))}</strong></div>
@@ -660,7 +675,7 @@ def _render_repo_compliance_context_forms(repo_rows: list[dict[str, object]], *,
                     <div class="control-page-meta-card"><span class="control-page-meta-label">Deployment regions</span><strong>{html_escape(regions or 'None')}</strong></div>
                 </div>
                 <p class="control-page-copy">{html_escape(notes or 'No repo-specific override notes yet.')}</p>
-                <form method="post" action="/settings/repositories/compliance-context" class="control-page-form control-page-form-wide">
+                <form method="post" action="{html_escape(action_url)}" class="control-page-form control-page-form-wide compliance-context-repo-form">
                     {_csrf_input(csrf_token)}
                     <input type="hidden" name="allocation_id" value="{html_escape(str(allocation_id))}" />
                     <div class="control-page-form-grid compliance-context-form-grid">
@@ -1314,7 +1329,6 @@ def render_control_plane_settings_page(
     workspace_role: str,
     workspace_members: list[dict[str, object]],
     repo_rows: list[dict[str, object]],
-    workspace_compliance_context: dict[str, object] | None = None,
     next_payment_at: float | None,
     subscription_status: str | None,
     setup_state: str,
@@ -1372,9 +1386,6 @@ def render_control_plane_settings_page(
         .replace("{{WORKSPACE_MEMBER_ACTIONS}}", _render_workspace_member_invite_form(csrf_token=csrf_token, invite_enabled=invite_enabled))
         .replace("{{WORKSPACE_MEMBERS}}", _render_workspace_members_list(workspace_members))
         .replace("{{WORKSPACE_REPOS}}", _render_workspace_repos_table(repo_rows, csrf_token=csrf_token, can_manage=can_manage))
-        .replace("{{COMPLIANCE_CONTEXT_SUMMARY}}", _render_workspace_compliance_context_summary(workspace_compliance_context))
-        .replace("{{COMPLIANCE_CONTEXT_FORM}}", _render_workspace_compliance_context_form(csrf_token=csrf_token, can_manage=can_manage, context=workspace_compliance_context))
-        .replace("{{REPO_COMPLIANCE_CONTEXTS}}", _render_repo_compliance_context_forms(repo_rows, csrf_token=csrf_token, can_manage=can_manage))
         .replace("{{NEXT_PAYMENT_AT}}", html_escape(_format_timestamp(next_payment_at)))
         .replace("{{SUBSCRIPTION_STATUS}}", html_escape((subscription_status or "unknown").replace("_", " ").title()))
         .replace("{{SETUP_STATE}}", html_escape(_setup_state_label(setup_state)))
@@ -2318,6 +2329,7 @@ def _render_compliance_tab_bar(active_tab: str) -> str:
         ("readiness", "Readiness", "/compliance"),
         ("frameworks", "Frameworks", "/compliance/frameworks"),
         ("ai-systems", "Risk Classification", "/compliance/ai-systems"),
+        ("context", "Context", "/compliance/context"),
         ("exports", "Exports", "/compliance/exports"),
         ("evidence", "Evidence", "/compliance/evidence"),
     )
@@ -2712,6 +2724,9 @@ def _render_compliance_page_content(
     ai_system_summary_cards: list[dict[str, str]] | None = None,
     ai_system_rows: list[dict[str, object]] | None = None,
     can_manage_ai_systems: bool = False,
+    workspace_compliance_context: dict[str, object] | None = None,
+    repo_rows: list[dict[str, object]] | None = None,
+    can_manage_compliance_context: bool = False,
 ) -> str:
     if active_tab == "frameworks":
         return f'''
@@ -2755,6 +2770,31 @@ def _render_compliance_page_content(
                     <h2 class="control-page-section-title">Export history</h2>
                 </div>
                 {_render_compliance_export_history(export_jobs, view.repo_rows)}
+            </section>
+        '''
+    if active_tab == "context":
+        return f'''
+            <section class="control-page-section stack compact-stack compliance-context-shell">
+                <div>
+                    <p class="secondary-panel-title">Workspace defaults</p>
+                    <h2 class="control-page-section-title">Compliance context controls</h2>
+                    <p class="control-page-copy">Record workspace-level compliance posture and any repository-specific exceptions here.</p>
+                </div>
+                {_render_workspace_compliance_context_summary(workspace_compliance_context)}
+                {_render_workspace_compliance_context_form(
+                    csrf_token=csrf_token,
+                    can_manage=can_manage_compliance_context,
+                    context=workspace_compliance_context,
+                    action_url="/compliance/context",
+                )}
+            </section>
+            <section class="control-page-section stack compact-stack compliance-context-shell">
+                <div>
+                    <p class="secondary-panel-title">Repository overrides</p>
+                    <h2 class="control-page-section-title">Per-repo exceptions</h2>
+                    <p class="control-page-copy">Allocated repositories inherit workspace defaults unless you define a targeted override.</p>
+                </div>
+                <div class="compliance-context-overrides-grid">{_render_repo_compliance_context_forms(repo_rows or [], csrf_token=csrf_token, can_manage=can_manage_compliance_context, action_url="/compliance/repositories/context")}</div>
             </section>
         '''
     if active_tab == "evidence":
@@ -2814,6 +2854,9 @@ def render_control_plane_compliance_page(
     ai_system_summary_cards: list[dict[str, str]] | None = None,
     ai_system_rows: list[dict[str, object]] | None = None,
     can_manage_ai_systems: bool = False,
+    workspace_compliance_context: dict[str, object] | None = None,
+    repo_rows: list[dict[str, object]] | None = None,
+    can_manage_compliance_context: bool = False,
     sidebar_profile_initial: str = "V",
 ) -> str:
     template = _load_template("control_plane_compliance.html")
@@ -2851,7 +2894,23 @@ def render_control_plane_compliance_page(
         .replace("{{DASHBOARD_BLOCKED_CLASS}}", blocked_class)
         .replace("{{DASHBOARD_SHELL_NOTICE}}", shell_notice)
         .replace("{{COMPLIANCE_TAB_BAR}}", _render_compliance_tab_bar(active_tab))
-        .replace("{{COMPLIANCE_CONTENT}}", _render_compliance_page_content(active_tab, view, csrf_token, tuple(export_job_items), evidence_filter, evidence_repo, ai_system_summary_cards, ai_system_rows, can_manage_ai_systems))
+        .replace(
+            "{{COMPLIANCE_CONTENT}}",
+            _render_compliance_page_content(
+                active_tab,
+                view,
+                csrf_token,
+                tuple(export_job_items),
+                evidence_filter,
+                evidence_repo,
+                ai_system_summary_cards,
+                ai_system_rows,
+                can_manage_ai_systems,
+                workspace_compliance_context=workspace_compliance_context,
+                repo_rows=repo_rows,
+                can_manage_compliance_context=can_manage_compliance_context,
+            ),
+        )
     )
 
 

@@ -7178,8 +7178,61 @@ body.control-page.compliance-page .compliance-shell-section {
     padding: 0;
 }
 
+.compliance-page-tab-bar .control-page-tab-link {
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
 .compliance-export-form {
     gap: 18px;
+}
+
+.compliance-context-shell {
+    gap: 14px;
+}
+
+.compliance-context-summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.compliance-context-form {
+    gap: 14px;
+}
+
+.compliance-context-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 14px;
+    align-items: start;
+}
+
+.compliance-context-form-grid .control-page-label,
+.compliance-context-form-grid .control-page-select,
+.compliance-context-form-grid .control-page-input {
+    width: 100%;
+}
+
+.compliance-context-form-grid .control-page-checkbox {
+    grid-column: 1 / -1;
+}
+
+.compliance-context-overrides-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+}
+
+.compliance-context-repo-card {
+    gap: 12px;
+}
+
+.compliance-context-repo-form {
+    gap: 12px;
+}
+
+.compliance-context-repo-form .control-page-button {
+    margin-top: 2px;
 }
 
 .compliance-export-field {
@@ -7419,6 +7472,10 @@ body.control-page.compliance-page .compliance-shell-section {
 @media (max-width: 720px) {
     .compliance-content-shell > .control-page-stat-grid {
         grid-template-columns: 1fr;
+    }
+
+    .compliance-context-form-grid {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .compliance-export-choice-grid,

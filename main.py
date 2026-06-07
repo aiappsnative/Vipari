@@ -3240,11 +3240,6 @@ async def settings_page(request: Request):
             workspace_role=membership.role if membership else "viewer",
             workspace_members=_workspace_member_rows(workspace.id),
             repo_rows=_workspace_repo_rows(workspace.id, pr_feedback_allowed=pr_feedback_allowed),
-            workspace_compliance_context=resolve_effective_compliance_context(
-                AUDIT_DB_PATH,
-                workspace_id=workspace.id,
-                persist_missing_workspace_context=True,
-            ).context,
             next_payment_at=subscription.next_payment_at if subscription else None,
             subscription_status=subscription.status if subscription else None,
             setup_state=workspace.setup_state,
@@ -3349,6 +3344,8 @@ async def settings_update_repo_feedback_mode(
     return RedirectResponse("/settings?updated=1", status_code=303)
 
 
+@app.post("/compliance/context")
+@app.post("/app/compliance/context")
 @app.post("/settings/compliance-context")
 @app.post("/app/settings/compliance-context")
 async def settings_update_workspace_compliance_context(
@@ -3381,9 +3378,11 @@ async def settings_update_workspace_compliance_context(
         workspace_id=access_context["workspace"].id,
         context=context,
     )
-    return RedirectResponse("/settings?updated=1", status_code=303)
+    return RedirectResponse("/compliance/context?status=Compliance%20context%20updated.", status_code=303)
 
 
+@app.post("/compliance/repositories/context")
+@app.post("/app/compliance/repositories/context")
 @app.post("/settings/repositories/compliance-context")
 @app.post("/app/settings/repositories/compliance-context")
 async def settings_update_repo_compliance_context(
@@ -3429,7 +3428,7 @@ async def settings_update_repo_compliance_context(
         repo_allocation_id=allocation.id,
         context_override=override,
     )
-    return RedirectResponse("/settings?updated=1", status_code=303)
+    return RedirectResponse("/compliance/context?status=Repository%20compliance%20override%20updated.", status_code=303)
 
 
 @app.post("/settings/invite")
@@ -4127,6 +4126,18 @@ async def compliance_exports_page(request: Request):
     )
 
 
+@app.get("/compliance/context", response_class=HTMLResponse)
+@app.get("/app/compliance/context", response_class=HTMLResponse)
+async def compliance_context_page(request: Request):
+    return _render_compliance_tab_page(
+        request,
+        active_tab="context",
+        page_title="Compliance context",
+        page_description="Define workspace compliance defaults and repository-level overrides in one dedicated governance context page.",
+        page_note="Use this tab to maintain AI Act-related operational context without mixing it into general settings.",
+    )
+
+
 @app.get("/compliance/evidence", response_class=HTMLResponse)
 @app.get("/app/compliance/evidence", response_class=HTMLResponse)
 async def compliance_evidence_page(request: Request):
@@ -4155,6 +4166,7 @@ def _render_compliance_tab_page(
     user = access_context["user"]
     identity = access_context["identity"]
     session = access_context["session"]
+    membership = access_context.get("membership")
     plan_code = entitlement.plan_code if entitlement else subscription.plan_code if subscription else "starter"
     blocked_free_tier = _is_active_comments_only_workspace(access_context)
     shell_state = "active_comments_only" if blocked_free_tier else "active"
@@ -4173,6 +4185,12 @@ def _render_compliance_tab_page(
             status_note = "AI system classification saved. The registry remains deterministic; human review controls the final policy state."
     evidence_filter = request.query_params.get("gap") or ""
     evidence_repo = request.query_params.get("repo") or ""
+    workspace_compliance_context = resolve_effective_compliance_context(
+        AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        persist_missing_workspace_context=True,
+    ).context
+    repo_rows = _workspace_repo_rows(workspace.id, pr_feedback_allowed=_workspace_pr_comments_allowed_by_plan(access_context))
     return HTMLResponse(
         render_control_plane_compliance_page(
             workspace_name=workspace.display_name,
@@ -4197,6 +4215,9 @@ def _render_compliance_tab_page(
             ai_system_summary_cards=ai_system_summary_cards,
             ai_system_rows=ai_system_rows,
             can_manage_ai_systems=bool(access_context.get("membership") is not None and access_context["membership"].role in {"owner", "admin"}),
+            workspace_compliance_context=workspace_compliance_context,
+            repo_rows=repo_rows,
+            can_manage_compliance_context=bool(membership is not None and membership.role in {"owner", "admin"}),
             sidebar_profile_initial=_sidebar_profile_initial(
                 display_name=user.display_name if user else None,
                 github_login=identity.github_login if identity else None,
