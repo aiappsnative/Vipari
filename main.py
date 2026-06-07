@@ -5052,6 +5052,22 @@ async def repo_setup_page(request: Request):
         )
         if str(item.dashboard_scope or "allocated") == "allocated"
     ]
+    overview_view = build_dashboard_overview_view(
+        AUDIT_DB_PATH,
+        allowed_repo_fulls=visible_repo_fulls,
+        repo_scope_by_full=repo_scope_by_full,
+        allocation_status_by_full=allocation_status_by_full,
+    )
+    governance_signal_by_repo: dict[str, dict[str, object]] = {}
+    for attention in list(getattr(overview_view, "attention_repos", []) or []):
+        repo_full = str(getattr(attention, "repo_full", "") or "")
+        signal = getattr(attention, "governance_capability_delta_signal", None)
+        if repo_full and isinstance(signal, dict):
+            governance_signal_by_repo[repo_full] = dict(signal)
+    for summary in onboarded_summaries:
+        repo_full = str(summary.get("repo_full") or "")
+        if repo_full in governance_signal_by_repo:
+            summary["governance_capability_delta_signal"] = governance_signal_by_repo[repo_full]
     consumed_repo_slots = len(
         {str(item["repo_full"]) for item in active_allocations}
         | {str(item["repo_full"]) for item in onboarded_summaries}

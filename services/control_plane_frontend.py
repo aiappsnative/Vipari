@@ -1145,12 +1145,26 @@ def render_repo_onboarding_metrics(onboarded_summaries: list[dict[str, object]])
     approved_count = sum(1 for summary in onboarded_summaries if str(summary.get("onboarding_status") or "").lower() == "baseline_approved")
     tracked_artifacts = sum(int(summary.get("discovered_artifact_count") or 0) for summary in onboarded_summaries)
     historical_checkpoints = sum(int(summary.get("historical_version_count") or 0) for summary in onboarded_summaries)
+    material_capability_shift_count = sum(
+        1
+        for summary in onboarded_summaries
+        if isinstance(summary.get("governance_capability_delta_signal"), dict)
+        and bool(summary.get("governance_capability_delta_signal", {}).get("material"))
+    )
     cards = [
         ("Onboarded repos", onboarded_count, "Repositories with a stored onboarding record in this workspace."),
         ("Baseline approved", approved_count, "Repos whose current onboarding baseline is already locked."),
         ("Tracked artifacts", tracked_artifacts, "Control surfaces currently captured across onboarded repositories."),
         ("History checkpoints", historical_checkpoints, "Historical snapshots materialized across onboarded repositories."),
     ]
+    if material_capability_shift_count > 0:
+        cards.append(
+            (
+                "Material capability shifts",
+                material_capability_shift_count,
+                "Onboarded repos whose latest governance review reported a material capability delta.",
+            )
+        )
     return "".join(
         f'''
         <article class="repo-setup-metric-card">
@@ -1172,6 +1186,7 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
         state_label, state_class = _repo_setup_state_label(None, {"allocation_status": summary.get("allocation_status")}, summary)
         state_key = _repo_setup_state_key(None, {"allocation_status": summary.get("allocation_status")}, summary)
         last_onboarded_value = summary.get("last_onboarded_at") if isinstance(summary.get("last_onboarded_at"), (int, float)) else 0
+        capability_signal_copy = _repo_setup_capability_delta_copy(summary)
         rendered.append(
             f'''
             <article class="repo-setup-card repo-setup-card-strong repo-setup-summary-card" data-repo-summary-card="true" data-status="{html_escape(state_key)}" data-repo-full="{html_escape(str(summary['repo_full']).lower())}" data-artifacts="{int(summary.get('discovered_artifact_count') or 0)}" data-history="{int(summary.get('historical_version_count') or 0)}" data-last-onboarded="{last_onboarded_value}">
@@ -1187,11 +1202,22 @@ def render_repo_onboarded_summary_cards(onboarded_summaries: list[dict[str, obje
                     <div class="repo-setup-stat"><span class="repo-setup-meta-label">Last onboarded</span><span class="repo-setup-meta-value">{html_escape(_format_timestamp(summary.get('last_onboarded_at') if isinstance(summary.get('last_onboarded_at'), (int, float)) else None))}</span></div>
                 </div>
                 <p>{html_escape(_repo_setup_summary_copy(summary))}</p>
+                {f'<p class="repo-setup-metric-foot">{html_escape(capability_signal_copy)}</p>' if capability_signal_copy else ''}
                 <a class="repo-setup-secondary-link" href="{html_escape(_repo_dashboard_href(str(summary['repo_full'])))}">Open audit page</a>
             </article>
             '''
         )
     return "".join(rendered)
+
+
+def _repo_setup_capability_delta_copy(summary: dict[str, object]) -> str | None:
+    signal = summary.get("governance_capability_delta_signal")
+    if not isinstance(signal, dict):
+        return None
+    summary_text = str(signal.get("summary") or "").strip()
+    if not summary_text:
+        return None
+    return f"Capability delta: {summary_text}"
 
 
 def render_repo_connection_cards(connections: list[dict[str, str]], *, csrf_token: str) -> str:

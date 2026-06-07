@@ -5388,6 +5388,98 @@ def test_repo_setup_treats_connected_history_repo_as_not_yet_onboarded(tmp_path)
     main.AUDIT_DB_PATH = original_db_path
 
 
+def test_repo_setup_shows_capability_delta_signal_in_onboarded_summary_cards(tmp_path):
+    original_db_path = main.AUDIT_DB_PATH
+    main.AUDIT_DB_PATH = str(tmp_path / "repo-capability-signal.db")
+    main.init_db(main.AUDIT_DB_PATH)
+
+    from services.control_plane_records import create_user_session, create_workspace, replace_repo_connections, upsert_github_identity, upsert_github_installation
+    from services.dashboard_views import RepoDashboardIndexEntry
+
+    owner, _identity = upsert_github_identity(
+        main.AUDIT_DB_PATH,
+        github_user_id="842",
+        github_login="repo-signal-owner",
+        display_name="Repo Signal Owner",
+        primary_email="owner@example.com",
+        avatar_url=None,
+        granted_scopes=["read:user"],
+        access_token_encrypted="encrypted-token",
+    )
+    workspace = create_workspace(
+        main.AUDIT_DB_PATH,
+        slug="repo-signal-workspace",
+        display_name="Repo Signal Workspace",
+        billing_owner_user_id=owner.id,
+    )
+    session = create_user_session(
+        main.AUDIT_DB_PATH,
+        session_id="repo-signal-session",
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        csrf_secret="csrf",
+        expires_at=time.time() + 3600,
+    )
+    upsert_github_installation(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        account_id="77",
+        account_login="doria90",
+        account_type="Organization",
+        target_type="Organization",
+    )
+    replace_repo_connections(
+        main.AUDIT_DB_PATH,
+        workspace_id=workspace.id,
+        installation_id=12345,
+        repositories=[
+            {"repo_github_id": "1", "repo_full": "doria90/dummyAI", "default_branch": "main", "is_private": True, "status": "available"},
+        ],
+    )
+
+    with patch(
+        "main.list_repo_dashboard_index",
+        return_value=[
+            RepoDashboardIndexEntry(
+                "doria90/dummyAI",
+                "main",
+                "baseline_approved",
+                5,
+                time.time(),
+                historical_version_count=7,
+                dashboard_scope="allocated",
+                allocation_status="onboarded",
+            )
+        ],
+    ), patch(
+        "main.build_dashboard_overview_view",
+        return_value=SimpleNamespace(
+            attention_repos=[
+                SimpleNamespace(
+                    repo_full="doria90/dummyAI",
+                    governance_capability_delta_signal={
+                        "delta": 0.12,
+                        "direction": "expanded",
+                        "material": True,
+                        "summary": "Material capability delta expanded by 0.120.",
+                    },
+                )
+            ]
+        ),
+    ):
+        response = client.get(
+            "/repos",
+            cookies={main.settings.session_cookie_name: session.session_id},
+        )
+
+    assert response.status_code == 200
+    assert "Capability delta: Material capability delta expanded by 0.120." in response.text
+    assert "Material capability shifts" in response.text
+
+    main.AUDIT_DB_PATH = original_db_path
+
+
 def test_repo_setup_install_action_uses_install_start_route(tmp_path):
     original_db_path = main.AUDIT_DB_PATH
     main.AUDIT_DB_PATH = str(tmp_path / "repo-install-route.db")
