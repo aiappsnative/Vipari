@@ -1670,7 +1670,11 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
                 )
                 compliance_context = resolved_context.context
                 compliance_context_source = resolved_context.source
-            except Exception:
+            except ValueError as exc:
+                logger.warning(
+                    "Falling back to workspace default compliance context due to invalid repo compliance mapping",
+                    extra={"workspace_id": workspace_id, "repo_allocation_id": allocation.id, "error": str(exc)},
+                )
                 compliance_context = default_workspace_compliance_context()
                 compliance_context_source = "workspace_default"
         effective_mode_label = {
@@ -1714,7 +1718,11 @@ def _workspace_repo_rows(workspace_id: int, *, pr_feedback_allowed: bool = True)
             )
             compliance_context = resolved_context.context
             compliance_context_source = resolved_context.source
-        except Exception:
+        except ValueError as exc:
+            logger.warning(
+                "Falling back to workspace default compliance context due to invalid repo compliance mapping",
+                extra={"workspace_id": workspace_id, "repo_allocation_id": allocation.id, "error": str(exc)},
+            )
             compliance_context = default_workspace_compliance_context()
             compliance_context_source = "workspace_default"
         effective_mode_label = {
