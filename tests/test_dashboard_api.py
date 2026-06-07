@@ -1154,6 +1154,10 @@ def test_repo_dashboard_api_includes_pr_review_routes_for_selected_episode(tmp_p
     assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["requires_escalation"] is True
     assert payload["pr_review_routes"]["selected_route"]["governance_decision"]["should_block_merge"] is False
     assert any(
+        reason["code"] == "material_capability_expansion"
+        for reason in payload["pr_review_routes"]["selected_route"]["governance_decision"]["rationale"]
+    )
+    assert any(
         reason["code"] == "high_risk_audit"
         for reason in payload["pr_review_routes"]["selected_route"]["governance_decision"]["rationale"]
     )

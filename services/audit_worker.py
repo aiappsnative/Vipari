@@ -2065,10 +2065,27 @@ def _build_governance_signal_for_job(
         verifier_trigger=verifier_trigger,
         verifier_request_count=verifier_request_count,
     )
+    capability_deltas: list[float] = []
+    for profile in attribute_profiles:
+        for dimension in profile.dimensions:
+            if dimension.attribute_key != "capability_risk" or dimension.delta is None:
+                continue
+            capability_deltas.append(float(dimension.delta))
+    has_capability_measurement = bool(capability_deltas)
+    capability_signal = build_capability_delta_signal(
+        (sum(capability_deltas) / len(capability_deltas)) if has_capability_measurement else None,
+        has_measurement=has_capability_measurement,
+    )
     decision = evaluate_governance_decision(
         transient_audit,
         findings=deterministic_analysis.findings,
         rollout_mode=normalized_rollout_mode,
+        capability_delta_signal={
+            "delta": capability_signal.delta,
+            "direction": capability_signal.direction,
+            "material": capability_signal.material,
+            "summary": capability_signal.summary,
+        },
     )
     outcome = build_governance_ci_outcome(decision)
     target_url = _build_pr_comment_dashboard_deep_link(

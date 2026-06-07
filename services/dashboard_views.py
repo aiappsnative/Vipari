@@ -656,6 +656,17 @@ def build_repo_pr_review_routes_payload(
                     )
                 )
             )
+            selected_audit_record = next((audit for audit in candidate_audits if audit.id == entry["audit_id"]), None)
+            if selected_audit_record is not None:
+                selected_findings = list_findings_for_audit(db_path, entry["audit_id"])
+                entry["governance_decision"] = _governance_decision_payload(
+                    evaluate_governance_decision(
+                        selected_audit_record,
+                        findings=selected_findings,
+                        rollout_mode=normalized_rollout_mode,
+                        capability_delta_signal=entry["capability_delta_signal"],
+                    )
+                )
         else:
             entry["capability_delta_signal"] = asdict(
                 build_capability_delta_signal(
@@ -2528,11 +2539,6 @@ def _build_repo_governance_decision_summary(
         reverse=True,
     )[0]
     findings = list_findings_for_audit(db_path, latest_audit.id)
-    decision = evaluate_governance_decision(
-        latest_audit,
-        findings=findings,
-        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
-    )
     baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, latest_audit.id)
     capability_delta_signal = dict(
         baseline_comparison.get("capability_delta_signal")
@@ -2543,6 +2549,12 @@ def _build_repo_governance_decision_summary(
                 unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
             )
         )
+    )
+    decision = evaluate_governance_decision(
+        latest_audit,
+        findings=findings,
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal=capability_delta_signal,
     )
     return RepoGovernanceDecisionSummary(
         audit_id=latest_audit.id,
@@ -3241,11 +3253,6 @@ def _build_repo_governance_decision_summary_from_rows(
         )
         for row in finding_rows
     ]
-    decision = evaluate_governance_decision(
-        audit,
-        findings=findings,
-        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
-    )
     baseline_comparison = _build_pr_review_baseline_comparison(db_path, repo_full, audit.id)
     capability_delta_signal = dict(
         baseline_comparison.get("capability_delta_signal")
@@ -3256,6 +3263,12 @@ def _build_repo_governance_decision_summary_from_rows(
                 unavailable_summary="Capability delta is unavailable for this audit until comparable profile data is captured.",
             )
         )
+    )
+    decision = evaluate_governance_decision(
+        audit,
+        findings=findings,
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal=capability_delta_signal,
     )
     return RepoGovernanceDecisionSummary(
         audit_id=audit.id,

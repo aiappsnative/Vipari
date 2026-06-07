@@ -151,3 +151,71 @@ index 1..2
     assert decision.decision_lane == "block_merge"
     assert any(reason.code == "high_severity_findings" for reason in decision.rationale)
     assert any(reason.code == "shadow_verifier_signal" for reason in decision.rationale)
+
+
+def test_evaluate_governance_decision_escalates_on_material_capability_expansion_even_without_high_risk():
+    from services.audit_records import PullRequestAuditRecord
+
+    audit = PullRequestAuditRecord(
+        **_base_audit_kwargs(
+            id=3,
+            job_id=3,
+            pr_number=44,
+            head_sha="sha-44",
+            suggested_risk_level="Medium",
+            fused_confidence="Medium",
+            verifier_mode="off",
+            verifier_trigger=None,
+            verifier_request_count=0,
+        )
+    )
+
+    decision = evaluate_governance_decision(
+        audit,
+        findings=[],
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal={
+            "delta": 0.2,
+            "direction": "expanded",
+            "material": True,
+            "summary": "Material capability delta expanded by 0.200.",
+        },
+    )
+
+    assert decision.requires_escalation is True
+    assert decision.decision_lane == "escalate"
+    assert any(reason.code == "material_capability_expansion" for reason in decision.rationale)
+
+
+def test_evaluate_governance_decision_records_material_capability_reduction_without_escalation():
+    from services.audit_records import PullRequestAuditRecord
+
+    audit = PullRequestAuditRecord(
+        **_base_audit_kwargs(
+            id=4,
+            job_id=4,
+            pr_number=45,
+            head_sha="sha-45",
+            suggested_risk_level="Low",
+            fused_confidence="Medium",
+            verifier_mode="off",
+            verifier_trigger=None,
+            verifier_request_count=0,
+        )
+    )
+
+    decision = evaluate_governance_decision(
+        audit,
+        findings=[],
+        rollout_mode=GOVERNANCE_ROLLOUT_DRY_RUN,
+        capability_delta_signal={
+            "delta": -0.2,
+            "direction": "reduced",
+            "material": True,
+            "summary": "Material capability delta reduced by 0.200.",
+        },
+    )
+
+    assert decision.requires_escalation is False
+    assert decision.decision_lane == "normal"
+    assert any(reason.code == "material_capability_reduction" for reason in decision.rationale)
