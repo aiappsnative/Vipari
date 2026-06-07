@@ -3457,6 +3457,7 @@ index 1..2
     assert "### Attribute profile" in comment
     assert "| Attribute | Baseline -> Current | Reason |" in comment
     assert "| Capability | low -> moderate | Capability expanded because the workflow now issues refunds automatically |" in comment
+    assert "Material capability delta expanded by 0.320. Baseline coverage: 1/1 touched artifacts are anchored to approved onboarding baselines." in comment
     assert "<details>" in comment
     assert "- Capability expanded: low → moderate." in comment
     assert "- Added automatic refund issuance for requests under 500." in comment

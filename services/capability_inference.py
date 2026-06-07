@@ -31,6 +31,14 @@ class CapabilityDelta:
     retained: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class CapabilityDeltaSignal:
+    delta: float
+    direction: str
+    material: bool
+    summary: str
+
+
 def empty_capability_profile() -> CapabilityProfile:
     return CapabilityProfile(
         capability_tags=(),
@@ -143,3 +151,37 @@ def compare_capability_profiles(current: CapabilityProfile, baseline: Capability
     removed = tuple(sorted(baseline_tags - current_tags))
     retained = tuple(sorted(current_tags.intersection(baseline_tags)))
     return CapabilityDelta(introduced=introduced, removed=removed, retained=retained)
+
+
+def build_capability_delta_signal(
+    delta: float | None,
+    *,
+    has_measurement: bool = True,
+    material_threshold: float = 0.03,
+    unavailable_summary: str = "Capability delta is unavailable until Vipari captures comparable baseline evidence.",
+) -> CapabilityDeltaSignal:
+    if not has_measurement:
+        return CapabilityDeltaSignal(
+            delta=0.0,
+            direction="stable",
+            material=False,
+            summary=unavailable_summary,
+        )
+
+    normalized_delta = round(float(delta or 0.0), 4)
+    if normalized_delta > 0:
+        direction = "expanded"
+    elif normalized_delta < 0:
+        direction = "reduced"
+    else:
+        direction = "stable"
+
+    material = abs(normalized_delta) >= float(material_threshold)
+    magnitude_label = "Material" if material else "Minor"
+    summary = f"{magnitude_label} capability delta {direction} by {abs(normalized_delta):.3f}."
+    return CapabilityDeltaSignal(
+        delta=normalized_delta,
+        direction=direction,
+        material=material,
+        summary=summary,
+    )

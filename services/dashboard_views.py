@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from engine.drift_profile import AgentAttributeProfile, StaticSignals
-from services.capability_inference import CapabilityDelta, CapabilityProfile, compare_capability_profiles, empty_capability_delta, empty_capability_profile, infer_capability_profile_from_artifacts
+from services.capability_inference import CapabilityDelta, CapabilityProfile, build_capability_delta_signal, compare_capability_profiles, empty_capability_delta, empty_capability_profile, infer_capability_profile_from_artifacts
 from services.compliance_context_records import resolve_effective_compliance_context
 from .baseline_provenance import (
     BaselineProvenance,
@@ -278,6 +278,14 @@ def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id:
         {key: _average(values) for key, values in aggregate_dimension_deltas.items() if values},
         limit=4,
     )
+    capability_values = aggregate_dimension_deltas.get("capability_risk") or []
+    capability_delta_signal = asdict(
+        build_capability_delta_signal(
+            _average(capability_values),
+            has_measurement=bool(capability_values),
+            unavailable_summary="Capability delta is unavailable for this PR route until comparable profile data is captured.",
+        )
+    )
 
     comparison_ready = bool(artifact_rows)
     comparison_notice = ""
@@ -309,6 +317,7 @@ def _build_pr_review_baseline_comparison(db_path: str, repo_full: str, audit_id:
             "approved_baseline_artifact_count": len(approved_baselines_by_path),
         },
         "top_dimension_shifts": top_dimension_shifts,
+        "capability_delta_signal": capability_delta_signal,
         "artifact_rows": artifact_rows,
     }
 
@@ -637,6 +646,24 @@ def build_repo_pr_review_routes_payload(
         entry["selected"] = bool(selected_route is not None and entry["audit_id"] == selected_route["audit_id"])
         if selected_route is not None and entry["audit_id"] == selected_route["audit_id"]:
             entry["baseline_comparison"] = _build_pr_review_baseline_comparison(db_path, repo_full, entry["audit_id"])
+            entry["capability_delta_signal"] = dict(
+                entry["baseline_comparison"].get("capability_delta_signal")
+                or asdict(
+                    build_capability_delta_signal(
+                        None,
+                        has_measurement=False,
+                        unavailable_summary="Capability delta is unavailable for this PR route until comparable profile data is captured.",
+                    )
+                )
+            )
+        else:
+            entry["capability_delta_signal"] = asdict(
+                build_capability_delta_signal(
+                    None,
+                    has_measurement=False,
+                    unavailable_summary="No capability delta signal available for this route preview.",
+                )
+            )
 
     return {
         "repo_full": repo_full,

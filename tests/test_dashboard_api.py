@@ -636,6 +636,8 @@ def test_dashboard_api_returns_governance_decision_summary_for_latest_completed_
     assert payload["governance_decision"]["decision_lane"] == "escalate"
     assert payload["governance_decision"]["requires_escalation"] is True
     assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["pr_review_routes"]["selected_route"]["capability_delta_signal"]["delta"], float)
     assert isinstance(payload["governance_decision"]["rationale"], list)
     assert any(reason["code"] == "high_risk_audit" for reason in payload["governance_decision"]["rationale"])
 
@@ -962,6 +964,8 @@ def test_repo_governance_decision_api_returns_dry_run_decision_for_persisted_aud
     assert payload["governance_decision"]["decision_lane"] == "escalate"
     assert payload["governance_decision"]["requires_escalation"] is True
     assert payload["governance_decision"]["should_block_merge"] is False
+    assert payload["capability_delta_signal"]["direction"] in {"expanded", "reduced", "stable"}
+    assert isinstance(payload["capability_delta_signal"]["delta"], float)
     assert payload["governance_decision"]["conclusion"] == "neutral"
     assert payload["governance_decision"]["recommended_exit_code"] == 0
 

@@ -27,6 +27,7 @@ from engine.verifier import (
     parse_verifier_review_result,
     should_invoke_verifier,
 )
+from .capability_inference import build_capability_delta_signal
 from .analysis_budget import (
     AdvancedAnalysisBudgetExceededError,
     compute_feature_units,
@@ -441,7 +442,7 @@ def _build_pr_comment_review(
         confidence=confidence,
         context_line=_build_context_line(normalized_risk, primary_profile, confidence=confidence),
         attribute_table_rows=_build_attribute_table_rows(profiles),
-        what_changed=_build_what_changed_lines(summary, fusion_summary, decision, primary_profile),
+        what_changed=_build_what_changed_lines(summary, fusion_summary, decision, primary_profile, profiles),
         key_deltas=_build_key_delta_bullets(selected_key_deltas, deterministic_analysis),
         evidence=_build_evidence_bullets(selected_key_deltas, deterministic_analysis),
         governance_findings=build_pr_comment_governance_findings(
@@ -571,15 +572,42 @@ def _build_what_changed_lines(
     fusion_summary: str | None,
     decision: str,
     primary_profile: ArtifactAttributeProfile | None,
+    attribute_profiles: list[ArtifactAttributeProfile],
 ) -> tuple[str, ...]:
     lines = [_normalize_summary(summary, default=summary)]
     if fusion_summary:
         lines.append(_normalize_sentence(fusion_summary, default=fusion_summary))
-    if primary_profile is None or not primary_profile.has_authoritative_baseline:
+    capability_line = _build_capability_delta_line(attribute_profiles)
+    if capability_line:
+        lines.append(capability_line)
+    if len(lines) < 3 and (primary_profile is None or not primary_profile.has_authoritative_baseline):
         lines.append("No approved baseline exists yet for this control surface, so treat the accepted version as a baseline candidate after review.")
-    elif decision == "escalate_before_merge":
+    elif len(lines) < 3 and decision == "escalate_before_merge":
         lines.append("It moves the control surface farther from the approved baseline rather than tightening it.")
     return tuple(lines[:3])
+
+
+def _build_capability_delta_line(attribute_profiles: list[ArtifactAttributeProfile]) -> str | None:
+    if not attribute_profiles:
+        return None
+
+    capability_deltas: list[float] = []
+    anchored_count = 0
+    for profile in attribute_profiles:
+        if profile.has_authoritative_baseline:
+            anchored_count += 1
+        for dimension in profile.dimensions:
+            if dimension.attribute_key != "capability_risk" or dimension.delta is None:
+                continue
+            capability_deltas.append(float(dimension.delta))
+
+    has_measurement = bool(capability_deltas)
+    signal = build_capability_delta_signal(
+        (sum(capability_deltas) / len(capability_deltas)) if has_measurement else None,
+        has_measurement=has_measurement,
+    )
+    baseline_coverage = f"Baseline coverage: {anchored_count}/{len(attribute_profiles)} touched artifacts are anchored to approved onboarding baselines."
+    return f"{signal.summary} {baseline_coverage}"
 
 
 def _build_signal_fusion_summary(

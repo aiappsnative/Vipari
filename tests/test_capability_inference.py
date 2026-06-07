@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from services.ai_library_registry import AiLibraryMatch
-from services.capability_inference import compare_capability_profiles, infer_capability_profile
+from services.capability_inference import build_capability_delta_signal, compare_capability_profiles, infer_capability_profile
 from services.onboarding_records import DiscoveredArtifactInput
 
 
@@ -98,3 +98,21 @@ def test_compare_capability_profiles_reports_introduced_and_removed_tags():
     assert delta.introduced == ("generative_ai", "model_serving")
     assert delta.removed == ("retrieval",)
     assert delta.retained == ()
+
+
+def test_build_capability_delta_signal_reports_material_expansion():
+    signal = build_capability_delta_signal(0.14, has_measurement=True)
+
+    assert signal.direction == "expanded"
+    assert signal.material is True
+    assert signal.delta == 0.14
+    assert "Material capability delta expanded" in signal.summary
+
+
+def test_build_capability_delta_signal_reports_unavailable_when_missing_measurement():
+    signal = build_capability_delta_signal(None, has_measurement=False)
+
+    assert signal.direction == "stable"
+    assert signal.material is False
+    assert signal.delta == 0.0
+    assert "unavailable" in signal.summary.lower()
